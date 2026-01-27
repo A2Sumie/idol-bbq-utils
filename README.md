@@ -1,6 +1,13 @@
-**过时文档，请等待maintainer撰写最新版本的文档**
+# idol-bbq-utils (Custom Fork)
 
-# idol-bbq-utils
+> [!NOTE]
+> **This is a customized fork maintained by @A2Sumie.**
+> It is deployed on custom infrastructure via Docker Compose.
+>
+> **Key Modifications:**
+> - Docker Compose setup for local building and sensitive asset injection.
+> - Customized `.gitignore` for deployment security.
+> - Intended for use with specific operational requirements of the deployment environment.
 
 > 偶像吃的瑞士军刀.jpg
 
