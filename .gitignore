@@ -141,6 +141,11 @@ assets/fonts/*.woff
 assets/fonts/*.woff2
 assets/fonts/*.ttf
 
+# Ignored assets
+assets/cookies/
+assets/*.db
+
+
 
 *.cookies
 

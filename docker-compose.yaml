@@ -1,26 +1,33 @@
+# docker-compose.yaml
+
 services:
-  sns-forwarder:
-    # build:
-    #   context: .
-    #   dockerfile: app/tweet-forwarder/Dockerfile
-    image: ghcr.io/idol-bbq-utils/idol-bbq-utils:latest
-    container_name: 'sns-forwarder'
+  spider:
+    # 使用官方最新镜像
+    #image: ghcr.io/idol-bbq-utils/idol-bbq-utils:canary-fix_conversation-tweet
+    #image: ghcr.io/idol-bbq-utils/idol-bbq-utils:latest
+    build:
+      context: .
+      dockerfile: app/tweet-forwarder/Dockerfile
+    # 为您的容器命名
+    container_name: 'forwarder-new'
+    # 直接使用主机的网络，完美解决访问主机 127.0.0.1 的问题
     network_mode: 'host'
+    # 失败时自动重启
     restart: 'on-failure'
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
-        compress: "true"
-        mode: "non-blocking"
-        max-buffer-size: "4m"
     environment:
-      - TZ=Asia/Shanghai
-      - NO_SANDBOX=true
+      # 设置时区为东京时间，您可以根据需要修改
+      - TZ=Asia/Tokyo
+      # 设置日志级别
       - LOG_LEVEL=info
     volumes:
-      - './assets/tweet-forwarder/config.example.yaml:/app/config.yaml'
-      - './assets/tweet-forwarder/data.db:/app/data.db'
-      - './assets:/app/assets'
-      - '/tmp:/tmp'
+      # --- 以下是文件挂载，将主机文件映射到容器内部 ---
+      # 1. 挂载配置文件
+      - './assets/config.yaml:/app/config.yaml'
+      # 2. 挂载数据库文件
+      - './assets/refactor.db:/app/data.db'
+      # 3. 挂载 cookies 文件夹 (注意：只挂载子目录以保留容器内的字体文件)
+      - './assets/cookies:/app/assets/cookies'
+      # 4. 挂载日志目录
+      - '/tmp/tweet-forwarder/logs:/tmp/tweet-forwarder/logs'
+      # 5. 挂载媒体文件临时目录
+      - '/tmp/tweet-forwarder/media:/tmp/tweet-forwarder/media'
