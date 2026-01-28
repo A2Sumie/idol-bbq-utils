@@ -111,7 +111,7 @@ type ForwardTargetPlatformConfig<T extends ForwardTargetPlatformEnum = ForwardTa
 interface ForwarderConfig extends CommonCfgConfig {
     cron?: string
     media?: Media
-    render_type?: 'text' | 'img' | 'img-with-meta'
+    render_type?: 'text' | 'img' | 'img-with-meta' | 'img-with-source' | 'img-with-source-summary'
 }
 
 interface ForwardTarget<T extends ForwardTargetPlatformEnum = ForwardTargetPlatformEnum> {
