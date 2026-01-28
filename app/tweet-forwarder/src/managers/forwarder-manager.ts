@@ -46,9 +46,9 @@ interface CrawlerTaskResult {
 class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
     NAME: string = 'ForwarderTaskScheduler'
     protected log?: Logger
-    private props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections'>
+    private props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers'>
 
-    constructor(props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections'>, emitter: EventEmitter, log?: Logger) {
+    constructor(props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers'>, emitter: EventEmitter, log?: Logger) {
         super(emitter)
         this.log = log?.child({ subservice: this.NAME })
         this.props = props
@@ -68,41 +68,69 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
 
         // 遍历爬虫配置，为每个爬虫创建定时任务
-        for (const forwarder of this.props.forwarders) {
-            forwarder.cfg_forwarder = {
-                cron: '*/30 * * * *',
-                media: {
-                    type: 'no-storage',
-                    use: {
-                        tool: MediaToolEnum.DEFAULT,
-                    },
-                },
-                ...this.props.cfg_forwarder,
-                ...forwarder.cfg_forwarder,
-            }
-            const { cron } = forwarder.cfg_forwarder
-            const { task_title, name } = forwarder
-            // 定时dispatch任务
-            const job = new CronJob(cron as string, async () => {
-                const taskId = `${Math.random().toString(36).substring(2, 9)}`
-                this.log?.info(`starting to dispatch task ${[name, task_title].filter(Boolean).join(' ')}...`)
-                const task: TaskScheduler.Task = {
-                    id: taskId,
-                    status: TaskScheduler.TaskStatus.PENDING,
-                    data: {
-                        ...forwarder,
-                        // Inject connections into task data so pools can access it
-                        connections: this.props.connections
-                    },
-                }
-                this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, {
-                    taskId,
-                    task: task,
+        // Auto-Bind Logic: Iterate Crawlers -> Find Matching Forwarder -> Spawn Task
+        if (this.props.crawlers && this.props.crawlers.length > 0) {
+            for (const crawler of this.props.crawlers) {
+                // Find matching forwarder by origin
+                const matchForwarder = this.props.forwarders.find(f => {
+                    // Simple origin match. Could be improved with improved url matching if needed.
+                    return f.origin && crawler.origin && f.origin === crawler.origin
                 })
-                this.tasks.set(taskId, task)
-            })
-            this.log?.debug(`Task dispatcher created with detail: ${JSON.stringify(forwarder)}`)
-            this.cronJobs.push(job)
+
+                if (!matchForwarder) {
+                    this.log?.debug(`No matching forwarder template found for crawler ${crawler.name} (${crawler.origin}), skipping auto-bind...`)
+                    continue
+                }
+
+                // Use Crawler's Name so connections work!
+                const taskName = crawler.name
+                // Use Forwarder's Config as Template
+                const cfg_forwarder = {
+                    cron: '*/30 * * * *',
+                    media: {
+                        type: 'no-storage',
+                        use: {
+                            tool: MediaToolEnum.DEFAULT,
+                        },
+                    },
+                    ...this.props.cfg_forwarder,
+                    ...matchForwarder.cfg_forwarder,
+                }
+                const { cron } = cfg_forwarder
+
+                // Create the task using Crawler's paths/identity but Forwarder's settings
+                const forwarderTaskData: Forwarder = {
+                    ...matchForwarder, // Inherit base props/methods/id from template if any
+                    name: taskName,    // OVERRIDE Name
+                    websites: undefined, // Clear hardcoded websites
+                    origin: crawler.origin,
+                    paths: crawler.paths, // Use Crawler's Paths
+                    cfg_forwarder: cfg_forwarder as any // Use merged config
+                }
+
+                const job = new CronJob(cron as string, async () => {
+                    const taskId = `${Math.random().toString(36).substring(2, 9)}`
+                    this.log?.info(`starting to dispatch task ${taskName}...`)
+                    const task: TaskScheduler.Task = {
+                        id: taskId,
+                        status: TaskScheduler.TaskStatus.PENDING,
+                        data: {
+                            ...forwarderTaskData,
+                            // Inject connections into task data so pools can access it
+                            connections: this.props.connections
+                        },
+                    }
+                    this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, {
+                        taskId,
+                        task: task,
+                    })
+                    this.tasks.set(taskId, task)
+                })
+                this.log?.info(`Auto-Bound Forwarder Task created: ${taskName} using template ${matchForwarder.name}`)
+                this.cronJobs.push(job)
+            }
+        } else {
+            this.log?.warn('No crawlers defined for auto-binding.')
         }
     }
 

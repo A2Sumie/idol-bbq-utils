@@ -74,6 +74,7 @@ async function main() {
                 forwarders,
                 cfg_forwarder,
                 connections: config.connections,
+                crawlers,
             },
             emitter,
             log,
