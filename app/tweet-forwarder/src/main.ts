@@ -21,7 +21,7 @@ async function main() {
         log.error('Config file is empty or invalid, exiting...')
         return
     }
-    const { crawlers, cfg_crawler, forward_targets, cfg_forward_target, forwarders, cfg_forwarder } = config
+    const { crawlers, cfg_crawler, forward_targets, cfg_forward_target, forwarders, cfg_forwarder, formatters } = config
 
     if (crawlers && crawlers.length > 0) {
         const tmpDir = tmp.dirSync({
@@ -60,6 +60,7 @@ async function main() {
                 forward_targets,
                 cfg_forward_target,
                 connections: config.connections,
+                formatters,
             },
             emitter,
             log,

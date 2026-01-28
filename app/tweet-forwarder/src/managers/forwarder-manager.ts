@@ -202,7 +202,7 @@ class ForwarderPools extends BaseCompatibleModel {
             cfg_forwarder: Forwarder['cfg_forwarder']
         }
     > = new Map()
-    private props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections'>
+    private props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters'>
     private ArticleConverter = new ImgConverter()
 
     /**
@@ -215,7 +215,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private errorCounter = new Map<string, number>()
 
     // private workers:
-    constructor(props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections'>, emitter: EventEmitter, log?: Logger) {
+    constructor(props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters'>, emitter: EventEmitter, log?: Logger) {
         super()
         this.log = log?.child({ subservice: this.NAME })
         this.emitter = emitter
@@ -363,14 +363,73 @@ class ForwarderPools extends BaseCompatibleModel {
         for (const website of websites) {
             // 单次爬虫任务
             const url = new URL(website)
-            const forwarders = this.getOrInitForwarders(batchId, subscribers, cfg_forwarder, cfg_forward_target, id, connections)
-            if (forwarders.length === 0) {
+
+            // New Logic: Crawler -> Formatter -> Target
+            // Identify Crawler Name
+            const crawlerName = ctx.task.data.name
+            if (!crawlerName) {
+                ctx.log?.warn(`Crawler name not found for task ${ctx.taskId}`)
                 continue
             }
-            /**
-             * 查询当前网站下的近10篇文章并查询转发
-             */
-            await this.processSingleArticleTask(ctx, url.href, forwarders, cfg_forwarder)
+
+            const { connections, formatters } = this.props
+            if (!connections || !connections['crawler-formatter']) {
+                ctx.log?.warn(`No crawler-formatter connections definitions found`)
+                continue
+            }
+
+            const connectedFormatterIds = connections['crawler-formatter'][crawlerName]
+            if (!connectedFormatterIds || connectedFormatterIds.length === 0) {
+                ctx.log?.debug(`No formatters connected to crawler ${crawlerName}`)
+                continue
+            }
+
+            for (const formatterId of connectedFormatterIds) {
+                // Find Formatter Config
+                const formatterConfig = formatters?.find(f => f.id === formatterId)
+                if (!formatterConfig) {
+                    ctx.log?.warn(`Formatter config not found for id ${formatterId}`)
+                    continue
+                }
+
+                // Resolve Targets for this Formatter
+                if (!connections['formatter-target'] || !connections['formatter-target'][formatterId]) {
+                    ctx.log?.debug(`No targets connected to formatter ${formatterId}`)
+                    continue
+                }
+
+                const targetIds = connections['formatter-target'][formatterId]
+                const forwarders: Array<ForwardTargetInstanceWithRuntimeConfig> = []
+
+                for (const targetId of targetIds) {
+                    const forwarderInstance = this.forward_to.get(targetId)
+                    if (forwarderInstance) {
+                        forwarders.push({
+                            forwarder: forwarderInstance,
+                            runtime_config: cfg_forward_target // Base config, no specific override here for now
+                        })
+                    } else {
+                        ctx.log?.warn(`Target forwarding instance not found for id ${targetId}`)
+                    }
+                }
+
+                if (forwarders.length === 0) {
+                    continue
+                }
+
+                // Construct Merged Config with Render Type
+                const mergedCfgForwarder: Forwarder['cfg_forwarder'] = {
+                    ...cfg_forwarder,
+                    render_type: formatterConfig.render_type
+                }
+
+                ctx.log?.info(`Processing via Formatter: ${formatterConfig.name} (${formatterConfig.render_type}) for ${forwarders.length} targets`)
+
+                /**
+                 * 查询当前网站下的近10篇文章并查询转发
+                 */
+                await this.processSingleArticleTask(ctx, url.href, forwarders, mergedCfgForwarder)
+            }
         }
     }
 
