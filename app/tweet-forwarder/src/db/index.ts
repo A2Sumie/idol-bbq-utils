@@ -192,16 +192,20 @@ namespace DB {
         }
 
         export async function save(ref_id: number, bot_id: string, task_type: string) {
-            let exist_one = await checkExist(ref_id, bot_id, task_type)
-            if (exist_one) {
-                return exist_one
-            }
-            return await prisma.forward_by.create({
-                data: {
+            return await prisma.forward_by.upsert({
+                where: {
+                    ref_id_bot_id_task_type: {
+                        ref_id,
+                        bot_id,
+                        task_type,
+                    },
+                },
+                create: {
                     ref_id,
                     bot_id,
                     task_type,
                 },
+                update: {},
             })
         }
 
