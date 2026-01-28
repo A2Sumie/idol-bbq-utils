@@ -450,7 +450,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
             // Extract platform label for source-based formatters
             const extractPlatformLabel = (article: Article): string => {
-                const platform = article.platform?.toLowerCase()
+                const platformName = Platform[article.platform]?.toLowerCase()
                 const platformMap: Record<string, string> = {
                     'x': 'X',
                     'twitter': 'X',
@@ -459,7 +459,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     'youtube': 'YouTube',
                     'bilibili': 'Bilibili'
                 }
-                return platformMap[platform || ''] || article.platform || 'Unknown'
+                return platformMap[platformName || ''] || Platform[article.platform] || 'Unknown'
             }
 
             if (cfg_forwarder?.render_type?.startsWith('img')) {
