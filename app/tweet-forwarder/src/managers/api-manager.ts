@@ -55,6 +55,11 @@ export class APIManager extends BaseCompatibleModel {
                     return this.handleCookieDelete(req)
                 }
 
+                // Add POST delete to alias DELETE method for proxy compatibility
+                if (req.method === 'POST' && url.pathname === '/api/cookies/delete') {
+                    return this.handleCookieDelete(req)
+                }
+
                 if (req.method === 'GET' && url.pathname === '/api/cookies') {
                     return this.handleCookieList(req)
                 }
