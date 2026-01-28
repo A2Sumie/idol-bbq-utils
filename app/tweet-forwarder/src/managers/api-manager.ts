@@ -159,7 +159,7 @@ export class APIManager extends BaseCompatibleModel {
 
             const files = fs.readdirSync(cookiesDir)
             const cookieFiles = files
-                .filter(f => f.endsWith('.txt'))
+                .filter(f => f.endsWith('.txt') && !f.startsWith('.'))
                 .map(f => {
                     const filePath = path.join(cookiesDir, f)
                     const stats = fs.statSync(filePath)
