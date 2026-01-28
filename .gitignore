@@ -153,4 +153,14 @@ assets/*.db
 !config.example.yaml
 *.md
 !README.md
+!private/README.md
 .vscode/
+
+# Private credentials directory - NEVER COMMIT
+private/
+!private/README.md
+!private/credentials.py.template
+
+# Deployment temporary files
+*.backup
+remote_config.yml

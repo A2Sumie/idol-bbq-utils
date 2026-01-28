@@ -12,6 +12,10 @@ interface AppConfig {
     cfg_forward_target?: ForwardTargetPlatformCommonConfig
     forwarders?: Array<Forwarder<TaskType>>
     cfg_forwarder?: ForwarderConfig
+    api?: {
+        port?: number
+        secret?: string
+    }
 }
 
 export type { AppConfig }

@@ -78,6 +78,13 @@ async function main() {
         taskSchedulers.push(forwarderTaskScheduler)
     }
 
+    // Initialize APIManager
+    if (config.api || process.env.API_SECRET) {
+        const { APIManager } = await import('./managers/api-manager')
+        const apiManager = new APIManager(config, log)
+        compatibleModels.push(apiManager)
+    }
+
     for (const c of compatibleModels) {
         await c.init()
     }
