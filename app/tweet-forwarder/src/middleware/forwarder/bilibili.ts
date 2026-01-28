@@ -22,6 +22,7 @@ class BiliForwarder extends Forwarder {
 
     constructor(...[config, ...rest]: [...ConstructorParameters<typeof Forwarder>]) {
         super(config, ...rest)
+        this.minInterval = 10000 // 10s
         const {
             bili_jct,
             sessdata,

@@ -207,12 +207,12 @@ class XListSpider extends BaseSpider {
             if (config.crawl_engine === 'api-statuses') {
                 this.log?.debug('Using api-statuses engine')
                 res = await this.grabTweets(id, cookie_string)
-            } else if (config.crawl_engine === 'api-graphql') {
-                this.log?.debug('Using api-graphql engine')
-                res = await this.GRAPHQL_API_CLIENT.grabTweetsFromList(id, cookie_string)
-            } else {
+            } else if (config.crawl_engine === 'api-member') {
                 this.log?.debug('Using api-member engine')
                 res = await this.grabTweetsPoor(id, cookie_string)
+            } else {
+                this.log?.debug('Using api-graphql engine (default)')
+                res = await this.GRAPHQL_API_CLIENT.grabTweetsFromList(id, cookie_string)
             }
             return res as TaskTypeResult<T, Platform.X>
         }
@@ -1059,8 +1059,8 @@ namespace XApiJsonParser {
             ref: result.quoted_status_result?.result
                 ? tweetParser(result.quoted_status_result.result)
                 : result.retweeted_status_result?.result
-                  ? tweetParser(result.retweeted_status_result.result)
-                  : null,
+                    ? tweetParser(result.retweeted_status_result.result)
+                    : null,
             media: mediaParser(legacy?.extended_entities?.media || legacy?.entities?.media),
             has_media: !!legacy?.extended_entities?.media || !!legacy?.entities?.media,
             extra: Card.cardParser(result.card?.legacy),
@@ -1297,8 +1297,8 @@ namespace XApiJsonParser {
                 height: number
             }
         } = {
-            viewport: defaultViewport,
-        },
+                viewport: defaultViewport,
+            },
     ): Promise<Array<GenericArticle<Platform.X>>> {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
@@ -1348,8 +1348,8 @@ namespace XApiJsonParser {
                 height: number
             }
         } = {
-            viewport: defaultViewport,
-        },
+                viewport: defaultViewport,
+            },
     ): Promise<Array<GenericArticle<Platform.X>>> {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()

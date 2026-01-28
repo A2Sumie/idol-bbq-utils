@@ -12,6 +12,7 @@ class QQForwarder extends Forwarder {
 
     constructor(...[config, ...rest]: [...ConstructorParameters<typeof Forwarder>]) {
         super(config, ...rest)
+        this.minInterval = 1000 // 1s
         const { group_id, url, token } = config as ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.QQ>
         if (!group_id || !url) {
             throw new Error(`forwarder ${this.NAME} group_id and url is required`)
@@ -80,23 +81,23 @@ class QQForwarder extends Forwarder {
     async sendWithPayload(
         arr_of_segments: Array<
             | {
-                  type: 'text'
-                  data: {
-                      text: string
-                  }
-              }
+                type: 'text'
+                data: {
+                    text: string
+                }
+            }
             | {
-                  type: 'image'
-                  data: {
-                      file: string
-                  }
-              }
+                type: 'image'
+                data: {
+                    file: string
+                }
+            }
             | {
-                  type: 'video'
-                  data: {
-                      file: string
-                  }
-              }
+                type: 'video'
+                data: {
+                    file: string
+                }
+            }
         >,
     ) {
         const res = await axios.post(

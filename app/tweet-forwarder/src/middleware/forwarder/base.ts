@@ -103,6 +103,9 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         return blocked
     }
 
+    protected minInterval: number = 0
+    private lastSentTime: number = 0
+
     public async send(text: string, props?: SendProps): Promise<any> {
         const { runtime_config } = props || {}
         const mergedConfig: ForwardTargetPlatformCommonConfig = {
@@ -131,6 +134,20 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         const _log = this.log
 
         _log?.debug(`trying to send text with length ${context.text.length}`)
+
+        // Rate Limit Check
+        if (this.minInterval > 0) {
+            const now = Date.now()
+            const timeSinceLastSend = now - this.lastSentTime
+            if (timeSinceLastSend < this.minInterval) {
+                const waitTime = this.minInterval - timeSinceLastSend
+                _log?.debug(`Rate limit hit, waiting ${waitTime}ms`)
+                await new Promise((resolve) => setTimeout(resolve, waitTime))
+            }
+        }
+        
+        // Update timestamp BEFORE attempt to space out *starts* of attempts (conservative approach)
+        this.lastSentTime = Date.now()
 
         await pRetry(() => this.realSend(chunks, props), {
             retries: RETRY_LIMIT,

@@ -68,13 +68,13 @@ export class RenderService {
             }
         }
 
-        if (render_type === 'img-with-source') {
-            // Case 1: img+source
+        if (render_type === 'source') {
+            // Case 1: source (was img+source / img-with-source)
             // Concept: Source (Platform Tag) + Original Media. NO Rendered Image.
             text = this.extractPlatformLabel(article)
-        } else if (render_type === 'img-with-source-summary') {
-            // Case 2: img+source w/ summary
-            // Concept: Source (Platform Tag) + Original Media + Rendered Image (at end).
+        } else if (render_type === 'img+source') {
+            // Case 2: img+source (was img-with-source-summary)
+            // Concept: Source (Platform Tag) + Original Media + Rendered Image (at END).
             text = this.extractPlatformLabel(article)
             const renderedPath = await generateRenderedImage()
             if (renderedPath) {
@@ -132,7 +132,11 @@ export class RenderService {
     }
 
     private extractPlatformLabel(article: Article): string {
-        const platformName = Platform[article.platform]?.toLowerCase()
+        // Platform is enum number usually.
+        // Platform[article.platform] returns string key e.g. 'X'
+        const platformKey = Platform[article.platform]
+        const platformName = platformKey?.toLowerCase() || ''
+
         const platformMap: Record<string, string> = {
             'x': 'X',
             'twitter': 'X',
@@ -141,7 +145,9 @@ export class RenderService {
             'youtube': 'YouTube',
             'bilibili': 'Bilibili'
         }
-        return platformMap[platformName || ''] || Platform[article.platform] || 'Unknown'
+
+        const label = platformMap[platformName] || platformKey || 'Unknown'
+        return `[${label}]`
     }
 
     private async handleMedia(

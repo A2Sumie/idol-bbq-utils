@@ -12,18 +12,11 @@ import { type Media, type MediaTool, MediaToolEnum } from '@/types/media'
 import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } from '@/types/forwarder'
 import { getForwarder } from '@/middleware/forwarder'
 import crypto from 'crypto'
-import {
-    galleryDownloadMediaFile,
-    getMediaType,
-    plainDownloadMediaFile,
-    tryGetCookie,
-    writeImgToFile,
-} from '@/middleware/media'
-import { articleToText, followsToText, formatMetaline, ImgConverter } from '@idol-bbq-utils/render'
-import { existsSync, unlinkSync } from 'fs'
+import { RenderService } from '@/services/render-service'
+import { followsToText } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
-import { platformPresetHeadersMap } from '@idol-bbq-utils/spider/const'
+
 
 type Forwarder = RealForwarder<TaskType>
 
@@ -231,7 +224,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     > = new Map()
     private props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters'>
-    private ArticleConverter = new ImgConverter()
+    private renderService: RenderService
 
     /**
      * max allowed error count for a single article in every cycle
@@ -246,6 +239,7 @@ class ForwarderPools extends BaseCompatibleModel {
     constructor(props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters'>, emitter: EventEmitter, log?: Logger) {
         super()
         this.log = log?.child({ subservice: this.NAME })
+        this.renderService = new RenderService(this.log)
         this.emitter = emitter
         this.props = props
     }
@@ -389,75 +383,74 @@ class ForwarderPools extends BaseCompatibleModel {
             .createHash('md5')
             .update(`article:${websites.join(',')}`)
             .digest('hex')
+
+        // Define a unified path structure
+        interface ForwardingPath {
+            formatterConfig: Forwarder['cfg_forwarder']
+            targets: Array<ForwardTargetInstanceWithRuntimeConfig>
+            source: 'graph' | 'inline'
+            formatterName: string
+        }
+
         for (const website of websites) {
             // 单次爬虫任务
             const url = new URL(website)
 
-            // New Logic: Crawler -> Formatter -> Target
-            // Identify Crawler Name
+            // Collection of all paths for this website
+            const allPaths: ForwardingPath[] = []
+
+            // 1. Resolve Graph Connections (Crawler -> Formatter -> Target)
             const crawlerName = ctx.task.data.name
-            if (!crawlerName) {
-                ctx.log?.warn(`Crawler name not found for task ${ctx.taskId}`)
-                continue
-            }
+            if (crawlerName && connections && connections['crawler-formatter'] && connections['formatter-target']) {
+                const connectedFormatterIds = connections['crawler-formatter'][crawlerName] || []
+                const { formatters } = this.props
 
-            const { connections, formatters } = this.props
-            if (!connections || !connections['crawler-formatter']) {
-                ctx.log?.warn(`No crawler-formatter connections definitions found`)
-                continue
-            }
+                for (const formatterId of connectedFormatterIds) {
+                    const formatterConfig = formatters?.find(f => f.id === formatterId)
+                    if (!formatterConfig) continue
 
-            const connectedFormatterIds = connections['crawler-formatter'][crawlerName]
-            if (!connectedFormatterIds || connectedFormatterIds.length === 0) {
-                ctx.log?.debug(`No formatters connected to crawler ${crawlerName}`)
-                continue
-            }
+                    const targetIds = connections['formatter-target'][formatterId] || []
+                    const validTargets: Array<ForwardTargetInstanceWithRuntimeConfig> = []
 
-            for (const formatterId of connectedFormatterIds) {
-                // Find Formatter Config
-                const formatterConfig = formatters?.find(f => f.id === formatterId)
-                if (!formatterConfig) {
-                    ctx.log?.warn(`Formatter config not found for id ${formatterId}`)
-                    continue
-                }
+                    for (const targetId of targetIds) {
+                        const forwarderInstance = this.forward_to.get(targetId)
+                        if (forwarderInstance) {
+                            validTargets.push({
+                                forwarder: forwarderInstance,
+                                runtime_config: cfg_forward_target
+                            })
+                        }
+                    }
 
-                // Resolve Targets for this Formatter
-                if (!connections['formatter-target'] || !connections['formatter-target'][formatterId]) {
-                    ctx.log?.debug(`No targets connected to formatter ${formatterId}`)
-                    continue
-                }
-
-                const targetIds = connections['formatter-target'][formatterId]
-                const forwarders: Array<ForwardTargetInstanceWithRuntimeConfig> = []
-
-                for (const targetId of targetIds) {
-                    const forwarderInstance = this.forward_to.get(targetId)
-                    if (forwarderInstance) {
-                        forwarders.push({
-                            forwarder: forwarderInstance,
-                            runtime_config: cfg_forward_target // Base config, no specific override here for now
+                    if (validTargets.length > 0) {
+                        allPaths.push({
+                            formatterConfig: {
+                                ...cfg_forwarder,
+                                render_type: formatterConfig.render_type
+                            },
+                            targets: validTargets,
+                            source: 'graph',
+                            formatterName: formatterConfig.name || 'Graph Formatter'
                         })
-                    } else {
-                        ctx.log?.warn(`Target forwarding instance not found for id ${targetId}`)
                     }
                 }
+            }
 
-                if (forwarders.length === 0) {
-                    continue
-                }
 
-                // Construct Merged Config with Render Type
-                const mergedCfgForwarder: Forwarder['cfg_forwarder'] = {
-                    ...cfg_forwarder,
-                    render_type: formatterConfig.render_type
-                }
 
-                ctx.log?.info(`Processing via Formatter: ${formatterConfig.name} (${formatterConfig.render_type}) for ${forwarders.length} targets`)
+            // 3. Execute All Paths
+            if (allPaths.length === 0) {
+                // Only warn if we really found nothing at all (neither graph nor inline)
+                ctx.log?.debug(`No forwarding paths (graph or inline) found for ${url}, skipping...`)
+                continue
+            }
 
+            for (const path of allPaths) {
+                ctx.log?.info(`Processing via path [${path.source}]: ${path.formatterName} for ${path.targets.length} targets`)
                 /**
                  * 查询当前网站下的近10篇文章并查询转发
                  */
-                await this.processSingleArticleTask(ctx, url.href, forwarders, mergedCfgForwarder)
+                await this.processSingleArticleTask(ctx, url.href, path.targets, path.formatterConfig)
             }
         }
     }
@@ -534,69 +527,15 @@ class ForwarderPools extends BaseCompatibleModel {
                 continue
             }
 
-            let articleToImgSuccess = false
             ctx.log?.debug(`Processing article ${article.a_id} for ${to.map((i) => i.forwarder.id).join(', ')}`)
-            let maybe_media_files = [] as Array<{
-                path: string
-                media_type: MediaType
-            }>
 
-            // 下载媒体文件
-            if (cfg_forwarder?.media) {
-                maybe_media_files = await this.handleMedia(ctx, article, cfg_forwarder.media)
-            }
-
-            // Extract platform label for source-based formatters
-            const extractPlatformLabel = (article: Article): string => {
-                const platformName = Platform[article.platform]?.toLowerCase()
-                const platformMap: Record<string, string> = {
-                    'x': 'X',
-                    'twitter': 'X',
-                    'tiktok': 'TikTok',
-                    'instagram': 'Instagram',
-                    'youtube': 'YouTube',
-                    'bilibili': 'Bilibili'
-                }
-                return platformMap[platformName || ''] || Platform[article.platform] || 'Unknown'
-            }
-
-            if (cfg_forwarder?.render_type?.startsWith('img')) {
-                try {
-                    const imgBuffer = await this.ArticleConverter.articleToImg(cloneDeep(article))
-                    ctx.log?.debug(`Converted article ${article.a_id} to img successfully`)
-                    const path = writeImgToFile(imgBuffer, `${ctx.taskId}-${article.a_id}-rendered.png`)
-
-                    maybe_media_files.unshift({
-                        path,
-                        media_type: 'photo',
-                    })
-                    articleToImgSuccess = true
-
-                    // For img-with-source-summary, also append rendered image at end
-                    if (cfg_forwarder?.render_type === 'img-with-source-summary') {
-                        maybe_media_files.push({
-                            path,
-                            media_type: 'photo',
-                        })
-                    }
-                } catch (e) {
-                    ctx.log?.error(`Error while converting article to img: ${e}`)
-                }
-            }
-            // article to photo
-
-            const fullText = articleToText(article)
-            // 获取需要转发的文本，但如果已经执行了文本转图片，则只需要metaline
-            let text = articleToImgSuccess ? formatMetaline(article) : fullText
-
-            // Handle different render types
-            if (cfg_forwarder?.render_type === 'img') {
-                text = '' // No text for pure img mode
-            } else if (cfg_forwarder?.render_type === 'img-with-source' || cfg_forwarder?.render_type === 'img-with-source-summary') {
-                // Add platform label at the beginning
-                const platformLabel = extractPlatformLabel(article)
-                text = `${platformLabel}\n${text}`
-            }
+            // --- Use RenderService ---
+            const renderResult = await this.renderService.process(article, {
+                taskId: ctx.taskId,
+                render_type: cfg_forwarder?.render_type,
+                mediaConfig: cfg_forwarder?.media
+            })
+            // -------------------------
 
             let error_for_all = true
             let cloned_article = cloneDeep(article)
@@ -616,8 +555,8 @@ class ForwarderPools extends BaseCompatibleModel {
                                 currentArticle = currentArticle.ref as ArticleWithId | null
                             }
                             try {
-                                await target.send(text, {
-                                    media: maybe_media_files,
+                                await target.send(renderResult.text, {
+                                    media: renderResult.mediaFiles,
                                     timestamp: article.created_at,
                                     runtime_config,
                                     article: cloned_article,
@@ -669,17 +608,7 @@ class ForwarderPools extends BaseCompatibleModel {
             /**
              * 清理媒体文件
              */
-            maybe_media_files
-                .map((i) => i.path)
-                .forEach((path) => {
-                    try {
-                        if (existsSync(path)) {
-                            unlinkSync(path)
-                        }
-                    } catch (e) {
-                        ctx.log?.error(`Error while unlinking file ${path}: ${e}`)
-                    }
-                })
+            this.renderService.cleanup(renderResult.mediaFiles)
         }
     }
 
@@ -833,96 +762,6 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
             })
             .filter((i) => i !== undefined)
-    }
-
-    async handleMedia(
-        ctx: TaskScheduler.TaskCtx,
-        article: Article,
-        media: Media,
-    ): Promise<
-        Array<{
-            path: string
-            media_type: MediaType
-        }>
-    > {
-        let maybe_media_files = [] as Array<{
-            path: string
-            media_type: MediaType
-        }>
-        let currentArticle: Article | null = article
-        while (currentArticle) {
-            let new_files = [] as Array<
-                | {
-                    path: string
-                    media_type: MediaType
-                }
-                | undefined
-            >
-            if (currentArticle.has_media) {
-                ctx.log?.debug(`Downloading media files for ${currentArticle.a_id}`)
-                let cookie: string | undefined = undefined
-                // TODO: better way to get cookie
-                if ([Platform.TikTok].includes(currentArticle.platform)) {
-                    cookie = await tryGetCookie(currentArticle.url)
-                }
-                async function _handleMedia(media: Array<{ url: string; type: MediaType }>, overrideType?: boolean) {
-                    return Promise.all(
-                        media.map(async ({ url, type }) => {
-                            try {
-                                // TODO: better way to set referer
-                                const path = await plainDownloadMediaFile(url, ctx.taskId, {
-                                    cookie: cookie || '',
-                                    ...(currentArticle?.platform
-                                        ? platformPresetHeadersMap[currentArticle.platform]
-                                        : {}),
-                                })
-                                return {
-                                    path,
-                                    media_type: overrideType ? getMediaType(path) : type,
-                                }
-                            } catch (e) {
-                                ctx.log?.error(`Error while downloading media file: ${e}, skipping ${url}`)
-                            }
-                            return undefined
-                        }),
-                    )
-                }
-                // handle media
-                if (media.use.tool === MediaToolEnum.DEFAULT && currentArticle.media) {
-                    ctx.log?.debug(`Downloading media with http downloader`)
-                    new_files = await _handleMedia(currentArticle.media)
-
-                    if (currentArticle.extra?.media) {
-                        const extra_files = await _handleMedia(currentArticle.extra.media, true)
-                        new_files = new_files.concat(extra_files)
-                    }
-                }
-                if (media.use.tool === MediaToolEnum.GALLERY_DL) {
-                    ctx.log?.debug(`Downloading media with gallery-dl`)
-                    new_files = await galleryDownloadMediaFile(
-                        currentArticle.url,
-                        media.use as MediaTool<MediaToolEnum.GALLERY_DL>,
-                    ).map((path) => ({
-                        path,
-                        media_type: getMediaType(path),
-                    }))
-                    if (currentArticle.extra?.media) {
-                        const extra_files = await _handleMedia(currentArticle.extra.media, true)
-                        new_files = new_files.concat(extra_files)
-                    }
-                }
-                if (new_files.length > 0) {
-                    ctx.log?.debug(`Downloaded media files: ${new_files.join(', ')}`)
-                    maybe_media_files = maybe_media_files.concat(new_files.filter((i) => i !== undefined))
-                }
-            }
-            if (currentArticle.ref && typeof currentArticle.ref === 'object') {
-                currentArticle = currentArticle.ref as Article
-            } else {
-                currentArticle = null
-            }
-        }
-        return maybe_media_files
     }
 }
 
