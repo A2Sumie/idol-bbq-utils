@@ -334,7 +334,8 @@ class ForwarderPools extends BaseCompatibleModel {
                             subscribers,
                             cfg_forward_target,
                             id,
-                            connections
+                            connections,
+                            name
                         },
                     },
                 })
