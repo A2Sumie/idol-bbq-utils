@@ -4,6 +4,7 @@ import { Logger } from '@idol-bbq-utils/log'
 import { spiderRegistry } from '@idol-bbq-utils/spider'
 import fs from 'fs'
 import path from 'path'
+import YAML from 'yaml'
 
 interface ApiConfig {
     port?: number
@@ -45,22 +46,39 @@ export class APIManager extends BaseCompatibleModel {
                 }
 
                 // Cookie management endpoints
-                if (req.method === 'POST' && url.pathname === '/api/cookie') {
+                // Standardizing to plural /api/cookies to match RESTful practices and frontend
+                if (req.method === 'POST' && url.pathname === '/api/cookies') {
                     return this.handleCookieUpdate(req)
+                }
+
+                if (req.method === 'DELETE' && url.pathname === '/api/cookies') {
+                    return this.handleCookieDelete(req)
                 }
 
                 if (req.method === 'GET' && url.pathname === '/api/cookies') {
                     return this.handleCookieList(req)
                 }
 
-                if (req.method === 'GET' && url.pathname.startsWith('/api/cookie/')) {
-                    const finder = url.pathname.split('/api/cookie/')[1]
+                if (req.method === 'GET' && url.pathname.startsWith('/api/cookies/')) {
+                    const finder = url.pathname.split('/api/cookies/')[1]
                     return this.handleCookieView(req, finder)
                 }
 
                 // Config management endpoints
+                if (req.method === 'GET' && url.pathname === '/api/config') {
+                    return this.handleConfigGet(req)
+                }
+
                 if (req.method === 'GET' && url.pathname === '/api/config/crawlers') {
                     return this.handleConfigList(req)
+                }
+
+                if (req.method === 'POST' && url.pathname === '/api/config/update') {
+                    return this.handleConfigUpdate(req)
+                }
+
+                if (req.method === 'POST' && url.pathname === '/api/server/restart') {
+                    return this.handleServerRestart(req)
                 }
 
                 return new Response(`Not Found: ${req.method} ${url.pathname} (Full: ${req.url})`, { status: 404 })
@@ -185,13 +203,61 @@ export class APIManager extends BaseCompatibleModel {
         }
     }
 
+    private async handleCookieDelete(req: Request): Promise<Response> {
+        try {
+            const body = await req.json() as { filenames: string[] }
+            const { filenames } = body
+
+            if (!filenames || !Array.isArray(filenames) || filenames.length === 0) {
+                return new Response('No filenames provided', { status: 400 })
+            }
+
+            const cookiesDir = path.join(process.cwd(), 'assets', 'cookies')
+            let deletedCount = 0
+            let errors: string[] = []
+
+            for (const filename of filenames) {
+                // Security check: prevent directory traversal
+                const safeName = path.basename(filename)
+                if (safeName !== filename) {
+                    errors.push(`Invalid filename: ${filename}`)
+                    continue
+                }
+
+                const filePath = path.join(cookiesDir, safeName)
+                if (fs.existsSync(filePath)) {
+                    try {
+                        fs.unlinkSync(filePath)
+                        deletedCount++
+                    } catch (e: any) {
+                        errors.push(`Failed to delete ${filename}: ${e.message}`)
+                    }
+                }
+            }
+
+            this.log?.info(`Deleted ${deletedCount} cookies. Errors: ${errors.length}`)
+
+            return new Response(JSON.stringify({
+                success: true,
+                deleted: deletedCount,
+                errors
+            }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            })
+        } catch (error) {
+            this.log?.error('Cookie delete error:', error)
+            return new Response('Failed to delete cookies', { status: 500 })
+        }
+    }
+
     private async handleConfigList(req: Request): Promise<Response> {
         try {
             const crawlers = this.config.crawlers || []
 
             const crawlerInfo = crawlers.map(crawler => ({
                 name: crawler.name,
-                type: crawler.type,
+                type: crawler.task_type,
                 schedule: crawler.cfg_crawler?.cron || null,
                 cookieFile: crawler.cfg_crawler?.cookie_file || null,
                 enabled: true // 所有配置的crawler默认启用
@@ -206,4 +272,72 @@ export class APIManager extends BaseCompatibleModel {
             return new Response('Failed to list crawlers', { status: 500 })
         }
     }
+
+    private async handleConfigUpdate(req: Request): Promise<Response> {
+        try {
+            const body = await req.json() as AppConfig
+            this.log?.info('Received config update request', { keys: Object.keys(body) })
+
+            // Basic validation
+            if (!body || typeof body !== 'object') {
+                return new Response('Invalid config format', { status: 400 })
+            }
+
+            const configPath = path.join(process.cwd(), 'config.yaml')
+
+            // Read existing config first to preserve comments/structure if possible (though generic YAML stringify might lose comments)
+            // For now, we just overwrite because maintaining comments in YAML via JS is hard without specialized libs.
+            // But we should backup!
+            if (fs.existsSync(configPath)) {
+                fs.copyFileSync(configPath, `${configPath}.bak`)
+            }
+
+            const yamlStr = YAML.stringify(body)
+            fs.writeFileSync(configPath, yamlStr, 'utf8')
+
+            this.log?.info('Configuration updated via API')
+
+            // Update internal config state reference? 
+            // Might be dangerous if other components hold references. 
+            // Restart is safest, but we can update this.config slightly for read-after-write consistency if needed.
+            this.config = body
+
+            return new Response(JSON.stringify({ success: true, message: 'Configuration saved. Restart server to apply changes.' }), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            })
+        } catch (error) {
+            this.log?.error('Config update error:', error)
+            return new Response(`Failed to update config: ${error instanceof Error ? error.message : String(error)}`, { status: 500 })
+        }
+    }
+
+    private async handleServerRestart(req: Request): Promise<Response> {
+        this.log?.warn('Server restart requested via API')
+
+        // Respond first, then exit
+        setTimeout(() => {
+            this.log?.info('Exiting process for restart...')
+            process.exit(0) // Docker/PM2 should restart it
+        }, 1000)
+
+        return new Response(JSON.stringify({ success: true, message: 'Server restarting...' }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' }
+        })
+    }
+
+    private async handleConfigGet(req: Request): Promise<Response> {
+        try {
+            this.log?.debug('Serving config', { keys: Object.keys(this.config) })
+            return new Response(JSON.stringify(this.config), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' }
+            })
+        } catch (error) {
+            this.log?.error('Config get error:', error)
+            return new Response('Failed to get config', { status: 500 })
+        }
+    }
 }
+
