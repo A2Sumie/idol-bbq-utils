@@ -447,6 +447,21 @@ class ForwarderPools extends BaseCompatibleModel {
             if (cfg_forwarder?.media) {
                 maybe_media_files = await this.handleMedia(ctx, article, cfg_forwarder.media)
             }
+
+            // Extract platform label for source-based formatters
+            const extractPlatformLabel = (article: Article): string => {
+                const platform = article.platform?.toLowerCase()
+                const platformMap: Record<string, string> = {
+                    'x': 'X',
+                    'twitter': 'X',
+                    'tiktok': 'TikTok',
+                    'instagram': 'Instagram',
+                    'youtube': 'YouTube',
+                    'bilibili': 'Bilibili'
+                }
+                return platformMap[platform || ''] || article.platform || 'Unknown'
+            }
+
             if (cfg_forwarder?.render_type?.startsWith('img')) {
                 try {
                     const imgBuffer = await this.ArticleConverter.articleToImg(cloneDeep(article))
@@ -458,6 +473,14 @@ class ForwarderPools extends BaseCompatibleModel {
                         media_type: 'photo',
                     })
                     articleToImgSuccess = true
+
+                    // For img-with-source-summary, also append rendered image at end
+                    if (cfg_forwarder?.render_type === 'img-with-source-summary') {
+                        maybe_media_files.push({
+                            path,
+                            media_type: 'photo',
+                        })
+                    }
                 } catch (e) {
                     ctx.log?.error(`Error while converting article to img: ${e}`)
                 }
@@ -467,8 +490,15 @@ class ForwarderPools extends BaseCompatibleModel {
             const fullText = articleToText(article)
             // 获取需要转发的文本，但如果已经执行了文本转图片，则只需要metaline
             let text = articleToImgSuccess ? formatMetaline(article) : fullText
-            // 如果render_type是img，则不需要文本
-            text = cfg_forwarder?.render_type === 'img' ? '' : text
+
+            // Handle different render types
+            if (cfg_forwarder?.render_type === 'img') {
+                text = '' // No text for pure img mode
+            } else if (cfg_forwarder?.render_type === 'img-with-source' || cfg_forwarder?.render_type === 'img-with-source-summary') {
+                // Add platform label at the beginning
+                const platformLabel = extractPlatformLabel(article)
+                text = `${platformLabel}\n${text}`
+            }
 
             let error_for_all = true
             let cloned_article = cloneDeep(article)
@@ -638,21 +668,21 @@ class ForwarderPools extends BaseCompatibleModel {
             const newWrap = {
                 to: subscribers
                     ? subscribers.reduce((acc, s) => {
-                          if (typeof s === 'string') {
-                              acc[s] = common_cfg
-                          }
-                          if (typeof s === 'object') {
-                              acc[s.id] = {
-                                  ...common_cfg,
-                                  ...s.cfg_forward_target,
-                              }
-                          }
-                          return acc
-                      }, {} as ForwardTargetIdWithRuntimeConfig)
+                        if (typeof s === 'string') {
+                            acc[s] = common_cfg
+                        }
+                        if (typeof s === 'object') {
+                            acc[s.id] = {
+                                ...common_cfg,
+                                ...s.cfg_forward_target,
+                            }
+                        }
+                        return acc
+                    }, {} as ForwardTargetIdWithRuntimeConfig)
                     : this.forward_to.keys().reduce((acc, id) => {
-                          acc[id] = undefined
-                          return acc
-                      }, {} as ForwardTargetIdWithRuntimeConfig),
+                        acc[id] = undefined
+                        return acc
+                    }, {} as ForwardTargetIdWithRuntimeConfig),
                 cfg_forwarder: cfg,
             }
             this.subscribers.set(id, newWrap)
@@ -669,9 +699,9 @@ class ForwarderPools extends BaseCompatibleModel {
                     typeof s === 'string'
                         ? common_cfg
                         : {
-                              ...common_cfg,
-                              ...s.cfg_forward_target,
-                          }
+                            ...common_cfg,
+                            ...s.cfg_forward_target,
+                        }
             }
         })
         return Object.entries(to)
@@ -706,9 +736,9 @@ class ForwarderPools extends BaseCompatibleModel {
         while (currentArticle) {
             let new_files = [] as Array<
                 | {
-                      path: string
-                      media_type: MediaType
-                  }
+                    path: string
+                    media_type: MediaType
+                }
                 | undefined
             >
             if (currentArticle.has_media) {
