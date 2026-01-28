@@ -59,6 +59,7 @@ async function main() {
             {
                 forward_targets,
                 cfg_forward_target,
+                connections: config.connections,
             },
             emitter,
             log,
@@ -71,6 +72,7 @@ async function main() {
             {
                 forwarders,
                 cfg_forwarder,
+                connections: config.connections,
             },
             emitter,
             log,

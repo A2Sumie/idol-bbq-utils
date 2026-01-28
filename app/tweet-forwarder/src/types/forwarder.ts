@@ -126,6 +126,10 @@ interface ForwardTarget<T extends ForwardTargetPlatformEnum = ForwardTargetPlatf
 
 interface Forwarder<T extends TaskType> {
     /**
+     * Unique identifier for connection mapping
+     */
+    id?: string
+    /**
      * Display only
      */
     name?: string
@@ -159,9 +163,9 @@ interface Forwarder<T extends TaskType> {
     subscribers?: Array<
         | string
         | {
-              id: string
-              cfg_forward_target?: ForwardTargetPlatformCommonConfig
-          }
+            id: string
+            cfg_forward_target?: ForwardTargetPlatformCommonConfig
+        }
     >
 
     cfg_forwarder?: ForwarderConfig

@@ -20,6 +20,7 @@ interface ConnectionMap {
     'translator-formatter'?: Record<string, string[]>
     'crawler-formatter'?: Record<string, string[]>
     'formatter-target'?: Record<string, string[]>
+    'forwarder-target'?: Record<string, string[]>
 }
 
 export type { Formatter, ConnectionType, ConnectionMap }
