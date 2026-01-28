@@ -10,6 +10,10 @@ const MATCH_FILE_NAME = /(?<filename>[^/]+)\.(?<ext>[^.]+)$/
 
 function writeImgToFile(buffer: Buffer<ArrayBufferLike>, filename: string): string {
     const dest = `${CACHE_DIR_ROOT}/media/plain/${filename}`
+    const dir = path.dirname(dest)
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true })
+    }
     writeFileSync(dest, buffer)
     return dest
 }
@@ -77,7 +81,7 @@ async function tryGetCookie(url: string) {
     try {
         const res = await fetch(url)
         cookieString = res.headers.get('set-cookie')
-    } catch (e) {}
+    } catch (e) { }
     if (!cookieString) {
         return
     }

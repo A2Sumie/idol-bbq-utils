@@ -59,7 +59,9 @@ export class RenderService {
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
                 const imgBuffer = await this.ArticleConverter.articleToImg(cloneDeep(article))
-                return writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
+                const path = writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
+                this.log?.debug(`Generated rendered image at ${path}`)
+                return path
             } catch (e) {
                 this.log?.error(`Error while converting article to img: ${e}`)
                 return null
