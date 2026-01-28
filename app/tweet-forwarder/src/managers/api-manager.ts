@@ -63,7 +63,7 @@ export class APIManager extends BaseCompatibleModel {
                     return this.handleConfigList(req)
                 }
 
-                return new Response('Not Found', { status: 404 })
+                return new Response(`Not Found: ${req.method} ${url.pathname} (Full: ${req.url})`, { status: 404 })
 
             },
         })
