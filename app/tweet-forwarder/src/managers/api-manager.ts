@@ -116,19 +116,22 @@ export class APIManager extends BaseCompatibleModel {
             }
 
             // Find crawler by name or website
+            let cookieFile: string;
+
+            // Try to find crawler config first
             const crawler = crawlers.find(c => {
                 if (c.name === finder) return true
                 if (c.websites?.some(w => w.includes(finder))) return true
                 return false
             })
 
-            if (!crawler) {
-                return new Response('Crawler not found', { status: 404 })
-            }
-
-            const cookieFile = crawler.cfg_crawler?.cookie_file
-            if (!cookieFile) {
-                return new Response('Crawler has no cookie_file configured', { status: 400 })
+            if (crawler && crawler.cfg_crawler?.cookie_file) {
+                cookieFile = crawler.cfg_crawler.cookie_file
+            } else {
+                // Fallback: Use standard assets/cookies directory
+                // This allows creating cookies before configuring the crawler
+                const safeName = path.basename(finder).replace(/\.txt$/, '') // Ensure no extension duplication if user typed it
+                cookieFile = path.join(process.cwd(), 'assets', 'cookies', `${safeName}.txt`)
             }
 
             // Ensure directory exists
@@ -138,7 +141,7 @@ export class APIManager extends BaseCompatibleModel {
             }
 
             fs.writeFileSync(cookieFile, cookie)
-            this.log?.info(`Cookie updated for ${finder}`)
+            this.log?.info(`Cookie updated for ${finder} at ${cookieFile}`)
             return new Response('Cookie updated successfully', { status: 200 })
         } catch (error) {
             this.log?.error('Cookie update error:', error)
@@ -159,7 +162,7 @@ export class APIManager extends BaseCompatibleModel {
 
             const files = fs.readdirSync(cookiesDir)
             const cookieFiles = files
-                .filter(f => f.endsWith('.txt') && !f.startsWith('.'))
+                .filter(f => f.endsWith('.txt'))
                 .map(f => {
                     const filePath = path.join(cookiesDir, f)
                     const stats = fs.statSync(filePath)
