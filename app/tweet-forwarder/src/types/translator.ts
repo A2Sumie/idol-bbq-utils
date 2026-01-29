@@ -58,6 +58,7 @@ interface TranslatorConfig extends CommonCfgConfig {
 interface Translator {
     id?: string
     name?: string
+    group?: string
     provider: TranslatorProvider
     api_key: string
     cfg_translator?: TranslatorConfig

@@ -121,6 +121,10 @@ interface ForwardTarget<T extends ForwardTargetPlatformEnum = ForwardTargetPlatf
      * default is md5 hash of the platform and config
      */
     id?: string
+    /**
+     * Group tag for UI grouping
+     */
+    group?: string
     cfg_platform: ForwardTargetPlatformConfig<T> & ForwardTargetPlatformCommonConfig
 }
 
@@ -129,6 +133,10 @@ interface Forwarder<T extends TaskType> {
      * Unique identifier for connection mapping
      */
     id?: string
+    /**
+     * Group tag for UI grouping
+     */
+    group?: string
     /**
      * Display only
      */

@@ -51,6 +51,10 @@ interface Crawler {
      */
     name?: string
     /**
+     * Group tag for UI grouping
+     */
+    group?: string
+    /**
      * will override the origin and paths
      */
     websites?: Array<string>

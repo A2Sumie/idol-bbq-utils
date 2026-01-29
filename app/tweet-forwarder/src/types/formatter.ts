@@ -4,6 +4,7 @@
 interface Formatter {
     id?: string
     name?: string
+    group?: string
     render_type: 'text' | 'img' | 'img-with-meta' | 'img-with-source' | 'img-with-source-summary'
 }
 
