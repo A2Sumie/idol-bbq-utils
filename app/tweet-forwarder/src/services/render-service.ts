@@ -158,7 +158,7 @@ export class RenderService {
             this.log?.warn(`Unknown platform for article ${article.a_id}: ${article.platform}`)
         }
         // "From Twitter"
-        return `From ${platformName}`
+        return `${platformName}`
     }
 
     private async handleMedia(
