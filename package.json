@@ -1,6 +1,6 @@
 {
     "name": "idol-bbq-utils",
-    "version": "0.0.0",
+    "version": "0.3.2-custom",
     "description": "",
     "main": "index.js",
     "scripts": {

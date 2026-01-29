@@ -1089,10 +1089,9 @@ namespace XApiJsonParser {
                 tweet.content = tweet.content?.replace(u.url, '') ?? null
             }
         }
-        if (tweet.media) {
-            for (const { url } of legacy.entities.media) {
-                tweet.content = tweet.content.replace(url, '')
-            }
+        let media_urls = legacy.entities.media?.map((m: { url: string }) => m.url) || []
+        for (const url of media_urls) {
+            tweet.content = tweet.content?.replace(url, '') ?? null
         }
         return tweet as GenericArticle<Platform.X>
     }
