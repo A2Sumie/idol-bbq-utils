@@ -12,7 +12,7 @@ import {
 import { articleToText, formatMetaline, ImgConverter } from '@idol-bbq-utils/render'
 import { existsSync, unlinkSync } from 'fs'
 import { cloneDeep } from 'lodash'
-import { platformPresetHeadersMap } from '@idol-bbq-utils/spider/const'
+import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spider/const'
 import type { MediaType } from '@idol-bbq-utils/spider/types'
 
 export interface RenderResult {
@@ -68,14 +68,35 @@ export class RenderService {
             }
         }
 
-        if (render_type === 'source') {
-            // Case 1: source (was img+source / img-with-source)
-            // Concept: Source (Platform Tag) + Original Media. NO Rendered Image.
-            text = this.extractPlatformLabel(article)
-        } else if (render_type === 'img+source') {
-            // Case 2: img+source (was img-with-source-summary)
-            // Concept: Source (Platform Tag) + Original Media + Rendered Image (at END).
-            text = this.extractPlatformLabel(article)
+        if (render_type === 'tag') {
+            // Case 1: tag (was source)
+            // Output: "From [Platform]"
+            // Skip if no media
+            if (maybe_media_files.length === 0) {
+                this.log?.debug(`Skipping 'tag' mode for text-only article ${article.a_id}`)
+                return { text: '', mediaFiles: [] }
+            }
+            text = this.formatPlatformFrom(article)
+        } else if (render_type === 'img-tag') {
+            // Case 2: img-tag (was img+source)
+            // Output: "From [Platform]" + Media + Card (Lat)
+            text = this.formatPlatformFrom(article)
+            const renderedPath = await generateRenderedImage()
+            if (renderedPath) {
+                maybe_media_files.push({
+                    path: renderedPath,
+                    media_type: 'photo' as MediaType,
+                })
+            }
+        } else if (render_type === 'img-tag-dynamic') {
+            // Case 3: img-tag-dynamic
+            // Output: "From [Platform]" + Media + Card (Last)
+            // Skip if no ORIGINAL media
+            if (maybe_media_files.length === 0) {
+                this.log?.debug(`Skipping 'img-tag-dynamic' mode for text-only article ${article.a_id}`)
+                return { text: '', mediaFiles: [] }
+            }
+            text = this.formatPlatformFrom(article)
             const renderedPath = await generateRenderedImage()
             if (renderedPath) {
                 maybe_media_files.push({
@@ -84,7 +105,7 @@ export class RenderService {
                 })
             }
         } else if (render_type?.startsWith('img')) {
-            // Case 3: Other img-based types (e.g. 'img')
+            // Case 4: Other img-based types (e.g. 'img')
             // Concept: Rendered Image (at start) + Metaline/Empty Text.
             const renderedPath = await generateRenderedImage()
             let articleToImgSuccess = false
@@ -104,7 +125,7 @@ export class RenderService {
                 text = '' // No text for pure img mode
             }
         } else {
-            // Case 4: Standard Text
+            // Case 5: Standard Text
             text = articleToText(article)
         }
 
@@ -131,23 +152,13 @@ export class RenderService {
             })
     }
 
-    private extractPlatformLabel(article: Article): string {
-        // Platform is enum number usually.
-        // Platform[article.platform] returns string key e.g. 'X'
-        const platformKey = Platform[article.platform]
-        const platformName = platformKey?.toLowerCase() || ''
-
-        const platformMap: Record<string, string> = {
-            'x': 'X',
-            'twitter': 'X',
-            'tiktok': 'TikTok',
-            'instagram': 'Instagram',
-            'youtube': 'YouTube',
-            'bilibili': 'Bilibili'
+    private formatPlatformFrom(article: Article): string {
+        const platformName = platformNameMap[article.platform] || 'Unknown'
+        if (platformName === 'Unknown') {
+            this.log?.warn(`Unknown platform for article ${article.a_id}: ${article.platform}`)
         }
-
-        const label = platformMap[platformName] || platformKey || 'Unknown'
-        return `[${label}]`
+        // "From Twitter"
+        return `From ${platformName}`
     }
 
     private async handleMedia(
