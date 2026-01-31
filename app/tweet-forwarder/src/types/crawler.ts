@@ -1,6 +1,12 @@
 import type { CrawlEngine, TaskType } from '@idol-bbq-utils/spider/types'
 import type { CommonCfgConfig } from './common'
-import type { Translator } from './translator'
+import type { Processor } from './processor'
+
+interface AggregationConfig {
+    cron?: string
+    prompt?: string
+    processor_id?: string
+}
 
 interface CrawlerConfig extends CommonCfgConfig {
     /**
@@ -32,7 +38,14 @@ interface CrawlerConfig extends CommonCfgConfig {
      */
     immediate_notify?: boolean
     user_agent?: string
-    translator?: Translator
+
+    // Processor Configuration
+    processor?: Processor
+    processor_id?: string
+
+    // Aggregation (Batch Formatting) Configuration
+    aggregation?: AggregationConfig
+
     /**
      * Default use browser, it depends on the spider behavior.
      */
@@ -76,4 +89,4 @@ interface Crawler {
     cfg_crawler?: CrawlerConfig
 }
 
-export type { Crawler, CrawlerConfig }
+export type { Crawler, CrawlerConfig, AggregationConfig }

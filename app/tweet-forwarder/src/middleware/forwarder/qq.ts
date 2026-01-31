@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { chunk } from 'lodash'
 import { Forwarder, type SendProps } from './base'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 
@@ -58,19 +59,32 @@ class QQForwarder extends Forwarder {
             _log?.debug(`videos: ${videos}`)
         }
 
-        let _res = []
 
-        for (const t of texts) {
-            const res = await this.sendWithPayload([
-                {
-                    type: 'text',
-                    data: {
-                        text: t,
-                    },
-                },
-                ...pics,
-            ])
-            _res.push(res)
+
+        const MAX_PICS = 10
+        const picChunks = chunk(pics, MAX_PICS)
+        const textChunks = texts.length > 0 ? texts : []
+        const n = Math.max(picChunks.length, textChunks.length)
+
+        const _res = []
+
+        for (let i = 0; i < n; i++) {
+            const text = textChunks[i]
+            const msgPics = picChunks[i] || []
+
+            const segments = []
+            if (text) {
+                segments.push({ type: 'text', data: { text } })
+            }
+            if (msgPics.length > 0) {
+                // Cast to any to avoid complex type reconstruction in this snippet, though structure matches.
+                segments.push(...(msgPics as any[]))
+            }
+
+            if (segments.length > 0) {
+                const res = await this.sendWithPayload(segments as any)
+                _res.push(res)
+            }
         }
 
         const maybe_video_res = videos.length !== 0 && (await this.sendWithPayload(videos))

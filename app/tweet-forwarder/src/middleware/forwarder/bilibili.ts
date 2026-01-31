@@ -3,6 +3,7 @@ import { Forwarder, type SendProps } from './base'
 import { pRetry } from '@idol-bbq-utils/utils'
 import FormData from 'form-data'
 import fs from 'fs'
+import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 
 interface BiliImageUploaded {
@@ -78,15 +79,27 @@ class BiliForwarder extends Forwarder {
             throw new Error(`Some photos upload failed, please check your bili_jct and sessdata.`)
         }
         // TODO: more pics support
-        pics = pics.slice(0, 9)
-        if (pics.length > 0) {
-            _log?.debug(`pics: ${pics}`)
-            _log?.debug(`Send text with photos..., media: ${media}`)
-        }
+        const MAX_PICS = 9
+        const picChunks = chunk(pics, MAX_PICS)
+
+        const textChunks = texts.length > 0 ? texts : []
+
+        const n = Math.max(picChunks.length, textChunks.length)
         const _res = []
-        for (const t of texts) {
-            _log?.debug(`Send text: ${t}`)
-            const res = await (pics.length ? this.sendTextWithPhotos(t, pics) : this.sendText(t))
+
+        for (let i = 0; i < n; i++) {
+            const text = textChunks[i] || (i === 0 ? 'Forwarded content' : ' ') // Fallback text. Bilibili dynamic needs text.
+            const msgPics = picChunks[i] || [] // Type: BiliImageUploaded[]
+
+            _log?.debug(`Sending chunk ${i + 1}/${n}: text length ${text.length}, pics count ${msgPics.length}`)
+
+            let res
+            if (msgPics.length > 0) {
+                res = await this.sendTextWithPhotos(text, msgPics)
+            } else {
+                if (!textChunks[i]) continue; // If no text and no pics, skip (shouldn't happen due to Math.max logic unless textChunks ran out and picChunks ran out)
+                res = await this.sendText(text)
+            }
             _res.push(res)
         }
         _res.forEach((res) => {

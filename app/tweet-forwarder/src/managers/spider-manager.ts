@@ -8,7 +8,8 @@ import EventEmitter from 'events'
 import { BaseCompatibleModel, sanitizeWebsites, TaskScheduler } from '@/utils/base'
 import type { Crawler } from '@/types/crawler'
 import type { AppConfig } from '@/types'
-import type { Platform, TaskType, TaskTypeResult } from '@idol-bbq-utils/spider/types'
+import { Platform } from '@idol-bbq-utils/spider/types'
+import type { TaskType, TaskTypeResult } from '@idol-bbq-utils/spider/types'
 import { BaseSpider } from '@idol-bbq-utils/spider'
 import { ProcessorProvider } from '@/types/processor'
 import { processorRegistry } from '@/middleware/processor'
@@ -19,6 +20,7 @@ import { RETRY_LIMIT } from '@/config'
 import { delay } from '@/utils/time'
 import { shuffle } from 'lodash'
 import crypto from 'crypto'
+import dayjs from 'dayjs'
 
 interface TaskResult {
     taskId: string
@@ -84,8 +86,71 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 this.tasks.set(taskId, task)
             })
             this.log?.debug(`Task dispatcher created with detail: ${JSON.stringify(crawler)}`)
-            this.cronJobs.push(job)
+
+
+
+            // Aggregation Task Scheduling
+            if (crawler.cfg_crawler.aggregation && crawler.cfg_crawler.aggregation.cron) {
+                const aggCron = crawler.cfg_crawler.aggregation.cron
+                const aggJob = new CronJob(aggCron, async () => {
+                    const now = dayjs()
+                    const start = now.startOf('day').unix()
+                    const end = now.endOf('day').unix()
+
+                    const websites = crawler.websites || []
+                    const paths = crawler.paths || []
+                    const origin = crawler.origin || ''
+                    // Combine to full URLs
+                    const targets = [...websites, ...paths.map(p => origin + p)].filter(Boolean)
+
+                    for (const url of targets) {
+                        let platform: Platform | null = null
+                        let u_id: string | null = null
+
+                        if (url.includes('twitter.com') || url.includes('x.com')) {
+                            platform = Platform.Twitter
+                            const parts = url.split('/')
+                            u_id = parts[parts.length - 1] || null
+                        } else if (url.includes('instagram.com')) {
+                            platform = Platform.Instagram
+                            const parts = url.split('/').filter(Boolean)
+                            u_id = parts[parts.length - 1] || null
+                        } else if (url.includes('tiktok.com')) {
+                            platform = Platform.TikTok
+                            const parts = url.split('/').filter(Boolean)
+                            const userPart = parts.find(p => p.startsWith('@'))
+                            u_id = (userPart ? userPart.substring(1) : parts[parts.length - 1]) || null
+                        } else if (url.includes('youtube.com')) {
+                            platform = Platform.YouTube
+                            const parts = url.split('/').filter(Boolean)
+                            u_id = parts[parts.length - 1] || null
+                        }
+
+                        // If we found a valid target, schedule aggregation
+                        if (platform && u_id) {
+                            await DB.TaskQueue.add(
+                                'aggregate_daily',
+                                {
+                                    platform,
+                                    u_id,
+                                    start,
+                                    end,
+                                    bot_id: 'system',
+                                    processorConfig: crawler.cfg_crawler?.processor,
+                                    prompt: crawler.cfg_crawler?.aggregation?.prompt
+                                },
+                                now.unix()
+                            )
+                            this.log?.info(`Scheduled aggregation task for ${platform} ${u_id}`)
+                        }
+                    }
+                })
+                this.cronJobs.push(aggJob)
+                this.log?.info(`Aggregation schedule created for ${crawler.name} at ${aggCron}`)
+            }
+
         }
+
     }
 
     /**
@@ -208,14 +273,15 @@ class SpiderPools extends BaseCompatibleModel {
             return
         }
 
-        let { translator: _processor, interval_time } = cfg_crawler || {} // Keep 'translator' key in config for compatibility if untyped? Or update config? 
-        // The type `CrawlerConfig` from `types/crawler.ts` should be updated if I want to rename the config key. 
-        // For now I assume `cfg_crawler` might still have `translator` key or I should rename it to `processor`.
-        // Let's assume I check both or just `translator` (old key) for safety, but cast to processor config.
+        let { processor: _processor, interval_time } = cfg_crawler || {}
+        // Fallback for compatibility or if type mismatch
+        if (!_processor) {
+            _processor = (cfg_crawler as any)?.translator
+        }
 
         let processor: BaseProcessor | undefined = undefined
         if (_processor) {
-            const processor_cfg = _processor as any // Cast as any to avoid type mismatch if I didn't update definitions fully
+            const processor_cfg = _processor as any
             processor = this.processors.get(crawler_batch_id)
             if (!processor) {
                 try {
