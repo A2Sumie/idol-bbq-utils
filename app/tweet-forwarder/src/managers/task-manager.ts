@@ -105,11 +105,53 @@ export class TaskManager extends BaseCompatibleModel {
             summary = `Summarization failed. Raw content count: ${articles.length}`
         }
 
+        // --- NEW: Generate Image Card for Summary ---
+        const { ImgConverter } = await import('@idol-bbq-utils/render')
+        const { writeImgToFile } = await import('@/middleware/media')
+        const fs = await import('fs')
+
+        const fakeArticle: any = {
+            id: 0,
+            a_id: `summary-${start}-${end}`,
+            u_id: u_id, // Title of the card
+            platform: platform,
+            content: summary,
+            created_at: end,
+            url: `https://${platform}.com`,
+            has_media: false,
+            timestamp: end,
+            author: {
+                name: `Daily Report: ${u_id}`,
+                username: u_id,
+                url: '',
+                avatar: ''
+            }
+        }
+
+        let mediaFiles: { path: string, media_type: 'photo' }[] = []
+        try {
+            const converter = new ImgConverter()
+            const imgBuffer = await converter.articleToImg(fakeArticle)
+            const path = writeImgToFile(imgBuffer, `summary-${start}-${end}.png`)
+            mediaFiles.push({ path, media_type: 'photo' })
+        } catch (e) {
+            this.log?.error(`Failed to generate summary image: ${e}`)
+        }
+        // --------------------------------------------
+
         const forwarder = this.forwarderPools.getTarget(bot_id)
         if (forwarder) {
             await forwarder.send(`Daily Report for ${u_id}:\n\n${summary}`, {
-                timestamp: Math.floor(Date.now() / 1000)
+                timestamp: Math.floor(Date.now() / 1000),
+                media: mediaFiles.length > 0 ? mediaFiles : undefined
             })
+
+            // Cleanup
+            if (mediaFiles.length > 0) {
+                mediaFiles.forEach(f => {
+                    try { fs.unlinkSync(f.path) } catch (e) { }
+                })
+            }
         } else {
             this.log?.warn(`Forwarder ${bot_id} not found for aggregation result`)
         }

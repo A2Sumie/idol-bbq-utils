@@ -548,6 +548,41 @@ class ForwarderPools extends BaseCompatibleModel {
                         // 运行前再检查下，因为cron的设定，可能同时会有两个同样的任务在执行
                         // 如果不存在则尝试发送
                         if (!exist) {
+                            // --- NEW: No Backfill Logic ---
+                            // If article is older than 2 hours, assume it's a backfill/initial bind and skip sending
+                            // But mark it as sent so we don't process it again.
+                            const ONE_HOUR_SECONDS = 3600 * 2
+                            const now = dayjs().unix()
+                            if (now - article.created_at > ONE_HOUR_SECONDS) {
+                                ctx.log?.info(`Skipping old article ${article.a_id} (created at ${dayjs.unix(article.created_at).format()}) for target ${target.id}`)
+                                let currentArticle: ArticleWithId | null = article
+                                while (currentArticle && typeof currentArticle === 'object') {
+                                    await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
+                                    currentArticle = currentArticle.ref as ArticleWithId | null
+                                }
+                                return // Skip sending
+                            }
+                            // -----------------------------
+
+                            // --- NEW: Keyword Filter Logic ---
+                            // If keywords are defined in config, only send if content matches
+                            const keywords = (cfg_forwarder as any)?.keywords as string[] | undefined
+                            if (keywords && keywords.length > 0) {
+                                const content = article.content || ''
+                                const hasKeyword = keywords.some(k => content.includes(k))
+                                if (!hasKeyword) {
+                                    ctx.log?.debug(`Article ${article.a_id} does not contain any required keywords, skipping for ${target.id}`)
+                                    // Mark as sent (ignored) so we don't retry endlessly
+                                    let currentArticle: ArticleWithId | null = article
+                                    while (currentArticle && typeof currentArticle === 'object') {
+                                        await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
+                                        currentArticle = currentArticle.ref as ArticleWithId | null
+                                    }
+                                    return
+                                }
+                            }
+                            // -------------------------------
+
                             // 先占用发送
                             let currentArticle: ArticleWithId | null = article
                             while (currentArticle && typeof currentArticle === 'object') {
