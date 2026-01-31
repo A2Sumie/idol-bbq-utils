@@ -1,18 +1,18 @@
-import { BaseTranslator } from './base'
+import { BaseProcessor } from './base'
 import axios from 'axios'
-import { TranslatorProvider, type TranslatorConfig } from '@/types/translator'
+import { ProcessorProvider, type ProcessorConfig } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
 
-class ByteDanceLLMTranslator extends BaseTranslator {
-    static _PROVIDER = TranslatorProvider.ByteDance
+class ByteDanceLLMTranslator extends BaseProcessor {
+    static _PROVIDER = ProcessorProvider.ByteDance
     protected BASE_URL = 'https://ark.cn-beijing.volces.com/api/v3/chat/completions'
     NAME: string
-    constructor(api_key: string, log?: Logger, config?: TranslatorConfig) {
+    constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
         super(api_key, log, config)
         this.NAME = this.config?.name || 'Doubao'
         this.BASE_URL = this.config?.base_url || this.BASE_URL
     }
-    public async translate(text: string) {
+    public async process(text: string) {
         const res = await axios.post(
             this.BASE_URL,
             {
@@ -21,7 +21,7 @@ class ByteDanceLLMTranslator extends BaseTranslator {
                 messages: [
                     {
                         role: 'system',
-                        content: this.config?.prompt || this.TRANSLATION_PROMPT,
+                        content: this.config?.prompt || this.PROCESS_PROMPT,
                     },
                     {
                         role: 'user',

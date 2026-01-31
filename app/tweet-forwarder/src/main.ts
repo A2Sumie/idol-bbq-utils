@@ -54,8 +54,9 @@ async function main() {
         taskSchedulers.push(spiderTaskScheduler)
     }
 
+    let forwarderPools: ForwarderPools | undefined
     if (forward_targets && forward_targets.length > 0) {
-        const forwarderPools = new ForwarderPools(
+        forwarderPools = new ForwarderPools(
             {
                 forward_targets,
                 cfg_forward_target,
@@ -66,6 +67,12 @@ async function main() {
             log,
         )
         compatibleModels.push(forwarderPools)
+    }
+
+    if (forwarderPools) {
+        const { TaskManager } = await import('./managers/task-manager')
+        const taskManager = new TaskManager(forwarderPools, log)
+        compatibleModels.push(taskManager)
     }
 
     if (forwarders && forwarders.length > 0) {

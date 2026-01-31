@@ -1,23 +1,23 @@
-import { BaseTranslator } from './base'
+import { BaseProcessor } from './base'
 import axios from 'axios'
-import { type TranslatorConfig, TranslatorProvider } from '@/types/translator'
+import { type ProcessorConfig, ProcessorProvider } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
 
-abstract class BaseOpenai extends BaseTranslator {
+abstract class BaseOpenai extends BaseProcessor {
     public name = 'base openai translator'
     protected BASE_URL = 'https://api.openai.com/v1/chat/completions'
 }
 
 class OpenaiLikeLLMTranslator extends BaseOpenai {
-    static _PROVIDER = TranslatorProvider.OpenAI
+    static _PROVIDER = ProcessorProvider.OpenAI
     NAME: string
-    constructor(api_key: string, log?: Logger, config?: TranslatorConfig) {
+    constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
         super(api_key, log, config)
         this.api_key = api_key
         this.NAME = config?.name || 'Openai-like'
         this.BASE_URL = config?.base_url || this.BASE_URL
     }
-    public async translate(text: string) {
+    public async process(text: string) {
         const res = await axios.post(
             this.BASE_URL,
             {
@@ -26,7 +26,7 @@ class OpenaiLikeLLMTranslator extends BaseOpenai {
                 messages: [
                     {
                         role: 'system',
-                        content: this.config?.prompt || this.TRANSLATION_PROMPT,
+                        content: this.config?.prompt || this.PROCESS_PROMPT,
                     },
                     {
                         role: 'user',

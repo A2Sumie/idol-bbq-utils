@@ -7,7 +7,7 @@ type Deepseek_LLM = 'deepseek-v3'
 
 type OpenA_Like_LLM = 'Openai'
 
-enum TranslatorProvider {
+enum ProcessorProvider {
     /**
      *
      */
@@ -38,7 +38,7 @@ enum TranslatorProvider {
     QwenMT = 'QwenMT',
 }
 
-interface TranslatorConfig extends CommonCfgConfig {
+interface ProcessorConfig extends CommonCfgConfig {
     prompt?: string
     /**
      * Customize api url
@@ -55,14 +55,14 @@ interface TranslatorConfig extends CommonCfgConfig {
     extended_payload?: Record<string, any>
 }
 
-interface Translator {
+interface Processor {
     id?: string
     name?: string
     group?: string
-    provider: TranslatorProvider
+    provider: ProcessorProvider
     api_key: string
-    cfg_translator?: TranslatorConfig
+    cfg_processor?: ProcessorConfig
 }
 
-export { TranslatorProvider }
-export type { Translator, TranslatorConfig }
+export { ProcessorProvider }
+export type { Processor, ProcessorConfig }

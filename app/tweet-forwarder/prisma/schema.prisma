@@ -8,9 +8,8 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model crawler_article {
-  id                    Int               @id @unique(map: "sqlite_autoindex_crawler_article_1") @default(autoincrement())
-  platform              Int
+model twitter_article {
+  id                    Int               @id @unique(map: "sqlite_autoindex_twitter_article_1") @default(autoincrement())
   a_id                  String
   u_id                  String
   username              String
@@ -25,12 +24,91 @@ model crawler_article {
   media                 Json?
   extra                 Json?
   u_avatar              String?
-  crawler_article       crawler_article?  @relation("crawler_articleTocrawler_article", fields: [ref], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  other_crawler_article crawler_article[] @relation("crawler_articleTocrawler_article")
+  ref_article           twitter_article?  @relation("TwitterRef", fields: [ref], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referenced_by         twitter_article[] @relation("TwitterRef")
 
-  @@unique([a_id, platform], map: "sqlite_autoindex_crawler_article_2")
-  @@index([platform], map: "platform_index")
-  @@index([platform, created_at(sort: Desc)], map: "platform_by_timestamp")
+  @@unique([a_id], map: "sqlite_autoindex_twitter_article_2")
+  @@index([created_at(sort: Desc)], map: "twitter_by_timestamp")
+}
+
+model instagram_article {
+  id                    Int               @id @unique(map: "sqlite_autoindex_instagram_article_1") @default(autoincrement())
+  a_id                  String
+  u_id                  String
+  username              String
+  created_at            Int
+  content               String?
+  translation           String?
+  translated_by         String?
+  url                   String
+  type                  String
+  ref                   Int?
+  has_media             Boolean
+  media                 Json?
+  extra                 Json?
+  u_avatar              String?
+  ref_article           instagram_article?  @relation("InstagramRef", fields: [ref], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referenced_by         instagram_article[] @relation("InstagramRef")
+
+  @@unique([a_id], map: "sqlite_autoindex_instagram_article_2")
+  @@index([created_at(sort: Desc)], map: "instagram_by_timestamp")
+}
+
+model tiktok_article {
+  id                    Int               @id @unique(map: "sqlite_autoindex_tiktok_article_1") @default(autoincrement())
+  a_id                  String
+  u_id                  String
+  username              String
+  created_at            Int
+  content               String?
+  translation           String?
+  translated_by         String?
+  url                   String
+  type                  String
+  ref                   Int?
+  has_media             Boolean
+  media                 Json?
+  extra                 Json?
+  u_avatar              String?
+  ref_article           tiktok_article?  @relation("TiktokRef", fields: [ref], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referenced_by         tiktok_article[] @relation("TiktokRef")
+
+  @@unique([a_id], map: "sqlite_autoindex_tiktok_article_2")
+  @@index([created_at(sort: Desc)], map: "tiktok_by_timestamp")
+}
+
+model youtube_article {
+  id                    Int               @id @unique(map: "sqlite_autoindex_youtube_article_1") @default(autoincrement())
+  a_id                  String
+  u_id                  String
+  username              String
+  created_at            Int
+  content               String?
+  translation           String?
+  translated_by         String?
+  url                   String
+  type                  String
+  ref                   Int?
+  has_media             Boolean
+  media                 Json?
+  extra                 Json?
+  u_avatar              String?
+  ref_article           youtube_article?  @relation("YoutubeRef", fields: [ref], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referenced_by         youtube_article[] @relation("YoutubeRef")
+
+  @@unique([a_id], map: "sqlite_autoindex_youtube_article_2")
+  @@index([created_at(sort: Desc)], map: "youtube_by_timestamp")
+}
+
+model task_queue {
+  id         Int    @id @default(autoincrement())
+  type       String
+  payload    Json
+  status     String @default("pending") // pending, processing, completed, failed
+  created_at Int
+  execute_at Int
+  
+  @@index([status, execute_at])
 }
 
 model crawler_follows {
@@ -44,11 +122,15 @@ model crawler_follows {
   @@index([u_id], map: "user_id_index")
 }
 
+// Keeping this for deduplication / tracking sent messages
 model forward_by {
-  ref_id    Int
+  ref_id    Int // Note: This might need to track platform now, or assume global ID uniqueness if we had one (we don't). So better add platform or use combined key.
+  // Actually, let's make it generic string based ID for flexibility across tables?
+  // Or: platform + article_id (int)
+  platform  String 
   bot_id    String
   task_type String
 
-  @@id([ref_id, bot_id, task_type])
+  @@id([ref_id, platform, bot_id, task_type])
   @@index([bot_id], map: "bot_id_index")
 }

@@ -1,17 +1,17 @@
 import { ChatSession, GoogleGenerativeAI, HarmBlockThreshold, HarmCategory } from '@google/generative-ai'
-import { BaseTranslator } from './base'
-import { type TranslatorConfig, TranslatorProvider } from '@/types/translator'
+import { BaseProcessor } from './base'
+import { type ProcessorConfig, ProcessorProvider } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
 
-class GoogleLLMTranslator extends BaseTranslator {
-    static _PROVIDER = TranslatorProvider.Google
+class GoogleLLMTranslator extends BaseProcessor {
+    static _PROVIDER = ProcessorProvider.Google
     BASE_URL = ''
     NAME = 'Gemini'
     private genAI
     private model
     private prompt: string
     private chat: ChatSession | undefined
-    constructor(api_key: string, log?: Logger, config?: TranslatorConfig) {
+    constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
         super(api_key, log, config)
         this.genAI = new GoogleGenerativeAI(api_key)
         this.model = this.genAI.getGenerativeModel({
@@ -35,7 +35,7 @@ class GoogleLLMTranslator extends BaseTranslator {
                 },
             ],
         })
-        this.prompt = config?.prompt || this.TRANSLATION_PROMPT
+        this.prompt = config?.prompt || this.PROCESS_PROMPT
         this.NAME = config?.name || this.NAME
     }
     public async init() {
@@ -50,7 +50,7 @@ class GoogleLLMTranslator extends BaseTranslator {
         })
         this.chat = chat
     }
-    public async translate(text: string) {
+    public async process(text: string) {
         const res = (await this.chat?.sendMessage(text))?.response.text() || ''
         return res
     }

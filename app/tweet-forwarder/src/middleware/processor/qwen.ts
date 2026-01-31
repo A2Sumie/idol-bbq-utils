@@ -1,24 +1,24 @@
-import { BaseTranslator } from './base'
+import { BaseProcessor } from './base'
 import axios from 'axios'
-import { type TranslatorConfig, TranslatorProvider } from '@/types/translator'
+import { type ProcessorConfig, ProcessorProvider } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
 
-abstract class BaseQwen extends BaseTranslator {
+abstract class BaseQwen extends BaseProcessor {
     public name = 'base qwen translator'
     protected BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions'
 }
 
 class QwenMTTranslator extends BaseQwen {
-    static _PROVIDER = TranslatorProvider.QwenMT
+    static _PROVIDER = ProcessorProvider.QwenMT
     NAME: string
-    constructor(api_key: string, log?: Logger, config?: TranslatorConfig) {
+    constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
         super(api_key, log, config)
         this.api_key = api_key
         this.NAME = config?.name || 'Qwen-MT'
         this.BASE_URL = config?.base_url || this.BASE_URL
     }
-    public async translate(text: string) {
-        const prompt = this.config?.prompt || this.TRANSLATION_PROMPT
+    public async process(text: string) {
+        const prompt = this.config?.prompt || this.PROCESS_PROMPT
         const res = await axios.post(
             this.BASE_URL,
             {

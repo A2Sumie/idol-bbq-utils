@@ -426,7 +426,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         allPaths.push({
                             formatterConfig: {
                                 ...cfg_forwarder,
-                                render_type: formatterConfig.render_type
+                                render_type: formatterConfig.render_type as any
                             },
                             targets: validTargets,
                             source: 'graph',
@@ -486,7 +486,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 /**
                  * 同一个宏任务循环中，此时可能会有同一个网站运行了两次及以上的定时任务，此时checkExist都是false
                  */
-                const exist = await DB.ForwardBy.checkExist(article.id, id, 'article')
+                const exist = await DB.ForwardBy.checkExist(article.id, platform, id, 'article')
                 if (!exist) {
                     to.push(forwarder)
                 }
@@ -520,7 +520,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 for (const { forwarder: target } of to) {
                     let currentArticle: ArticleWithId | null = article
                     while (currentArticle && typeof currentArticle === 'object') {
-                        await DB.ForwardBy.save(currentArticle.id, target.id, 'article')
+                        await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
                         currentArticle = currentArticle.ref as ArticleWithId | null
                     }
                 }
@@ -544,14 +544,14 @@ class ForwarderPools extends BaseCompatibleModel {
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     ctx.log?.info(`Sending article ${article.a_id} from ${article.u_id} to ${target.NAME}`)
                     try {
-                        const exist = await DB.ForwardBy.checkExist(article.id, target.id, 'article')
+                        const exist = await DB.ForwardBy.checkExist(article.id, platform, target.id, 'article')
                         // 运行前再检查下，因为cron的设定，可能同时会有两个同样的任务在执行
                         // 如果不存在则尝试发送
                         if (!exist) {
                             // 先占用发送
                             let currentArticle: ArticleWithId | null = article
                             while (currentArticle && typeof currentArticle === 'object') {
-                                await DB.ForwardBy.save(currentArticle.id, target.id, 'article')
+                                await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
                                 currentArticle = currentArticle.ref as ArticleWithId | null
                             }
                             try {
@@ -566,7 +566,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 ctx.log?.error(`Error while sending to ${target.id}: ${e}`)
                                 let currentArticle: ArticleWithId | null = article
                                 while (currentArticle && typeof currentArticle === 'object') {
-                                    await DB.ForwardBy.deleteRecord(currentArticle.id, target.id, 'article')
+                                    await DB.ForwardBy.deleteRecord(currentArticle.id, platform, target.id, 'article')
                                     currentArticle = currentArticle.ref as ArticleWithId | null
                                 }
                             }
@@ -595,7 +595,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     for (const { forwarder: target } of to) {
                         let currentArticle: ArticleWithId | null = cloned_article
                         while (currentArticle && typeof currentArticle === 'object') {
-                            await DB.ForwardBy.save(currentArticle.id, target.id, 'article')
+                            await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
                             currentArticle = currentArticle.ref as ArticleWithId | null
                         }
                     }
@@ -762,6 +762,13 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
             })
             .filter((i) => i !== undefined)
+    }
+
+    /**
+     * Get a specific forward target by ID
+     */
+    getTarget(id: string): BaseForwarder | undefined {
+        return this.forward_to.get(id)
     }
 }
 

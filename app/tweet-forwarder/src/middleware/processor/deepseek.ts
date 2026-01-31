@@ -1,27 +1,27 @@
-import { BaseTranslator } from './base'
+import { BaseProcessor } from './base'
 import axios from 'axios'
-import { type TranslatorConfig, TranslatorProvider } from '@/types/translator'
+import { type ProcessorConfig, ProcessorProvider } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
 
 const RECOMMEND_CONFIGURATIONS = {
     temperature: 1.3, // recommended for translation. ref: https://api-docs.deepseek.com/quick_start/parameter_settings
 }
 
-abstract class BaseDeepSeek extends BaseTranslator {
+abstract class BaseDeepSeek extends BaseProcessor {
     NAME = 'base deepseek translator'
     protected BASE_URL = 'https://api.deepseek.com/chat/completions'
 }
 
 class DeepSeekLLMTranslator extends BaseDeepSeek {
-    static _PROVIDER: TranslatorProvider = TranslatorProvider.Deepseek
+    static _PROVIDER: ProcessorProvider = ProcessorProvider.Deepseek
     NAME: string
-    constructor(api_key: string, log?: Logger, config?: TranslatorConfig) {
+    constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
         super(api_key, log, config)
         this.api_key = api_key
         this.NAME = config?.name || 'DeepSeek-v3'
         this.BASE_URL = config?.base_url || this.BASE_URL
     }
-    public async translate(text: string) {
+    public async process(text: string) {
         const res = await axios.post(
             this.BASE_URL,
             {
@@ -31,7 +31,7 @@ class DeepSeekLLMTranslator extends BaseDeepSeek {
                 messages: [
                     {
                         role: 'system',
-                        content: this.config?.prompt || this.TRANSLATION_PROMPT,
+                        content: this.config?.prompt || this.PROCESS_PROMPT,
                     },
                     {
                         role: 'user',

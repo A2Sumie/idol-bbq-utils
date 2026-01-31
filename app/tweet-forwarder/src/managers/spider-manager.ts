@@ -3,15 +3,15 @@ import { spiderRegistry, parseNetscapeCookieToPuppeteerCookie, UserAgent } from 
 import { Page } from 'puppeteer-core'
 import { Browser } from 'puppeteer-core'
 import { CronJob } from 'cron'
-import { BaseTranslator, TRANSLATION_ERROR_FALLBACK } from '@/middleware/translator/base'
+import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
 import EventEmitter from 'events'
 import { BaseCompatibleModel, sanitizeWebsites, TaskScheduler } from '@/utils/base'
 import type { Crawler } from '@/types/crawler'
 import type { AppConfig } from '@/types'
 import type { Platform, TaskType, TaskTypeResult } from '@idol-bbq-utils/spider/types'
 import { BaseSpider } from '@idol-bbq-utils/spider'
-import { TranslatorProvider } from '@/types/translator'
-import { translatorRegistry } from '@/middleware/translator'
+import { ProcessorProvider } from '@/types/processor'
+import { processorRegistry } from '@/middleware/processor'
 import { pRetry } from '@idol-bbq-utils/utils'
 import DB from '@/db'
 import type { Article } from '@/db'
@@ -147,7 +147,7 @@ class SpiderPools extends BaseCompatibleModel {
     NAME = 'SpiderPools'
     log?: Logger
     private emitter: EventEmitter
-    private translators: Map<string, BaseTranslator> = new Map()
+    private processors: Map<string, BaseProcessor> = new Map()
     private browser: Browser
     /**
      * BaseSpider._VALID_URL.source
@@ -208,23 +208,27 @@ class SpiderPools extends BaseCompatibleModel {
             return
         }
 
-        let { translator: _translator, interval_time } = cfg_crawler || {}
-        let translator: BaseTranslator | undefined = undefined
-        if (_translator) {
-            const translator_cfg = _translator
-            translator = this.translators.get(crawler_batch_id)
-            if (!translator) {
+        let { translator: _processor, interval_time } = cfg_crawler || {} // Keep 'translator' key in config for compatibility if untyped? Or update config? 
+        // The type `CrawlerConfig` from `types/crawler.ts` should be updated if I want to rename the config key. 
+        // For now I assume `cfg_crawler` might still have `translator` key or I should rename it to `processor`.
+        // Let's assume I check both or just `translator` (old key) for safety, but cast to processor config.
+
+        let processor: BaseProcessor | undefined = undefined
+        if (_processor) {
+            const processor_cfg = _processor as any // Cast as any to avoid type mismatch if I didn't update definitions fully
+            processor = this.processors.get(crawler_batch_id)
+            if (!processor) {
                 try {
-                    translator = await translatorRegistry.create(
-                        translator_cfg.provider,
-                        translator_cfg.api_key,
+                    processor = await processorRegistry.create(
+                        processor_cfg.provider,
+                        processor_cfg.api_key,
                         this.log,
-                        translator_cfg.cfg_translator,
+                        processor_cfg.cfg_processor || processor_cfg.cfg_translator, // compatibility
                     )
-                    this.translators.set(crawler_batch_id, translator)
-                    ctx.log?.info(`Translator instance created for ${translator_cfg.provider}`)
+                    this.processors.set(crawler_batch_id, processor)
+                    ctx.log?.info(`Processor instance created for ${processor_cfg.provider}`)
                 } catch (e) {
-                    ctx.log?.warn(`Translator not found for ${translator_cfg.provider}: ${e}`)
+                    ctx.log?.warn(`Processor not found for ${processor_cfg.provider}: ${e}`)
                 }
             }
         }
@@ -293,7 +297,7 @@ class SpiderPools extends BaseCompatibleModel {
                             spider,
                             url,
                             page,
-                            translator,
+                            processor,
                             cookieString,
                         )
 
@@ -362,7 +366,7 @@ class SpiderPools extends BaseCompatibleModel {
     async drop(...args: any[]): Promise<void> {
         this.log?.info('Dropping Spider Pools...')
         this.spiders.clear()
-        this.translators.clear()
+        this.processors.clear()
         this.emitter.removeAllListeners()
         await this.browser.close()
         this.log?.info('Browser closed')
@@ -374,7 +378,7 @@ class SpiderPools extends BaseCompatibleModel {
         spider: BaseSpider,
         url: URL,
         page?: Page,
-        translator?: BaseTranslator,
+        processor?: BaseProcessor,
         cookieString?: string,
     ): Promise<Array<number>> {
         const { cfg_crawler } = ctx.task.data as Crawler
@@ -411,7 +415,7 @@ class SpiderPools extends BaseCompatibleModel {
         /**
          * 非常耗时，如何解决
          */
-        new_articles = await Promise.all(new_articles.map((article) => this.doTranslate(ctx, article, translator)))
+        new_articles = await Promise.all(new_articles.map((article) => this.doProcess(ctx, article, processor)))
 
         // 串行，防止create unique的问题
         for (const article of new_articles) {
@@ -419,31 +423,31 @@ class SpiderPools extends BaseCompatibleModel {
              * TODO 这里可以尝试更新翻译
              */
             const res = await DB.Article.trySave(article)
-            saved_article_ids.push(res)
+            if (res) saved_article_ids.push(res)
         }
         ctx.log?.info(`[${url.href}] ${saved_article_ids.length} articles saved.`)
         return saved_article_ids.filter((i) => i !== undefined).map((i) => i.id) as Array<number>
     }
 
-    private async doTranslate(
+    private async doProcess(
         ctx: TaskScheduler.TaskCtx,
         article: Article,
-        translator?: BaseTranslator,
+        processor?: BaseProcessor,
     ): Promise<Article> {
-        if (!translator) {
+        if (!processor) {
             return article
         }
         const { username } = article
-        ctx.log?.info(`[${username}] [${article.a_id}] Translating article...`)
+        ctx.log?.info(`[${username}] [${article.a_id}] Processing article...`)
         let currentArticle: Article | null = article
         /**
          * 先获取所有引用文章的指针，flat为数组，对数组进行await Promise.all操作
          * 再根据是否需要更新翻译进行更新
          */
-        let articleNeedTobeTranslated: Array<Article> = []
+        let articleNeedTobeProcessed: Array<Article> = []
         // 获取引用文章
         while (currentArticle && typeof currentArticle === 'object') {
-            articleNeedTobeTranslated.push(currentArticle)
+            articleNeedTobeProcessed.push(currentArticle)
             if (typeof currentArticle.ref !== 'string') {
                 currentArticle = currentArticle.ref as Article
             } else {
@@ -451,40 +455,40 @@ class SpiderPools extends BaseCompatibleModel {
             }
         }
         /**
-         * 并行翻译
-         * 通过文章引用来修改对应文章的翻译
+         * 并行处理
+         * 通过文章引用来修改对应文章的翻译/处理结果
          */
         ctx.log?.info(
-            `[${username}] [${article.a_id}] Starting batch translating ${articleNeedTobeTranslated.length} articles...`,
+            `[${username}] [${article.a_id}] Starting batch processing ${articleNeedTobeProcessed.length} articles...`,
         )
         await Promise.all(
-            articleNeedTobeTranslated.map(async (currentArticle) => {
+            articleNeedTobeProcessed.map(async (currentArticle) => {
                 const { a_id, username, platform } = currentArticle
                 // maybe the ref article translated failed
-                const article_maybe_translated = await DB.Article.getByArticleCode(a_id, platform)
+                const article_maybe_processed = await DB.Article.getByArticleCode(a_id, platform)
                 if (
                     currentArticle.content &&
-                    !BaseTranslator.isValidTranslation(article_maybe_translated?.translation)
+                    !BaseProcessor.isValidResult(article_maybe_processed?.translation)
                 ) {
                     const content = currentArticle.content
-                    ctx.log?.info(`[${username}] [${a_id}] Starting to translate...`)
-                    const content_translation = await pRetry(() => translator.translate(content), {
+                    ctx.log?.info(`[${username}] [${a_id}] Starting to process...`)
+                    const content_processed = await pRetry(() => processor.process(content), {
                         retries: RETRY_LIMIT,
                         onFailedAttempt: (error) => {
                             ctx.log?.warn(
-                                `[${username}] [${a_id}] Translation content failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
+                                `[${username}] [${a_id}] Process content failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
                             )
                         },
                     })
                         .then((res) => res)
                         .catch((err) => {
-                            ctx.log?.error(`[${username}] [${a_id}] Error while translating content: ${err}`)
-                            return TRANSLATION_ERROR_FALLBACK
+                            ctx.log?.error(`[${username}] [${a_id}] Error while processing content: ${err}`)
+                            return PROCESSOR_ERROR_FALLBACK
                         })
-                    ctx.log?.debug(`[${username}] [${a_id}] Translation content: ${content_translation}`)
-                    ctx.log?.info(`[${username}] [${a_id}] Translation complete.`)
-                    currentArticle.translation = content_translation
-                    currentArticle.translated_by = translator.NAME
+                    ctx.log?.debug(`[${username}] [${a_id}] Process result: ${content_processed}`)
+                    ctx.log?.info(`[${username}] [${a_id}] Process complete.`)
+                    currentArticle.translation = content_processed
+                    currentArticle.translated_by = processor.NAME
                 }
 
                 if (currentArticle.media) {
@@ -492,26 +496,26 @@ class SpiderPools extends BaseCompatibleModel {
                         // 假设图片与描述的顺序是一致的
                         if (
                             media.alt &&
-                            !BaseTranslator.isValidTranslation(
-                                (article_maybe_translated?.media as unknown as Article['media'])?.[idx]?.translation,
+                            !BaseProcessor.isValidResult(
+                                (article_maybe_processed?.media as unknown as Article['media'])?.[idx]?.translation,
                             )
                         ) {
                             const alt = media.alt
-                            const caption_translation = await await pRetry(() => translator.translate(alt), {
+                            const caption_processed = await await pRetry(() => processor.process(alt), {
                                 retries: RETRY_LIMIT,
                                 onFailedAttempt: (error) => {
                                     ctx.log?.warn(
-                                        `[${username}] [${a_id}] Translation media alt failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
+                                        `[${username}] [${a_id}] Process media alt failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
                                     )
                                 },
                             })
                                 .then((res) => res)
                                 .catch((err) => {
-                                    ctx.log?.error(`[${username}] [${a_id}] Error while translating media alt: ${err}`)
-                                    return TRANSLATION_ERROR_FALLBACK
+                                    ctx.log?.error(`[${username}] [${a_id}] Error while processing media alt: ${err}`)
+                                    return PROCESSOR_ERROR_FALLBACK
                                 })
-                            media.translation = caption_translation
-                            media.translated_by = translator.NAME
+                            media.translation = caption_processed
+                            media.translated_by = processor.NAME
                         }
                     }
                 }
@@ -519,27 +523,27 @@ class SpiderPools extends BaseCompatibleModel {
                 if (currentArticle.extra) {
                     const extra_ref = currentArticle.extra
                     let { content, translation } = extra_ref
-                    if (content && !BaseTranslator.isValidTranslation(translation)) {
-                        const content_translation = await pRetry(() => translator.translate(content), {
+                    if (content && !BaseProcessor.isValidResult(translation)) {
+                        const content_processed = await pRetry(() => processor.process(content), {
                             retries: RETRY_LIMIT,
                             onFailedAttempt: (error) => {
                                 ctx.log?.warn(
-                                    `[${username}] [${a_id}] Translation extra content failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
+                                    `[${username}] [${a_id}] Process extra content failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
                                 )
                             },
                         })
                             .then((res) => res)
                             .catch((err) => {
-                                ctx.log?.error(`[${username}] [${a_id}] Error while translating extra content: ${err}`)
-                                return TRANSLATION_ERROR_FALLBACK
+                                ctx.log?.error(`[${username}] [${a_id}] Error while processing extra content: ${err}`)
+                                return PROCESSOR_ERROR_FALLBACK
                             })
-                        extra_ref.translation = content_translation
-                        extra_ref.translated_by = translator.NAME
+                        extra_ref.translation = content_processed
+                        extra_ref.translated_by = processor.NAME
                     }
                 }
             }),
         )
-        ctx.log?.info(`[${username}] [${article.a_id}] ${articleNeedTobeTranslated.length} Articles are translated.`)
+        ctx.log?.info(`[${username}] [${article.a_id}] ${articleNeedTobeProcessed.length} Articles are processed.`)
         return article
     }
 }

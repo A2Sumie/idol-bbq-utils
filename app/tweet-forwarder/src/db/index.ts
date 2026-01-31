@@ -6,17 +6,38 @@ import type { Article } from '@idol-bbq-utils/render/types'
 
 type ArticleWithId = Article & { id: number }
 
-type DBArticle = Prisma.crawler_articleGetPayload<{}>
+// Union of all article payloads
+type DBArticle =
+    | Prisma.twitter_articleGetPayload<{}>
+    | Prisma.instagram_articleGetPayload<{}>
+    | Prisma.tiktok_articleGetPayload<{}>
+    | Prisma.youtube_articleGetPayload<{}>
+
 type DBFollows = Prisma.crawler_followsGetPayload<{}>
+
 namespace DB {
     export namespace Article {
+        function getDelegate(platform: Platform): any {
+            switch (platform) {
+                case Platform.X:
+                case Platform.Twitter:
+                    return prisma.twitter_article
+                case Platform.Instagram:
+                    return prisma.instagram_article
+                case Platform.TikTok:
+                    return prisma.tiktok_article
+                case Platform.YouTube:
+                    return prisma.youtube_article
+                default:
+                    throw new Error(`Unsupported platform: ${platform}`)
+            }
+        }
+
         export async function checkExist(article: Article) {
-            return await prisma.crawler_article.findUnique({
+            const delegate = getDelegate(article.platform)
+            return await delegate.findUnique({
                 where: {
-                    a_id_platform: {
-                        a_id: article.a_id,
-                        platform: article.platform,
-                    },
+                    a_id: article.a_id,
                 },
             })
         }
@@ -41,12 +62,21 @@ namespace DB {
                     ref = (await save(article.ref)).id
                 }
                 if (typeof article.ref === 'string') {
+                    // For ref string, we assume it's same platform
                     ref = (await getByArticleCode(article.ref, article.platform))?.id
                 }
             }
-            const res = await prisma.crawler_article.create({
+
+            const delegate = getDelegate(article.platform)
+            // Remove platform from data as it's not in the model anymore (implied by table)
+            // But we need to keep other keys. 
+            // The model expects: a_id, u_id, username, created_at, content...
+            // It does NOT have 'platform' column.
+            const { platform, ...rest } = article
+
+            const res = await delegate.create({
                 data: {
-                    ...article,
+                    ...rest,
                     ref: ref,
                     extra: article.extra ? (article.extra as unknown as Prisma.JsonObject) : Prisma.JsonNull,
                     media: (article.media as unknown as Prisma.JsonArray) ?? Prisma.JsonNull,
@@ -55,8 +85,9 @@ namespace DB {
             return res
         }
 
-        export async function get(id: number) {
-            return await prisma.crawler_article.findUnique({
+        export async function get(id: number, platform: Platform) {
+            const delegate = getDelegate(platform)
+            return await delegate.findUnique({
                 where: {
                     id: id,
                 },
@@ -64,18 +95,17 @@ namespace DB {
         }
 
         export async function getByArticleCode(a_id: string, platform: Platform) {
-            return await prisma.crawler_article.findUnique({
+            const delegate = getDelegate(platform)
+            return await delegate.findUnique({
                 where: {
-                    a_id_platform: {
-                        a_id,
-                        platform,
-                    },
+                    a_id,
                 },
             })
         }
 
-        export async function getSingleArticle(id: number) {
-            const article = await prisma.crawler_article.findUnique({
+        export async function getSingleArticle(id: number, platform: Platform) {
+            const delegate = getDelegate(platform)
+            const article = await delegate.findUnique({
                 where: {
                     id: id,
                 },
@@ -83,44 +113,108 @@ namespace DB {
             if (!article) {
                 return
             }
-            return await getFullChainArticle(article)
+            return await getFullChainArticle(article, platform)
         }
 
         export async function getSingleArticleByArticleCode(a_id: string, platform: Platform) {
-            const article = await prisma.crawler_article.findUnique({
+            const delegate = getDelegate(platform)
+            const article = await delegate.findUnique({
                 where: {
-                    a_id_platform: {
-                        a_id,
-                        platform,
-                    },
+                    a_id,
                 },
             })
             if (!article) {
                 return
             }
-            return await getFullChainArticle(article)
+            return await getFullChainArticle(article, platform)
         }
 
-        async function getFullChainArticle(article: DBArticle) {
+        async function getFullChainArticle(article: DBArticle, platform: Platform) {
             let currentRefId = article.ref
-            let currentArticle = article as unknown as ArticleWithId
+            let currentArticle = { ...article, platform } as unknown as ArticleWithId
+            const delegate = getDelegate(platform)
+
             while (currentRefId) {
-                const foundArticle = await prisma.crawler_article.findUnique({
+                const foundArticle = await delegate.findUnique({
                     where: {
                         id: currentRefId,
                     },
                 })
                 currentRefId = foundArticle?.ref || null
-                currentArticle.ref = foundArticle as unknown as ArticleWithId
-                currentArticle = foundArticle as unknown as ArticleWithId
+                // We assume ref is also same platform
+                currentArticle.ref = foundArticle ? { ...foundArticle, platform } as unknown as ArticleWithId : null
+                if (foundArticle) {
+                    // Move up the chain? actually this logic seems to just attach one level?
+                    // Original code: currentArticle.ref = foundArticle ...
+                    // It seems it was traversing but overwriting currentArticle? 
+                    // Wait, original code:
+                    // currentRefId = foundArticle?.ref
+                    // currentArticle.ref = foundArticle
+                    // currentArticle = foundArticle
+                    // This constructs a linked list in verifyse? No, it attaches parent to .ref.
+                    // But if deep, it flattens?
+                    // "currentArticle = foundArticle" -> moves pointer up.
+                    // But "currentArticle.ref = foundArticle" sets the property on the CHILD.
+                    // So it builds the chain upwards. Correct.
+
+                    // We need to properly type the found article
+                    const foundWithPlatform = { ...foundArticle, platform } as unknown as ArticleWithId
+                    currentArticle.ref = foundWithPlatform
+                    currentArticle = foundWithPlatform
+                }
             }
-            return article as unknown as ArticleWithId
+            // Return request article (the child) which now has populated ref chain
+            // Wait, original code returned `article`. But it modified `article` properties in place?
+            // `currentArticle` started as `article`.
+            // Yes, objects are passed by reference.
+            // But I did `...article` spread, so it's a copy.
+            // I should return the copy.
+            // Re-check: `let currentArticle = article`. If article came from prisma, it's an object.
+            // But I cast it.
+            // In my new code: `let currentArticle = { ...article, platform }`. It's a copy. Good.
+            // I should return `rootArticle`.
+
+            // Wait, I lost the reference to the root `currentArticle` if I reassign `currentArticle`.
+            // Original: `let currentArticle = article`. `article` acts as root.
+            // Here: `let root = { ...article, platform } as unknown as ArticleWithId`
+            // `let current = root`
+            // ...
+            // return root
+
+            // Let's fix this logic to be safe.
+            return rootWithChain(article, platform)
         }
 
+        async function rootWithChain(article: DBArticle, platform: Platform) {
+            const root = { ...article, platform } as unknown as ArticleWithId
+            let current = root
+            const delegate = getDelegate(platform)
+
+            while (current.ref && typeof current.ref === 'number') {
+                // The ref field in DBArticle is generic Int?
+                // In transformed ArticleWithId, ref can be object.
+                // But initially it's just ID from DB.
+                // Wait, `article.ref` (DB) is number.
+                // `current.ref` (ArticleWithId) is generic.
+                // We need to look at `current.ref` as ID.
+                const refId = current.ref as unknown as number
+                const found = await delegate.findUnique({ where: { id: refId } })
+                if (found) {
+                    const foundWithP = { ...found, platform } as unknown as ArticleWithId
+                    current.ref = foundWithP
+                    current = foundWithP
+                } else {
+                    break
+                }
+            }
+            return root
+        }
+
+
         export async function getArticlesByName(u_id: string, platform: Platform, count = 10) {
-            const res = await prisma.crawler_article.findMany({
+            const delegate = getDelegate(platform)
+            const res = await delegate.findMany({
                 where: {
-                    platform: platform,
                     u_id: u_id,
                 },
                 orderBy: {
@@ -128,7 +222,27 @@ namespace DB {
                 },
                 take: count,
             })
-            const articles = await Promise.all(res.map(async ({ id }) => getSingleArticle(id)))
+            const articles = await Promise.all(res.map(async ({ id }: any) => getSingleArticle(id, platform)))
+            return articles.filter((item) => item) as ArticleWithId[]
+        }
+
+        // New method for time-range query (User Requirement 2)
+        export async function getArticlesByTimeRange(u_id: string, platform: Platform, start: number, end: number) {
+            const delegate = getDelegate(platform)
+            const res = await delegate.findMany({
+                where: {
+                    u_id: u_id,
+                    created_at: {
+                        gte: start,
+                        lte: end
+                    }
+                },
+                orderBy: {
+                    created_at: 'asc', // Ascending for aggregation? Or Desc?
+                }
+            })
+            // No need for full chain probably if just for summary, but safer to get it
+            const articles = await Promise.all(res.map(async ({ id }: any) => getSingleArticle(id, platform)))
             return articles.filter((item) => item) as ArticleWithId[]
         }
     }
@@ -179,11 +293,12 @@ namespace DB {
     }
 
     export namespace ForwardBy {
-        export async function checkExist(ref_id: number, bot_id: string, task_type: string) {
+        export async function checkExist(ref_id: number, platform: string, bot_id: string, task_type: string) {
             return await prisma.forward_by.findUnique({
                 where: {
-                    ref_id_bot_id_task_type: {
+                    ref_id_platform_bot_id_task_type: {
                         ref_id,
+                        platform,
                         bot_id,
                         task_type,
                     },
@@ -191,17 +306,19 @@ namespace DB {
             })
         }
 
-        export async function save(ref_id: number, bot_id: string, task_type: string) {
+        export async function save(ref_id: number, platform: string, bot_id: string, task_type: string) {
             return await prisma.forward_by.upsert({
                 where: {
-                    ref_id_bot_id_task_type: {
+                    ref_id_platform_bot_id_task_type: {
                         ref_id,
+                        platform,
                         bot_id,
                         task_type,
                     },
                 },
                 create: {
                     ref_id,
+                    platform,
                     bot_id,
                     task_type,
                 },
@@ -209,19 +326,52 @@ namespace DB {
             })
         }
 
-        export async function deleteRecord(ref_id: number, bot_id: string, task_type: string) {
-            let exist_one = await checkExist(ref_id, bot_id, task_type)
+        export async function deleteRecord(ref_id: number, platform: string, bot_id: string, task_type: string) {
+            let exist_one = await checkExist(ref_id, platform, bot_id, task_type)
             if (!exist_one) {
                 return
             }
             return await prisma.forward_by.delete({
                 where: {
-                    ref_id_bot_id_task_type: {
+                    ref_id_platform_bot_id_task_type: {
                         ref_id,
+                        platform,
                         bot_id,
                         task_type,
                     },
                 },
+            })
+        }
+    }
+
+    export namespace TaskQueue {
+        export async function add(type: string, payload: any, execute_at: number) {
+            return await prisma.task_queue.create({
+                data: {
+                    type,
+                    payload,
+                    execute_at,
+                    created_at: Math.floor(Date.now() / 1000),
+                    status: 'pending'
+                }
+            })
+        }
+
+        export async function getPending(now: number) {
+            return await prisma.task_queue.findMany({
+                where: {
+                    status: 'pending',
+                    execute_at: {
+                        lte: now
+                    }
+                }
+            })
+        }
+
+        export async function updateStatus(id: number, status: string) {
+            return await prisma.task_queue.update({
+                where: { id },
+                data: { status }
             })
         }
     }

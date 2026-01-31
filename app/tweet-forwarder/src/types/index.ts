@@ -1,8 +1,14 @@
 import type { TaskType } from '@idol-bbq-utils/spider/types'
 import type { Crawler, CrawlerConfig } from './crawler'
 import type { Forwarder, ForwarderConfig, ForwardTarget, ForwardTargetPlatformCommonConfig } from './forwarder'
-import type { Translator } from './translator'
 import type { Formatter, ConnectionMap } from './formatter'
+import type { Processor } from './processor'
+
+export * from './processor'
+export * from './crawler'
+export * from './forwarder'
+export * from './formatter'
+export * from './common'
 
 /**
  * only crawling or forwarding or both
@@ -10,7 +16,7 @@ import type { Formatter, ConnectionMap } from './formatter'
 interface AppConfig {
     crawlers?: Array<Crawler>
     cfg_crawler?: CrawlerConfig
-    translators?: Array<Translator>
+    processors?: Array<Processor>
     formatters?: Array<Formatter>
     forward_targets?: Array<ForwardTarget>
     cfg_forward_target?: ForwardTargetPlatformCommonConfig
