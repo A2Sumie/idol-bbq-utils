@@ -17,7 +17,7 @@ COPY ./assets/fonts ./assets/fonts
 ENV PUPPETEER_SKIP_DOWNLOAD true
 ENV DATABASE_URL="file:/app/data.db"
 
-RUN bun install --filter "./app/tweet-forwarder" --filter "./core/*" --frozen-lockfile --production
+RUN bun install --filter "./app/tweet-forwarder" --filter "./core/*" --frozen-lockfile
 RUN bun --filter "@idol-bbq-utils/tweet-forwarder" db:generate-client
 RUN bun --filter "@idol-bbq-utils/tweet-forwarder" build
 
@@ -29,7 +29,7 @@ RUN apt-get update \
     && apt-get install -y wget gnupg \
     # Required for Chrome
     && apt-get install -y fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libcurl4 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libvulkan1 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2 xdg-utils \
-      --no-install-recommends \
+    --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Chrome
@@ -40,7 +40,7 @@ RUN wget --no-verbose -O /tmp/chrome.deb https://dl.google.com/linux/chrome/deb/
 # Install gallery-dl
 RUN wget https://github.com/mikf/gallery-dl/releases/download/${GALLERY_DL_VERSION}/gallery-dl.bin -O /usr/local/bin/gallery-dl \
     && chmod +x /usr/local/bin/gallery-dl
- 
+
 WORKDIR /app
 COPY --from=builder /app/app/tweet-forwarder/build/main.js /app/bin.js
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
@@ -48,6 +48,8 @@ COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
 COPY --from=builder /app/app/tweet-forwarder/prisma/client /app/prisma/client
 # Copy assets
 COPY --from=builder /app/assets/fonts /app/assets/fonts
+# Copy node_modules (including prisma)
+COPY --from=builder /app/node_modules /app/node_modules
 
 # Copy source prisma schema and migrations for deployment
 COPY app/tweet-forwarder/prisma /app/prisma
@@ -58,9 +60,6 @@ RUN chown -R bun:bun /app/ \
     && chmod +x /app/start.sh
 
 USER bun
-
-# Install prisma CLI in the runner stage so we can run migrations
-RUN bun add prisma
 
 ENV NO_SANDBOX=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
