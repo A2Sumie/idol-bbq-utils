@@ -89,8 +89,8 @@ async function main() {
         taskSchedulers.push(forwarderTaskScheduler)
     }
 
-    // Initialize APIManager
-    if (config.api || process.env.API_SECRET) {
+    // Initialize APIManager (Skip in Debug Mode to avoid port conflict)
+    if ((config.api || process.env.API_SECRET) && !process.env.TEST_PUSH_TARGET) {
         const { APIManager } = await import('./managers/api-manager')
         const apiManager = new APIManager(config, log)
         compatibleModels.push(apiManager)
