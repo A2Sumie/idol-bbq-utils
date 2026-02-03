@@ -134,3 +134,14 @@ model forward_by {
   @@id([ref_id, platform, bot_id, task_type])
   @@index([bot_id], map: "bot_id_index")
 }
+
+model media_hashes {
+  id         Int    @id @default(autoincrement())
+  platform   String
+  hash       String
+  a_id       String @default("")
+  created_at Int
+
+  @@unique([platform, hash], map: "platform_hash_unique")
+  @@index([hash])
+}

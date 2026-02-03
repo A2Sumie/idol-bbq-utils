@@ -341,6 +341,37 @@ namespace DB {
             })
         }
     }
+
+    export namespace MediaHash {
+        export async function checkExist(platform: string, hash: string) {
+            return await prisma.media_hashes.findUnique({
+                where: {
+                    platform_hash: {
+                        platform,
+                        hash
+                    }
+                }
+            })
+        }
+
+        export async function save(platform: string, hash: string, a_id: string = '') {
+            return await prisma.media_hashes.upsert({
+                where: {
+                    platform_hash: {
+                        platform,
+                        hash
+                    }
+                },
+                create: {
+                    platform,
+                    hash,
+                    a_id,
+                    created_at: Math.floor(Date.now() / 1000)
+                },
+                update: {} // No op if exists
+            })
+        }
+    }
 }
 
 export default DB

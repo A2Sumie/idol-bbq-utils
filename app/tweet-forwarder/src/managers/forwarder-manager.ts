@@ -121,6 +121,33 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                 })
                 this.log?.info(`Auto-Bound Forwarder Task created: ${taskName} using template ${matchForwarder.name}`)
                 this.cronJobs.push(job)
+
+                // --- BATCH MODE DISPATCHER ---
+                if ((cfg_forwarder as any).batch_mode) {
+                    const batchJob = new CronJob('0 * * * *', async () => {
+                        this.log?.info(`Dispatching Hourly Batch for ${taskName}`)
+                        // Resolve Platform/UID
+                        // Try to find a valid URL from crawler or forwarder to extract info
+                        const website = crawler.websites?.[0] || matchForwarder.websites?.[0]
+                        if (website) {
+                            const info = spiderRegistry.extractBasicInfo(website)
+                            if (info && info.u_id && info.platform) {
+                                const end = Math.floor(Date.now() / 1000)
+                                const start = end - 3600
+                                await DB.TaskQueue.add('aggregate_hourly', {
+                                    platform: info.platform,
+                                    u_id: info.u_id,
+                                    start,
+                                    end,
+                                    bot_id: matchForwarder.id
+                                }, end)
+                            }
+                        }
+                    })
+                    this.log?.info(`Batch Job created for ${taskName}`)
+                    this.cronJobs.push(batchJob)
+                }
+                // -----------------------------
             }
         } else {
             this.log?.warn('No crawlers defined for auto-binding.')
@@ -565,6 +592,23 @@ class ForwarderPools extends BaseCompatibleModel {
                                 return // Skip sending
                             }
                             // -----------------------------
+
+                            // --- NEW: Batch Mode Skip Logic ---
+                            if ((cfg_forwarder as any)?.batch_mode) {
+                                // Exception Check
+                                const isException = target.id === '七虹信标-群2' || (target as any).name === '七虹信标-群2' || (runtime_config as any)?.bypass_batch
+                                if (!isException) {
+                                    ctx.log?.info(`Skipping real-time send for ${article.a_id} to ${target.id} (Batch Mode ON)`)
+                                    // Mark as sent to prevent retry
+                                    let currentArticle: ArticleWithId | null = article
+                                    while (currentArticle && typeof currentArticle === 'object') {
+                                        await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
+                                        currentArticle = currentArticle.ref as ArticleWithId | null
+                                    }
+                                    return
+                                }
+                            }
+                            // ----------------------------------
 
                             // --- NEW: Keyword Filter Logic ---
                             // If keywords are defined in config, only send if content matches

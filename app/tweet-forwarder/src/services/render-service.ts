@@ -183,6 +183,11 @@ export class RenderService {
         }>
         let currentArticle: Article | null = article
 
+        // Dynamic imports to avoid top-level issues during hot-reload or circular deps, and purely for this logic
+        const fs = await import('fs')
+        const crypto = await import('crypto')
+        const DB = (await import('@/db')).default
+
         while (currentArticle) {
             let new_files = [] as Array<
                 | {
@@ -209,6 +214,27 @@ export class RenderService {
                                         ? platformPresetHeadersMap[currentArticle.platform]
                                         : {}),
                                 })
+
+                                // --- HASH CHECK ---
+                                try {
+                                    const buffer = fs.readFileSync(path)
+                                    const hash = crypto.createHash('sha256').update(buffer).digest('hex')
+                                    const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
+
+                                    const exists = await DB.MediaHash.checkExist(platformStr, hash)
+                                    if (exists) {
+                                        this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`)
+                                        // Delete local file since we won't use it
+                                        fs.unlinkSync(path)
+                                        return undefined
+                                    }
+                                    // Save hash
+                                    await DB.MediaHash.save(platformStr, hash, currentArticle?.a_id || '')
+                                } catch (e) {
+                                    this.log?.error(`Error during duplicate check: ${e}`)
+                                }
+                                // ------------------
+
                                 return {
                                     path,
                                     media_type: overrideType ? getMediaType(path) : type,
@@ -241,10 +267,31 @@ export class RenderService {
                         media.use as MediaTool<MediaToolEnum.GALLERY_DL>,
                     )
 
-                    new_files = paths.map((path) => ({
-                        path,
-                        media_type: getMediaType(path),
+                    new_files = await Promise.all(paths.map(async (path) => {
+                        // --- HASH CHECK (Gallery-DL) ---
+                        try {
+                            const buffer = fs.readFileSync(path)
+                            const hash = crypto.createHash('sha256').update(buffer).digest('hex')
+                            const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
+
+                            const exists = await DB.MediaHash.checkExist(platformStr, hash)
+                            if (exists) {
+                                this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...) via gallery-dl, skipping.`)
+                                fs.unlinkSync(path)
+                                return undefined
+                            }
+                            await DB.MediaHash.save(platformStr, hash, currentArticle?.a_id || '')
+                        } catch (e) {
+                            this.log?.error(`Error during duplicate check: ${e}`)
+                        }
+                        // ------------------
+
+                        return {
+                            path,
+                            media_type: getMediaType(path),
+                        }
                     }))
+                    new_files = new_files.filter(f => f !== undefined)
 
                     if (currentArticle.extra?.media) {
                         const extra_files = await _handleMedia(currentArticle.extra.media, true)
