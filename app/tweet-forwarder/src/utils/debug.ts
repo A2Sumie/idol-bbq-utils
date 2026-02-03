@@ -4,18 +4,17 @@ import { Platform } from '@idol-bbq-utils/spider/types'
 import { Logger } from '@idol-bbq-utils/log'
 import type { Article } from '@/db'
 import dayjs from 'dayjs'
-import { X } from '@idol-bbq-utils/spider'
 import { MediaToolEnum } from '@/types/media'
-import EventEmitter from 'events'
 
 export async function runDebugPush(targetGroup: string, log: Logger) {
-    log.info(`Starting Debug Push to target: ${targetGroup}`)
+    // Unused
 }
 
 export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targetGroup: string, log: Logger) {
     log.info(`Starting Debug Push to target: ${targetGroup} using existing pools`)
 
-    // 1. Fake X Article (Text Only) - Use correct Enum
+    // 1. Fake X Article (Text Only)
+    // ArticleTypeEnum is not exported, using string 'tweet'
     const xArticleText: Article = {
         id: 1001,
         platform: Platform.X,
@@ -27,11 +26,11 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
         translation: '',
         translated_by: '',
         url: 'https://twitter.com/debug_user/status/1',
-        type: X.ArticleTypeEnum.TWEET,
+        type: 'tweet' as any,
         ref: null,
         has_media: false,
         media: [],
-        extra: { data: X.ExtraContentType.TWEET },
+        extra: { data: 'tweet' as any },
         u_avatar: 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png'
     }
 
@@ -56,7 +55,7 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
         platform: Platform.YouTube,
         a_id: 'fake-yt-1',
         content: 'New Video Uploaded!',
-        type: 'post', // Generic fallback
+        type: 'post',
         has_media: false,
         media: [{
             type: 'video_thumbnail',
@@ -113,7 +112,28 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
                         sent = true
                         break;
                     } else {
-                        log.warn(`Bot ${botId} client does not have sendGroupMsg or is not exposed.`)
+                        // Some clients (like icqq) might use pickGroup().send()
+                        if (client.pickGroup) {
+                            const group = client.pickGroup(Number(targetGroup))
+                            if (group && group.sendMsg) {
+                                const mediaElements = result.mediaFiles.map(f => {
+                                    return {
+                                        type: 'image',
+                                        file: f.path
+                                    }
+                                })
+                                // icqq message format? usually just array of elements
+                                const message = [
+                                    result.text,
+                                    ...mediaElements
+                                ]
+                                await group.sendMsg(message)
+                                log.info(`Sent successfully via pickGroup to ${targetGroup}.`)
+                                sent = true
+                                break;
+                            }
+                        }
+                        log.warn(`Bot ${botId} client does not have sendGroupMsg or pickGroup.`)
                     }
                 } catch (e) {
                     log.error(`Failed to send via bot ${botId}: ${e}`)
