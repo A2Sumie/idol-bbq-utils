@@ -10,11 +10,34 @@ export async function runDebugPush(targetGroup: string, log: Logger) {
     // Unused
 }
 
-export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targetGroup: string, log: Logger) {
-    log.info(`Starting Debug Push to target: ${targetGroup} using existing pools`)
+export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targetIdentifier: string, log: Logger) {
+    log.info(`Starting Debug Push. Looking for target matching: ${targetIdentifier}`)
+
+    // Access private forward_to map using cast
+    const poolsMap = (forwarderPools as any).forward_to as Map<string, any>
+    let targetForwarder: any = null
+
+    // 1. Try match by ID (exact match)
+    if (poolsMap.has(targetIdentifier)) {
+        targetForwarder = poolsMap.get(targetIdentifier)
+        log.info(`Found target by ID: ${targetIdentifier}`)
+    } else {
+        // 2. Try match by group_id in config
+        for (const [id, forwarder] of poolsMap.entries()) {
+            if (forwarder.cfg_platform?.group_id === targetIdentifier || forwarder.cfg_platform?.group_id === Number(targetIdentifier)) {
+                targetForwarder = forwarder
+                log.info(`Found target by Group ID: ${targetIdentifier} -> ${id}`)
+                break
+            }
+        }
+    }
+
+    if (!targetForwarder) {
+        log.error(`Target ${targetIdentifier} NOT found in loaded pools! Available IDs: ${Array.from(poolsMap.keys()).join(', ')}`)
+        return
+    }
 
     // 1. Fake X Article (Text Only)
-    // ArticleTypeEnum is not exported, using string 'tweet'
     const xArticleText: Article = {
         id: 1001,
         platform: Platform.X,
@@ -22,7 +45,7 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
         u_id: 'debug_user',
         username: 'Debug User',
         created_at: dayjs().unix(),
-        content: 'This is a debug text tweet from X.',
+        content: '[Debug] Text only tweet (Should be just text)',
         translation: '',
         translated_by: '',
         url: 'https://twitter.com/debug_user/status/1',
@@ -39,7 +62,7 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
         ...xArticleText,
         id: 1002,
         a_id: 'fake-x-img-1',
-        content: 'This is a debug tweet with image.',
+        content: '[Debug] Image tweet (Should generate Card)',
         has_media: true,
         media: [{
             type: 'photo',
@@ -54,7 +77,7 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
         id: 1003,
         platform: Platform.YouTube,
         a_id: 'fake-yt-1',
-        content: 'New Video Uploaded!',
+        content: '[Debug] YouTube Video (Should be EXEMPTED -> Text Only + Link)',
         type: 'post',
         has_media: false,
         media: [{
@@ -64,11 +87,28 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
         }]
     }
 
+    // 4. Fake TikTok (Video Type - Should be Exempted)
+    const tiktokArticle: any = {
+        ...xArticleText,
+        id: 1004,
+        platform: Platform.TikTok,
+        a_id: 'fake-tk-1',
+        content: '[Debug] TikTok Video (Should be EXEMPTED -> Text Only)',
+        type: 'video',
+        has_media: true,
+        media: [{
+            type: 'video',
+            url: 'http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4', // public sample
+            alt: 'Video'
+        }]
+    }
+
+
     const { RenderService } = await import('../services/render-service')
     const renderService = new RenderService(log)
 
     const send = async (article: Article, tag: string) => {
-        log.info(`Processing ${tag}...`)
+        log.info(`--- Processing ${tag} ---`)
 
         // Mock Media Config
         const mockMediaConfig: any = {
@@ -76,79 +116,38 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
             use: { tool: MediaToolEnum.DEFAULT }
         }
 
+        // We assume 'img-tag' is what the user uses for X/General
         const result = await renderService.process(article, {
             taskId: 'debug-task',
             render_type: 'img-tag',
             mediaConfig: mockMediaConfig
         })
 
-        log.info(`Processed Result for ${tag}:`)
-        log.info(`Text Preview: ${result.text.substring(0, 50)}...`)
-        log.info(`Media Files: ${result.mediaFiles.length}`)
-        result.mediaFiles.forEach(f => log.info(` - ${f.path}`))
-
-        // Access private forward_to map using cast
-        const poolsMap = (forwarderPools as any).forward_to as Map<string, any>
-
-        let sent = false
-        for (const [botId, forwarder] of poolsMap.entries()) {
-            if (forwarder.type === 'qq') {
-                log.info(`Attempting to send via bot ${botId} to group ${targetGroup}`)
-                try {
-                    const client = forwarder.client
-                    if (client && client.sendGroupMsg) {
-                        const mediaElements = result.mediaFiles.map(f => {
-                            return {
-                                type: 'image',
-                                file: f.path
-                            }
-                        })
-                        const message = [
-                            result.text,
-                            ...mediaElements
-                        ]
-                        await client.sendGroupMsg(Number(targetGroup), message)
-                        log.info(`Sent successfully to ${targetGroup}.`)
-                        sent = true
-                        break;
-                    } else {
-                        // Some clients (like icqq) might use pickGroup().send()
-                        if (client.pickGroup) {
-                            const group = client.pickGroup(Number(targetGroup))
-                            if (group && group.sendMsg) {
-                                const mediaElements = result.mediaFiles.map(f => {
-                                    return {
-                                        type: 'image',
-                                        file: f.path
-                                    }
-                                })
-                                // icqq message format? usually just array of elements
-                                const message = [
-                                    result.text,
-                                    ...mediaElements
-                                ]
-                                await group.sendMsg(message)
-                                log.info(`Sent successfully via pickGroup to ${targetGroup}.`)
-                                sent = true
-                                break;
-                            }
-                        }
-                        log.warn(`Bot ${botId} client does not have sendGroupMsg or pickGroup.`)
-                    }
-                } catch (e) {
-                    log.error(`Failed to send via bot ${botId}: ${e}`)
-                }
-            }
+        log.info(`Render Result: Text length=${result.text.length}, MediaFiles=${result.mediaFiles.length}`)
+        if (result.mediaFiles.length > 0) {
+            log.info(`Media: ${result.mediaFiles.map(f => f.path).join(', ')}`)
         }
-        if (!sent) {
-            log.warn('Could not find suitable QQ bot or failed to send.')
+
+        try {
+            log.info(`Sending to ${targetForwarder.id}...`)
+            // Use the Forwarder's standard send method
+            await targetForwarder.send(result.text, {
+                media: result.mediaFiles,
+                timestamp: article.created_at,
+                runtime_config: {}, // empty runtime config
+                article: article
+            })
+            log.info(`Successfully sent ${tag}`)
+        } catch (e) {
+            log.error(`Failed to send ${tag}: ${e}`)
         }
     }
 
     try {
-        await send(xArticleText, 'X Text')
-        await send(xArticleImg, 'X Image')
-        await send(ytArticle, 'YouTube Video')
+        await send(xArticleText, 'X (Text)')
+        await send(xArticleImg, 'X (Image)')
+        await send(ytArticle, 'YouTube (Video)')
+        await send(tiktokArticle, 'TikTok (Video)')
     } catch (e) {
         log.error(`Error in debug loop: ${e}`)
     }
