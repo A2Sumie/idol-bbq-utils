@@ -68,7 +68,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         return 1000
     }
 
-    public check_blocked(text: string, props: SendProps): boolean {
+    public async check_blocked(text: string, props: SendProps): Promise<boolean> {
         const { timestamp, runtime_config, article } = props || {}
         const mergedConfig: ForwardTargetPlatformCommonConfig = {
             ...this.config,
@@ -90,17 +90,12 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             .use(new KeywordFilterMiddleware())
             .use(new BlockRuleMiddleware())
 
-        let blocked = false
-        blockCheckPipeline
-            .execute(context)
-            .then((result) => {
-                blocked = !result
-            })
-            .catch(() => {
-                blocked = true
-            })
-
-        return blocked
+        try {
+            const result = await blockCheckPipeline.execute(context)
+            return !result
+        } catch {
+            return true
+        }
     }
 
     protected minInterval: number = 0
@@ -145,7 +140,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
                 await new Promise((resolve) => setTimeout(resolve, waitTime))
             }
         }
-        
+
         // Update timestamp BEFORE attempt to space out *starts* of attempts (conservative approach)
         this.lastSentTime = Date.now()
 

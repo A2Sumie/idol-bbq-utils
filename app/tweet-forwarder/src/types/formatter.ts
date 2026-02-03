@@ -1,11 +1,16 @@
 /**
+ * Supported render types for formatting articles
+ */
+type RenderType = 'text' | 'img' | 'tag' | 'img-tag' | 'img-tag-dynamic'
+
+/**
  * Formatter type definition for independent formatter configuration
  */
 interface Formatter {
     id?: string
     name?: string
     group?: string
-    render_type: 'text' | 'img' | 'img-with-meta' | 'img-with-source' | 'img-with-source-summary'
+    render_type: RenderType
 }
 
 /**

@@ -81,7 +81,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                 const cfg_forwarder = {
                     cron: '*/30 * * * *',
                     media: {
-                        type: 'no-storage',
+                        type: 'no-storage' as const,
                         use: {
                             tool: MediaToolEnum.DEFAULT,
                         },
@@ -98,7 +98,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                     websites: undefined, // Clear hardcoded websites
                     origin: crawler.origin,
                     paths: crawler.paths, // Use Crawler's Paths
-                    cfg_forwarder: cfg_forwarder as any // Use merged config
+                    cfg_forwarder: cfg_forwarder // Use merged config
                 }
 
                 const job = new CronJob(cron as string, async () => {
@@ -426,7 +426,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         allPaths.push({
                             formatterConfig: {
                                 ...cfg_forwarder,
-                                render_type: formatterConfig.render_type as any
+                                render_type: formatterConfig.render_type
                             },
                             targets: validTargets,
                             source: 'graph',
@@ -507,13 +507,15 @@ class ForwarderPools extends BaseCompatibleModel {
         // 开始转发文章
         for (const { article, to } of articles_forwarders) {
             // check article
-            const article_is_blocked = to.every(({ forwarder: target, runtime_config }) =>
+            const blockResults = await Promise.all(to.map(({ forwarder: target, runtime_config }) =>
                 target.check_blocked('', {
                     timestamp: article.created_at,
                     runtime_config,
                     article: cloneDeep(article),
-                }),
-            )
+                })
+            ))
+            const article_is_blocked = blockResults.every(result => result)
+
             if (article_is_blocked) {
                 ctx.log?.warn(`Article ${article.a_id} is blocked by all forwarders, skipping...`)
                 // save forwardby
@@ -551,9 +553,9 @@ class ForwarderPools extends BaseCompatibleModel {
                             // --- NEW: No Backfill Logic ---
                             // If article is older than 2 hours, assume it's a backfill/initial bind and skip sending
                             // But mark it as sent so we don't process it again.
-                            const ONE_HOUR_SECONDS = 3600 * 2
+                            const TWO_HOURS_SECONDS = 3600 * 2
                             const now = dayjs().unix()
-                            if (now - article.created_at > ONE_HOUR_SECONDS) {
+                            if (now - article.created_at > TWO_HOURS_SECONDS) {
                                 ctx.log?.info(`Skipping old article ${article.a_id} (created at ${dayjs.unix(article.created_at).format()}) for target ${target.id}`)
                                 let currentArticle: ArticleWithId | null = article
                                 while (currentArticle && typeof currentArticle === 'object') {
@@ -566,7 +568,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
                             // --- NEW: Keyword Filter Logic ---
                             // If keywords are defined in config, only send if content matches
-                            const keywords = (cfg_forwarder as any)?.keywords as string[] | undefined
+                            const keywords = cfg_forwarder?.keywords
                             if (keywords && keywords.length > 0) {
                                 const content = article.content || ''
                                 const hasKeyword = keywords.some(k => content.includes(k))

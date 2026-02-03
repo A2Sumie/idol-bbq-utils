@@ -142,46 +142,12 @@ namespace DB {
                 })
                 currentRefId = foundArticle?.ref || null
                 // We assume ref is also same platform
-                currentArticle.ref = foundArticle ? { ...foundArticle, platform } as unknown as ArticleWithId : null
                 if (foundArticle) {
-                    // Move up the chain? actually this logic seems to just attach one level?
-                    // Original code: currentArticle.ref = foundArticle ...
-                    // It seems it was traversing but overwriting currentArticle? 
-                    // Wait, original code:
-                    // currentRefId = foundArticle?.ref
-                    // currentArticle.ref = foundArticle
-                    // currentArticle = foundArticle
-                    // This constructs a linked list in verifyse? No, it attaches parent to .ref.
-                    // But if deep, it flattens?
-                    // "currentArticle = foundArticle" -> moves pointer up.
-                    // But "currentArticle.ref = foundArticle" sets the property on the CHILD.
-                    // So it builds the chain upwards. Correct.
-
-                    // We need to properly type the found article
                     const foundWithPlatform = { ...foundArticle, platform } as unknown as ArticleWithId
                     currentArticle.ref = foundWithPlatform
                     currentArticle = foundWithPlatform
                 }
             }
-            // Return request article (the child) which now has populated ref chain
-            // Wait, original code returned `article`. But it modified `article` properties in place?
-            // `currentArticle` started as `article`.
-            // Yes, objects are passed by reference.
-            // But I did `...article` spread, so it's a copy.
-            // I should return the copy.
-            // Re-check: `let currentArticle = article`. If article came from prisma, it's an object.
-            // But I cast it.
-            // In my new code: `let currentArticle = { ...article, platform }`. It's a copy. Good.
-            // I should return `rootArticle`.
-
-            // Wait, I lost the reference to the root `currentArticle` if I reassign `currentArticle`.
-            // Original: `let currentArticle = article`. `article` acts as root.
-            // Here: `let root = { ...article, platform } as unknown as ArticleWithId`
-            // `let current = root`
-            // ...
-            // return root
-
-            // Let's fix this logic to be safe.
             return rootWithChain(article, platform)
         }
 
@@ -293,12 +259,12 @@ namespace DB {
     }
 
     export namespace ForwardBy {
-        export async function checkExist(ref_id: number, platform: string, bot_id: string, task_type: string) {
+        export async function checkExist(ref_id: number, platform: string | number, bot_id: string, task_type: string) {
             return await prisma.forward_by.findUnique({
                 where: {
                     ref_id_platform_bot_id_task_type: {
                         ref_id,
-                        platform,
+                        platform: String(platform),
                         bot_id,
                         task_type,
                     },
@@ -306,19 +272,19 @@ namespace DB {
             })
         }
 
-        export async function save(ref_id: number, platform: string, bot_id: string, task_type: string) {
+        export async function save(ref_id: number, platform: string | number, bot_id: string, task_type: string) {
             return await prisma.forward_by.upsert({
                 where: {
                     ref_id_platform_bot_id_task_type: {
                         ref_id,
-                        platform,
+                        platform: String(platform),
                         bot_id,
                         task_type,
                     },
                 },
                 create: {
                     ref_id,
-                    platform,
+                    platform: String(platform),
                     bot_id,
                     task_type,
                 },
@@ -326,7 +292,7 @@ namespace DB {
             })
         }
 
-        export async function deleteRecord(ref_id: number, platform: string, bot_id: string, task_type: string) {
+        export async function deleteRecord(ref_id: number, platform: string | number, bot_id: string, task_type: string) {
             let exist_one = await checkExist(ref_id, platform, bot_id, task_type)
             if (!exist_one) {
                 return
@@ -335,7 +301,7 @@ namespace DB {
                 where: {
                     ref_id_platform_bot_id_task_type: {
                         ref_id,
-                        platform,
+                        platform: String(platform),
                         bot_id,
                         task_type,
                     },

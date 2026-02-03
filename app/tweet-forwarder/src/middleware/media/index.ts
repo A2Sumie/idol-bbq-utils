@@ -94,7 +94,7 @@ async function tryGetCookie(url: string) {
     cookies.forEach((cookie) => {
         const parts = cookie.split(';').map((part) => part.trim())
 
-        const [keyValue, ...attributes] = parts
+        const [keyValue] = parts
         if (keyValue) {
             cookieArr.push(keyValue)
         }
