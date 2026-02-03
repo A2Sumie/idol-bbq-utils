@@ -77,53 +77,64 @@ export class RenderService {
                 return { text: '', mediaFiles: [] }
             }
             text = this.formatPlatformFrom(article)
-        } else if (render_type === 'img-tag') {
-            // Case 2: img-tag (was img+source)
-            // Output: "From [Platform]" + Media + Card (Lat)
-            text = this.formatPlatformFrom(article)
-            const renderedPath = await generateRenderedImage()
-            if (renderedPath) {
-                maybe_media_files.push({
-                    path: renderedPath,
-                    media_type: 'photo' as MediaType,
-                })
-            }
-        } else if (render_type === 'img-tag-dynamic') {
-            // Case 3: img-tag-dynamic
-            // Output: "From [Platform]" + Media + Card (Last)
-            // Skip if no ORIGINAL media
-            if (maybe_media_files.length === 0) {
-                this.log?.debug(`Skipping 'img-tag-dynamic' mode for text-only article ${article.a_id}`)
-                return { text: '', mediaFiles: [] }
-            }
-            text = this.formatPlatformFrom(article)
-            const renderedPath = await generateRenderedImage()
-            if (renderedPath) {
-                maybe_media_files.push({
-                    path: renderedPath,
-                    media_type: 'photo' as MediaType,
-                })
+        } else if (render_type === 'img-tag' || render_type === 'img-tag-dynamic') {
+            // Case 2 & 3: img-tag family
+            // Check Exemption Logic
+            const isVideoPlatform = [
+                Platform.TikTok,
+                Platform.YouTube
+            ].includes(article.platform)
+
+            const isVideoType = article.media?.some(m => m.type === 'video') || article.media?.some(m => m.type === 'video_thumbnail')
+
+            // User requested Bilibili (future) and Video types NOT to be merged
+            if (isVideoPlatform || isVideoType) {
+                this.log?.info(`Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id}`)
+                // Fallback to standard text + media
+                text = articleToText(article)
+            } else {
+                // Standard Card Logic
+                text = this.formatPlatformFrom(article)
+                const renderedPath = await generateRenderedImage()
+                if (renderedPath) {
+                    maybe_media_files.push({
+                        path: renderedPath,
+                        media_type: 'photo' as MediaType,
+                    })
+                }
             }
         } else if (render_type?.startsWith('img')) {
             // Case 4: Other img-based types (e.g. 'img')
             // Concept: Rendered Image (at start) + Metaline/Empty Text.
-            const renderedPath = await generateRenderedImage()
-            let articleToImgSuccess = false
-            if (renderedPath) {
-                maybe_media_files.unshift({
-                    path: renderedPath,
-                    media_type: 'photo' as MediaType,
-                })
-                articleToImgSuccess = true
+
+            // Check Exemption Logic
+            const isVideoPlatform = [
+                Platform.TikTok,
+                Platform.YouTube
+            ].includes(article.platform)
+            if (isVideoPlatform) {
+                this.log?.info(`Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id} in img mode`)
+                text = articleToText(article)
+            } else {
+                const renderedPath = await generateRenderedImage()
+                let articleToImgSuccess = false
+                if (renderedPath) {
+                    maybe_media_files.unshift({
+                        path: renderedPath,
+                        media_type: 'photo' as MediaType,
+                    })
+                    articleToImgSuccess = true
+                }
+
+                const fullText = articleToText(article)
+                // If converted to image, usually only want the metaline
+                text = articleToImgSuccess ? formatMetaline(article) : fullText
+
+                if (render_type === 'img') {
+                    text = '' // No text for pure img mode
+                }
             }
 
-            const fullText = articleToText(article)
-            // If converted to image, usually only want the metaline
-            text = articleToImgSuccess ? formatMetaline(article) : fullText
-
-            if (render_type === 'img') {
-                text = '' // No text for pure img mode
-            }
         } else {
             // Case 5: Standard Text
             text = articleToText(article)

@@ -2,6 +2,7 @@ import type { Article, FontConfig } from '@/types'
 import { getIconCode, loadEmoji, type apis } from './utils/twemoji'
 import { FontDetector, languageFontMap } from './utils/font'
 import { articleParser, CARD_WIDTH } from '@/template/img/DefaultCard'
+import { TemplateRegistry } from '@/registry'
 import satori, { type Font } from 'satori'
 import tailwindConfig from '@/template/img/DefaultTailwindConfig'
 import { Resvg } from '@resvg/resvg-js'
@@ -77,26 +78,26 @@ async function loadGoogleFont(fonts: string[], text: string) {
     async function getFontResponseBuffer(weight: number) {
         const encodedFontBuffers: ArrayBuffer[] = []
         let fontBufferByteLength = 0
-        ;(
-            await Promise.all(
-                _fonts.map((font) => {
-                    if (!textByFont[font]) return
-                    return fetchFont(textByFont[font], font, weight)
-                }),
+            ; (
+                await Promise.all(
+                    _fonts.map((font) => {
+                        if (!textByFont[font]) return
+                        return fetchFont(textByFont[font], font, weight)
+                    }),
+                )
             )
-        )
-            .filter(Boolean)
-            .forEach((fontData, i) => {
-                if (fontData) {
-                    // TODO: We should be able to directly get the language code here :)
-                    const langCode = Object.entries(languageFontMap).find(([, v]) => v.includes(_fonts[i] || ''))?.[0]
-                    if (langCode) {
-                        const buffer = encodeFontInfoAsArrayBuffer(langCode, fontData)
-                        encodedFontBuffers.push(buffer)
-                        fontBufferByteLength += buffer.byteLength
+                .filter(Boolean)
+                .forEach((fontData, i) => {
+                    if (fontData) {
+                        // TODO: We should be able to directly get the language code here :)
+                        const langCode = Object.entries(languageFontMap).find(([, v]) => v.includes(_fonts[i] || ''))?.[0]
+                        if (langCode) {
+                            const buffer = encodeFontInfoAsArrayBuffer(langCode, fontData)
+                            encodedFontBuffers.push(buffer)
+                            fontBufferByteLength += buffer.byteLength
+                        }
                     }
-                }
-            })
+                })
         const responseBuffer = new ArrayBuffer(fontBufferByteLength)
         const responseBufferView = new Uint8Array(responseBuffer)
         let offset = 0
@@ -185,8 +186,9 @@ class ImgConverter {
         const fonts: FontConfig[] = JSON.parse(fs.readFileSync(`${fontsDir}/fonts.json`, 'utf-8'))
         this.fonts = fonts
     }
-    public async articleToImg(article: Article) {
-        const { height, component: Card } = articleParser(article)
+    public async articleToImg(article: Article, templateName?: string) {
+        const parser = TemplateRegistry.getInstance().getOrDefault(templateName)
+        const { height, component: Card } = parser(article)
         const fontsOptions: Font[] = this.fonts
             .map((font) => {
                 try {
@@ -207,7 +209,10 @@ class ImgConverter {
             height: height,
             fonts: fontsOptions,
             loadAdditionalAsset: (code: string, text: string) => {
-                return loadDynamicAsset('twemoji', code, text)
+                const result = loadDynamicAsset('twemoji', code, text)
+                // loadDynamicAsset returns Promise, need to handle await or ensure satori supports promises (it usually does for loadAdditionalAsset)
+                // Checking usage in original code: return loadDynamicAsset(...)
+                return result as Promise<string | import("satori").Font[]>
             },
             tailwindConfig,
         })

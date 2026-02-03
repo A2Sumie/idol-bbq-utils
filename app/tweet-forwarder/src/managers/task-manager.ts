@@ -106,36 +106,47 @@ export class TaskManager extends BaseCompatibleModel {
         }
 
         // --- NEW: Generate Image Card for Summary ---
-        const { ImgConverter } = await import('@idol-bbq-utils/render')
-        const { writeImgToFile } = await import('@/middleware/media')
-        const fs = await import('fs')
-
-        const fakeArticle: any = {
-            id: 0,
-            a_id: `summary-${start}-${end}`,
-            u_id: u_id, // Title of the card
-            platform: platform,
-            content: summary,
-            created_at: end,
-            url: `https://${platform}.com`,
-            has_media: false,
-            timestamp: end,
-            author: {
-                name: `Daily Report: ${u_id}`,
-                username: u_id,
-                url: '',
-                avatar: ''
-            }
-        }
+        // Exemption: Do not generate card for video platforms (TikTok, YouTube)
+        // because "merging" video summaries into a card usually doesn't make sense or look good.
+        const isVideoPlatform = [Platform.TikTok, Platform.YouTube].includes(platform)
 
         let mediaFiles: { path: string, media_type: 'photo' }[] = []
-        try {
-            const converter = new ImgConverter()
-            const imgBuffer = await converter.articleToImg(fakeArticle)
-            const path = writeImgToFile(imgBuffer, `summary-${start}-${end}.png`)
-            mediaFiles.push({ path, media_type: 'photo' })
-        } catch (e) {
-            this.log?.error(`Failed to generate summary image: ${e}`)
+
+        const fs = await import('fs')
+        if (!isVideoPlatform) {
+            const { ImgConverter } = await import('@idol-bbq-utils/render')
+            const { writeImgToFile } = await import('@/middleware/media')
+
+            const fakeArticle: any = {
+                id: 0,
+                platform: platform,
+                a_id: `summary-${start}-${end}`,
+                u_id: u_id,
+                username: `Daily Report: ${u_id}`,
+                created_at: end,
+                content: summary,
+                translation: '',
+                translated_by: '',
+                url: `https://${platform}.com`,
+                type: 'post', // Generic type
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null
+            }
+
+            try {
+                const converter = new ImgConverter()
+                // Use 'default' template for now. Future: select based on config?
+                const imgBuffer = await converter.articleToImg(fakeArticle as any, 'default')
+                const path = writeImgToFile(imgBuffer, `summary-${start}-${end}.png`)
+                mediaFiles.push({ path, media_type: 'photo' })
+            } catch (e) {
+                this.log?.error(`Failed to generate summary image: ${e}`)
+            }
+        } else {
+            this.log?.info(`Skipping summary image generation for video platform ${platform}`)
         }
         // --------------------------------------------
 
