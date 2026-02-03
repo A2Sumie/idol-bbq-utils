@@ -44,16 +44,27 @@ RUN wget https://github.com/mikf/gallery-dl/releases/download/${GALLERY_DL_VERSI
 WORKDIR /app
 COPY --from=builder /app/app/tweet-forwarder/build/main.js /app/bin.js
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
+# Copy generated client
 COPY --from=builder /app/app/tweet-forwarder/prisma/client /app/prisma/client
+# Copy assets
 COPY --from=builder /app/assets/fonts /app/assets/fonts
 
-RUN chown -R bun:bun /app/
+# Copy source prisma schema and migrations for deployment
+COPY app/tweet-forwarder/prisma /app/prisma
+# Copy startup script
+COPY app/tweet-forwarder/start.sh /app/start.sh
+
+RUN chown -R bun:bun /app/ \
+    && chmod +x /app/start.sh
 
 USER bun
+
+# Install prisma CLI in the runner stage so we can run migrations
+RUN bun add prisma
 
 ENV NO_SANDBOX=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV DATABASE_URL="file:/app/data.db"
 ENV FONTS_DIR=/app/assets/fonts
 
-CMD ["sh", "-c", "bun /app/bin.js"]
+CMD ["/app/start.sh"]
