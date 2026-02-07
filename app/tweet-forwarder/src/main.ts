@@ -22,6 +22,8 @@ async function main() {
         return
     }
     const { crawlers, cfg_crawler, forward_targets, cfg_forward_target, forwarders, cfg_forwarder, formatters } = config
+    log.info(`[Trace] Config loaded. Connections keys: ${config.connections ? Object.keys(config.connections).join(',') : 'UNDEFINED'}`)
+
 
     if (crawlers && crawlers.length > 0) {
         const tmpDir = tmp.dirSync({
