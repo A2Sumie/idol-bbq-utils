@@ -328,7 +328,7 @@ class ForwarderPools extends BaseCompatibleModel {
         ctx.log?.debug(`Task received: ${JSON.stringify(task)}`)
 
         if (!websites && !origin && !paths) {
-            ctx.log?.error(`No websites or origin or paths found`)
+            ctx.log?.error(`[Trace] No websites or origin or paths found. Task data keys: ${Object.keys(task.data).join(',')}`)
             this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
                 taskId,
                 status: TaskScheduler.TaskStatus.CANCELLED,
@@ -340,6 +340,8 @@ class ForwarderPools extends BaseCompatibleModel {
             origin,
             paths,
         })
+        ctx.log?.info(`[Trace] Sanitized websites: ${websites?.length || 0} found. List: ${websites?.join(', ')}`)
+
 
         try {
             let result: Array<CrawlerTaskResult> = []
@@ -430,13 +432,18 @@ class ForwarderPools extends BaseCompatibleModel {
             const crawlerName = ctx.task.data.name
             if (crawlerName && connections && connections['crawler-formatter'] && connections['formatter-target']) {
                 const connectedFormatterIds = connections['crawler-formatter'][crawlerName] || []
+                ctx.log?.info(`[Trace] Crawler '${crawlerName}' connected formatters: ${connectedFormatterIds.length} (${connectedFormatterIds.join(', ')})`)
                 const { formatters } = this.props
 
                 for (const formatterId of connectedFormatterIds) {
                     const formatterConfig = formatters?.find(f => f.id === formatterId)
-                    if (!formatterConfig) continue
+                    if (!formatterConfig) {
+                        ctx.log?.warn(`[Trace] Formatter config NOT found for ID: ${formatterId}`)
+                        continue
+                    }
 
                     const targetIds = connections['formatter-target'][formatterId] || []
+                    ctx.log?.info(`[Trace] Formatter '${formatterId}' connected targets: ${targetIds.length} (${targetIds.join(', ')})`)
                     const validTargets: Array<ForwardTargetInstanceWithRuntimeConfig> = []
 
                     for (const targetId of targetIds) {
@@ -446,6 +453,8 @@ class ForwarderPools extends BaseCompatibleModel {
                                 forwarder: forwarderInstance,
                                 runtime_config: cfg_forward_target
                             })
+                        } else {
+                            ctx.log?.warn(`[Trace] Forwarder Instance NOT found for Target ID: ${targetId}`)
                         }
                     }
 
@@ -459,8 +468,12 @@ class ForwarderPools extends BaseCompatibleModel {
                             source: 'graph',
                             formatterName: formatterConfig.name || 'Graph Formatter'
                         })
+                    } else {
+                        ctx.log?.warn(`[Trace] No valid targets found for formatter ${formatterId} (Original IDs: ${targetIds.join(', ')})`)
                     }
                 }
+            } else {
+                ctx.log?.warn(`[Trace] Missing connections or crawler name. Name: ${crawlerName}, Connections present: ${!!connections}`)
             }
 
 
@@ -468,7 +481,7 @@ class ForwarderPools extends BaseCompatibleModel {
             // 3. Execute All Paths
             if (allPaths.length === 0) {
                 // Only warn if we really found nothing at all (neither graph nor inline)
-                ctx.log?.debug(`No forwarding paths (graph or inline) found for ${url}, skipping...`)
+                ctx.log?.debug(`[Trace] No forwarding paths (graph or inline) found for ${url}, skipping...`)
                 continue
             }
 
@@ -495,9 +508,10 @@ class ForwarderPools extends BaseCompatibleModel {
         }
         const articles = await DB.Article.getArticlesByName(u_id, platform)
         if (articles.length <= 0) {
-            ctx.log?.warn(`No articles found for ${url}`)
+            ctx.log?.warn(`[Trace] No articles found for ${url} (u_id: ${u_id}, platform: ${platform})`)
             return
         }
+        ctx.log?.info(`[Trace] Found ${articles.length} articles for ${url}`)
         /**
          * 一篇文章可能需要被转发至多个平台，先获取一篇文章与forwarder的对应关系
          */
@@ -516,6 +530,8 @@ class ForwarderPools extends BaseCompatibleModel {
                 const exist = await DB.ForwardBy.checkExist(article.id, platform, id, 'article')
                 if (!exist) {
                     to.push(forwarder)
+                } else {
+                    ctx.log?.debug(`[Trace] Article ${article.a_id} already exists for target ${id}`)
                 }
             }
             if (to.length > 0) {
@@ -527,10 +543,10 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         if (articles_forwarders.length === 0) {
-            ctx.log?.debug(`No articles need to be sent for ${url}`)
+            ctx.log?.debug(`[Trace] No articles need to be sent for ${url} (All exist or empty)`)
             return
         }
-        ctx.log?.info(`Ready to send articles for ${url}`)
+        ctx.log?.info(`[Trace] Ready to send ${articles_forwarders.length} articles for ${url}`)
         // 开始转发文章
         for (const { article, to } of articles_forwarders) {
             // check article
@@ -544,7 +560,7 @@ class ForwarderPools extends BaseCompatibleModel {
             const article_is_blocked = blockResults.every(result => result)
 
             if (article_is_blocked) {
-                ctx.log?.warn(`Article ${article.a_id} is blocked by all forwarders, skipping...`)
+                ctx.log?.warn(`[Trace] Article ${article.a_id} is blocked by all forwarders, skipping...`)
                 // save forwardby
                 for (const { forwarder: target } of to) {
                     let currentArticle: ArticleWithId | null = article
@@ -555,6 +571,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
                 continue
             }
+            ctx.log?.info(`[Trace] Article ${article.a_id} passed block check. Targets: ${to.map(t => t.forwarder.id).join(', ')}`)
 
             ctx.log?.debug(`Processing article ${article.a_id} for ${to.map((i) => i.forwarder.id).join(', ')}`)
 
@@ -606,8 +623,11 @@ class ForwarderPools extends BaseCompatibleModel {
                                         currentArticle = currentArticle.ref as ArticleWithId | null
                                     }
                                     return
+                                } else {
+                                    ctx.log?.info(`[Trace] Batch Mode Bypass for ${target.id}`)
                                 }
                             }
+
                             // ----------------------------------
 
                             // --- NEW: Keyword Filter Logic ---
