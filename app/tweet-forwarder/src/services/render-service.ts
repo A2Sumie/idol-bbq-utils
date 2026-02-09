@@ -40,16 +40,17 @@ export class RenderService {
             taskId: string
             render_type?: string
             mediaConfig?: Media
+            deduplication?: boolean
         }
     ): Promise<RenderResult> {
-        const { taskId, render_type, mediaConfig } = config
+        const { taskId, render_type, mediaConfig, deduplication } = config
         const cloned_article = cloneDeep(article)
 
         let maybe_media_files: Array<{ path: string; media_type: MediaType }> = []
 
         // 1. Download/Handle Media Files
         if (mediaConfig) {
-            maybe_media_files = await this.handleMedia(taskId, cloned_article, mediaConfig)
+            maybe_media_files = await this.handleMedia(taskId, cloned_article, mediaConfig, deduplication)
         }
 
         let text = ''
@@ -176,6 +177,7 @@ export class RenderService {
         taskId: string,
         article: Article,
         media: Media,
+        deduplication?: boolean
     ): Promise<Array<{ path: string; media_type: MediaType }>> {
         let maybe_media_files = [] as Array<{
             path: string
@@ -216,22 +218,24 @@ export class RenderService {
                                 })
 
                                 // --- HASH CHECK ---
-                                try {
-                                    const buffer = fs.readFileSync(path)
-                                    const hash = crypto.createHash('sha256').update(buffer).digest('hex')
-                                    const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
+                                if (deduplication) {
+                                    try {
+                                        const buffer = fs.readFileSync(path)
+                                        const hash = crypto.createHash('sha256').update(buffer).digest('hex')
+                                        const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
 
-                                    const exists = await DB.MediaHash.checkExist(platformStr, hash)
-                                    if (exists) {
-                                        this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`)
-                                        // Delete local file since we won't use it
-                                        fs.unlinkSync(path)
-                                        return undefined
+                                        const exists = await DB.MediaHash.checkExist(platformStr, hash)
+                                        if (exists) {
+                                            this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`)
+                                            // Delete local file since we won't use it
+                                            fs.unlinkSync(path)
+                                            return undefined
+                                        }
+                                        // Save hash
+                                        await DB.MediaHash.save(platformStr, hash, currentArticle?.a_id || '')
+                                    } catch (e) {
+                                        this.log?.error(`Error during duplicate check: ${e}`)
                                     }
-                                    // Save hash
-                                    await DB.MediaHash.save(platformStr, hash, currentArticle?.a_id || '')
-                                } catch (e) {
-                                    this.log?.error(`Error during duplicate check: ${e}`)
                                 }
                                 // ------------------
 

@@ -77,7 +77,8 @@ async function main() {
         compatibleModels.push(taskManager)
     }
 
-    if (forwarders && forwarders.length > 0) {
+    log.info(`[Trace] Check forwarders: ${forwarders?.length}, crawlers: ${crawlers?.length}`)
+    if ((forwarders && forwarders.length > 0) || (crawlers && crawlers.length > 0)) {
         const forwarderTaskScheduler = new ForwarderTaskScheduler(
             {
                 forwarders,

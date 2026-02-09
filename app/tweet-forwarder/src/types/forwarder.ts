@@ -113,6 +113,8 @@ interface ForwarderConfig extends CommonCfgConfig {
     media?: Media
     render_type?: 'text' | 'img' | 'tag' | 'img-tag' | 'img-tag-dynamic'
     keywords?: Array<string>
+    aggregation?: boolean
+    deduplication?: boolean
 }
 
 interface ForwardTarget<T extends ForwardTargetPlatformEnum = ForwardTargetPlatformEnum> {

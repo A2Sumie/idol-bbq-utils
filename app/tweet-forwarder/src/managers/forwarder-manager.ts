@@ -50,11 +50,6 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
     async init() {
         this.log?.info('initializing...')
 
-        if (!this.props.forwarders) {
-            this.log?.warn('Forwarder not found, skipping...')
-            return
-        }
-
         // 注册基本的监听器
         for (const [eventName, listener] of Object.entries(this.taskHandlers)) {
             this.emitter.on(`forwarder:${eventName}`, listener)
@@ -65,14 +60,27 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         if (this.props.crawlers && this.props.crawlers.length > 0) {
             for (const crawler of this.props.crawlers) {
                 // Find matching forwarder by origin
-                const matchForwarder = this.props.forwarders.find(f => {
+                let matchForwarder = this.props.forwarders?.find(f => {
                     // Simple origin match. Could be improved with improved url matching if needed.
                     return f.origin && crawler.origin && f.origin === crawler.origin
                 })
 
                 if (!matchForwarder) {
-                    this.log?.debug(`No matching forwarder template found for crawler ${crawler.name} (${crawler.origin}), skipping auto-bind...`)
-                    continue
+                    this.log?.debug(`No matching forwarder template found for crawler ${crawler.name} (${crawler.origin}), using default...`)
+                    // Create a default forwarder template
+                    matchForwarder = {
+                        name: 'default-auto-bind',
+                        origin: crawler.origin,
+                        cfg_forwarder: {
+                            cron: '*/30 * * * *',
+                            media: {
+                                type: 'no-storage',
+                                use: {
+                                    tool: MediaToolEnum.DEFAULT,
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Use Crawler's Name so connections work!
@@ -88,6 +96,8 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                     },
                     ...this.props.cfg_forwarder,
                     ...matchForwarder.cfg_forwarder,
+                    // Default deduplication to true for auto-bound crawlers
+                    deduplication: matchForwarder.cfg_forwarder?.deduplication ?? true
                 }
                 const { cron } = cfg_forwarder
 
@@ -158,10 +168,47 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
      * 启动定时任务
      */
     async start() {
-        this.log?.info('Manager starting...')
+        this.log?.info(`Manager starting... [CronJobs: ${this.cronJobs.length}]`)
         this.cronJobs.forEach((job) => {
             job.start()
+            this.log?.debug(`CronJob started: ${job.cronTime.source}`)
         })
+
+        // --- STARTUP VERIFICATION (Emergency Patch) ---
+        // Verify system by forcing a check on the first configured crawler
+        if (this.props.crawlers && this.props.crawlers.length > 0) {
+            const firstCrawler = this.props.crawlers[0]
+            if (firstCrawler) {
+                setTimeout(() => {
+                    const taskId = `startup-verify-${Math.random().toString(36).substring(2, 9)}`
+                    this.log?.info(`[${taskId}] Scheduling STARTUP VERIFICATION task for ${firstCrawler.name}`)
+
+                    // Construct a task that mimics a regular forwarder task but with force_verification flag
+                    // We need to find the matching forwarder template again or reuse logic,
+                    // but for simplicity we'll just use the first crawler's identity and default forwarder config
+                    // merged with the props.cfg_forwarder
+
+                    const task: TaskScheduler.Task = {
+                        id: taskId,
+                        status: TaskScheduler.TaskStatus.PENDING,
+                        data: {
+                            name: firstCrawler.name,
+                            origin: firstCrawler.origin,
+                            paths: firstCrawler.paths,
+                            cfg_forwarder: this.props.cfg_forwarder,
+                            connections: this.props.connections,
+                            force_verification: true // CUSTOM FLAG
+                        } as any, // Cast to any to allow custom flag
+                    }
+
+                    this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, {
+                        taskId,
+                        task,
+                    })
+                }, 5000) // Delay 5s to ensure pools are ready
+            }
+        }
+        // ----------------------------------------------
     }
 
     /**
@@ -462,7 +509,9 @@ class ForwarderPools extends BaseCompatibleModel {
                         allPaths.push({
                             formatterConfig: {
                                 ...cfg_forwarder,
-                                render_type: formatterConfig.render_type
+                                render_type: formatterConfig.render_type,
+                                aggregation: formatterConfig.aggregation,
+                                deduplication: formatterConfig.deduplication
                             },
                             targets: validTargets,
                             source: 'graph',
@@ -506,11 +555,22 @@ class ForwarderPools extends BaseCompatibleModel {
             ctx.log?.error(`Invalid url: ${url}`)
             return
         }
-        const articles = await DB.Article.getArticlesByName(u_id, platform)
+
+        // --- VERIFICATION FLAG CHECK ---
+        const forceVerification = (ctx.task.data as any).force_verification
+        // -------------------------------
+
+        let articles = await DB.Article.getArticlesByName(u_id, platform)
         if (articles.length <= 0) {
             ctx.log?.warn(`[Trace] No articles found for ${url} (u_id: ${u_id}, platform: ${platform})`)
             return
         }
+
+        if (forceVerification) {
+            ctx.log?.warn(`[Verification] Force verification detected. Using only top 1 article and ignoring filters.`)
+            articles = articles.slice(0, 1)
+        }
+
         ctx.log?.info(`[Trace] Found ${articles.length} articles for ${url}`)
         /**
          * 一篇文章可能需要被转发至多个平台，先获取一篇文章与forwarder的对应关系
@@ -528,7 +588,9 @@ class ForwarderPools extends BaseCompatibleModel {
                  * 同一个宏任务循环中，此时可能会有同一个网站运行了两次及以上的定时任务，此时checkExist都是false
                  */
                 const exist = await DB.ForwardBy.checkExist(article.id, platform, id, 'article')
-                if (!exist) {
+
+                // BYPASS EXIST CHECK for verification
+                if (!exist || forceVerification) {
                     to.push(forwarder)
                 } else {
                     ctx.log?.debug(`[Trace] Article ${article.a_id} already exists for target ${id}`)
@@ -559,7 +621,7 @@ class ForwarderPools extends BaseCompatibleModel {
             ))
             const article_is_blocked = blockResults.every(result => result)
 
-            if (article_is_blocked) {
+            if (article_is_blocked && !forceVerification) { // Bypass block for verification? Maybe not needed if logic allows it. But let's keep it safe.
                 ctx.log?.warn(`[Trace] Article ${article.a_id} is blocked by all forwarders, skipping...`)
                 // save forwardby
                 for (const { forwarder: target } of to) {
@@ -579,7 +641,8 @@ class ForwarderPools extends BaseCompatibleModel {
             const renderResult = await this.renderService.process(article, {
                 taskId: ctx.taskId,
                 render_type: cfg_forwarder?.render_type,
-                mediaConfig: cfg_forwarder?.media
+                mediaConfig: cfg_forwarder?.media,
+                deduplication: cfg_forwarder?.deduplication
             })
             // -------------------------
 
@@ -593,13 +656,13 @@ class ForwarderPools extends BaseCompatibleModel {
                         const exist = await DB.ForwardBy.checkExist(article.id, platform, target.id, 'article')
                         // 运行前再检查下，因为cron的设定，可能同时会有两个同样的任务在执行
                         // 如果不存在则尝试发送
-                        if (!exist) {
+                        if (!exist || forceVerification) { // BYPASS CHECK
                             // --- NEW: No Backfill Logic ---
                             // If article is older than 2 hours, assume it's a backfill/initial bind and skip sending
                             // But mark it as sent so we don't process it again.
                             const TWO_HOURS_SECONDS = 3600 * 2
                             const now = dayjs().unix()
-                            if (now - article.created_at > TWO_HOURS_SECONDS) {
+                            if ((now - article.created_at > TWO_HOURS_SECONDS) && !forceVerification) { // BYPASS TIME CHECK
                                 ctx.log?.info(`Skipping old article ${article.a_id} (created at ${dayjs.unix(article.created_at).format()}) for target ${target.id}`)
                                 let currentArticle: ArticleWithId | null = article
                                 while (currentArticle && typeof currentArticle === 'object') {
@@ -610,12 +673,13 @@ class ForwarderPools extends BaseCompatibleModel {
                             }
                             // -----------------------------
 
-                            // --- NEW: Batch Mode Skip Logic ---
-                            if ((cfg_forwarder as any)?.batch_mode) {
+                            // --- NEW: Batch Mode / Aggregation Skip Logic ---
+                            const isAggregation = cfg_forwarder?.aggregation || (cfg_forwarder as any)?.batch_mode
+                            if (isAggregation && !forceVerification) { // BYPASS BATCH MODE
                                 // Exception Check
                                 const isException = target.id === '七虹信标-群2' || (target as any).name === '七虹信标-群2' || (runtime_config as any)?.bypass_batch
                                 if (!isException) {
-                                    ctx.log?.info(`Skipping real-time send for ${article.a_id} to ${target.id} (Batch Mode ON)`)
+                                    ctx.log?.info(`Skipping real-time send for ${article.a_id} to ${target.id} (Aggregation/Batch Mode ON)`)
                                     // Mark as sent to prevent retry
                                     let currentArticle: ArticleWithId | null = article
                                     while (currentArticle && typeof currentArticle === 'object') {
@@ -633,7 +697,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             // --- NEW: Keyword Filter Logic ---
                             // If keywords are defined in config, only send if content matches
                             const keywords = cfg_forwarder?.keywords
-                            if (keywords && keywords.length > 0) {
+                            if (keywords && keywords.length > 0 && !forceVerification) { // BYPASS KEYWORDS
                                 const content = article.content || ''
                                 const hasKeyword = keywords.some(k => content.includes(k))
                                 if (!hasKeyword) {

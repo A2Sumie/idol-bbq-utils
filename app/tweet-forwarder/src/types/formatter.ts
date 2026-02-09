@@ -11,6 +11,14 @@ interface Formatter {
     name?: string
     group?: string
     render_type: RenderType
+    /**
+     * Enable hourly batch aggregation for this formatter
+     */
+    aggregation?: boolean
+    /**
+     * Enable media deduplication (skip if media already sent)
+     */
+    deduplication?: boolean
 }
 
 /**
