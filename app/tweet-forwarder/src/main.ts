@@ -92,8 +92,8 @@ async function main() {
         taskSchedulers.push(forwarderTaskScheduler)
     }
 
-    // Initialize APIManager (Skip in Debug Mode to avoid port conflict)
-    if ((config.api || process.env.API_SECRET) && !process.env.TEST_PUSH_TARGET) {
+    // Initialize APIManager
+    if (config.api || process.env.API_SECRET) {
         const { APIManager } = await import('./managers/api-manager')
         const apiManager = new APIManager(config, log)
         compatibleModels.push(apiManager)
@@ -102,16 +102,6 @@ async function main() {
     for (const c of compatibleModels) {
         await c.init()
     }
-
-    // --- DEBUG TRIGGER ---
-    if (process.env.TEST_PUSH_TARGET && forwarderPools) {
-        log.info(`Debug Trigger Detected. Target: ${process.env.TEST_PUSH_TARGET}`)
-        const { runDebugPushWithPools } = await import('./utils/debug')
-        await runDebugPushWithPools(forwarderPools, process.env.TEST_PUSH_TARGET, log)
-        log.info('Debug sequence finished. Exiting.')
-        process.exit(0)
-    }
-    // ---------------------
 
     for (const taskScheduler of taskSchedulers) {
         await taskScheduler.init()

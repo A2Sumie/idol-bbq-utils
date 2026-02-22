@@ -200,50 +200,8 @@ export class TaskManager extends BaseCompatibleModel {
             summary = `Summarization failed. Raw content count: ${articles.length}`
         }
 
-        // --- NEW: Generate Image Card for Summary ---
-        // Exemption: Do not generate card for video platforms (TikTok, YouTube)
-        // because "merging" video summaries into a card usually doesn't make sense or look good.
-        const isVideoPlatform = [Platform.TikTok, Platform.YouTube].includes(platform)
-
         let mediaFiles: { path: string, media_type: 'photo' }[] = []
-
         const fs = await import('fs')
-        if (!isVideoPlatform) {
-            const { ImgConverter } = await import('@idol-bbq-utils/render')
-            const { writeImgToFile } = await import('@/middleware/media')
-
-            const fakeArticle: any = {
-                id: 0,
-                platform: platform,
-                a_id: `summary-${start}-${end}`,
-                u_id: u_id,
-                username: `Daily Report: ${u_id}`,
-                created_at: end,
-                content: summary,
-                translation: '',
-                translated_by: '',
-                url: `https://${platform}.com`,
-                type: 'post', // Generic type
-                ref: null,
-                has_media: false,
-                media: [],
-                extra: null,
-                u_avatar: null
-            }
-
-            try {
-                const converter = new ImgConverter()
-                // Use 'default' template for now. Future: select based on config?
-                const imgBuffer = await converter.articleToImg(fakeArticle as any, 'default')
-                const path = writeImgToFile(imgBuffer, `summary-${start}-${end}.png`)
-                mediaFiles.push({ path, media_type: 'photo' })
-            } catch (e) {
-                this.log?.error(`Failed to generate summary image: ${e}`)
-            }
-        } else {
-            this.log?.info(`Skipping summary image generation for video platform ${platform}`)
-        }
-        // --------------------------------------------
 
         const forwarder = this.forwarderPools.getTarget(bot_id)
         if (forwarder) {
