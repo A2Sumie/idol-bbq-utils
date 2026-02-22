@@ -13,7 +13,8 @@ interface AggregatePayload {
     u_id: string
     start: number
     end: number
-    bot_id: string
+    target_ids?: string[]
+    bot_id?: string // legacy
     processorConfig?: ProcessorConfig & { provider: string; api_key?: string }
     prompt?: string
 }
@@ -75,7 +76,7 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     private async handleHourlyAggregation(payload: AggregatePayload) {
-        const { platform, u_id, start, end, bot_id } = payload
+        const { platform, u_id, start, end, bot_id, target_ids } = payload
         this.log?.info(`Processing HOURLY batch for ${u_id} on ${platform}`)
 
         const articles = await DB.Article.getArticlesByTimeRange(u_id, platform, start, end)
@@ -146,28 +147,39 @@ export class TaskManager extends BaseCompatibleModel {
         }
 
         // 4. Send
-        const forwarder = this.forwarderPools.getTarget(bot_id)
-        if (forwarder) {
-            await forwarder.send(`Hourly Batch for ${u_id}`, {
-                timestamp: Math.floor(Date.now() / 1000),
-                media: mediaFiles.length > 0 ? mediaFiles : undefined
-            })
+        const idsToSend = target_ids && target_ids.length > 0 ? target_ids : (bot_id ? [bot_id] : [])
+        if (idsToSend.length === 0) {
+            this.log?.warn(`No target IDs provided for hourly batch of ${u_id}`)
+        }
 
-            // Cleanup
-            if (mediaFiles.length > 0) {
-                setTimeout(() => {
-                    mediaFiles.forEach(f => {
-                        try { fs.unlinkSync(f.path) } catch (e) { }
+        for (const targetId of idsToSend) {
+            const forwarder = this.forwarderPools.getTarget(targetId)
+            if (forwarder) {
+                try {
+                    await forwarder.send(`Hourly Batch for ${u_id}`, {
+                        timestamp: Math.floor(Date.now() / 1000),
+                        media: mediaFiles.length > 0 ? mediaFiles : undefined
                     })
-                }, 60000) // Delayed cleanup 1 minute
+                } catch (e) {
+                    this.log?.error(`Failed to send hourly batch for ${u_id} to ${targetId}: ${e}`)
+                }
+            } else {
+                this.log?.warn(`Target ${targetId} not found for hourly batch`)
             }
-        } else {
-            this.log?.warn(`Forwarder ${bot_id} not found for hourly batch`)
+        }
+
+        // Cleanup
+        if (mediaFiles.length > 0) {
+            setTimeout(() => {
+                mediaFiles.forEach(f => {
+                    try { fs.unlinkSync(f.path) } catch (e) { }
+                })
+            }, 60000) // Delayed cleanup 1 minute
         }
     }
 
     private async handleDailyAggregation(payload: AggregatePayload) {
-        const { platform, u_id, start, end, bot_id, processorConfig, prompt } = payload
+        const { platform, u_id, start, end, bot_id, target_ids, processorConfig, prompt } = payload
 
         this.log?.info(`Processing aggregation for ${u_id} on ${platform} (${dayjs.unix(start).format()} - ${dayjs.unix(end).format()})`)
 
@@ -203,21 +215,32 @@ export class TaskManager extends BaseCompatibleModel {
         let mediaFiles: { path: string, media_type: 'photo' }[] = []
         const fs = await import('fs')
 
-        const forwarder = this.forwarderPools.getTarget(bot_id)
-        if (forwarder) {
-            await forwarder.send(`Daily Report for ${u_id}:\n\n${summary}`, {
-                timestamp: Math.floor(Date.now() / 1000),
-                media: mediaFiles.length > 0 ? mediaFiles : undefined
-            })
+        const idsToSend = target_ids && target_ids.length > 0 ? target_ids : (bot_id ? [bot_id] : [])
+        if (idsToSend.length === 0) {
+            this.log?.warn(`No target IDs provided for daily aggregation of ${u_id}`)
+        }
 
-            // Cleanup
-            if (mediaFiles.length > 0) {
-                mediaFiles.forEach(f => {
-                    try { fs.unlinkSync(f.path) } catch (e) { }
-                })
+        for (const targetId of idsToSend) {
+            const forwarder = this.forwarderPools.getTarget(targetId)
+            if (forwarder) {
+                try {
+                    await forwarder.send(`Daily Report for ${u_id}:\n\n${summary}`, {
+                        timestamp: Math.floor(Date.now() / 1000),
+                        media: mediaFiles.length > 0 ? mediaFiles : undefined
+                    })
+                } catch (e) {
+                    this.log?.error(`Failed to send daily report for ${u_id} to ${targetId}: ${e}`)
+                }
+            } else {
+                this.log?.warn(`Target ${targetId} not found for aggregation result`)
             }
-        } else {
-            this.log?.warn(`Forwarder ${bot_id} not found for aggregation result`)
+        }
+
+        // Cleanup
+        if (mediaFiles.length > 0) {
+            mediaFiles.forEach(f => {
+                try { fs.unlinkSync(f.path) } catch (e) { }
+            })
         }
     }
 }

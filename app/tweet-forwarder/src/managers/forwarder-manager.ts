@@ -39,9 +39,9 @@ interface CrawlerTaskResult {
 class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
     NAME: string = 'ForwarderTaskScheduler'
     protected log?: Logger
-    private props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers'>
+    private props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters'>
 
-    constructor(props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers'>, emitter: EventEmitter, log?: Logger) {
+    constructor(props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters'>, emitter: EventEmitter, log?: Logger) {
         super(emitter)
         this.log = log?.child({ subservice: this.NAME })
         this.props = props
@@ -133,12 +133,25 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                 this.cronJobs.push(job)
 
                 // --- BATCH MODE DISPATCHER ---
-                if ((cfg_forwarder as any).batch_mode) {
+                // Find formatters connected to this crawler that have aggregation enabled
+                const crawlerFormatterMap = (this.props.connections as any)?.['crawler-formatter'] || {}
+                const connectedFormatterIds: string[] = crawlerFormatterMap[crawler.name as string] || []
+                const aggregatingFormatters = this.props.connections ? connectedFormatterIds
+                    .map((fid: string) => this.props.formatters?.find(f => f.id === fid))
+                    .filter(f => f?.aggregation) : []
+
+                if (aggregatingFormatters.length > 0 || (cfg_forwarder as any).batch_mode) {
                     const batchJob = new CronJob('0 * * * *', async () => {
                         this.log?.info(`Dispatching Hourly Batch for ${taskName}`)
-                        // Resolve Platform/UID
-                        // Try to find a valid URL from crawler or forwarder to extract info
-                        const website = crawler.websites?.[0] || matchForwarder.websites?.[0]
+                        // Collect all targets that need to receive this batch
+                        const targetIds = new Set<string>()
+                        aggregatingFormatters.forEach((f: any) => {
+                            if (f && (this.props.connections as any)?.['formatter-target']?.[f.id]) {
+                                ((this.props.connections as any)['formatter-target'][f.id] as string[]).forEach((tid: string) => targetIds.add(tid))
+                            }
+                        })
+
+                        const website = crawler.websites?.[0] || matchForwarder?.websites?.[0]
                         if (website) {
                             const info = spiderRegistry.extractBasicInfo(website)
                             if (info && info.u_id && info.platform) {
@@ -149,12 +162,12 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                                     u_id: info.u_id,
                                     start,
                                     end,
-                                    bot_id: matchForwarder.id
+                                    target_ids: Array.from(targetIds)
                                 }, end)
                             }
                         }
                     })
-                    this.log?.info(`Batch Job created for ${taskName}`)
+                    this.log?.info(`Batch Job created for ${taskName} to send to ${aggregatingFormatters.length} aggregating formatters`)
                     this.cronJobs.push(batchJob)
                 }
                 // -----------------------------
@@ -637,7 +650,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             const isAggregation = cfg_forwarder?.aggregation || (cfg_forwarder as any)?.batch_mode
                             if (isAggregation) {
                                 // Exception Check
-                                const isException = target.id === '七虹信标-群2' || (target as any).name === '七虹信标-群2' || (runtime_config as any)?.bypass_batch
+                                const isException = (runtime_config as any)?.bypass_batch === true
                                 if (!isException) {
                                     ctx.log?.info(`Skipping real-time send for ${article.a_id} to ${target.id} (Aggregation/Batch Mode ON)`)
                                     // Mark as sent to prevent retry
@@ -648,7 +661,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                     }
                                     return
                                 } else {
-                                    ctx.log?.info(`[Trace] Batch Mode Bypass for ${target.id}`)
+                                    ctx.log?.info(`[Trace] Batch Mode Bypass for ${target.id} via target config`)
                                 }
                             }
 
