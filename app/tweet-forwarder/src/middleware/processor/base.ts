@@ -32,6 +32,32 @@ abstract class BaseProcessor extends BaseCompatibleModel {
 
     public abstract process(text: string): Promise<string>
 
+    protected getPrompt() {
+        return this.config?.prompt || this.PROCESS_PROMPT
+    }
+
+    protected buildOpenAICompatibleRequestConfig(defaults: Record<string, unknown> = {}) {
+        const payload: Record<string, unknown> = {
+            ...defaults,
+        }
+        if (typeof this.config?.temperature === 'number') {
+            payload.temperature = this.config.temperature
+        }
+        if (typeof this.config?.max_tokens === 'number') {
+            payload.max_tokens = this.config.max_tokens
+        }
+        if (this.config?.output_schema) {
+            payload.response_format = {
+                type: 'json_schema',
+                json_schema: {
+                    name: (this.NAME || 'processor').replace(/[^a-zA-Z0-9_-]+/g, '_').toLowerCase(),
+                    schema: this.config.output_schema,
+                },
+            }
+        }
+        return payload
+    }
+
     static isValidResult(text?: string | null): boolean {
         return Boolean(text) && text !== PROCESSOR_ERROR_FALLBACK
     }

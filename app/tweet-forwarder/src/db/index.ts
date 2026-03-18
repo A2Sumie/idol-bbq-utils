@@ -12,8 +12,21 @@ type DBArticle =
     | Prisma.instagram_articleGetPayload<{}>
     | Prisma.tiktok_articleGetPayload<{}>
     | Prisma.youtube_articleGetPayload<{}>
+    | Prisma.website_articleGetPayload<{}>
 
 type DBFollows = Prisma.crawler_followsGetPayload<{}>
+type DBTaskQueue = Prisma.task_queueGetPayload<{}>
+type DBProcessorRun = Prisma.processor_runsGetPayload<{}>
+
+interface ArticleQueryParams {
+    platform?: Platform
+    u_id?: string
+    a_id?: string
+    q?: string
+    from?: number
+    to?: number
+    limit?: number
+}
 
 namespace DB {
     export namespace Article {
@@ -28,9 +41,24 @@ namespace DB {
                     return prisma.tiktok_article
                 case Platform.YouTube:
                     return prisma.youtube_article
+                case Platform.Website:
+                    return prisma.website_article
                 default:
                     throw new Error(`Unsupported platform: ${platform}`)
             }
+        }
+
+        function getDelegates(platform?: Platform) {
+            if (platform) {
+                return [{ platform, delegate: getDelegate(platform) }]
+            }
+            return [
+                { platform: Platform.X, delegate: getDelegate(Platform.X) },
+                { platform: Platform.Instagram, delegate: getDelegate(Platform.Instagram) },
+                { platform: Platform.TikTok, delegate: getDelegate(Platform.TikTok) },
+                { platform: Platform.YouTube, delegate: getDelegate(Platform.YouTube) },
+                { platform: Platform.Website, delegate: getDelegate(Platform.Website) },
+            ]
         }
 
         export async function checkExist(article: Article) {
@@ -129,6 +157,28 @@ namespace DB {
             return await getFullChainArticle(article, platform)
         }
 
+        export async function update(id: number, platform: Platform, patch: Partial<Article>) {
+            const delegate = getDelegate(platform)
+            const { platform: _platform, ref, media, extra, ...rest } = patch
+            return await delegate.update({
+                where: { id },
+                data: {
+                    ...rest,
+                    ...(media !== undefined
+                        ? {
+                              media: (media as unknown as Prisma.JsonArray) ?? Prisma.JsonNull,
+                          }
+                        : {}),
+                    ...(extra !== undefined
+                        ? {
+                              extra: (extra as unknown as Prisma.JsonObject) ?? Prisma.JsonNull,
+                          }
+                        : {}),
+                    ...(ref === null ? { ref: null } : {}),
+                },
+            })
+        }
+
         async function getFullChainArticle(article: DBArticle, platform: Platform) {
             let currentRefId = article.ref
             let currentArticle = { ...article, platform } as unknown as ArticleWithId
@@ -210,6 +260,54 @@ namespace DB {
             // No need for full chain probably if just for summary, but safer to get it
             const articles = await Promise.all(res.map(async ({ id }: any) => getSingleArticle(id, platform)))
             return articles.filter((item) => item) as ArticleWithId[]
+        }
+
+        export async function query(params: ArticleQueryParams = {}) {
+            const limit = Math.max(1, Math.min(params.limit || 50, 200))
+            const results = [] as ArticleWithId[]
+
+            for (const { platform, delegate } of getDelegates(params.platform)) {
+                const where: Record<string, any> = {}
+                if (params.u_id) {
+                    where.u_id = params.u_id
+                }
+                if (params.a_id) {
+                    where.a_id = params.a_id
+                }
+                if (params.from || params.to) {
+                    where.created_at = {}
+                    if (params.from) {
+                        where.created_at.gte = params.from
+                    }
+                    if (params.to) {
+                        where.created_at.lte = params.to
+                    }
+                }
+                if (params.q) {
+                    where.OR = [
+                        { content: { contains: params.q } },
+                        { translation: { contains: params.q } },
+                        { username: { contains: params.q } },
+                        { u_id: { contains: params.q } },
+                    ]
+                }
+
+                const rows = await delegate.findMany({
+                    where,
+                    orderBy: {
+                        created_at: 'desc',
+                    },
+                    take: limit,
+                })
+                for (const row of rows) {
+                    const article = await getSingleArticle(row.id, platform)
+                    if (article) {
+                        results.push(article)
+                    }
+                }
+            }
+
+            return results.sort((a, b) => b.created_at - a.created_at).slice(0, limit)
         }
     }
 
@@ -330,15 +428,27 @@ namespace DB {
     }
 
     export namespace TaskQueue {
-        export async function add(type: string, payload: any, execute_at: number) {
+        export async function add(
+            type: string,
+            payload: any,
+            execute_at: number,
+            meta?: {
+                source_ref?: string
+                action_type?: string
+            },
+        ) {
+            const now = Math.floor(Date.now() / 1000)
             return await prisma.task_queue.create({
                 data: {
                     type,
                     payload,
                     execute_at,
-                    created_at: Math.floor(Date.now() / 1000),
-                    status: 'pending'
-                }
+                    created_at: now,
+                    updated_at: now,
+                    status: 'pending',
+                    source_ref: meta?.source_ref,
+                    action_type: meta?.action_type,
+                },
             })
         }
 
@@ -348,15 +458,78 @@ namespace DB {
                     status: 'pending',
                     execute_at: {
                         lte: now
-                    }
-                }
+                    },
+                },
+                orderBy: {
+                    execute_at: 'asc',
+                },
             })
         }
 
-        export async function updateStatus(id: number, status: string) {
+        export async function updateStatus(
+            id: number,
+            status: string,
+            meta?: { last_error?: string | null; result_summary?: string | null },
+        ) {
+            const now = Math.floor(Date.now() / 1000)
             return await prisma.task_queue.update({
                 where: { id },
-                data: { status }
+                data: {
+                    status,
+                    updated_at: now,
+                    finished_at: ['completed', 'failed', 'cancelled'].includes(status) ? now : null,
+                    last_error: meta?.last_error ?? undefined,
+                    result_summary: meta?.result_summary ?? undefined,
+                },
+            })
+        }
+
+        export async function list(limit = 50, status?: string): Promise<Array<DBTaskQueue>> {
+            return await prisma.task_queue.findMany({
+                where: status ? { status } : undefined,
+                orderBy: {
+                    created_at: 'desc',
+                },
+                take: Math.max(1, Math.min(limit, 200)),
+            })
+        }
+    }
+
+    export namespace ProcessorRun {
+        export async function create(data: {
+            processor_id?: string | null
+            action: string
+            source_type?: string | null
+            source_ref?: string | null
+            status?: string
+            input?: any
+            output?: any
+            error?: string | null
+        }) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.processor_runs.create({
+                data: {
+                    processor_id: data.processor_id || null,
+                    action: data.action,
+                    source_type: data.source_type || null,
+                    source_ref: data.source_ref || null,
+                    status: data.status || 'completed',
+                    input: (data.input as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    output: (data.output as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    error: data.error || null,
+                    created_at: now,
+                    finished_at: now,
+                },
+            })
+        }
+
+        export async function list(limit = 50, source_ref?: string): Promise<Array<DBProcessorRun>> {
+            return await prisma.processor_runs.findMany({
+                where: source_ref ? { source_ref } : undefined,
+                orderBy: {
+                    created_at: 'desc',
+                },
+                take: Math.max(1, Math.min(limit, 200)),
             })
         }
     }
@@ -394,4 +567,4 @@ namespace DB {
 }
 
 export default DB
-export type { Article, ArticleWithId, DBFollows }
+export type { Article, ArticleWithId, DBFollows, DBProcessorRun, DBTaskQueue }

@@ -81,3 +81,4 @@ class SimpleExpiringCache {
 
 export { parseNetscapeCookieToPuppeteerCookie, getCookieString, SimpleExpiringCache }
 export * from './http'
+export * from './browser'

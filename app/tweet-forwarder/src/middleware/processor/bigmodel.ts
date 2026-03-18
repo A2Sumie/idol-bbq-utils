@@ -24,13 +24,15 @@ class BigModelLLMTranslator extends BaseBigModel {
         const res = await axios.post(
             this.BASE_URL,
             {
-                max_tokens: 4000,
+                ...this.buildOpenAICompatibleRequestConfig({
+                    max_tokens: 4000,
+                }),
                 ...this.config?.extended_payload,
                 model: this.config?.model_id || EnumBigModel.GLM4Flash,
                 messages: [
                     {
                         role: 'system',
-                        content: this.config?.prompt || this.PROCESS_PROMPT,
+                        content: this.getPrompt(),
                     },
                     {
                         role: 'user',

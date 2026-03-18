@@ -1,7 +1,6 @@
 import { Logger } from '@idol-bbq-utils/log'
-import { spiderRegistry, parseNetscapeCookieToPuppeteerCookie, UserAgent } from '@idol-bbq-utils/spider'
+import { spiderRegistry, parseNetscapeCookieToPuppeteerCookie } from '@idol-bbq-utils/spider'
 import { Page } from 'puppeteer-core'
-import { Browser } from 'puppeteer-core'
 import { CronJob } from 'cron'
 import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
 import EventEmitter from 'events'
@@ -21,6 +20,7 @@ import { delay } from '@/utils/time'
 import { shuffle } from 'lodash'
 import crypto from 'crypto'
 import dayjs from 'dayjs'
+import { BrowserSessionPool } from '@/services/browser-session-pool'
 
 interface TaskResult {
     taskId: string
@@ -214,17 +214,17 @@ class SpiderPools extends BaseCompatibleModel {
     log?: Logger
     private emitter: EventEmitter
     private processors: Map<string, BaseProcessor> = new Map()
-    private browser: Browser
+    private browserPool: BrowserSessionPool
     /**
      * BaseSpider._VALID_URL.source
      */
     private spiders: Map<string, BaseSpider> = new Map()
     // private workers:
-    constructor(browser: Browser, emitter: EventEmitter, log?: Logger) {
+    constructor(cacheRoot: string, emitter: EventEmitter, log?: Logger) {
         super()
-        this.browser = browser
         this.log = log?.child({ subservice: this.NAME })
         this.emitter = emitter
+        this.browserPool = new BrowserSessionPool(cacheRoot, this.log)
     }
 
     async init() {
@@ -344,12 +344,15 @@ class SpiderPools extends BaseCompatibleModel {
                     }
 
                     const crawl_engine = cfg_crawler?.engine
-                    const needsBrowser = !crawl_engine?.startsWith('api')
+                    const needsBrowser = spiderPlugin.platform === Platform.Website || !crawl_engine?.startsWith('api')
 
                     if (needsBrowser && !page) {
                         ctx.log?.info(`Creating browser page for engine: ${crawl_engine || 'browser'}`)
-                        page = await this.browser.newPage()
-                        await page.setUserAgent(user_agent || UserAgent.CHROME)
+                        const browserRequest = this.resolveBrowserRequest(cfg_crawler, url, spiderPlugin.platform)
+                        page = await this.browserPool.createPage({
+                            ...browserRequest,
+                            user_agent,
+                        })
 
                         if (cookie_file) {
                             await page.browserContext().setCookie(...parseNetscapeCookieToPuppeteerCookie(cookie_file))
@@ -435,9 +438,35 @@ class SpiderPools extends BaseCompatibleModel {
         this.spiders.clear()
         this.processors.clear()
         this.emitter.removeAllListeners()
-        await this.browser.close()
-        this.log?.info('Browser closed')
+        await this.browserPool.closeAll()
+        this.log?.info('Browser sessions closed')
         this.log?.info('Spider Pools dropped')
+    }
+
+    private resolveBrowserRequest(
+        cfg_crawler: Crawler['cfg_crawler'] | undefined,
+        url: URL,
+        platform: Platform,
+    ) {
+        const requiresMobileProfile =
+            platform === Platform.Website || url.hostname === 'nanabunnonijyuuni-mobile.com'
+        const deviceProfile = cfg_crawler?.device_profile || (requiresMobileProfile ? 'mobile_ios_safari_portrait' : 'desktop_chrome')
+
+        if (requiresMobileProfile && deviceProfile !== 'mobile_ios_safari_portrait') {
+            throw new Error(
+                `Crawler for ${url.hostname} must use mobile_ios_safari_portrait, got ${deviceProfile}`,
+            )
+        }
+
+        return {
+            browser_mode: cfg_crawler?.browser_mode,
+            device_profile: deviceProfile,
+            session_profile: cfg_crawler?.session_profile || (requiresMobileProfile ? `mobile:${url.hostname}` : undefined),
+            extra_headers: cfg_crawler?.extra_headers,
+            viewport: cfg_crawler?.viewport,
+            locale: cfg_crawler?.locale,
+            timezone: cfg_crawler?.timezone,
+        }
     }
 
     private async crawlArticle(

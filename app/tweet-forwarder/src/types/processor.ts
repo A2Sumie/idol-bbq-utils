@@ -36,9 +36,14 @@ enum ProcessorProvider {
      * Qwen MT model
      */
     QwenMT = 'QwenMT',
+    /**
+     * Built-in deterministic processor for rule-based extraction/merge
+     */
+    Mechanical = 'Mechanical',
 }
 
 interface ProcessorConfig extends CommonCfgConfig {
+    action?: 'translate' | 'extract' | 'merge' | 'plan'
     prompt?: string
     /**
      * Customize api url
@@ -49,10 +54,16 @@ interface ProcessorConfig extends CommonCfgConfig {
      */
     name?: string
     model_id?: string
+    max_tokens?: number
+    temperature?: number
     /**
      * extra config for request body
      */
     extended_payload?: Record<string, any>
+    output_schema?: Record<string, any>
+    schedule_url?: string
+    schedule_api_key?: string
+    result_key?: string
 }
 
 interface Processor {

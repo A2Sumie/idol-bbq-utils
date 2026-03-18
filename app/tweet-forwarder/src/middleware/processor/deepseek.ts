@@ -25,13 +25,13 @@ class DeepSeekLLMTranslator extends BaseDeepSeek {
         const res = await axios.post(
             this.BASE_URL,
             {
-                ...RECOMMEND_CONFIGURATIONS,
+                ...this.buildOpenAICompatibleRequestConfig(RECOMMEND_CONFIGURATIONS),
                 ...this.config?.extended_payload,
                 model: this.config?.model_id || 'deepseek-chat',
                 messages: [
                     {
                         role: 'system',
-                        content: this.config?.prompt || this.PROCESS_PROMPT,
+                        content: this.getPrompt(),
                     },
                     {
                         role: 'user',

@@ -17,6 +17,7 @@ export interface SpiderPlugin {
     priority: SpiderPriority
     urlPattern: RegExp
     create: (log?: Logger) => BaseSpider
+    extractBasicInfo?: (url: string) => { u_id: string; platform: Platform } | undefined
 }
 
 class SpiderRegistry {
@@ -59,6 +60,10 @@ class SpiderRegistry {
     extractBasicInfo(url: string): { u_id: string; platform: Platform } | undefined {
         const plugin = this.findByUrl(url)
         if (!plugin) return undefined
+
+        if (plugin.extractBasicInfo) {
+            return plugin.extractBasicInfo(url)
+        }
 
         const match = plugin.urlPattern.exec(url)
         if (match?.groups?.id) {

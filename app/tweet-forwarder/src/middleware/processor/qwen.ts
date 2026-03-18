@@ -18,10 +18,11 @@ class QwenMTTranslator extends BaseQwen {
         this.BASE_URL = config?.base_url || this.BASE_URL
     }
     public async process(text: string) {
-        const prompt = this.config?.prompt || this.PROCESS_PROMPT
+        const prompt = this.getPrompt()
         const res = await axios.post(
             this.BASE_URL,
             {
+                ...this.buildOpenAICompatibleRequestConfig(),
                 model: this.config?.model_id || 'qwen-mt-turbo',
                 messages: [
                     {

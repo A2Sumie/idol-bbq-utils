@@ -100,15 +100,61 @@ model youtube_article {
   @@index([created_at(sort: Desc)], map: "youtube_by_timestamp")
 }
 
+model website_article {
+  id                    Int               @id @unique(map: "sqlite_autoindex_website_article_1") @default(autoincrement())
+  a_id                  String
+  u_id                  String
+  username              String
+  created_at            Int
+  content               String?
+  translation           String?
+  translated_by         String?
+  url                   String
+  type                  String
+  ref                   Int?
+  has_media             Boolean
+  media                 Json?
+  extra                 Json?
+  u_avatar              String?
+  ref_article           website_article?  @relation("WebsiteRef", fields: [ref], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  referenced_by         website_article[] @relation("WebsiteRef")
+
+  @@unique([a_id], map: "sqlite_autoindex_website_article_2")
+  @@index([created_at(sort: Desc)], map: "website_by_timestamp")
+}
+
 model task_queue {
   id         Int    @id @default(autoincrement())
   type       String
   payload    Json
   status     String @default("pending") // pending, processing, completed, failed
   created_at Int
+  updated_at Int    @default(0)
   execute_at Int
+  finished_at Int?
+  last_error String?
+  result_summary String?
+  source_ref String?
+  action_type String?
   
   @@index([status, execute_at])
+}
+
+model processor_runs {
+  id           Int    @id @default(autoincrement())
+  processor_id String?
+  action       String
+  source_type  String?
+  source_ref   String?
+  status       String @default("completed")
+  input        Json?
+  output       Json?
+  error        String?
+  created_at   Int
+  finished_at  Int?
+
+  @@index([processor_id, created_at(sort: Desc)])
+  @@index([source_ref, created_at(sort: Desc)])
 }
 
 model crawler_follows {

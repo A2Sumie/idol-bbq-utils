@@ -6,13 +6,7 @@ import { BigModelLLMTranslator } from './bigmodel'
 import { DeepSeekLLMTranslator } from './deepseek'
 import { OpenaiLikeLLMTranslator } from './openai'
 import { QwenMTTranslator } from './qwen'
-
-// Note: I will rename the *Translator classes in their respective files later, but for now I reference them by their current name if I haven't changed them yet?
-// Wait, I can't import them if they extend BaseProcessor (which is now BaseProcessor) and I haven't updated them.
-// They will fail to compile.
-// But file replacement is unrelated to compilation at this exact step.
-// However, logically I am renaming the whole system.
-// I will assume I will rename the classes to *Processor.
+import { MechanicalProcessor } from './mechanical'
 
 const GooglePlugin: ProcessorPlugin = {
     provider: ProcessorProvider.Google,
@@ -44,6 +38,11 @@ const QwenMTPlugin: ProcessorPlugin = {
     create: (apiKey, log, config) => new QwenMTTranslator(apiKey, log, config),
 }
 
+const MechanicalPlugin: ProcessorPlugin = {
+    provider: ProcessorProvider.Mechanical,
+    create: (apiKey, log, config) => new MechanicalProcessor(apiKey, log, config),
+}
+
 const processorRegistry = ProcessorRegistry.getInstance()
     .register(GooglePlugin)
     .register(ByteDancePlugin)
@@ -51,6 +50,7 @@ const processorRegistry = ProcessorRegistry.getInstance()
     .register(DeepseekPlugin)
     .register(OpenAIPlugin)
     .register(QwenMTPlugin)
+    .register(MechanicalPlugin)
 
 interface ProcessorConstructor {
     _PROVIDER: ProcessorProvider
@@ -64,6 +64,7 @@ const processors: Array<ProcessorConstructor> = [
     DeepSeekLLMTranslator,
     OpenaiLikeLLMTranslator,
     QwenMTTranslator,
+    MechanicalProcessor,
 ]
 
 /** @deprecated Use processorRegistry.find() instead */

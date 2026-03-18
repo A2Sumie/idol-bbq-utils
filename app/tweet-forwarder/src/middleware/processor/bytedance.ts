@@ -16,12 +16,13 @@ class ByteDanceLLMTranslator extends BaseProcessor {
         const res = await axios.post(
             this.BASE_URL,
             {
+                ...this.buildOpenAICompatibleRequestConfig(),
                 ...this.config?.extended_payload,
                 model: this.config?.model_id || 'doubao-pro-128k',
                 messages: [
                     {
                         role: 'system',
-                        content: this.config?.prompt || this.PROCESS_PROMPT,
+                        content: this.getPrompt(),
                     },
                     {
                         role: 'user',

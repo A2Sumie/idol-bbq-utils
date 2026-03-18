@@ -14,6 +14,17 @@ class GoogleLLMTranslator extends BaseProcessor {
     constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
         super(api_key, log, config)
         this.genAI = new GoogleGenerativeAI(api_key)
+        const generationConfig: Record<string, unknown> = {}
+        if (typeof this.config?.temperature === 'number') {
+            generationConfig.temperature = this.config.temperature
+        }
+        if (typeof this.config?.max_tokens === 'number') {
+            generationConfig.maxOutputTokens = this.config.max_tokens
+        }
+        if (this.config?.output_schema) {
+            generationConfig.responseMimeType = 'application/json'
+            generationConfig.responseSchema = this.config.output_schema
+        }
         this.model = this.genAI.getGenerativeModel({
             model: this.config?.model_id || 'gemini-2.0-flash',
             safetySettings: [
@@ -34,8 +45,11 @@ class GoogleLLMTranslator extends BaseProcessor {
                     threshold: HarmBlockThreshold.BLOCK_NONE,
                 },
             ],
+            ...(Object.keys(generationConfig).length > 0
+                ? { generationConfig: generationConfig as any }
+                : {}),
         })
-        this.prompt = config?.prompt || this.PROCESS_PROMPT
+        this.prompt = this.getPrompt()
         this.NAME = config?.name || this.NAME
     }
     public async init() {

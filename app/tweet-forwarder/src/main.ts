@@ -1,13 +1,9 @@
-import puppeteer from 'puppeteer-core'
 import { SpiderPools, SpiderTaskScheduler } from './managers/spider-manager'
 import { configParser, log, CACHE_DIR_ROOT } from './config'
 import EventEmitter from 'events'
 import { ForwarderPools, ForwarderTaskScheduler } from './managers/forwarder-manager'
 import { BaseCompatibleModel, TaskScheduler } from './utils/base'
-import tmp from 'tmp'
 import { initializeCacheDirectories } from './utils/directories'
-
-tmp.setGracefulCleanup()
 
 async function main() {
     initializeCacheDirectories(CACHE_DIR_ROOT)
@@ -26,24 +22,7 @@ async function main() {
 
 
     if (crawlers && crawlers.length > 0) {
-        const tmpDir = tmp.dirSync({
-            prefix: 'puppeteer-',
-            unsafeCleanup: true,
-        })
-
-        log.info(`Puppeteer userDataDir: ${tmpDir.name}`)
-
-        const browser = await puppeteer.launch({
-            headless: true,
-            handleSIGINT: false,
-            handleSIGHUP: false,
-            handleSIGTERM: false,
-            args: [process.env.NO_SANDBOX ? '--no-sandbox' : '', '--disable-dev-shm-usage'].filter(Boolean),
-            channel: 'chrome',
-            userDataDir: tmpDir.name,
-        })
-        // @ts-ignore
-        const spiderPools = new SpiderPools(browser, emitter, log)
+        const spiderPools = new SpiderPools(CACHE_DIR_ROOT, emitter, log)
         compatibleModels.push(spiderPools)
         const spiderTaskScheduler = new SpiderTaskScheduler(
             {
@@ -96,7 +75,14 @@ async function main() {
     // Initialize APIManager
     if (config.api || process.env.API_SECRET) {
         const { APIManager } = await import('./managers/api-manager')
-        const apiManager = new APIManager(config, log)
+        const apiManager = new APIManager(
+            config,
+            {
+                emitter,
+                forwarderPools,
+            },
+            log,
+        )
         compatibleModels.push(apiManager)
     }
 

@@ -4,6 +4,7 @@ import { InstagramSpider } from './instagram'
 import { XListSpider, XUserTimeLineSpider } from './x'
 import { TiktokSpider } from './tiktok'
 import { YoutubeSpider } from './youtube'
+import { NanabunnonijyuuniWebsiteSpider } from './website'
 
 const XUserTimelinePlugin: SpiderPlugin = {
     id: 'x-timeline',
@@ -45,12 +46,22 @@ const YoutubePlugin: SpiderPlugin = {
     create: (log) => new YoutubeSpider(log).init(),
 }
 
+const WebsitePlugin: SpiderPlugin = {
+    id: 'website-227',
+    platform: Platform.Website,
+    priority: SpiderPriority.HIGH,
+    urlPattern: NanabunnonijyuuniWebsiteSpider._VALID_URL,
+    create: (log) => new NanabunnonijyuuniWebsiteSpider(log).init(),
+    extractBasicInfo: (url) => NanabunnonijyuuniWebsiteSpider.extractBasicInfo(url),
+}
+
 const spiderRegistry = SpiderRegistry.getInstance()
     .register(XUserTimelinePlugin)
     .register(XListPlugin)
     .register(InstagramPlugin)
     .register(TiktokPlugin)
     .register(YoutubePlugin)
+    .register(WebsitePlugin)
 
 namespace Spider {
     export interface SpiderConstructor {
@@ -65,6 +76,7 @@ namespace Spider {
         InstagramSpider,
         TiktokSpider,
         YoutubeSpider,
+        NanabunnonijyuuniWebsiteSpider,
     ]
 
     /** @deprecated Use spiderRegistry.findByUrl() instead */
@@ -89,3 +101,4 @@ export * as X from './x'
 export * as Instagram from './instagram'
 export * as Tiktok from './tiktok'
 export * as Youtube from './youtube'
+export * as Website from './website'

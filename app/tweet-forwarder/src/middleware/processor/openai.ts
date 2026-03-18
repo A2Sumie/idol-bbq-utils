@@ -21,12 +21,13 @@ class OpenaiLikeLLMTranslator extends BaseOpenai {
         const res = await axios.post(
             this.BASE_URL,
             {
+                ...this.buildOpenAICompatibleRequestConfig(),
                 ...this.config?.extended_payload,
                 model: this.config?.model_id || 'openai',
                 messages: [
                     {
                         role: 'system',
-                        content: this.config?.prompt || this.PROCESS_PROMPT,
+                        content: this.getPrompt(),
                     },
                     {
                         role: 'user',

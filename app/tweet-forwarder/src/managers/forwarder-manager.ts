@@ -17,6 +17,9 @@ import { followsToText } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
 
+function sortUnique(values: Array<string>) {
+    return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
+}
 
 type Forwarder = RealForwarder<TaskType>
 
@@ -97,7 +100,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                 const forwarderTaskData: Forwarder = {
                     ...matchForwarder, // Inherit base props/methods/id from template if any
                     name: taskName,    // OVERRIDE Name
-                    websites: undefined, // Clear hardcoded websites
+                    websites: crawler.websites,
                     origin: crawler.origin,
                     paths: crawler.paths, // Use Crawler's Paths
                     cfg_forwarder: cfg_forwarder // Use merged config
@@ -127,7 +130,14 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                 // --- BATCH MODE DISPATCHER ---
                 // Find formatters connected to this crawler that have aggregation enabled
                 const crawlerFormatterMap = (this.props.connections as any)?.['crawler-formatter'] || {}
-                const connectedFormatterIds: string[] = crawlerFormatterMap[crawler.name as string] || []
+                const crawlerProcessorMap = (this.props.connections as any)?.['crawler-processor'] || {}
+                const processorFormatterMap = (this.props.connections as any)?.['processor-formatter'] || {}
+                const directFormatterIds: string[] = crawlerFormatterMap[crawler.name as string] || []
+                const processorId: string | undefined = crawlerProcessorMap[crawler.name as string]
+                const connectedFormatterIds: string[] = sortUnique([
+                    ...directFormatterIds,
+                    ...((processorId ? processorFormatterMap[processorId] : []) || []),
+                ])
                 const aggregatingFormatters = this.props.connections ? connectedFormatterIds
                     .map((fid: string) => this.props.formatters?.find(f => f.id === fid))
                     .filter(f => f?.aggregation) : []
@@ -240,6 +250,12 @@ type ForwardTargetIdWithRuntimeConfig = Record<string, ForwardTargetPlatformComm
 type ForwardTargetInstanceWithRuntimeConfig = {
     forwarder: BaseForwarder
     runtime_config?: ForwardTargetPlatformCommonConfig
+}
+interface ForwardingPath {
+    formatterConfig: Forwarder['cfg_forwarder']
+    targets: Array<ForwardTargetInstanceWithRuntimeConfig>
+    source: 'graph' | 'inline'
+    formatterName: string
 }
 class ForwarderPools extends BaseCompatibleModel {
     NAME = 'ForwarderPools'
@@ -453,60 +469,8 @@ class ForwarderPools extends BaseCompatibleModel {
             // 单次爬虫任务
             const url = new URL(website)
 
-            // Collection of all paths for this website
-            const allPaths: ForwardingPath[] = []
-
-            // 1. Resolve Graph Connections (Crawler -> Formatter -> Target)
             const crawlerName = ctx.task.data.name
-            if (crawlerName && connections && connections['crawler-formatter'] && connections['formatter-target']) {
-                const connectedFormatterIds = connections['crawler-formatter'][crawlerName] || []
-                ctx.log?.info(`[Trace] Crawler '${crawlerName}' connected formatters: ${connectedFormatterIds.length} (${connectedFormatterIds.join(', ')})`)
-                const { formatters } = this.props
-
-                for (const formatterId of connectedFormatterIds) {
-                    const formatterConfig = formatters?.find(f => f.id === formatterId)
-                    if (!formatterConfig) {
-                        ctx.log?.warn(`[Trace] Formatter config NOT found for ID: ${formatterId}`)
-                        continue
-                    }
-
-                    const targetIds = connections['formatter-target'][formatterId] || []
-                    ctx.log?.info(`[Trace] Formatter '${formatterId}' connected targets: ${targetIds.length} (${targetIds.join(', ')})`)
-                    const validTargets: Array<ForwardTargetInstanceWithRuntimeConfig> = []
-
-                    for (const targetId of targetIds) {
-                        const forwarderInstance = this.forward_to.get(targetId)
-                        if (forwarderInstance) {
-                            validTargets.push({
-                                forwarder: forwarderInstance,
-                                runtime_config: cfg_forward_target
-                            })
-                        } else {
-                            ctx.log?.warn(`[Trace] Forwarder Instance NOT found for Target ID: ${targetId}`)
-                        }
-                    }
-
-                    if (validTargets.length > 0) {
-                        allPaths.push({
-                            formatterConfig: {
-                                ...cfg_forwarder,
-                                render_type: formatterConfig.render_type,
-                                aggregation: formatterConfig.aggregation,
-                                deduplication: formatterConfig.deduplication
-                            },
-                            targets: validTargets,
-                            source: 'graph',
-                            formatterName: formatterConfig.name || 'Graph Formatter'
-                        })
-                    } else {
-                        ctx.log?.warn(`[Trace] No valid targets found for formatter ${formatterId} (Original IDs: ${targetIds.join(', ')})`)
-                    }
-                }
-            } else {
-                ctx.log?.warn(`[Trace] Missing connections or crawler name. Name: ${crawlerName}, Connections present: ${!!connections}`)
-            }
-
-
+            const allPaths = this.resolveForwardingPaths(crawlerName, cfg_forwarder, cfg_forward_target, connections, ctx.log)
 
             // 3. Execute All Paths
             if (allPaths.length === 0) {
@@ -522,6 +486,30 @@ class ForwarderPools extends BaseCompatibleModel {
                  */
                 await this.processSingleArticleTask(ctx, url.href, path.targets, path.formatterConfig)
             }
+        }
+    }
+
+    async resendArticle(
+        article: ArticleWithId,
+        crawlerName: string,
+        cfg_forwarder?: Forwarder['cfg_forwarder'],
+        cfg_forward_target?: Forwarder['cfg_forward_target'],
+    ) {
+        const taskLog = this.log?.child({ label: `manual-resend:${crawlerName}` })
+        const paths = this.resolveForwardingPaths(crawlerName, cfg_forwarder, cfg_forward_target, this.props.connections, taskLog)
+        if (paths.length === 0) {
+            throw new Error(`No forwarding paths found for crawler ${crawlerName}`)
+        }
+
+        for (const path of paths) {
+            await this.sendArticles(
+                taskLog,
+                `manual-${article.a_id}`,
+                [article],
+                path.targets,
+                path.formatterConfig,
+                { forceSend: true },
+            )
         }
     }
 
@@ -545,12 +533,86 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
 
-
-
         ctx.log?.info(`[Trace] Found ${articles.length} articles for ${url}`)
-        /**
-         * 一篇文章可能需要被转发至多个平台，先获取一篇文章与forwarder的对应关系
-         */
+        await this.sendArticles(ctx.log, ctx.taskId, articles, forwarders, cfg_forwarder)
+    }
+
+    private resolveForwardingPaths(
+        crawlerName: string | undefined,
+        cfg_forwarder: Forwarder['cfg_forwarder'],
+        cfg_forward_target: Forwarder['cfg_forward_target'],
+        connections: AppConfig['connections'] | undefined,
+        log?: Logger,
+    ) {
+        const allPaths: ForwardingPath[] = []
+        if (!crawlerName || !connections || !connections['formatter-target']) {
+            log?.warn(`[Trace] Missing connections or crawler name. Name: ${crawlerName}, Connections present: ${!!connections}`)
+            return allPaths
+        }
+
+        const directFormatterIds = connections['crawler-formatter']?.[crawlerName] || []
+        const processorId = connections['crawler-processor']?.[crawlerName]
+        const viaProcessorFormatterIds = processorId
+            ? connections['processor-formatter']?.[processorId] || []
+            : []
+        const connectedFormatterIds = sortUnique([...directFormatterIds, ...viaProcessorFormatterIds])
+        log?.info(
+            `[Trace] Crawler '${crawlerName}' connected formatters: ${connectedFormatterIds.length} (${connectedFormatterIds.join(', ')})`,
+        )
+
+        const { formatters } = this.props
+        for (const formatterId of connectedFormatterIds) {
+            const formatterConfig = formatters?.find((f) => f.id === formatterId)
+            if (!formatterConfig) {
+                log?.warn(`[Trace] Formatter config NOT found for ID: ${formatterId}`)
+                continue
+            }
+
+            const targetIds = connections['formatter-target']?.[formatterId] || []
+            const validTargets: Array<ForwardTargetInstanceWithRuntimeConfig> = []
+            for (const targetId of targetIds) {
+                const forwarderInstance = this.forward_to.get(targetId)
+                if (forwarderInstance) {
+                    validTargets.push({
+                        forwarder: forwarderInstance,
+                        runtime_config: cfg_forward_target,
+                    })
+                } else {
+                    log?.warn(`[Trace] Forwarder Instance NOT found for Target ID: ${targetId}`)
+                }
+            }
+
+            if (validTargets.length <= 0) {
+                log?.warn(`[Trace] No valid targets found for formatter ${formatterId} (Original IDs: ${targetIds.join(', ')})`)
+                continue
+            }
+
+            allPaths.push({
+                formatterConfig: {
+                    ...cfg_forwarder,
+                    render_type: formatterConfig.render_type,
+                    aggregation: formatterConfig.aggregation,
+                    deduplication: formatterConfig.deduplication,
+                },
+                targets: validTargets,
+                source: 'graph',
+                formatterName: formatterConfig.name || formatterId,
+            })
+        }
+
+        return allPaths
+    }
+
+    private async sendArticles(
+        log: Logger | undefined,
+        taskId: string,
+        articles: Array<ArticleWithId>,
+        forwarders: Array<ForwardTargetInstanceWithRuntimeConfig>,
+        cfg_forwarder: Forwarder['cfg_forwarder'],
+        options?: {
+            forceSend?: boolean
+        },
+    ) {
         const articles_forwarders = [] as Array<{
             article: ArticleWithId
             to: Array<ForwardTargetInstanceWithRuntimeConfig>
@@ -558,17 +620,15 @@ class ForwarderPools extends BaseCompatibleModel {
         for (const article of articles) {
             const to = [] as Array<ForwardTargetInstanceWithRuntimeConfig>
             for (const forwarder of forwarders) {
-                const { forwarder: f } = forwarder
-                const id = f.id
-                /**
-                 * 同一个宏任务循环中，此时可能会有同一个网站运行了两次及以上的定时任务，此时checkExist都是false
-                 */
-                const exist = await DB.ForwardBy.checkExist(article.id, platform, id, 'article')
-
+                if (options?.forceSend) {
+                    to.push(forwarder)
+                    continue
+                }
+                const exist = await DB.ForwardBy.checkExist(article.id, article.platform, forwarder.forwarder.id, 'article')
                 if (!exist) {
                     to.push(forwarder)
                 } else {
-                    ctx.log?.debug(`[Trace] Article ${article.a_id} already exists for target ${id}`)
+                    log?.debug(`[Trace] Article ${article.a_id} already exists for target ${forwarder.forwarder.id}`)
                 }
             }
             if (to.length > 0) {
@@ -580,137 +640,117 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         if (articles_forwarders.length === 0) {
-            ctx.log?.debug(`[Trace] No articles need to be sent for ${url} (All exist or empty)`)
+            log?.debug(`[Trace] No articles need to be sent (All exist or empty)`)
             return
         }
-        ctx.log?.info(`[Trace] Ready to send ${articles_forwarders.length} articles for ${url}`)
-        // 开始转发文章
+
+        log?.info(`[Trace] Ready to send ${articles_forwarders.length} articles`)
         for (const { article, to } of articles_forwarders) {
-            // check article
-            const blockResults = await Promise.all(to.map(({ forwarder: target, runtime_config }) =>
-                target.check_blocked('', {
-                    timestamp: article.created_at,
-                    runtime_config,
-                    article: cloneDeep(article),
-                })
-            ))
-            const article_is_blocked = blockResults.every(result => result)
+            const platform = article.platform
+            const blockResults = await Promise.all(
+                to.map(({ forwarder: target, runtime_config }) =>
+                    target.check_blocked('', {
+                        timestamp: article.created_at,
+                        runtime_config,
+                        article: cloneDeep(article),
+                    }),
+                ),
+            )
+            const article_is_blocked = blockResults.every((result) => result)
 
             if (article_is_blocked) {
-                ctx.log?.warn(`[Trace] Article ${article.a_id} is blocked by all forwarders, skipping...`)
-                // save forwardby
+                log?.warn(`[Trace] Article ${article.a_id} is blocked by all forwarders, skipping...`)
                 for (const { forwarder: target } of to) {
                     await this.claimArticleChain(article, platform, target.id)
                 }
                 continue
             }
-            ctx.log?.info(`[Trace] Article ${article.a_id} passed block check. Targets: ${to.map(t => t.forwarder.id).join(', ')}`)
 
-            ctx.log?.debug(`Processing article ${article.a_id} for ${to.map((i) => i.forwarder.id).join(', ')}`)
-
-            // --- Use RenderService ---
             const renderResult = await this.renderService.process(article, {
-                taskId: ctx.taskId,
+                taskId,
                 render_type: cfg_forwarder?.render_type,
                 mediaConfig: cfg_forwarder?.media,
-                deduplication: cfg_forwarder?.deduplication
+                deduplication: cfg_forwarder?.deduplication,
             })
-            // -------------------------
 
             let error_for_all = true
-            let cloned_article = cloneDeep(article)
-            // 对所有订阅者进行转发
+            const cloned_article = cloneDeep(article)
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     try {
-                        // --- NEW: No Backfill Logic ---
-                        // If article is older than 2 hours, assume it's a backfill/initial bind and skip sending
-                        // But mark it as sent so we don't process it again.
-                        const TWO_HOURS_SECONDS = 3600 * 2
-                        const now = dayjs().unix()
-                        if (now - article.created_at > TWO_HOURS_SECONDS) {
-                            const claimed = await this.claimArticleChain(article, platform, target.id)
-                            if (claimed) {
-                                ctx.log?.info(`Skipping old article ${article.a_id} (created at ${dayjs.unix(article.created_at).format()}) for target ${target.id}`)
-                            }
-                            return
-                        }
-                        // -----------------------------
-
-                        // --- NEW: Batch Mode / Aggregation Skip Logic ---
-                        const isAggregation = cfg_forwarder?.aggregation || (cfg_forwarder as any)?.batch_mode
-                        if (isAggregation) {
-                            // Exception Check
-                            const isException = (runtime_config as any)?.bypass_batch === true
-                            if (!isException) {
+                        if (!options?.forceSend) {
+                            const TWO_HOURS_SECONDS = 3600 * 2
+                            const now = dayjs().unix()
+                            if (now - article.created_at > TWO_HOURS_SECONDS) {
                                 const claimed = await this.claimArticleChain(article, platform, target.id)
                                 if (claimed) {
-                                    ctx.log?.info(`Skipping real-time send for ${article.a_id} to ${target.id} (Aggregation/Batch Mode ON)`)
-                                }
-                                return
-                            } else {
-                                ctx.log?.info(`[Trace] Batch Mode Bypass for ${target.id} via target config`)
-                            }
-                        }
-
-                        // ----------------------------------
-
-                        // --- NEW: Keyword Filter Logic ---
-                        // If keywords are defined in config, only send if content matches
-                        const keywords = cfg_forwarder?.keywords
-                        if (keywords && keywords.length > 0) {
-                            const content = article.content || ''
-                            const hasKeyword = keywords.some(k => content.includes(k))
-                            if (!hasKeyword) {
-                                const claimed = await this.claimArticleChain(article, platform, target.id)
-                                if (claimed) {
-                                    ctx.log?.debug(`Article ${article.a_id} does not contain any required keywords, skipping for ${target.id}`)
+                                    log?.info(
+                                        `Skipping old article ${article.a_id} (created at ${dayjs.unix(article.created_at).format()}) for target ${target.id}`,
+                                    )
                                 }
                                 return
                             }
-                        }
-                        // -------------------------------
 
-                        const claimed = await this.claimArticleChain(article, platform, target.id)
-                        if (!claimed) {
-                            ctx.log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
-                            return
+                            const isAggregation = cfg_forwarder?.aggregation || (cfg_forwarder as any)?.batch_mode
+                            if (isAggregation && (runtime_config as any)?.bypass_batch !== true) {
+                                const claimed = await this.claimArticleChain(article, platform, target.id)
+                                if (claimed) {
+                                    log?.info(
+                                        `Skipping real-time send for ${article.a_id} to ${target.id} (Aggregation/Batch Mode ON)`,
+                                    )
+                                }
+                                return
+                            }
+
+                            const keywords = cfg_forwarder?.keywords
+                            if (keywords && keywords.length > 0) {
+                                const content = article.content || ''
+                                const hasKeyword = keywords.some((keyword) => content.includes(keyword))
+                                if (!hasKeyword) {
+                                    const claimed = await this.claimArticleChain(article, platform, target.id)
+                                    if (claimed) {
+                                        log?.debug(
+                                            `Article ${article.a_id} does not contain any required keywords, skipping for ${target.id}`,
+                                        )
+                                    }
+                                    return
+                                }
+                            }
                         }
 
-                        ctx.log?.info(`Sending article ${article.a_id} from ${article.u_id} to ${target.NAME}`)
-                        try {
-                            await target.send(renderResult.text, {
-                                media: renderResult.mediaFiles,
-                                timestamp: article.created_at,
-                                runtime_config,
-                                article: cloned_article,
-                            })
-                            error_for_all = false
-                        } catch (e) {
-                            ctx.log?.error(`Error while sending to ${target.id}: ${e}`)
+                        let claimed = true
+                        if (!options?.forceSend) {
+                            claimed = await this.claimArticleChain(article, platform, target.id)
+                            if (!claimed) {
+                                log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
+                                return
+                            }
+                        }
+
+                        await target.send(renderResult.text, {
+                            media: renderResult.mediaFiles,
+                            timestamp: article.created_at,
+                            runtime_config,
+                            article: cloned_article,
+                        })
+                        if (options?.forceSend) {
+                            await DB.ForwardBy.save(article.id, platform, target.id, 'article')
+                        }
+                        error_for_all = false
+                    } catch (error) {
+                        log?.error(`Error while sending to ${target.id}: ${error}`)
+                        if (!options?.forceSend) {
                             await this.releaseArticleChain(article, platform, target.id)
                         }
-                    } catch (e) {
-                        ctx.log?.error(`DB Error ${target.id}: ${e}`)
                     }
                 }),
             )
 
-            /**
-             * 如果剩下的转发平台全部都出错，并且在5个循环周期内都没有成功转发，我们认为这个文章已经无法转发了，标记为已转发
-             * 比如 413: Request Entity Too Large
-             */
             if (error_for_all) {
-                // 记录错误次数
-                let errorCount = this.errorCounter.get(`${platform}:${cloned_article.a_id}`)
-                if (!errorCount) {
-                    errorCount = 0
-                }
-                errorCount = errorCount + 1
+                let errorCount = this.errorCounter.get(`${platform}:${cloned_article.a_id}`) || 0
+                errorCount += 1
                 if (errorCount > this.MAX_ERROR_COUNT) {
-                    ctx.log?.error(
-                        `Error count exceeded for ${cloned_article.a_id}, skipping this and tag forwarded...`,
-                    )
+                    log?.error(`Error count exceeded for ${cloned_article.a_id}, skipping this and tag forwarded...`)
                     for (const { forwarder: target } of to) {
                         let currentArticle: ArticleWithId | null = cloned_article
                         while (currentArticle && typeof currentArticle === 'object') {
@@ -721,12 +761,10 @@ class ForwarderPools extends BaseCompatibleModel {
                     this.errorCounter.delete(`${platform}:${cloned_article.a_id}`)
                 } else {
                     this.errorCounter.set(`${platform}:${cloned_article.a_id}`, errorCount)
-                    ctx.log?.error(`Error count for ${cloned_article.a_id}: ${errorCount}`)
+                    log?.error(`Error count for ${cloned_article.a_id}: ${errorCount}`)
                 }
             }
-            /**
-             * 清理媒体文件
-             */
+
             this.renderService.cleanup(renderResult.mediaFiles)
         }
     }

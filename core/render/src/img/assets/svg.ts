@@ -11,6 +11,8 @@ const Tiktok =
 
 const Youtube =
     'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJleHRlcm5hbC1pY29uIiB2aWV3Qm94PSIwIDAgMjguNTcgIDIwIiBmb2N1c2FibGU9ImZhbHNlIiBzdHlsZT0icG9pbnRlci1ldmVudHM6IG5vbmU7IGRpc3BsYXk6IGJsb2NrOyB3aWR0aDogMTAwJTsgaGVpZ2h0OiAxMDAlOyI+DQogIDxzdmcgdmlld0JveD0iMCAwIDI4LjU3IDIwIiBwcmVzZXJ2ZUFzcGVjdFJhdGlvPSJ4TWlkWU1pZCBtZWV0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPg0KICAgIDxnPg0KICAgICAgPHBhdGggZD0iTTI3Ljk3MjcgMy4xMjMyNEMyNy42NDM1IDEuODkzMjMgMjYuNjc2OCAwLjkyNjYyMyAyNS40NDY4IDAuNTk3MzY2QzIzLjIxOTcgMi4yNDI4OGUtMDcgMTQuMjg1IDAgMTQuMjg1IDBDMTQuMjg1IDAgNS4zNTA0MiAyLjI0Mjg4ZS0wNyAzLjEyMzIzIDAuNTk3MzY2QzEuODkzMjMgMC45MjY2MjMgMC45MjY2MjMgMS44OTMyMyAwLjU5NzM2NiAzLjEyMzI0QzIuMjQyODhlLTA3IDUuMzUwNDIgMCAxMCAwIDEwQzAgMTAgMi4yNDI4OGUtMDcgMTQuNjQ5NiAwLjU5NzM2NiAxNi44NzY4QzAuOTI2NjIzIDE4LjEwNjggMS44OTMyMyAxOS4wNzM0IDMuMTIzMjMgMTkuNDAyNkM1LjM1MDQyIDIwIDE0LjI4NSAyMCAxNC4yODUgMjBDMTQuMjg1IDIwIDIzLjIxOTcgMjAgMjUuNDQ2OCAxOS40MDI2QzI2LjY3NjggMTkuMDczNCAyNy42NDM1IDE4LjEwNjggMjcuOTcyNyAxNi44NzY4QzI4LjU3MDEgMTQuNjQ5NiAyOC41NzAxIDEwIDI4LjU3MDEgMTBDMjguNTcwMSAxMCAyOC41Njc3IDUuMzUwNDIgMjcuOTcyNyAzLjEyMzI0WiIgZmlsbD0iI0ZGMDAwMCI+PC9wYXRoPg0KICAgICAgPHBhdGggZD0iTTExLjQyNTMgMTQuMjg1NEwxOC44NDc3IDEwLjAwMDRMMTEuNDI1MyA1LjcxNTMzVjE0LjI4NTRaIiBmaWxsPSJ3aGl0ZSI+PC9wYXRoPg0KICAgIDwvZz4NCiAgPC9zdmc+DQo8L3N2Zz4='
+const Website =
+    'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="%230f172a"/><circle cx="32" cy="32" r="18" fill="none" stroke="%2367e8f9" stroke-width="4"/><path d="M14 32h36M32 14c6 6.4 9 13.1 9 18s-3 11.6-9 18c-6-6.4-9-13.1-9-18s3-11.6 9-18Z" fill="none" stroke="%23e2e8f0" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 
 const SVGMapping = {
     [Platform.X]: {
@@ -29,6 +31,10 @@ const SVGMapping = {
         icon: Youtube,
         ratio: 0.7000350018,
     },
+    [Platform.Website]: {
+        icon: Website,
+        ratio: 1,
+    },
 } as Record<
     Platform,
     {
@@ -37,6 +43,6 @@ const SVGMapping = {
     }
 >
 
-export { X, Instagram, Tiktok, Youtube }
+export { X, Instagram, Tiktok, Website, Youtube }
 
 export default SVGMapping

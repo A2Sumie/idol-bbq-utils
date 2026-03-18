@@ -1,4 +1,4 @@
-import { X, Instagram, Tiktok, Youtube } from './spiders'
+import { X, Instagram, Tiktok, Website, Youtube } from './spiders'
 import type { ExtraContentType } from './spiders/x'
 
 type CrawlEngine = 'browser' | 'api' | X.XListApiEngine
@@ -9,6 +9,7 @@ enum Platform {
     Instagram,
     TikTok,
     YouTube,
+    Website,
 }
 
 type PlatformArticleMap = {
@@ -17,6 +18,7 @@ type PlatformArticleMap = {
     [Platform.Instagram]: Instagram.ArticleTypeEnum
     [Platform.TikTok]: Tiktok.ArticleTypeEnum
     [Platform.YouTube]: Youtube.ArticleTypeEnum
+    [Platform.Website]: Website.ArticleTypeEnum
 }
 
 type PlatformExtractMap = {
@@ -25,6 +27,7 @@ type PlatformExtractMap = {
     [Platform.Instagram]: null
     [Platform.TikTok]: null
     [Platform.YouTube]: null
+    [Platform.Website]: Record<string, any>
 }
 
 type PlatformRefMap = {
@@ -33,6 +36,7 @@ type PlatformRefMap = {
     [Platform.Instagram]: null
     [Platform.TikTok]: null
     [Platform.YouTube]: null
+    [Platform.Website]: null
 }
 
 // related to platform

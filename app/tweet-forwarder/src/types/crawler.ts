@@ -1,3 +1,4 @@
+import type { BrowserMode, DeviceProfile, ProfileViewport } from '@idol-bbq-utils/spider'
 import type { CrawlEngine, TaskType } from '@idol-bbq-utils/spider/types'
 import type { CommonCfgConfig } from './common'
 import type { Processor } from './processor'
@@ -38,6 +39,13 @@ interface CrawlerConfig extends CommonCfgConfig {
      */
     immediate_notify?: boolean
     user_agent?: string
+    browser_mode?: BrowserMode
+    device_profile?: DeviceProfile
+    session_profile?: string
+    extra_headers?: Record<string, string>
+    viewport?: Partial<ProfileViewport>
+    locale?: string
+    timezone?: string
 
     // Processor Configuration
     processor?: Processor

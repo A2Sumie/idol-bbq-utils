@@ -1,4 +1,4 @@
-import { Instagram, Tiktok, X, Youtube } from './spiders'
+import { Instagram, Tiktok, Website, X, Youtube } from './spiders'
 import { Platform } from './types'
 
 /**
@@ -27,6 +27,9 @@ const platformArticleMapToActionText: Record<Platform, Record<string, string>> =
         [Youtube.ArticleTypeEnum.VIDEO]: '发布视频',
         [Youtube.ArticleTypeEnum.SHORTS]: '发布短视频',
     },
+    [Platform.Website]: {
+        [Website.ArticleTypeEnum.ARTICLE]: '发布站点更新',
+    },
 }
 
 const platformNameMap: Record<Platform, string> = {
@@ -34,6 +37,7 @@ const platformNameMap: Record<Platform, string> = {
     [Platform.Instagram]: 'Instagram',
     [Platform.TikTok]: 'TikTok',
     [Platform.YouTube]: 'YouTube',
+    [Platform.Website]: 'Website',
 }
 
 const platformPresetHeadersMap: Record<Platform, Record<string, string>> = {
@@ -43,6 +47,7 @@ const platformPresetHeadersMap: Record<Platform, Record<string, string>> = {
         referer: 'https://www.tiktok.com/',
     },
     [Platform.YouTube]: {},
+    [Platform.Website]: {},
 }
 
 export { platformArticleMapToActionText, platformNameMap, platformPresetHeadersMap }
