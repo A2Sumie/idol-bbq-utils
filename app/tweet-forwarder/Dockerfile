@@ -47,8 +47,6 @@ RUN chmod +x /app/tools/update-media-tools.sh \
     && /app/tools/update-media-tools.sh
 COPY --from=builder /app/app/tweet-forwarder/build/main.js /app/bin.js
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
-# Copy generated client
-COPY --from=builder /app/app/tweet-forwarder/prisma/client /app/prisma/client
 # Copy assets
 COPY --from=builder /app/assets/fonts /app/assets/fonts
 # Copy node_modules (including prisma)
@@ -56,6 +54,8 @@ COPY --from=builder /app/node_modules /app/node_modules
 
 # Copy source prisma schema and migrations for deployment
 COPY app/tweet-forwarder/prisma /app/prisma
+# Copy generated client last so it does not get overwritten by the checked-in prisma folder
+COPY --from=builder /app/app/tweet-forwarder/prisma/client /app/prisma/client
 # Copy startup script
 COPY app/tweet-forwarder/start.sh /app/start.sh
 
