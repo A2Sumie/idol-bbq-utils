@@ -378,7 +378,7 @@ async function extractStandardEntryList(page: Page, url: string, options: Standa
 
 async function extractNewsList(page: Page, url: string) {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.news_box', { timeout: 15000 })
+    await page.waitForSelector('.news_box, .entry-list .entry-item', { timeout: 15000 })
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const absolute = (value?: string | null) => {
@@ -391,7 +391,7 @@ async function extractNewsList(page: Page, url: string) {
                 return null
             }
         }
-        const items = Array.from(document.querySelectorAll('.news_box'))
+        const legacyItems = Array.from(document.querySelectorAll('.news_box'))
             .map((node) => {
                 const detailUrl =
                     absolute(node.querySelector('.news_box_title a')?.getAttribute('href'))
@@ -409,6 +409,25 @@ async function extractNewsList(page: Page, url: string) {
                 }
             })
             .filter(Boolean)
+        const entryItems = Array.from(document.querySelectorAll('.entry-list .entry-item'))
+            .map((node) => {
+                const detailUrl =
+                    absolute(node.querySelector('a.panel')?.getAttribute('href'))
+                    || absolute(node.querySelector('.entry__title a')?.getAttribute('href'))
+                if (!detailUrl) {
+                    return null
+                }
+                return {
+                    detailUrl,
+                    title: clean(node.querySelector('.entry__title')?.textContent),
+                    dateText: clean(node.querySelector('.entry__posted')?.textContent),
+                    summary: clean(node.querySelector('.entry__text, .entry__description')?.textContent),
+                    member: null,
+                    thumbnail: null,
+                }
+            })
+            .filter(Boolean)
+        const items = legacyItems.length > 0 ? legacyItems : entryItems
         const nextUrl = absolute(document.querySelector('.pager .next a')?.getAttribute('href'))
         return {
             items,
