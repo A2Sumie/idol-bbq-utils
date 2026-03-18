@@ -104,6 +104,16 @@ namespace InsApiJsonParser {
         return edges_json
     }
 
+    function fallbackUsername(...candidates: Array<string | null | undefined>) {
+        for (const candidate of candidates) {
+            const normalized = candidate?.trim()
+            if (normalized) {
+                return normalized
+            }
+        }
+        return ''
+    }
+
     function mediaParser(edge: any): Array<GenericMediaInfo> {
         let arr = [] as Array<GenericMediaInfo>
         // cover
@@ -146,11 +156,12 @@ namespace InsApiJsonParser {
 
     function postParser(edge: any): GenericArticle<Platform.Instagram> {
         const node = edge.node
+        const handle = fallbackUsername(node?.user?.username, node?.owner?.username)
         return {
             platform: Platform.Instagram,
             a_id: node?.code,
-            u_id: node?.user?.username,
-            username: node?.user?.full_name,
+            u_id: handle,
+            username: fallbackUsername(node?.user?.full_name, node?.owner?.full_name, handle),
             created_at: node?.taken_at,
             content: node?.caption?.text,
             url: `https://www.instagram.com/p/${node?.code}/`,
@@ -221,8 +232,8 @@ namespace InsApiJsonParser {
         let user = json?.data?.user
         return {
             platform: Platform.Instagram,
-            username: user?.full_name,
-            u_id: user?.username,
+            username: fallbackUsername(user?.full_name, user?.username),
+            u_id: fallbackUsername(user?.username),
             followers: user?.follower_count,
         }
     }
@@ -233,13 +244,16 @@ namespace InsApiJsonParser {
         const reels_media = JSONPath({ path: '$..reels_media', json })[0]
         const res = reels_media
             .map((i: any) => {
+                const ownerHandle = fallbackUsername(i.user?.username)
+                const ownerName = fallbackUsername(i.user?.full_name, ownerHandle)
                 const stories = i.items
                     .map((item: any) => storyParser(item))
                     .map((item: any) => {
                         return {
                             ...item,
-                            u_id: i.user?.username,
-                            url: `https://www.instagram.com/stories/${i.user?.username}/${item.a_id}`,
+                            u_id: ownerHandle,
+                            username: ownerName,
+                            url: `https://www.instagram.com/stories/${ownerHandle}/${item.a_id}`,
                             u_avatar: i.user?.profile_pic_url,
                         }
                     })
@@ -248,9 +262,9 @@ namespace InsApiJsonParser {
             .flat()
         const og_title = await page.$('meta[property="og:title"]')
         const title = await og_title?.evaluate((el) => el.getAttribute('content'))
-        const username = title?.match(USERNAME_REGEX_FROM_OG_TITLE)?.groups?.username
+        const username = fallbackUsername(title?.match(USERNAME_REGEX_FROM_OG_TITLE)?.groups?.username)
         for (const item of res) {
-            item.username = username
+            item.username = fallbackUsername(username, item.username, item.u_id)
         }
         return res
     }

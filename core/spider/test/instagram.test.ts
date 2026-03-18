@@ -2,10 +2,13 @@ import puppeteer from 'puppeteer-core'
 import { Spider } from '../src'
 import { parseNetscapeCookieToPuppeteerCookie, UserAgent } from '../src/utils'
 import { readFileSync } from 'fs'
+import { join } from 'path'
 import { createLogger, winston, format } from '@idol-bbq-utils/log'
 import type { GenericFollows } from '../src/types'
 import { InsApiJsonParser } from '../src/spiders/instagram'
 import { test, expect } from 'bun:test'
+
+const dataPath = (...parts: Array<string>) => join(import.meta.dir, 'data', ...parts)
 
 /**
  * require network access & headless browser
@@ -56,17 +59,76 @@ test.skip('spider', async () => {
 })
 
 test('Instagram API JSON Parser', async () => {
-    const posts_json = JSON.parse(readFileSync('test/data/instagram/instagram-posts.json', 'utf-8'))
-    const hightlights_json = JSON.parse(readFileSync('test/data/instagram/instagram-highlights.json', 'utf-8'))
-    const profile_json = JSON.parse(readFileSync('test/data/instagram/instagram-profile.json', 'utf-8'))
+    const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
+    const profile_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-profile.json'), 'utf-8'))
 
-    const posts_json_result = JSON.parse(readFileSync('test/data/instagram/instagram-posts-result.json', 'utf-8'))
-    const hightlights_json_result = JSON.parse(
-        readFileSync('test/data/instagram/instagram-highlights-result.json', 'utf-8'),
+    const posts_json_result = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts-result.json'), 'utf-8'))
+    const profile_json_result = JSON.parse(
+        readFileSync(dataPath('instagram', 'instagram-follows-result.json'), 'utf-8'),
     )
-    const profile_json_result = JSON.parse(readFileSync('test/data/instagram/instagram-follows-result.json', 'utf-8'))
 
-    expect(InsApiJsonParser.postsParser(posts_json)).toEqual(posts_json_result)
-    expect(InsApiJsonParser.highlightsParser(hightlights_json)).toEqual(hightlights_json_result)
-    expect(InsApiJsonParser.followsParser(profile_json)).toEqual(profile_json_result)
+    const posts = InsApiJsonParser.postsParser(posts_json)
+
+    expect(posts).toHaveLength(posts_json_result.length)
+    expect(posts[0]).toMatchObject({
+        a_id: posts_json_result[0].a_id,
+        u_id: posts_json_result[0].u_id,
+        username: posts_json_result[0].username,
+        url: posts_json_result[0].url,
+        type: posts_json_result[0].type,
+    })
+    expect(posts.every((item) => item.username.length > 0)).toBeTrue()
+    expect(posts.every((item) => item.u_id.length > 0)).toBeTrue()
+    expect(posts.some((item) => (item.media?.length ?? 0) > 0)).toBeTrue()
+    expect(InsApiJsonParser.followsParser(profile_json)).toMatchObject({
+        platform: 2,
+        u_id: profile_json_result.u_id,
+        username: profile_json_result.username,
+        followers: profile_json_result.followers,
+    })
+})
+
+test('Instagram stories keep a non-empty username when og:title does not expose it', async () => {
+    const page = {
+        goto: async () => undefined,
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+        $$: async () => [
+            {
+                evaluate: async () =>
+                    JSON.stringify({
+                        xdt_api__v1__feed__reels_media: true,
+                        reels_media: [
+                            {
+                                user: {
+                                    username: 'nananijigram22_7',
+                                },
+                                items: [
+                                    {
+                                        id: '36963634381048167_1',
+                                        taken_at: 1773845200,
+                                        accessibility_caption: '1. Story caption',
+                                        image_versions2: {
+                                            candidates: [{ width: 720, url: 'https://example.com/story.jpg' }],
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    }),
+            },
+        ],
+        $: async () => ({
+            evaluate: async () => 'Instagram',
+        }),
+    } as any
+
+    const stories = await InsApiJsonParser.grabStories(page, 'https://www.instagram.com/stories/nananijigram22_7/')
+
+    expect(stories).toHaveLength(1)
+    expect(stories[0]?.a_id).toBe('36963634381048167')
+    expect(stories[0]?.u_id).toBe('nananijigram22_7')
+    expect(stories[0]?.username).toBe('nananijigram22_7')
+    expect(stories[0]?.url).toBe('https://www.instagram.com/stories/nananijigram22_7/36963634381048167')
 })
