@@ -71,15 +71,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                     matchForwarder = {
                         name: 'default-auto-bind',
                         origin: crawler.origin,
-                        cfg_forwarder: {
-                            cron: '*/30 * * * *',
-                            media: {
-                                type: 'no-storage',
-                                use: {
-                                    tool: MediaToolEnum.DEFAULT,
-                                }
-                            }
-                        }
+                        cfg_forwarder: {}
                     }
                 }
 
