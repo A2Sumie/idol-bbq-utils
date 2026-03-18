@@ -4,7 +4,7 @@ import { BaseSpider } from './base'
 import { Page } from 'puppeteer-core'
 
 import { JSONPath } from 'jsonpath-plus'
-import { HTTPClient, SimpleExpiringCache } from '@/utils'
+import { getCookieString, HTTPClient, SimpleExpiringCache } from '@/utils'
 
 enum ArticleTypeEnum {
     /**
@@ -49,17 +49,19 @@ class TiktokSpider extends BaseSpider {
         }
         const { id } = result
         const _url = `${this.BASE_URL}@${id}`
+        const cookieString = config.cookieString
+            || (page ? getCookieString(await page.browserContext().cookies()) : undefined)
         const { task_type } = config
         if (task_type === 'article') {
             this.log?.info('Trying to grab posts.')
-            const res = await TiktokApiJsonParser.grabPosts(_url, random_hex7, Number(device_id))
+            const res = await TiktokApiJsonParser.grabPosts(_url, random_hex7, Number(device_id), page, cookieString)
             return res as TaskTypeResult<T, Platform.TikTok>
         }
 
         if (task_type === 'follows') {
             this.log?.info('Trying to grab follows.')
             return [
-                await TiktokApiJsonParser.grabFollowsNumber(_url, random_hex7, Number(device_id)),
+                await TiktokApiJsonParser.grabFollowsNumber(_url, random_hex7, Number(device_id), page, cookieString),
             ] as TaskTypeResult<T, Platform.TikTok>
         }
 
@@ -97,6 +99,48 @@ namespace TiktokApiJsonParser {
             const error_content = (await main_frame_error.evaluate((e) => e.textContent))?.replace(/\s+/g, ' ')
             throw new Error(`Something wrong on the page: ${error_content}`)
         }
+    }
+
+    function buildHeaders(url: string, cookieString?: string): Record<string, string> {
+        const headers: Record<string, string> = {
+            'accept-language': 'en-US,en;q=0.9',
+            referer: url,
+        }
+        if (cookieString?.trim()) {
+            headers.cookie = cookieString
+        }
+        return headers
+    }
+
+    function extractUniversalData(text: string): string | null {
+        return text.match(/<script\s*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/)?.[1] || null
+    }
+
+    async function loadUniversalData(url: string, page?: Page, cookieString?: string): Promise<string> {
+        const headers = buildHeaders(url, cookieString)
+        const webpage = await HTTPClient.download_webpage(url, headers)
+        const text = await webpage.text()
+        const content = extractUniversalData(text)
+        if (content) {
+            return content
+        }
+
+        if (!page) {
+            throw new Error('Cannot find user data')
+        }
+
+        await page.goto(url, {
+            waitUntil: 'domcontentloaded',
+        })
+        await checkLogin(page)
+        await checkSomethingWrong(page)
+        await page.waitForSelector('script[id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]', { timeout: 5000 }).catch(() => null)
+        const browserContent = extractUniversalData(await page.content())
+        if (browserContent) {
+            return browserContent
+        }
+
+        throw new Error('Cannot find user data')
     }
 
     function mediaParser(item: any): Array<GenericMediaInfo> {
@@ -245,6 +289,8 @@ namespace TiktokApiJsonParser {
         url: string,
         random_hex7: string,
         device_id: number,
+        page?: Page,
+        cookieString?: string,
     ): Promise<Array<GenericArticle<Platform.TikTok>>> {
         // const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
         //     const url = response.url()
@@ -279,12 +325,7 @@ namespace TiktokApiJsonParser {
          * Use api query instead of headless browser
          */
         // ref: https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py
-        const webpage = await HTTPClient.download_webpage(url)
-        const text = await webpage.text()
-        const content = text.match(/<script\s*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/)?.[1]
-        if (!content) {
-            throw new Error('Cannot find user data')
-        }
+        const content = await loadUniversalData(url, page, cookieString)
         const sec_uid = JSONPath({
             path: "$..['webapp.user-detail'].userInfo.user.secUid",
             json: JSON.parse(content),
@@ -293,7 +334,7 @@ namespace TiktokApiJsonParser {
         const query_obj = _build_web_query(sec_uid[0], Date.now(), device_id, random_hex7)
         // @ts-ignore
         const query = new URLSearchParams(query_obj)
-        const res = await HTTPClient.download_webpage(`${_API_BASE_URL}?${query.toString()}`)
+        const res = await HTTPClient.download_webpage(`${_API_BASE_URL}?${query.toString()}`, buildHeaders(url, cookieString))
         const json = await res.json()
         return postsParser(json)
     }
@@ -302,13 +343,10 @@ namespace TiktokApiJsonParser {
         url: string,
         random_hex7: string,
         device_id: number,
+        page?: Page,
+        cookieString?: string,
     ): Promise<GenericFollows> {
-        const webpage = await HTTPClient.download_webpage(url)
-        const text = await webpage.text()
-        const content = text.match(/<script\s*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/)?.[1]
-        if (!content) {
-            throw new Error('Cannot find user data')
-        }
+        const content = await loadUniversalData(url, page, cookieString)
         const userInfo = JSONPath({
             path: "$..['webapp.user-detail'].userInfo",
             json: JSON.parse(content),
