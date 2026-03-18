@@ -5,6 +5,7 @@ import {
     applyBrowserProfile,
     resolveBrowserProfile,
     type BrowserMode,
+    type BrowserProfileConfig,
     type DeviceProfile,
     type ProfileViewport,
 } from '@idol-bbq-utils/spider'
@@ -51,10 +52,13 @@ export class BrowserSessionPool {
             userAgent: request.user_agent,
             viewport: request.viewport,
         })
-        const browserMode = request.browser_mode || ((process.env.BROWSER_MODE as BrowserMode | undefined) ?? 'headless')
+        const defaultBrowserMode: BrowserMode =
+            process.env.DISPLAY || process.env.ENABLE_XVFB === '1' ? 'headed-xvfb' : 'headless'
+        const browserMode =
+            request.browser_mode || ((process.env.BROWSER_MODE as BrowserMode | undefined) ?? defaultBrowserMode)
         const sessionId = sanitizeSessionId(request.session_profile || request.device_profile || 'default')
         const sessionKey = `${sessionId}:${browserMode}`
-        const session = await this.getOrCreateSession(sessionKey, sessionId, browserMode)
+        const session = await this.getOrCreateSession(sessionKey, sessionId, browserMode, resolvedProfile)
         const page = await session.browser.newPage()
         await applyBrowserProfile(page, resolvedProfile.deviceProfile, {
             userAgent: resolvedProfile.userAgent,
@@ -79,7 +83,12 @@ export class BrowserSessionPool {
         this.sessions.clear()
     }
 
-    private async getOrCreateSession(sessionKey: string, sessionId: string, browserMode: BrowserMode) {
+    private async getOrCreateSession(
+        sessionKey: string,
+        sessionId: string,
+        browserMode: BrowserMode,
+        profile: BrowserProfileConfig,
+    ) {
         const existing = this.sessions.get(sessionKey)
         if (existing) {
             return existing
@@ -87,7 +96,7 @@ export class BrowserSessionPool {
 
         const userDataDir = path.join(this.browserRoot, sessionId)
         ensureDirectoryExists(userDataDir)
-        const browser = await this.launchBrowser(browserMode, userDataDir)
+        const browser = await this.launchBrowser(browserMode, userDataDir, profile)
         const runtimeSession: BrowserRuntimeSession = {
             browser,
             mode: browserMode,
@@ -99,15 +108,26 @@ export class BrowserSessionPool {
         return runtimeSession
     }
 
-    private async launchBrowser(browserMode: BrowserMode, userDataDir: string) {
+    private async launchBrowser(
+        browserMode: BrowserMode,
+        userDataDir: string,
+        profile: BrowserProfileConfig,
+    ) {
         const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH
         const lang = process.env.BROWSER_LANG || 'ja-JP'
         const args = [
             process.env.NO_SANDBOX ? '--no-sandbox' : '',
+            process.env.NO_SANDBOX ? '--disable-setuid-sandbox' : '',
             '--disable-dev-shm-usage',
             '--disable-blink-features=AutomationControlled',
-            '--disable-features=Translate,BackForwardCache',
-            '--window-size=430,1200',
+            '--disable-features=Translate,BackForwardCache,AcceptCHFrame,MediaRouter',
+            '--disable-popup-blocking',
+            '--disable-renderer-backgrounding',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-infobars',
+            '--window-position=0,0',
+            `--window-size=${profile.windowSize.width},${profile.windowSize.height}`,
             `--lang=${lang}`,
         ].filter(Boolean)
 
@@ -117,6 +137,8 @@ export class BrowserSessionPool {
             handleSIGHUP: false,
             handleSIGTERM: false,
             args,
+            defaultViewport: null,
+            ignoreDefaultArgs: ['--enable-automation'],
             userDataDir,
             ...(executablePath ? { executablePath } : { channel: 'chrome' as const }),
         })

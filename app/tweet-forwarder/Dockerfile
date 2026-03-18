@@ -70,7 +70,7 @@ ENV DATABASE_URL="file:/app/data.db"
 ENV FONTS_DIR=/app/assets/fonts
 ENV ENABLE_XVFB=1
 ENV XVFB_DISPLAY=:99
-ENV XVFB_SCREEN="0 430x1200x24"
+ENV XVFB_SCREEN="0 1600x1200x24"
 ENV BROWSER_PROFILE_DIR=/app/assets/cookies/browser-profiles
 ENV PATH="/app/tools/bin:${PATH}"
 

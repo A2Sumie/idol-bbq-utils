@@ -24,6 +24,20 @@ export interface RenderResult {
     }>
 }
 
+function formatPlatformTag(article: Pick<Article, 'platform' | 'username' | 'a_id'>, log?: Pick<Logger, 'warn'>): string {
+    const platformName = platformNameMap[article.platform] || 'Unknown'
+    if (platformName === 'Unknown') {
+        log?.warn(`Unknown platform for article ${article.a_id}: ${article.platform}`)
+    }
+
+    const username = article.username?.trim()
+    if (!username || username === platformName) {
+        return platformName
+    }
+
+    return `${platformName} ${username}`
+}
+
 export class RenderService {
     private log?: Logger
     private ArticleConverter = new ImgConverter()
@@ -166,12 +180,7 @@ export class RenderService {
     }
 
     private formatPlatformFrom(article: Article): string {
-        const platformName = platformNameMap[article.platform] || 'Unknown'
-        if (platformName === 'Unknown') {
-            this.log?.warn(`Unknown platform for article ${article.a_id}: ${article.platform}`)
-        }
-        // "From Twitter"
-        return `${platformName}`
+        return formatPlatformTag(article, this.log)
     }
 
     private async handleMedia(
@@ -320,3 +329,5 @@ export class RenderService {
         return maybe_media_files
     }
 }
+
+export { formatPlatformTag }

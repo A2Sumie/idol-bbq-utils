@@ -36,7 +36,7 @@ if [ "${ENABLE_XVFB:-1}" != "0" ] && command -v Xvfb >/dev/null 2>&1 && [ -z "${
             rm -f "$XVFB_LOCK_FILE" "$XVFB_SOCKET_FILE"
         fi
     fi
-    XVFB_SCREEN_SPEC="${XVFB_SCREEN:-0 430x1200x24}"
+    XVFB_SCREEN_SPEC="${XVFB_SCREEN:-0 1600x1200x24}"
     set -- $XVFB_SCREEN_SPEC
     echo "Starting Xvfb on ${DISPLAY} with screen ${XVFB_SCREEN_SPEC}..."
     Xvfb "$DISPLAY" -screen "$1" "$2" -ac +extension RANDR -nolisten tcp >/tmp/tweet-forwarder-xvfb.log 2>&1 &

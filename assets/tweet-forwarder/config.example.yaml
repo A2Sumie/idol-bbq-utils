@@ -29,7 +29,7 @@ bots:
         group_id: 'qq group id'               # (required) qq group id
         url: 'onebot server url'              # (required) onebot server url
     config:                                   # (optional) forwarder configurations
-      user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0'                 # (optional) puppeteer supported user agent
+      user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'                             # (optional) puppeteer supported user agent
       cron: "*/5 4-23 * * *"                  
       interval_time:
         max: 6000
@@ -84,7 +84,7 @@ bots:
         max: 0
         min: 0
 config:                                       # (not required) forwarder configurations
-  user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0'                 # (not required) puppeteer supported user agent
+  user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'                             # (not required) puppeteer supported user agent
   cron: "*/5 4-23 * * *"                      # (not required) cron job
   interval_time:
     max: 1000
