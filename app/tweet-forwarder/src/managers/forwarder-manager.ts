@@ -600,11 +600,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 ctx.log?.warn(`[Trace] Article ${article.a_id} is blocked by all forwarders, skipping...`)
                 // save forwardby
                 for (const { forwarder: target } of to) {
-                    let currentArticle: ArticleWithId | null = article
-                    while (currentArticle && typeof currentArticle === 'object') {
-                        await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
-                        currentArticle = currentArticle.ref as ArticleWithId | null
-                    }
+                    await this.claimArticleChain(article, platform, target.id)
                 }
                 continue
             }
@@ -626,90 +622,73 @@ class ForwarderPools extends BaseCompatibleModel {
             // 对所有订阅者进行转发
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
-                    ctx.log?.info(`Sending article ${article.a_id} from ${article.u_id} to ${target.NAME}`)
                     try {
-                        const exist = await DB.ForwardBy.checkExist(article.id, platform, target.id, 'article')
-                        // 运行前再检查下，因为cron的设定，可能同时会有两个同样的任务在执行
-                        // 如果不存在则尝试发送
-                        if (!exist) {
-                            // --- NEW: No Backfill Logic ---
-                            // If article is older than 2 hours, assume it's a backfill/initial bind and skip sending
-                            // But mark it as sent so we don't process it again.
-                            const TWO_HOURS_SECONDS = 3600 * 2
-                            const now = dayjs().unix()
-                            if (now - article.created_at > TWO_HOURS_SECONDS) {
+                        // --- NEW: No Backfill Logic ---
+                        // If article is older than 2 hours, assume it's a backfill/initial bind and skip sending
+                        // But mark it as sent so we don't process it again.
+                        const TWO_HOURS_SECONDS = 3600 * 2
+                        const now = dayjs().unix()
+                        if (now - article.created_at > TWO_HOURS_SECONDS) {
+                            const claimed = await this.claimArticleChain(article, platform, target.id)
+                            if (claimed) {
                                 ctx.log?.info(`Skipping old article ${article.a_id} (created at ${dayjs.unix(article.created_at).format()}) for target ${target.id}`)
-                                let currentArticle: ArticleWithId | null = article
-                                while (currentArticle && typeof currentArticle === 'object') {
-                                    await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
-                                    currentArticle = currentArticle.ref as ArticleWithId | null
-                                }
-                                return // Skip sending
                             }
-                            // -----------------------------
+                            return
+                        }
+                        // -----------------------------
 
-                            // --- NEW: Batch Mode / Aggregation Skip Logic ---
-                            const isAggregation = cfg_forwarder?.aggregation || (cfg_forwarder as any)?.batch_mode
-                            if (isAggregation) {
-                                // Exception Check
-                                const isException = (runtime_config as any)?.bypass_batch === true
-                                if (!isException) {
+                        // --- NEW: Batch Mode / Aggregation Skip Logic ---
+                        const isAggregation = cfg_forwarder?.aggregation || (cfg_forwarder as any)?.batch_mode
+                        if (isAggregation) {
+                            // Exception Check
+                            const isException = (runtime_config as any)?.bypass_batch === true
+                            if (!isException) {
+                                const claimed = await this.claimArticleChain(article, platform, target.id)
+                                if (claimed) {
                                     ctx.log?.info(`Skipping real-time send for ${article.a_id} to ${target.id} (Aggregation/Batch Mode ON)`)
-                                    // Mark as sent to prevent retry
-                                    let currentArticle: ArticleWithId | null = article
-                                    while (currentArticle && typeof currentArticle === 'object') {
-                                        await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
-                                        currentArticle = currentArticle.ref as ArticleWithId | null
-                                    }
-                                    return
-                                } else {
-                                    ctx.log?.info(`[Trace] Batch Mode Bypass for ${target.id} via target config`)
                                 }
+                                return
+                            } else {
+                                ctx.log?.info(`[Trace] Batch Mode Bypass for ${target.id} via target config`)
                             }
+                        }
 
-                            // ----------------------------------
+                        // ----------------------------------
 
-                            // --- NEW: Keyword Filter Logic ---
-                            // If keywords are defined in config, only send if content matches
-                            const keywords = cfg_forwarder?.keywords
-                            if (keywords && keywords.length > 0) {
-                                const content = article.content || ''
-                                const hasKeyword = keywords.some(k => content.includes(k))
-                                if (!hasKeyword) {
+                        // --- NEW: Keyword Filter Logic ---
+                        // If keywords are defined in config, only send if content matches
+                        const keywords = cfg_forwarder?.keywords
+                        if (keywords && keywords.length > 0) {
+                            const content = article.content || ''
+                            const hasKeyword = keywords.some(k => content.includes(k))
+                            if (!hasKeyword) {
+                                const claimed = await this.claimArticleChain(article, platform, target.id)
+                                if (claimed) {
                                     ctx.log?.debug(`Article ${article.a_id} does not contain any required keywords, skipping for ${target.id}`)
-                                    // Mark as sent (ignored) so we don't retry endlessly
-                                    let currentArticle: ArticleWithId | null = article
-                                    while (currentArticle && typeof currentArticle === 'object') {
-                                        await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
-                                        currentArticle = currentArticle.ref as ArticleWithId | null
-                                    }
-                                    return
                                 }
+                                return
                             }
-                            // -------------------------------
+                        }
+                        // -------------------------------
 
-                            // 先占用发送
-                            let currentArticle: ArticleWithId | null = article
-                            while (currentArticle && typeof currentArticle === 'object') {
-                                await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
-                                currentArticle = currentArticle.ref as ArticleWithId | null
-                            }
-                            try {
-                                await target.send(renderResult.text, {
-                                    media: renderResult.mediaFiles,
-                                    timestamp: article.created_at,
-                                    runtime_config,
-                                    article: cloned_article,
-                                })
-                                error_for_all = false
-                            } catch (e) {
-                                ctx.log?.error(`Error while sending to ${target.id}: ${e}`)
-                                let currentArticle: ArticleWithId | null = article
-                                while (currentArticle && typeof currentArticle === 'object') {
-                                    await DB.ForwardBy.deleteRecord(currentArticle.id, platform, target.id, 'article')
-                                    currentArticle = currentArticle.ref as ArticleWithId | null
-                                }
-                            }
+                        const claimed = await this.claimArticleChain(article, platform, target.id)
+                        if (!claimed) {
+                            ctx.log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
+                            return
+                        }
+
+                        ctx.log?.info(`Sending article ${article.a_id} from ${article.u_id} to ${target.NAME}`)
+                        try {
+                            await target.send(renderResult.text, {
+                                media: renderResult.mediaFiles,
+                                timestamp: article.created_at,
+                                runtime_config,
+                                article: cloned_article,
+                            })
+                            error_for_all = false
+                        } catch (e) {
+                            ctx.log?.error(`Error while sending to ${target.id}: ${e}`)
+                            await this.releaseArticleChain(article, platform, target.id)
                         }
                     } catch (e) {
                         ctx.log?.error(`DB Error ${target.id}: ${e}`)
@@ -749,6 +728,28 @@ class ForwarderPools extends BaseCompatibleModel {
              * 清理媒体文件
              */
             this.renderService.cleanup(renderResult.mediaFiles)
+        }
+    }
+
+    private async claimArticleChain(article: ArticleWithId, platform: Platform, targetId: string) {
+        const claimed = await DB.ForwardBy.claim(article.id, platform, targetId, 'article')
+        if (!claimed) {
+            return false
+        }
+
+        let currentArticle = article.ref as ArticleWithId | null
+        while (currentArticle && typeof currentArticle === 'object') {
+            await DB.ForwardBy.save(currentArticle.id, platform, targetId, 'article')
+            currentArticle = currentArticle.ref as ArticleWithId | null
+        }
+        return true
+    }
+
+    private async releaseArticleChain(article: ArticleWithId, platform: Platform, targetId: string) {
+        let currentArticle: ArticleWithId | null = article
+        while (currentArticle && typeof currentArticle === 'object') {
+            await DB.ForwardBy.deleteRecord(currentArticle.id, platform, targetId, 'article')
+            currentArticle = currentArticle.ref as ArticleWithId | null
         }
     }
 

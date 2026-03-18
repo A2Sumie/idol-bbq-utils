@@ -292,6 +292,25 @@ namespace DB {
             })
         }
 
+        export async function claim(ref_id: number, platform: string | number, bot_id: string, task_type: string) {
+            try {
+                await prisma.forward_by.create({
+                    data: {
+                        ref_id,
+                        platform: String(platform),
+                        bot_id,
+                        task_type,
+                    },
+                })
+                return true
+            } catch (error) {
+                if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                    return false
+                }
+                throw error
+            }
+        }
+
         export async function deleteRecord(ref_id: number, platform: string | number, bot_id: string, task_type: string) {
             let exist_one = await checkExist(ref_id, platform, bot_id, task_type)
             if (!exist_one) {
