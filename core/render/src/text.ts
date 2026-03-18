@@ -95,6 +95,34 @@ function articleToText(article: Article) {
     return format_article
 }
 
+function compactArticleToText(article: Article) {
+    let currentArticle: Article | null = article
+    let format_article = ''
+    while (currentArticle) {
+        const metaline = formatCompactMetaline(currentArticle)
+        format_article += `${metaline}`
+        if (currentArticle.content) {
+            format_article += '\n\n'
+        }
+        if (currentArticle.translated_by) {
+            const translation = parseTranslationContent(currentArticle)
+            format_article += `${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
+        }
+
+        const raw_article = parseRawContent(currentArticle)
+        format_article += `${raw_article}`
+        if (currentArticle.ref) {
+            format_article += `\n\n${'-'.repeat(12)}\n\n`
+        }
+        if (currentArticle.ref && typeof currentArticle.ref === 'object') {
+            currentArticle = currentArticle.ref
+        } else {
+            currentArticle = null
+        }
+    }
+    return format_article
+}
+
 function followsToText(data: Array<[Platform, Array<[Follows, Follows | null]>]>) {
     // follows to texts
     const texts = [] as Array<string>
@@ -139,4 +167,18 @@ function formatMetaline(article: Article) {
     return metaline
 }
 
-export { articleToText, followsToText, formatMetaline, parseRawContent, parseTranslationContent }
+function formatCompactMetaline(article: Article) {
+    const header = [platformNameMap[article.platform], article.username].filter(Boolean).join(TAB)
+    const action = platformArticleMapToActionText[article.platform][article.type]
+    return `${header}\n${[formatTime(article.created_at), `${action}：`].join(TAB)}`
+}
+
+export {
+    articleToText,
+    compactArticleToText,
+    followsToText,
+    formatCompactMetaline,
+    formatMetaline,
+    parseRawContent,
+    parseTranslationContent,
+}

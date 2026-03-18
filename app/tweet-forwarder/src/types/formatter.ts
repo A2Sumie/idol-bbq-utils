@@ -1,7 +1,7 @@
 /**
  * Supported render types for formatting articles
  */
-type RenderType = 'text' | 'img' | 'tag' | 'img-tag' | 'img-tag-dynamic'
+type RenderType = 'text' | 'text-compact' | 'img' | 'tag' | 'img-tag' | 'img-tag-dynamic'
 
 /**
  * Formatter type definition for independent formatter configuration

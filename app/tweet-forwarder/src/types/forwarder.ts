@@ -111,7 +111,7 @@ type ForwardTargetPlatformConfig<T extends ForwardTargetPlatformEnum = ForwardTa
 interface ForwarderConfig extends CommonCfgConfig {
     cron?: string
     media?: Media
-    render_type?: 'text' | 'img' | 'tag' | 'img-tag' | 'img-tag-dynamic'
+    render_type?: 'text' | 'text-compact' | 'img' | 'tag' | 'img-tag' | 'img-tag-dynamic'
     keywords?: Array<string>
     aggregation?: boolean
     deduplication?: boolean

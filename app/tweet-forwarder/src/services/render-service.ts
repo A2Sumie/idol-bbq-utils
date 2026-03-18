@@ -10,7 +10,7 @@ import {
     ytDlpDownloadMediaFile,
     writeImgToFile,
 } from '@/middleware/media'
-import { articleToText, formatMetaline, ImgConverter } from '@idol-bbq-utils/render'
+import { articleToText, compactArticleToText, formatMetaline, ImgConverter } from '@idol-bbq-utils/render'
 import { existsSync, unlinkSync } from 'fs'
 import { cloneDeep } from 'lodash'
 import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spider/const'
@@ -151,6 +151,8 @@ export class RenderService {
                 }
             }
 
+        } else if (render_type === 'text-compact') {
+            text = compactArticleToText(article)
         } else {
             // Case 5: Standard Text
             text = articleToText(article)
