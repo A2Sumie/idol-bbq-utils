@@ -8,6 +8,7 @@ import DB from '@/db'
 import EventEmitter from 'events'
 import type { ForwarderPools } from './forwarder-manager'
 import { Platform } from '@idol-bbq-utils/spider/types'
+import { platformNameMap } from '@idol-bbq-utils/spider/const'
 import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
 import { processorRegistry } from '@/middleware/processor'
 import type { Article } from '@idol-bbq-utils/render/types'
@@ -47,6 +48,18 @@ function resolvePlatform(value?: string | null): Platform | null {
     if (['youtube', 'yt'].includes(normalized)) return Platform.YouTube
     if (['website', 'web'].includes(normalized)) return Platform.Website
     return null
+}
+
+function resolvePlatformFromOrigin(origin?: string | null): Platform | null {
+    if (!origin) {
+        return null
+    }
+    const normalized = origin.toLowerCase()
+    if (normalized.includes('x.com') || normalized.includes('twitter.com')) return Platform.X
+    if (normalized.includes('instagram.com')) return Platform.Instagram
+    if (normalized.includes('tiktok.com')) return Platform.TikTok
+    if (normalized.includes('youtube.com') || normalized.includes('youtu.be')) return Platform.YouTube
+    return Platform.Website
 }
 
 function flattenArticleChain(article: Article & { id: number }) {
@@ -555,6 +568,20 @@ export class APIManager extends BaseCompatibleModel {
         const article = await this.loadArticle(platform, body.id, body.a_id)
         if (!article) {
             return new Response('Article not found', { status: 404 })
+        }
+        const crawler = this.config.crawlers?.find((item) => item.name === body.crawlerName)
+        if (!crawler) {
+            return new Response('Crawler not found', { status: 404 })
+        }
+        const crawlerPlatform = resolvePlatformFromOrigin(crawler.origin)
+        if (!crawlerPlatform) {
+            return new Response('Unable to determine crawler platform', { status: 400 })
+        }
+        if (crawlerPlatform !== article.platform) {
+            return new Response(
+                `Crawler platform mismatch: ${body.crawlerName} is ${platformNameMap[crawlerPlatform]}, article is ${platformNameMap[article.platform]}`,
+                { status: 400 },
+            )
         }
 
         const task = await DB.TaskQueue.add(
