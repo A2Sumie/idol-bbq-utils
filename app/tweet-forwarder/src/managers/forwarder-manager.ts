@@ -695,7 +695,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 taskId,
                 render_type: cfg_forwarder?.render_type,
                 mediaConfig: cfg_forwarder?.media,
-                deduplication: cfg_forwarder?.deduplication,
+                deduplication: options?.forceSend ? false : cfg_forwarder?.deduplication,
             })
 
             let error_for_all = true

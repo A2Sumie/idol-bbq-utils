@@ -25,7 +25,7 @@ describe('formatPlatformTag', () => {
 })
 
 describe('RenderService text-compact', () => {
-    test('keeps platform and display name but omits u_id', async () => {
+    test('keeps display name and source label but omits u_id', async () => {
         const service = new RenderService()
         const result = await service.process(
             {
@@ -52,6 +52,7 @@ describe('RenderService text-compact', () => {
             },
         )
 
+        expect(result.text.split('\n')[0]).toBe('河瀬詩    来自Instagram')
         expect(result.text).toContain('Instagram')
         expect(result.text).toContain('河瀬詩')
         expect(result.text).toContain('hello world')

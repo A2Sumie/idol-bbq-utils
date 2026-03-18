@@ -168,7 +168,7 @@ function formatMetaline(article: Article) {
 }
 
 function formatCompactMetaline(article: Article) {
-    const header = [platformNameMap[article.platform], article.username].filter(Boolean).join(TAB)
+    const header = [article.username, `来自${platformNameMap[article.platform]}`].filter(Boolean).join(TAB)
     const action = platformArticleMapToActionText[article.platform][article.type]
     return `${header}\n${[formatTime(article.created_at), `${action}：`].join(TAB)}`
 }
