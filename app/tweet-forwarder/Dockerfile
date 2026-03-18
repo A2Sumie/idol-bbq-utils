@@ -26,7 +26,7 @@ FROM base AS runner
 ARG CHROME_VERSION
 ARG GALLERY_DL_VERSION
 RUN apt-get update \
-    && apt-get install -y wget gnupg \
+    && apt-get install -y wget gnupg curl unzip ffmpeg \
     # Required for Chrome
     && apt-get install -y fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libcurl4 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libvulkan1 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2 xdg-utils \
     --no-install-recommends \
@@ -42,6 +42,9 @@ RUN wget https://github.com/mikf/gallery-dl/releases/download/${GALLERY_DL_VERSI
     && chmod +x /usr/local/bin/gallery-dl
 
 WORKDIR /app
+COPY app/tweet-forwarder/update-media-tools.sh /app/tools/update-media-tools.sh
+RUN chmod +x /app/tools/update-media-tools.sh \
+    && /app/tools/update-media-tools.sh
 COPY --from=builder /app/app/tweet-forwarder/build/main.js /app/bin.js
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
 # Copy generated client
@@ -65,5 +68,6 @@ ENV NO_SANDBOX=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 ENV DATABASE_URL="file:/app/data.db"
 ENV FONTS_DIR=/app/assets/fonts
+ENV PATH="/app/tools/bin:${PATH}"
 
 CMD ["/app/start.sh"]

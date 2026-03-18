@@ -4,6 +4,7 @@ enum MediaToolEnum {
      */
     DEFAULT = 'default',
     GALLERY_DL = 'gallery-dl',
+    YT_DLP = 'yt-dlp',
 }
 
 type MediaToolConfigMap = {
@@ -14,6 +15,14 @@ type MediaToolConfigMap = {
          */
         path?: string
         cookie_file?: string
+    }
+    [MediaToolEnum.YT_DLP]: {
+        /**
+         * 可以为空，默认寻找系统路径中的 yt-dlp
+         */
+        path?: string
+        cookie_file?: string
+        format?: string
     }
 }
 

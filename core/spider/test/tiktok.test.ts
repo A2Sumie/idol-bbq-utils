@@ -64,3 +64,26 @@ test.skip('TikTok API JSON Parser', async () => {
     expect(TiktokApiJsonParser.postsParser(posts_json)).toEqual(posts_json_result)
     expect(TiktokApiJsonParser.followsParser(follows_json)).toEqual(follows_json_result)
 })
+
+test('TikTok API JSON Parser tolerates missing bitrateInfo', () => {
+    const posts = TiktokApiJsonParser.postsParser({
+        itemList: [{
+            id: '7351147085025500001',
+            createTime: 1710759600,
+            desc: 'Regression case',
+            author: {
+                uniqueId: 'cure_rinochi',
+                nickname: 'Cure Rinochi',
+                avatarLarger: 'https://example.com/avatar.jpg',
+            },
+            video: {
+                cover: 'https://example.com/cover.jpg',
+                originCover: 'https://example.com/origin-cover.jpg',
+            },
+        }],
+    })
+
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.media?.map((item) => item.type)).toEqual(['video_thumbnail', 'video_thumbnail'])
+    expect(posts[0]?.media?.some((item) => item.type === 'video')).toBeFalse()
+})

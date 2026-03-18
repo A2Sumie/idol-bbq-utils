@@ -105,34 +105,61 @@ namespace TiktokApiJsonParser {
             return []
         }
 
-        let arr = [] as Array<GenericMediaInfo>
-        // cover
-        arr.push({
-            type: 'video_thumbnail',
-            url: video.cover,
-        })
-        arr.push({
-            type: 'video_thumbnail',
-            url: video.originCover,
-        })
-        // video
-        let urlList = video.bitrateInfo.sort((a: any, b: any) => b.Bitrate - a.Bitrate)[0]?.PlayAddr?.UrlList
-        if (urlList) {
+        const arr = [] as Array<GenericMediaInfo>
+        const pushMedia = (type: GenericMediaInfo['type'], url?: string | null) => {
+            if (!url) {
+                return
+            }
             arr.push({
-                type: 'video',
-                url: urlList.find((m: any) => m.includes('aweme/v1/play')) || urlList.pop(),
+                type,
+                url: url.replaceAll('\\u0026', '&'),
             })
         }
-        return Array.from(new Set(arr)).map((m) => {
-            return {
-                ...m,
-                url: m.url.replace('\\u0026', '&'),
+
+        const pickUrl = (value: any): string | null => {
+            if (!value) {
+                return null
             }
-        })
+            if (typeof value === 'string') {
+                return value
+            }
+            if (Array.isArray(value)) {
+                return value.find((item) => typeof item === 'string' && item.includes('aweme/v1/play'))
+                    || value.find((item) => typeof item === 'string')
+                    || null
+            }
+            return pickUrl(
+                value.UrlList
+                || value.url_list
+                || value.PlayAddr?.UrlList
+                || value.playAddr?.url_list
+                || value.Data
+                || value.src,
+            )
+        }
+
+        // cover
+        pushMedia('video_thumbnail', video.cover)
+        pushMedia('video_thumbnail', video.originCover)
+        pushMedia('video_thumbnail', video.dynamicCover)
+
+        // Prefer the best playable address, but never fail the whole post if bitrate metadata is missing.
+        const bitrateInfo = Array.isArray(video.bitrateInfo) ? [...video.bitrateInfo] : []
+        const bestBitrate = bitrateInfo.sort((a: any, b: any) => (b?.Bitrate || 0) - (a?.Bitrate || 0))[0]
+        pushMedia('video', pickUrl(bestBitrate?.PlayAddr))
+        pushMedia('video', pickUrl(video.playAddr))
+        pushMedia('video', pickUrl(video.downloadAddr))
+
+        const dedup = new Map<string, GenericMediaInfo>()
+        for (const media of arr) {
+            dedup.set(`${media.type}:${media.url}`, media)
+        }
+        return Array.from(dedup.values())
     }
 
     function postParser(item: any): GenericArticle<Platform.TikTok> {
         const author = item?.author
+        const media = mediaParser(item)
         return {
             platform: Platform.TikTok,
             a_id: item?.id,
@@ -143,8 +170,8 @@ namespace TiktokApiJsonParser {
             url: `https://www.tiktok.com/@${author?.uniqueId}/video/${item?.id}/`,
             type: ArticleTypeEnum.POST,
             ref: null,
-            has_media: true,
-            media: mediaParser(item),
+            has_media: media.length > 0,
+            media,
             extra: null,
             u_avatar: author?.avatarLarger.replace('\\u0026', '&'),
         }

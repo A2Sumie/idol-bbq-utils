@@ -1,12 +1,13 @@
 import fs, { writeFileSync } from 'fs'
-import { execSync } from 'child_process'
+import { execFileSync, execSync } from 'child_process'
 import { CACHE_DIR_ROOT, log } from '@/config'
 import path from 'path'
-import type { MediaToolConfigMap } from '@/types/media'
+import { MediaToolEnum, type MediaToolConfigMap } from '@/types/media'
 import type { MediaType } from '@idol-bbq-utils/spider/types'
 import { UserAgent } from '@idol-bbq-utils/spider'
 
 const MATCH_FILE_NAME = /(?<filename>[^/]+)\.(?<ext>[^.]+)$/
+const DEFAULT_YT_DLP_FORMAT = 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b'
 
 function writeImgToFile(buffer: Buffer<ArrayBufferLike>, filename: string): string {
     const dest = `${CACHE_DIR_ROOT}/media/plain/${filename}`
@@ -144,6 +145,64 @@ function galleryDownloadMediaFile(
     }
 }
 
+function safeFilenamePrefix(prefix?: string): string {
+    return (prefix || Math.random().toString(36).slice(2, 10)).replace(/[^a-zA-Z0-9._-]/g, '_')
+}
+
+function buildYtDlpArgs(
+    url: string,
+    yt_dlp: MediaToolConfigMap[MediaToolEnum.YT_DLP],
+    outputTemplate: string,
+): string[] {
+    const args = [
+        '--no-playlist',
+        '--no-progress',
+        '--print',
+        'after_move:filepath',
+        '--merge-output-format',
+        'mp4',
+        '-o',
+        outputTemplate,
+    ]
+    if (yt_dlp.cookie_file) {
+        args.push('--cookies', yt_dlp.cookie_file)
+    }
+    args.push('-f', yt_dlp.format || DEFAULT_YT_DLP_FORMAT, url)
+    return args
+}
+
+function ytDlpDownloadMediaFile(
+    url: string,
+    yt_dlp: MediaToolConfigMap[MediaToolEnum.YT_DLP],
+    prefix?: string,
+): string[] {
+    if (!yt_dlp) {
+        return []
+    }
+    const exec_path = yt_dlp.path || 'yt-dlp'
+    const destDir = `${CACHE_DIR_ROOT}/media/yt-dlp`
+    if (!fs.existsSync(destDir)) {
+        fs.mkdirSync(destDir, { recursive: true })
+    }
+    const outputTemplate = path.join(destDir, `${safeFilenamePrefix(prefix)}-%(id)s.%(ext)s`)
+    const args = buildYtDlpArgs(url, yt_dlp, outputTemplate)
+    log.debug(`downloading media files with yt-dlp args: ${args.join(' ')}`)
+    try {
+        const res = execFileSync(exec_path, args, {
+            encoding: 'utf-8',
+        })
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean)
+        log.debug(`downloaded media files with yt-dlp: ${res}`)
+        return res
+    } catch (e: any) {
+        const stderr = e?.stderr?.toString?.() || e?.message || String(e)
+        log.error(`download media files failed via yt-dlp: ${stderr}`)
+        return []
+    }
+}
+
 function getMediaType(path: string): MediaType {
     const ext = path.split('.').pop() || ''
     if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) {
@@ -186,9 +245,12 @@ const extToMime = Object.fromEntries(Object.entries(mimeToExt).map(([mime, ext])
 type FileContentType = ImageContentType | VideoContentType
 
 export {
+    DEFAULT_YT_DLP_FORMAT,
+    buildYtDlpArgs,
     getMediaType,
     plainDownloadMediaFile,
     galleryDownloadMediaFile,
+    ytDlpDownloadMediaFile,
     writeImgToFile,
     extToMime,
     mimeToExt,

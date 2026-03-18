@@ -7,6 +7,7 @@ import {
     getMediaType,
     plainDownloadMediaFile,
     tryGetCookie,
+    ytDlpDownloadMediaFile,
     writeImgToFile,
 } from '@/middleware/media'
 import { articleToText, formatMetaline, ImgConverter } from '@idol-bbq-utils/render'
@@ -205,6 +206,30 @@ export class RenderService {
                     cookie = await tryGetCookie(currentArticle.url)
                 }
 
+                const finalizeDownloadedFile = async (path: string, preferredType?: MediaType) => {
+                    if (deduplication) {
+                        try {
+                            const buffer = fs.readFileSync(path)
+                            const hash = crypto.createHash('sha256').update(buffer).digest('hex')
+                            const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
+
+                            const exists = await DB.MediaHash.checkExist(platformStr, hash)
+                            if (exists) {
+                                this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`)
+                                fs.unlinkSync(path)
+                                return undefined
+                            }
+                            await DB.MediaHash.save(platformStr, hash, currentArticle?.a_id || '')
+                        } catch (e) {
+                            this.log?.error(`Error during duplicate check: ${e}`)
+                        }
+                    }
+                    return {
+                        path,
+                        media_type: preferredType || getMediaType(path),
+                    }
+                }
+
                 // Helper to download a list of media items
                 const _handleMedia = async (mediaList: Array<{ url: string; type: MediaType }>, overrideType?: boolean) => {
                     return Promise.all(
@@ -217,32 +242,7 @@ export class RenderService {
                                         : {}),
                                 })
 
-                                // --- HASH CHECK ---
-                                if (deduplication) {
-                                    try {
-                                        const buffer = fs.readFileSync(path)
-                                        const hash = crypto.createHash('sha256').update(buffer).digest('hex')
-                                        const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
-
-                                        const exists = await DB.MediaHash.checkExist(platformStr, hash)
-                                        if (exists) {
-                                            this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`)
-                                            // Delete local file since we won't use it
-                                            fs.unlinkSync(path)
-                                            return undefined
-                                        }
-                                        // Save hash
-                                        await DB.MediaHash.save(platformStr, hash, currentArticle?.a_id || '')
-                                    } catch (e) {
-                                        this.log?.error(`Error during duplicate check: ${e}`)
-                                    }
-                                }
-                                // ------------------
-
-                                return {
-                                    path,
-                                    media_type: overrideType ? getMediaType(path) : type,
-                                }
+                                return finalizeDownloadedFile(path, overrideType ? undefined : type)
                             } catch (e) {
                                 this.log?.error(`Error while downloading media file: ${e}, skipping ${url}`)
                             }
@@ -271,31 +271,30 @@ export class RenderService {
                         media.use as MediaTool<MediaToolEnum.GALLERY_DL>,
                     )
 
-                    new_files = await Promise.all(paths.map(async (path) => {
-                        // --- HASH CHECK (Gallery-DL) ---
-                        try {
-                            const buffer = fs.readFileSync(path)
-                            const hash = crypto.createHash('sha256').update(buffer).digest('hex')
-                            const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
-
-                            const exists = await DB.MediaHash.checkExist(platformStr, hash)
-                            if (exists) {
-                                this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...) via gallery-dl, skipping.`)
-                                fs.unlinkSync(path)
-                                return undefined
-                            }
-                            await DB.MediaHash.save(platformStr, hash, currentArticle?.a_id || '')
-                        } catch (e) {
-                            this.log?.error(`Error during duplicate check: ${e}`)
-                        }
-                        // ------------------
-
-                        return {
-                            path,
-                            media_type: getMediaType(path),
-                        }
-                    }))
+                    new_files = await Promise.all(paths.map((path) => finalizeDownloadedFile(path)))
                     new_files = new_files.filter(f => f !== undefined)
+
+                    if (currentArticle.extra?.media) {
+                        const extra_files = await _handleMedia(currentArticle.extra.media, true)
+                        new_files = new_files.concat(extra_files)
+                    }
+                }
+
+                // Tool: yt-dlp
+                if (media.use.tool === MediaToolEnum.YT_DLP) {
+                    this.log?.debug(`Downloading media with yt-dlp`)
+
+                    if (currentArticle.media) {
+                        new_files = await _handleMedia(currentArticle.media)
+                    }
+
+                    const videoPaths = await ytDlpDownloadMediaFile(
+                        currentArticle.url,
+                        media.use as MediaTool<MediaToolEnum.YT_DLP>,
+                        `${taskId}-${currentArticle.a_id}`,
+                    )
+                    const videoFiles = await Promise.all(videoPaths.map((path) => finalizeDownloadedFile(path)))
+                    new_files = new_files.concat(videoFiles)
 
                     if (currentArticle.extra?.media) {
                         const extra_files = await _handleMedia(currentArticle.extra.media, true)
