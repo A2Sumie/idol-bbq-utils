@@ -12,7 +12,7 @@ echo "Updating deno to stable..."
 if [ -x "$BIN_DIR/deno" ]; then
     DENO_INSTALL="$TOOLS_DIR" "$BIN_DIR/deno" upgrade stable --output "$BIN_DIR/deno"
 else
-    curl -fsSL https://deno.land/install.sh | DENO_INSTALL="$TOOLS_DIR" sh -s stable
+    curl -fsSL https://deno.land/install.sh | DENO_INSTALL="$TOOLS_DIR" sh
 fi
 "$BIN_DIR/deno" --version | sed -n '1p'
 
