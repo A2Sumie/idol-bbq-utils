@@ -21,6 +21,25 @@ function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
 
+function resolveBatchTargetIds(
+    formatterIds: Array<string>,
+    formatterTargetMap: Record<string, Array<string>>,
+    forwardTargets?: AppConfig['forward_targets'],
+) {
+    const targetIds = new Set<string>()
+    for (const formatterId of formatterIds) {
+        const connectedTargets = formatterTargetMap[formatterId] || []
+        for (const targetId of connectedTargets) {
+            const targetDef = forwardTargets?.find((target) => target.id === targetId)
+            if ((targetDef?.cfg_platform as any)?.bypass_batch === true) {
+                continue
+            }
+            targetIds.add(targetId)
+        }
+    }
+    return sortUnique(Array.from(targetIds))
+}
+
 type Forwarder = RealForwarder<TaskType>
 
 interface TaskResult {
@@ -145,13 +164,19 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                 if (aggregatingFormatters.length > 0 || (cfg_forwarder as any).batch_mode) {
                     const batchJob = new CronJob('0 * * * *', async () => {
                         this.log?.info(`Dispatching Hourly Batch for ${taskName}`)
-                        // Collect all targets that need to receive this batch
-                        const targetIds = new Set<string>()
-                        aggregatingFormatters.forEach((f: any) => {
-                            if (f && (this.props.connections as any)?.['formatter-target']?.[f.id]) {
-                                ((this.props.connections as any)['formatter-target'][f.id] as string[]).forEach((tid: string) => targetIds.add(tid))
-                            }
-                        })
+                        const formatterTargetMap = ((this.props.connections as any)?.['formatter-target'] || {}) as Record<
+                            string,
+                            Array<string>
+                        >
+                        const targetIds = resolveBatchTargetIds(
+                            aggregatingFormatters.map((formatter: any) => formatter.id).filter(Boolean),
+                            formatterTargetMap,
+                            this.props.forward_targets,
+                        )
+                        if (targetIds.length === 0) {
+                            this.log?.info(`Skipping Hourly Batch for ${taskName}: no batch-enabled targets`)
+                            return
+                        }
 
                         const websites = sanitizeWebsites({
                             websites: crawler.websites || matchForwarder?.websites,
@@ -173,7 +198,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                                     u_id: info.u_id,
                                     start,
                                     end,
-                                    target_ids: Array.from(targetIds),
+                                    target_ids: targetIds,
                                 },
                                 end,
                             )
@@ -952,3 +977,4 @@ class ForwarderPools extends BaseCompatibleModel {
 }
 
 export { ForwarderTaskScheduler, ForwarderPools }
+export { resolveBatchTargetIds }
