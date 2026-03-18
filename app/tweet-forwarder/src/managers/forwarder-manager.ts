@@ -151,20 +151,30 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                             }
                         })
 
-                        const website = crawler.websites?.[0] || matchForwarder?.websites?.[0]
-                        if (website) {
+                        const websites = sanitizeWebsites({
+                            websites: crawler.websites || matchForwarder?.websites,
+                            origin: crawler.origin || matchForwarder?.origin,
+                            paths: crawler.paths || matchForwarder?.paths,
+                        })
+                        const end = Math.floor(Date.now() / 1000)
+                        const start = end - 3600
+
+                        for (const website of websites) {
                             const info = spiderRegistry.extractBasicInfo(website)
-                            if (info && info.u_id && info.platform) {
-                                const end = Math.floor(Date.now() / 1000)
-                                const start = end - 3600
-                                await DB.TaskQueue.add('aggregate_hourly', {
+                            if (!info?.u_id || !info.platform) {
+                                continue
+                            }
+                            await DB.TaskQueue.add(
+                                'aggregate_hourly',
+                                {
                                     platform: info.platform,
                                     u_id: info.u_id,
                                     start,
                                     end,
-                                    target_ids: Array.from(targetIds)
-                                }, end)
-                            }
+                                    target_ids: Array.from(targetIds),
+                                },
+                                end,
+                            )
                         }
                     })
                     this.log?.info(`Batch Job created for ${taskName} to send to ${aggregatingFormatters.length} aggregating formatters`)

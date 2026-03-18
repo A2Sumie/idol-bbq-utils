@@ -1,28 +1,10 @@
 /*
   Warnings:
 
-  - You are about to drop the `crawler_article` table. If the table is not empty, all the data it contains will be lost.
   - The primary key for the `forward_by` table will be changed. If it partially fails, the table could be left without primary key constraint.
   - Added the required column `platform` to the `forward_by` table without a default value. This is not possible if the table is not empty.
 
 */
--- DropIndex
-DROP INDEX "sqlite_autoindex_crawler_article_2";
-
--- DropIndex
-DROP INDEX "platform_by_timestamp";
-
--- DropIndex
-DROP INDEX "platform_index";
-
--- DropIndex
-DROP INDEX "sqlite_autoindex_crawler_article_1";
-
--- DropTable
-PRAGMA foreign_keys=off;
-DROP TABLE "crawler_article";
-PRAGMA foreign_keys=on;
-
 -- CreateTable
 CREATE TABLE "twitter_article" (
     "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -113,6 +95,150 @@ CREATE TABLE "task_queue" (
     "execute_at" INTEGER NOT NULL
 );
 
+INSERT INTO "twitter_article" (
+    "id",
+    "a_id",
+    "u_id",
+    "username",
+    "created_at",
+    "content",
+    "translation",
+    "translated_by",
+    "url",
+    "type",
+    "ref",
+    "has_media",
+    "media",
+    "extra",
+    "u_avatar"
+)
+SELECT
+    "id",
+    "a_id",
+    "u_id",
+    "username",
+    "created_at",
+    "content",
+    "translation",
+    "translated_by",
+    "url",
+    "type",
+    "ref",
+    "has_media",
+    "media",
+    "extra",
+    "u_avatar"
+FROM "crawler_article"
+WHERE "platform" = 1;
+
+INSERT INTO "instagram_article" (
+    "id",
+    "a_id",
+    "u_id",
+    "username",
+    "created_at",
+    "content",
+    "translation",
+    "translated_by",
+    "url",
+    "type",
+    "ref",
+    "has_media",
+    "media",
+    "extra",
+    "u_avatar"
+)
+SELECT
+    "id",
+    "a_id",
+    "u_id",
+    "username",
+    "created_at",
+    "content",
+    "translation",
+    "translated_by",
+    "url",
+    "type",
+    "ref",
+    "has_media",
+    "media",
+    "extra",
+    "u_avatar"
+FROM "crawler_article"
+WHERE "platform" = 2;
+
+INSERT INTO "tiktok_article" (
+    "id",
+    "a_id",
+    "u_id",
+    "username",
+    "created_at",
+    "content",
+    "translation",
+    "translated_by",
+    "url",
+    "type",
+    "ref",
+    "has_media",
+    "media",
+    "extra",
+    "u_avatar"
+)
+SELECT
+    "id",
+    "a_id",
+    "u_id",
+    "username",
+    "created_at",
+    "content",
+    "translation",
+    "translated_by",
+    "url",
+    "type",
+    "ref",
+    "has_media",
+    "media",
+    "extra",
+    "u_avatar"
+FROM "crawler_article"
+WHERE "platform" = 3;
+
+INSERT INTO "youtube_article" (
+    "id",
+    "a_id",
+    "u_id",
+    "username",
+    "created_at",
+    "content",
+    "translation",
+    "translated_by",
+    "url",
+    "type",
+    "ref",
+    "has_media",
+    "media",
+    "extra",
+    "u_avatar"
+)
+SELECT
+    "id",
+    "a_id",
+    "u_id",
+    "username",
+    "created_at",
+    "content",
+    "translation",
+    "translated_by",
+    "url",
+    "type",
+    "ref",
+    "has_media",
+    "media",
+    "extra",
+    "u_avatar"
+FROM "crawler_article"
+WHERE "platform" = 4;
+
 -- RedefineTables
 PRAGMA defer_foreign_keys=ON;
 PRAGMA foreign_keys=OFF;
@@ -124,12 +250,36 @@ CREATE TABLE "new_forward_by" (
 
     PRIMARY KEY ("ref_id", "platform", "bot_id", "task_type")
 );
-INSERT INTO "new_forward_by" ("bot_id", "ref_id", "task_type", "platform") SELECT "bot_id", "ref_id", "task_type", 'legacy_unknown' FROM "forward_by";
+INSERT INTO "new_forward_by" ("bot_id", "ref_id", "task_type", "platform")
+SELECT
+    fb."bot_id",
+    fb."ref_id",
+    fb."task_type",
+    COALESCE(CAST(ca."platform" AS TEXT), 'legacy_unknown')
+FROM "forward_by" fb
+LEFT JOIN "crawler_article" ca ON ca."id" = fb."ref_id";
 DROP TABLE "forward_by";
 ALTER TABLE "new_forward_by" RENAME TO "forward_by";
 CREATE INDEX "bot_id_index" ON "forward_by"("bot_id");
 PRAGMA foreign_keys=ON;
 PRAGMA defer_foreign_keys=OFF;
+
+-- DropIndex
+DROP INDEX "sqlite_autoindex_crawler_article_2";
+
+-- DropIndex
+DROP INDEX "platform_by_timestamp";
+
+-- DropIndex
+DROP INDEX "platform_index";
+
+-- DropIndex
+DROP INDEX "sqlite_autoindex_crawler_article_1";
+
+-- DropTable
+PRAGMA foreign_keys=off;
+DROP TABLE "crawler_article";
+PRAGMA foreign_keys=on;
 
 -- CreateIndex
 Pragma writable_schema=1;

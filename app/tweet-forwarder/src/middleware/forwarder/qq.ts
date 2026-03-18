@@ -114,6 +114,13 @@ class QQForwarder extends Forwarder {
             }
         >,
     ) {
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+        }
+        if (this.token?.trim()) {
+            headers.Authorization = `Bearer ${this.token}`
+        }
+
         const res = await axios.post(
             `${this.url}/send_group_msg`,
             {
@@ -121,10 +128,7 @@ class QQForwarder extends Forwarder {
                 message: arr_of_segments,
             },
             {
-                headers: {
-                    Authorization: `Bearer ${this.token}`,
-                    'Content-Type': 'application/json',
-                },
+                headers,
             },
         )
         return res

@@ -85,6 +85,7 @@ async function main() {
                 cfg_forwarder,
                 connections: config.connections,
                 crawlers,
+                formatters,
             },
             emitter,
             log,

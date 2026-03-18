@@ -530,7 +530,7 @@ class XApiClient {
         const query_id = this.api_with_queryid[XApis.UserTweets]
         const query_path = `${this.API_PREFIX}/${query_id}/${XApis.UserTweets}`
         const transaction_id = await transaction.generateTransactionId('GET', query_path)
-        const csrf_token = this.getCsrfToken(cookie)?.[1]
+        const csrf_token = this.getCsrfToken(cookie)
         const uuid = uuidv4({
             rng: cookie ? () => Buffer.from(cookie.padEnd(16, '0')) : undefined,
         })
@@ -605,7 +605,7 @@ class XApiClient {
         const query_id = this.api_with_queryid[XApis.UserTweetsAndReplies]
         const query_path = `${this.API_PREFIX}/${query_id}/${XApis.UserTweetsAndReplies}`
         const transaction_id = await transaction.generateTransactionId('GET', query_path)
-        const csrf_token = this.getCsrfToken(cookie)?.[1]
+        const csrf_token = this.getCsrfToken(cookie)
         const uuid = uuidv4({
             rng: cookie ? () => Buffer.from(cookie.padEnd(16, '0')) : undefined,
         })

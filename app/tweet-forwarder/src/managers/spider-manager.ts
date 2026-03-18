@@ -86,6 +86,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 this.tasks.set(taskId, task)
             })
             this.log?.debug(`Task dispatcher created with detail: ${JSON.stringify(crawler)}`)
+            this.cronJobs.push(job)
 
 
 
