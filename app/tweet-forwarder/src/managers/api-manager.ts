@@ -96,6 +96,10 @@ function resolvePlatformFromOrigin(origin?: string | null): Platform | null {
     return Platform.Website
 }
 
+function resolveCrawlerPlatform(crawler?: { origin?: string | null; websites?: Array<string> | null } | null): Platform | null {
+    return resolvePlatformFromOrigin(crawler?.origin) || resolvePlatformFromOrigin(crawler?.websites?.[0])
+}
+
 function flattenArticleChain(article: Article & { id: number }) {
     const chain: Array<Article & { id: number }> = []
     let current: (Article & { id: number }) | null = article
@@ -739,8 +743,7 @@ export class APIManager extends BaseCompatibleModel {
         const platform =
             resolvePlatform(body.platform) ||
             resolvePlatformFromOrigin(body.url) ||
-            resolvePlatformFromOrigin(crawler?.origin) ||
-            resolvePlatformFromOrigin(crawler?.websites?.[0]) ||
+            resolveCrawlerPlatform(crawler) ||
             null
 
         if (!platform) {
@@ -892,7 +895,7 @@ export class APIManager extends BaseCompatibleModel {
         if (!crawler) {
             return new Response('Crawler not found', { status: 404 })
         }
-        const crawlerPlatform = resolvePlatformFromOrigin(crawler.origin)
+        const crawlerPlatform = resolveCrawlerPlatform(crawler)
         if (!crawlerPlatform) {
             return new Response('Unable to determine crawler platform', { status: 400 })
         }
