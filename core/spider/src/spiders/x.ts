@@ -322,9 +322,11 @@ class XListSpider extends BaseSpider {
     ): Promise<Array<GenericArticle<Platform.X>>> {
         const discoveryTweets = await client.grabTweetsFromList(list_id, cookie)
         const configuredUsers = this.sanitizeUserIds(options.hydrateUsers)
-        const activeUserIds = Array.from(
-            new Set(discoveryTweets.map((tweet) => tweet?.u_id?.trim()).filter(Boolean) as Array<string>),
-        )
+        const sampledViewportUsers = client.getSampledListUsers(list_id)
+        const activeUserIds = this.sanitizeUserIds([
+            ...(discoveryTweets.map((tweet) => tweet?.u_id?.trim()).filter(Boolean) as Array<string>),
+            ...sampledViewportUsers,
+        ])
         const listMemberUserIds = await client
             .grabFollowsFromList(list_id, cookie)
             .then((follows) => this.sanitizeUserIds(follows.map((follow) => follow?.u_id)))
@@ -341,7 +343,7 @@ class XListSpider extends BaseSpider {
         })
 
         this.log?.info(
-            `Unified list crawl prepared ${selectedUserIds.length} accounts for ${list_id} (configured=${configuredUsers.length}, active=${activeUserIds.length}, members=${listMemberUserIds.length}).`,
+            `Unified list crawl prepared ${selectedUserIds.length} accounts for ${list_id} (configured=${configuredUsers.length}, active=${activeUserIds.length}, sampled=${sampledViewportUsers.length}, members=${listMemberUserIds.length}).`,
         )
         if (configuredUsers.length + activeUserIds.length + listMemberUserIds.length > selectedUserIds.length) {
             this.log?.warn(
@@ -622,6 +624,7 @@ class XApiClient {
     api_with_queryid: Partial<Record<XApis, string>>
     name_to_rest_id: Record<string, string>
     operationProfiles: Partial<Record<XApis, XOperationProfile>>
+    listViewportUsers: Map<string, Array<string>>
     page?: Page
     log?: Logger
 
@@ -629,6 +632,7 @@ class XApiClient {
         this.api_with_queryid = {}
         this.name_to_rest_id = {}
         this.operationProfiles = {}
+        this.listViewportUsers = new Map()
         this.page = page
         this.log = log?.child({ subservice: 'XApiClient' })
         this.BASE_HEADER = {
@@ -660,6 +664,11 @@ class XApiClient {
 
     async prepareListOperations(listId: string) {
         await this.captureOperationsFromPage(`${this.BASE_URL}/i/lists/${listId}`, [XApis.ListLatestTweetsTimeline])
+        await this.captureListViewportUsers(listId)
+    }
+
+    getSampledListUsers(listId: string) {
+        return this.listViewportUsers.get(listId) || []
     }
 
     // 获取graphql query id, 备份用
@@ -741,6 +750,87 @@ class XApiClient {
             await sleep(1200)
         } catch (error) {
             this.log?.warn(`Browser capture navigation failed for ${targetUrl}: ${error}`)
+        }
+    }
+
+    private async captureListViewportUsers(listId: string) {
+        if (!this.page) {
+            return
+        }
+
+        const sampledUsers = new Set<string>()
+        const collectVisibleUsers = async () => {
+            try {
+                const usernames = await this.page!.evaluate(() => {
+                    const reserved = new Set([
+                        '',
+                        'compose',
+                        'explore',
+                        'home',
+                        'i',
+                        'jobs',
+                        'login',
+                        'messages',
+                        'notifications',
+                        'privacy',
+                        'search',
+                        'settings',
+                        'signup',
+                        'tos',
+                    ])
+                    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('article a[href*="/status/"]'))
+                    const users = new Set<string>()
+                    for (const link of links) {
+                        const href = link.getAttribute('href') || ''
+                        const match = href.match(/^\/([^/?#]+)\/status\//)
+                        if (!match) {
+                            continue
+                        }
+                        const user = match[1]?.trim().replace(/^@+/, '')
+                        if (!user || reserved.has(user.toLowerCase())) {
+                            continue
+                        }
+                        users.add(user)
+                    }
+                    return Array.from(users)
+                })
+                usernames.forEach((username) => sampledUsers.add(username))
+            } catch (error) {
+                this.log?.debug(`List viewport sampling failed for ${listId}: ${error}`)
+            }
+        }
+
+        await collectVisibleUsers()
+
+        const viewport = this.page.viewport()
+        for (let index = 0; index < 3; index += 1) {
+            if (viewport) {
+                const targetX = Math.floor(viewport.width * (0.25 + Math.random() * 0.5))
+                const targetY = Math.floor(viewport.height * (0.2 + Math.random() * 0.55))
+                await this.page.mouse.move(targetX, targetY, { steps: 10 }).catch(() => null)
+            }
+
+            const scrollAmount = 500 + Math.floor(Math.random() * 900)
+            await this.page.mouse.wheel(0, scrollAmount).catch(() => null)
+            await this.page
+                .evaluate((amount) => {
+                    const primaryColumn = document.querySelector('[data-testid="primaryColumn"]') as HTMLElement | null
+                    const scroller = (primaryColumn?.querySelector('section')?.parentElement as HTMLElement | null) || null
+                    if (scroller && typeof scroller.scrollBy === 'function') {
+                        scroller.scrollBy({ top: amount, behavior: 'instant' })
+                        return
+                    }
+                    window.scrollBy({ top: amount, behavior: 'instant' })
+                }, scrollAmount)
+                .catch(() => null)
+            await sleep(450 + Math.floor(Math.random() * 900))
+            await collectVisibleUsers()
+        }
+
+        if (sampledUsers.size > 0) {
+            const users = Array.from(sampledUsers)
+            this.listViewportUsers.set(listId, users)
+            this.log?.debug(`List viewport sampled ${users.length} accounts for ${listId}: ${users.join(', ')}`)
         }
     }
 

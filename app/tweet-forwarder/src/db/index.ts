@@ -289,6 +289,7 @@ namespace DB {
                         { translation: { contains: params.q } },
                         { username: { contains: params.q } },
                         { u_id: { contains: params.q } },
+                        { url: { contains: params.q } },
                     ]
                 }
 
