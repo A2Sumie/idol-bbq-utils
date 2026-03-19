@@ -1,7 +1,7 @@
 import { platformArticleMapToActionText, platformNameMap } from '@idol-bbq-utils/spider/const'
 import type { Article } from '@/types'
 import dayjs from 'dayjs'
-import type { GenericFollows, Platform } from '@idol-bbq-utils/spider/types'
+import { type GenericFollows, Platform } from '@idol-bbq-utils/spider/types'
 import { orderBy } from 'lodash'
 
 type Follows = GenericFollows & {
@@ -62,6 +62,38 @@ function parseRawContent(article: Article) {
     return content
 }
 
+function truncateCompactText(text: string, maxLength: number) {
+    const normalized = text.trim()
+    if (!normalized || normalized.length <= maxLength) {
+        return normalized
+    }
+
+    const slice = normalized.slice(0, maxLength)
+    const softCut = Math.max(slice.lastIndexOf('\n'), slice.lastIndexOf('。'), slice.lastIndexOf('！'), slice.lastIndexOf('？'))
+    const cutIndex = softCut > Math.floor(maxLength * 0.6) ? softCut + 1 : maxLength
+    return `${slice.slice(0, cutIndex).trimEnd()}……`
+}
+
+function parseCompactRawContent(article: Article) {
+    const raw = parseRawContent(article)
+    if (article.platform !== Platform.YouTube) {
+        return raw
+    }
+
+    const [title = '', ...rest] = raw.split(/\n{2,}/)
+    const description = rest.join('\n\n').trim()
+    if (!description) {
+        return raw
+    }
+
+    const compactDescription = truncateCompactText(description, 360)
+    if (compactDescription === description) {
+        return raw
+    }
+
+    return `${title.trim()}\n\n${compactDescription}\n\n[描述过长，已截断，完整内容请打开链接查看]`
+}
+
 /**
  * 原文 -> 媒体文件alt -> extra
  */
@@ -109,7 +141,7 @@ function compactArticleToText(article: Article) {
             format_article += `${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
         }
 
-        const raw_article = parseRawContent(currentArticle)
+        const raw_article = parseCompactRawContent(currentArticle)
         format_article += `${raw_article}`
         if (currentArticle.ref) {
             format_article += `\n\n${'-'.repeat(12)}\n\n`

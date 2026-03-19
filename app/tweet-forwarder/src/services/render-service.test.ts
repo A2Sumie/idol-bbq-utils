@@ -58,4 +58,37 @@ describe('RenderService text-compact', () => {
         expect(result.text).toContain('hello world')
         expect(result.text).not.toContain('kawase_uta')
     })
+
+    test('truncates overly long YouTube descriptions in compact mode', async () => {
+        const service = new RenderService()
+        const longDescription = '说明段落'.repeat(120)
+        const result = await service.process(
+            {
+                id: 2,
+                a_id: 'yt001',
+                u_id: '227SMEJ',
+                username: '22/7',
+                created_at: 1710000000,
+                content: `新视频标题\n\n${longDescription}`,
+                translation: null,
+                translated_by: null,
+                url: 'https://www.youtube.com/watch?v=yt001',
+                type: 'video',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.YouTube,
+            },
+            {
+                taskId: 'test-youtube-compact',
+                render_type: 'text-compact',
+            },
+        )
+
+        expect(result.text).toContain('新视频标题')
+        expect(result.text).toContain('[描述过长，已截断，完整内容请打开链接查看]')
+        expect(result.text.length).toBeLessThan(520)
+    })
 })
