@@ -18,13 +18,13 @@ type FeedKind =
     | 'photo'
     | 'live-report'
 
-interface FeedConfig {
+export interface FeedConfig {
     feed: FeedKind
     u_id: string
     label: string
 }
 
-interface WebsiteListItem {
+export interface WebsiteListItem {
     detailUrl: string
     title: string
     dateText: string
@@ -53,6 +53,28 @@ interface WebsiteListPageResult {
 interface WebsiteBuildOptions {
     articleId?: string
     detailUrl?: string
+}
+
+export interface WebsitePhotoEntry {
+    modalId: string
+    dataCode?: string | null
+    detailUrl: string
+    title: string
+    theme?: string | null
+    dateText: string
+    member?: string | null
+    bodyText: string
+    bodyHtml: string
+    media: Array<GenericMediaInfo>
+    uAvatar?: string | null
+    extraData?: Record<string, any>
+}
+
+export interface WebsitePhotoAlbumPayload {
+    currentUrl: string
+    albumId: string
+    pageTheme?: string | null
+    entries: Array<WebsitePhotoEntry>
 }
 
 interface StandardEntryListOptions {
@@ -327,6 +349,91 @@ function buildWebsiteArticle(
         },
         u_avatar: detail.uAvatar || listItem.uAvatar || null,
     }
+}
+
+function resolvePhotoAlbumAnchor(payload: WebsitePhotoAlbumPayload) {
+    const candidate =
+        payload.entries.map((entry) => cleanText(entry.dataCode)).find(Boolean)
+        || payload.entries.map((entry) => cleanText(entry.modalId)).find(Boolean)
+
+    if (candidate) {
+        return candidate
+    }
+
+    return Buffer.from(`${payload.albumId}:${payload.currentUrl}`).toString('base64url').slice(0, 16)
+}
+
+export function buildPhotoAlbumArticle(
+    config: FeedConfig,
+    listItem: WebsiteListItem,
+    payload: WebsitePhotoAlbumPayload,
+): Array<GenericArticle<Platform.Website>> {
+    if (payload.entries.length === 0) {
+        return []
+    }
+
+    const title =
+        cleanText(payload.pageTheme)
+        || cleanText(listItem.title)
+        || cleanText(payload.entries[0]?.theme)
+        || cleanText(payload.entries[0]?.title)
+    const dateText = payload.entries.map((entry) => cleanText(entry.dateText)).find(Boolean) || cleanText(listItem.dateText)
+    const media = payload.entries.flatMap((entry) => entry.media || [])
+    const bodyText = payload.entries
+        .map((entry) => {
+            const heading = cleanText(entry.member) || cleanText(entry.title)
+            const message = cleanMultilineText(entry.bodyText)
+            return [heading ? `【${heading}】` : '', message].filter(Boolean).join('\n')
+        })
+        .filter(Boolean)
+        .join('\n\n')
+    const bodyHtml = payload.entries
+        .map((entry) => entry.bodyHtml)
+        .filter(Boolean)
+        .join('\n<hr />\n')
+    const members = Array.from(
+        new Set(payload.entries.map((entry) => cleanText(entry.member)).filter(Boolean)),
+    )
+    const albumAnchor = resolvePhotoAlbumAnchor(payload)
+    const firstAvatar = payload.entries.map((entry) => entry.uAvatar).find(Boolean) || listItem.uAvatar || null
+
+    return [
+        buildWebsiteArticle(
+            config,
+            payload.currentUrl,
+            {
+                ...listItem,
+                title: title || listItem.title,
+                dateText: dateText || listItem.dateText,
+                member: null,
+                thumbnail: media[0]?.url || listItem.thumbnail,
+                uAvatar: firstAvatar,
+            },
+            {
+                title: title || listItem.title,
+                dateText: dateText || listItem.dateText,
+                bodyText,
+                bodyHtml,
+                member: null,
+                media,
+                uAvatar: firstAvatar,
+                extraData: {
+                    album_id: payload.albumId,
+                    album_anchor: albumAnchor,
+                    entry_count: payload.entries.length,
+                    members: members.length > 0 ? members : null,
+                    entries: payload.entries.map((entry) => ({
+                        ...entry,
+                        bodyText: cleanMultilineText(entry.bodyText),
+                    })),
+                },
+            },
+            {
+                articleId: `${config.feed}:album:${payload.albumId}:${albumAnchor}`,
+                detailUrl: payload.currentUrl,
+            },
+        ),
+    ]
 }
 
 async function extractStandardEntryList(page: Page, url: string, options: StandardEntryListOptions): Promise<WebsiteListPageResult> {
@@ -1192,38 +1299,13 @@ async function extractPhotoDetailArticles(
 
         return {
             currentUrl,
+            albumId,
+            pageTheme,
             entries,
         }
-    })
+    }) as WebsitePhotoAlbumPayload
 
-    return payload.entries.map((entry: any) =>
-        buildWebsiteArticle(
-            config,
-            entry.detailUrl,
-            {
-                ...listItem,
-                title: entry.title || listItem.title,
-                dateText: entry.dateText || listItem.dateText,
-                member: entry.member || listItem.member,
-                thumbnail: entry.media?.[0]?.url || listItem.thumbnail,
-                uAvatar: entry.uAvatar || listItem.uAvatar,
-            },
-            {
-                title: entry.title || listItem.title,
-                dateText: entry.dateText || listItem.dateText,
-                bodyText: entry.bodyText,
-                bodyHtml: entry.bodyHtml,
-                member: entry.member,
-                media: entry.media,
-                uAvatar: entry.uAvatar,
-                extraData: entry.extraData,
-            },
-            {
-                articleId: `${config.feed}:${entry.articleId}`,
-                detailUrl: entry.detailUrl,
-            },
-        ),
-    )
+    return buildPhotoAlbumArticle(config, listItem, payload)
 }
 
 function extractListPage(page: Page, feedConfig: FeedConfig, url: string): Promise<WebsiteListPageResult> {
