@@ -88,6 +88,13 @@ test('Instagram API JSON Parser', async () => {
     })
 })
 
+test('Instagram extractBasicInfo preserves dotted profile handles', () => {
+    expect(Spider.extractBasicInfo('https://www.instagram.com/nananijigram22_7_the.3rd/')?.u_id).toBe(
+        'nananijigram22_7_the.3rd',
+    )
+    expect(Spider.extractBasicInfo('https://www.instagram.com/p/DV0oKjQEcFT/')).toBeUndefined()
+})
+
 test('Instagram stories keep a non-empty username when og:title does not expose it', async () => {
     const page = {
         goto: async () => undefined,

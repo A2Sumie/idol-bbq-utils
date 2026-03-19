@@ -26,12 +26,36 @@ enum ArticleTypeEnum {
     // REEL = 'reel',
 }
 
+const INSTAGRAM_PROFILE_ID_PATTERN = /^[A-Za-z0-9._]+$/i
+const RESERVED_INSTAGRAM_PATHS = new Set(['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct'])
+
 class InstagramSpider extends BaseSpider {
     // extends from XBaseSpider regex
-    static _VALID_URL = /(https:\/\/)?(www\.)?instagram\.com\/(?<id>\w+)/
+    static _VALID_URL = /^(https:\/\/)?(www\.)?instagram\.com\/(?<id>[A-Za-z0-9._]+)(?:\/)?(?:\?.*)?$/i
     static _PLATFORM = Platform.Instagram
     BASE_URL: string = 'https://www.instagram.com/'
     NAME: string = 'Instagram Generic Spider'
+
+    static extractBasicInfo(url: string) {
+        try {
+            const parsed = new URL(url)
+            if (!/(^|\.)instagram\.com$/i.test(parsed.hostname)) {
+                return undefined
+            }
+
+            const id = parsed.pathname.split('/').filter(Boolean)[0]
+            if (!id || RESERVED_INSTAGRAM_PATHS.has(id.toLowerCase()) || !INSTAGRAM_PROFILE_ID_PATTERN.test(id)) {
+                return undefined
+            }
+
+            return {
+                u_id: id,
+                platform: Platform.Instagram,
+            }
+        } catch {
+            return undefined
+        }
+    }
 
     async _crawl<T extends TaskType>(
         url: string,

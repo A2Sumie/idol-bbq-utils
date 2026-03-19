@@ -28,6 +28,7 @@ const InstagramPlugin: SpiderPlugin = {
     priority: SpiderPriority.NORMAL,
     urlPattern: InstagramSpider._VALID_URL,
     create: (log) => new InstagramSpider(log).init(),
+    extractBasicInfo: (url) => InstagramSpider.extractBasicInfo(url),
 }
 
 const TiktokPlugin: SpiderPlugin = {
