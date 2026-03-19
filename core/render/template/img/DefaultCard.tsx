@@ -1,17 +1,51 @@
 import { parseRawContent, parseTranslationContent } from '@/text'
 import type { Article } from '@/types'
 import { X } from '@idol-bbq-utils/spider'
+import { Platform } from '@idol-bbq-utils/spider/types'
 import { platformArticleMapToActionText } from '@idol-bbq-utils/spider/const'
 import clsx from 'clsx'
 import dayjs from 'dayjs'
 import _, { reduce } from 'lodash'
 import type { JSX } from 'react/jsx-runtime'
-import SVG from '@/img/assets/svg'
+import SVG, { Website227FC, Website227Official } from '@/img/assets/svg'
 import { KOZUE } from '@/img/assets/img'
 
 const CARD_WIDTH = 600
 const CONTENT_WIDTH = CARD_WIDTH - 16 * 2 - 64 - 12
 const BASE_FONT_SIZE = 16
+
+type WebsiteBrandKey = 'official' | 'fc'
+
+const OFFICIAL_227_WEBSITE_FEEDS = new Set(['official-news', 'official-blog'])
+const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'photo', 'live-report'])
+const DEFAULT_PLATFORM_BADGE_WIDTH = 32
+
+const WEBSITE_BRAND_CONFIG = {
+    official: {
+        badgeIcon: Website227Official,
+        badgeRatio: 54.615 / 80,
+        badgeWidth: 42,
+        badgeOpacity: 0.2,
+        avatarBackground: 'linear-gradient(135deg, #f8fdff 0%, #e0f6ff 100%)',
+        avatarBorderColor: '#b6e4f8',
+        avatarText: '22/7',
+        avatarTextColor: '#008fd0',
+        avatarFontSizeAt64: 22,
+        avatarLetterSpacing: -0.8,
+    },
+    fc: {
+        badgeIcon: Website227FC,
+        badgeRatio: 71.39 / 505.05,
+        badgeWidth: 96,
+        badgeOpacity: 0.34,
+        avatarBackground: 'linear-gradient(135deg, #fff6fb 0%, #f3f5ff 52%, #f5f9e7 100%)',
+        avatarBorderColor: '#dccce9',
+        avatarText: 'FC',
+        avatarTextColor: '#8b67aa',
+        avatarFontSizeAt64: 22,
+        avatarLetterSpacing: -0.4,
+    },
+} as const
 
 function getContentWidth(level: number) {
     if (level === 0) {
@@ -25,6 +59,94 @@ function getImageWidth(level: number) {
         return (CONTENT_WIDTH - 4) / 2
     }
     return (CONTENT_WIDTH - 4 - 16 * 2 * level) / 2
+}
+
+export function resolve227WebsiteBrandKey(article: Pick<Article, 'platform' | 'extra'>): WebsiteBrandKey | null {
+    if (article.platform !== Platform.Website || !article.extra || article.extra.extra_type !== 'website_meta') {
+        return null
+    }
+
+    const data = article.extra.data as Record<string, unknown> | undefined
+    if (!data || data.site !== '22/7' || typeof data.feed !== 'string') {
+        return null
+    }
+
+    if (OFFICIAL_227_WEBSITE_FEEDS.has(data.feed)) {
+        return 'official'
+    }
+
+    if (FC_227_WEBSITE_FEEDS.has(data.feed)) {
+        return 'fc'
+    }
+
+    return null
+}
+
+function getPlatformBadge(article: Article) {
+    const websiteBrandKey = resolve227WebsiteBrandKey(article)
+    if (!websiteBrandKey) {
+        return {
+            width: DEFAULT_PLATFORM_BADGE_WIDTH,
+            ratio: SVG[article.platform].ratio,
+            icon: SVG[article.platform].icon,
+            opacity: 0.2,
+        }
+    }
+
+    const brand = WEBSITE_BRAND_CONFIG[websiteBrandKey]
+    return {
+        width: brand.badgeWidth,
+        ratio: brand.badgeRatio,
+        icon: brand.badgeIcon,
+        opacity: brand.badgeOpacity,
+    }
+}
+
+function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
+    if (article.u_avatar) {
+        return (
+            <img
+                tw="rounded-full flex-none"
+                style={{
+                    width: size,
+                    height: size,
+                    objectFit: 'cover',
+                }}
+                src={article.u_avatar}
+                alt={article.username}
+            />
+        )
+    }
+
+    const websiteBrandKey = resolve227WebsiteBrandKey(article)
+    if (!websiteBrandKey) {
+        return <div tw="rounded-full bg-gray-200 flex-none" style={{ width: size, height: size }} />
+    }
+
+    const brand = WEBSITE_BRAND_CONFIG[websiteBrandKey]
+    return (
+        <div
+            tw="rounded-full flex-none overflow-hidden flex items-center justify-center"
+            style={{
+                width: size,
+                height: size,
+                background: brand.avatarBackground,
+                border: `1px solid ${brand.avatarBorderColor}`,
+                boxShadow: '0 2px 8px rgba(15, 23, 42, 0.08)',
+            }}
+        >
+            <span
+                tw="font-bold leading-none"
+                style={{
+                    color: brand.avatarTextColor,
+                    fontSize: (brand.avatarFontSizeAt64 * size) / 64,
+                    letterSpacing: brand.avatarLetterSpacing,
+                }}
+            >
+                {brand.avatarText}
+            </span>
+        </div>
+    )
 }
 
 function Metaline({ article }: { article: Article }) {
@@ -207,11 +329,7 @@ function ArticleContent({ article, level = 0 }: { article: Article; level: numbe
                             columnGap: '4px',
                         }}
                     >
-                        {article.u_avatar ? (
-                            <img tw="w-8 h-8 rounded-full flex-none" src={article.u_avatar} alt={article.username} />
-                        ) : (
-                            <div tw="w-8 h-8 rounded-full bg-gray-200 flex-none" />
-                        )}
+                        <Avatar article={article} size={32} />
                         <div tw="flex flex-shrink">
                             <Metaline article={article} />
                         </div>
@@ -256,11 +374,7 @@ function ArticleContent({ article, level = 0 }: { article: Article; level: numbe
             }}
         >
             <div tw="flex flex-col items-center" style={{ rowGap: '6px' }}>
-                {article.u_avatar ? (
-                    <img tw="w-16 h-16 rounded-full flex-none" src={article.u_avatar} alt={article.username} />
-                ) : (
-                    <div tw="w-16 h-16 rounded-full bg-gray-200 flex-none" />
-                )}
+                <Avatar article={article} size={64} />
                 {isConversationType(article.type) && <div tw="flex-grow bg-idol-tertiary w-[2px] rounded-full"></div>}
             </div>
             <Content />
@@ -296,6 +410,7 @@ function flatArticle(article: Article): Array<Article> {
 
 function BaseCard({ article, paddingHeight }: { article: Article; paddingHeight: number }) {
     const flattedArticle = flatArticle(article)
+    const badge = getPlatformBadge(article)
     return (
         <div
             tw="p-4 pb-5 bg-white rounded-2xl shadow-sm h-full w-full flex flex-col relative"
@@ -304,13 +419,14 @@ function BaseCard({ article, paddingHeight }: { article: Article; paddingHeight:
             }}
         >
             <img
-                tw="absolute right-4 top-4 opacity-20"
+                tw="absolute right-4 top-4"
                 style={{
                     transform: 'rotate(6deg)',
+                    opacity: badge.opacity,
                 }}
-                width={32}
-                height={32 * SVG[article.platform].ratio}
-                src={SVG[article.platform].icon}
+                width={badge.width}
+                height={badge.width * badge.ratio}
+                src={badge.icon}
             />
             {flattedArticle.map((item, index) => (
                 <ArticleContent key={index} article={item} level={0} />
