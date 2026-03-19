@@ -526,7 +526,18 @@ async function applyBrowserProfile(
     )
 }
 
-export { DEVICE_PROFILE_PRESETS, applyBrowserProfile, resolveBrowserProfile }
+function buildBrowserRequestHeaders(
+    deviceProfile: DeviceProfile = 'desktop_chrome',
+    overrides: BrowserProfileOverrides = {},
+) {
+    const profile = resolveBrowserProfile(deviceProfile, overrides)
+    return {
+        'user-agent': profile.userAgent,
+        ...(profile.extraHeaders || {}),
+    }
+}
+
+export { DEVICE_PROFILE_PRESETS, applyBrowserProfile, buildBrowserRequestHeaders, resolveBrowserProfile }
 export type {
     BrowserMode,
     BrowserProfileConfig,

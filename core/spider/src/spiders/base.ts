@@ -93,8 +93,11 @@ abstract class BaseSpider {
         config?: {
             task_type?: T
             sub_task_type?: Array<string>
+            hydrate_users?: Array<string>
+            hydrate_limit?: number
             crawl_engine?: CrawlEngine
             cookieString?: string
+            requestHeaders?: Record<string, string>
         },
     ): Promise<TaskTypeResult<T, Platform>> {
         this.log = this.log?.child({ trace_id })
@@ -112,7 +115,10 @@ abstract class BaseSpider {
             task_type: T
             crawl_engine: CrawlEngine
             sub_task_type?: Array<string>
+            hydrate_users?: Array<string>
+            hydrate_limit?: number
             cookieString?: string
+            requestHeaders?: Record<string, string>
         },
     ): Promise<TaskTypeResult<T, Platform>>
 

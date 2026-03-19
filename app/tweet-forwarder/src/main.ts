@@ -21,8 +21,9 @@ async function main() {
     log.info(`[Trace] Config loaded. Connections keys: ${config.connections ? Object.keys(config.connections).join(',') : 'UNDEFINED'}`)
 
 
+    let spiderPools: SpiderPools | undefined
     if (crawlers && crawlers.length > 0) {
-        const spiderPools = new SpiderPools(CACHE_DIR_ROOT, emitter, log)
+        spiderPools = new SpiderPools(CACHE_DIR_ROOT, emitter, log)
         compatibleModels.push(spiderPools)
         const spiderTaskScheduler = new SpiderTaskScheduler(
             {
@@ -52,7 +53,7 @@ async function main() {
 
     if (forwarderPools) {
         const { TaskManager } = await import('./managers/task-manager')
-        const taskManager = new TaskManager(forwarderPools, log)
+        const taskManager = new TaskManager(forwarderPools, { processors: config.processors }, log)
         compatibleModels.push(taskManager)
     }
 
@@ -80,6 +81,7 @@ async function main() {
             {
                 emitter,
                 forwarderPools,
+                spiderPools,
             },
             log,
         )

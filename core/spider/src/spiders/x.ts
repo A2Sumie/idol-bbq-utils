@@ -12,14 +12,14 @@ import type {
 import { BaseSpider } from './base'
 import { Page } from 'puppeteer-core'
 import { JSONPath } from 'jsonpath-plus'
+import type { Logger } from '@idol-bbq-utils/log'
 import { waitForResponse } from '@/spiders/base'
 import { defaultViewport } from './base'
-import { SimpleExpiringCache, UserAgent } from '@/utils'
-import { ClientTransaction, handleXMigration } from 'x-client-transaction-id'
+import { UserAgent } from '@/utils'
 import { v4 as uuidv4 } from 'uuid'
 import { noop } from 'puppeteer-core/lib/esm/third_party/rxjs/rxjs.js'
 
-type XListApiEngine = 'api-statuses' | 'api-member' | 'api-graphql'
+type XListApiEngine = 'api-statuses' | 'api-member' | 'api-graphql' | 'api-unified'
 
 enum ArticleTypeEnum {
     /**
@@ -33,22 +33,63 @@ enum ArticleTypeEnum {
 
 const X_BASE_VALID_URL = /(https:\/\/)?(www\.)?x\.com\//
 
-const CACHE_KEYS = {
-    TransactionClient: 'transaction',
-}
-
 enum XApis {
     UserTweets = 'UserTweets',
     UserTweetsAndReplies = 'UserTweetsAndReplies',
     UserByScreenName = 'UserByScreenName',
     ListLatestTweetsTimeline = 'ListLatestTweetsTimeline',
+    ListMembers = 'ListMembers',
 }
 
-const apis = Object.values(XApis)
+const DEFAULT_QUERY_APIS = [
+    XApis.UserTweets,
+    XApis.UserTweetsAndReplies,
+    XApis.UserByScreenName,
+    XApis.ListLatestTweetsTimeline,
+] as Array<XApis>
+
+const CAPTURED_HEADER_KEYS = new Set([
+    'accept-language',
+    'authorization',
+    'content-type',
+    'referer',
+    'sec-ch-ua',
+    'sec-ch-ua-mobile',
+    'sec-ch-ua-platform',
+    'user-agent',
+    'x-client-transaction-id',
+    'x-csrf-token',
+    'x-twitter-active-user',
+    'x-twitter-auth-type',
+    'x-twitter-client-language',
+])
 
 enum XTweetsTaskType {
     tweets = 'tweets',
     replies = 'replies',
+}
+
+const X_UNIFIED_LIST_MAX_HYDRATED_USERS = 10
+const X_UNIFIED_LIST_CONCURRENCY = 4
+const X_UNIFIED_LIST_MEMBER_CURSORS = new Map<string, number>()
+
+interface XOperationProfile {
+    queryId: string
+    url: string
+    headers: Record<string, string>
+    capturedAt: number
+}
+
+function normalizeRequestHeaders(headers?: Record<string, string>) {
+    return Object.fromEntries(
+        Object.entries(headers || {}).filter(
+            ([key, value]) => typeof key === 'string' && key.trim() && typeof value === 'string' && value.trim(),
+        ),
+    )
+}
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 class XUserTimeLineSpider extends BaseSpider {
@@ -57,8 +98,6 @@ class XUserTimeLineSpider extends BaseSpider {
     static _PLATFORM = Platform.X
     BASE_URL: string = 'https://x.com/'
     NAME: string = 'X TimeLine Spider'
-
-    API_CLIENT: XApiClient = new XApiClient()
 
     init(): this {
         super.init()
@@ -72,7 +111,10 @@ class XUserTimeLineSpider extends BaseSpider {
             crawl_engine: CrawlEngine
             task_type: T
             sub_task_type?: Array<string>
+            hydrate_users?: Array<string>
+            hydrate_limit?: number
             cookieString?: string
+            requestHeaders?: Record<string, string>
         },
     ): Promise<TaskTypeResult<T, Platform.X>> {
         const result = super._match_valid_url(url, XUserTimeLineSpider)?.groups
@@ -84,7 +126,8 @@ class XUserTimeLineSpider extends BaseSpider {
             throw new Error(`Invalid URL: ${url}, id not found`)
         }
 
-        const { crawl_engine, task_type, sub_task_type, cookieString } = config
+        const { crawl_engine, task_type, sub_task_type, cookieString, requestHeaders } = config
+        const apiClient = new XApiClient(requestHeaders, page, this.log)
 
         if (crawl_engine === 'api') {
             this.log?.warn(`[Engine Api] API engine will be banned by X if you use it too much`)
@@ -98,6 +141,19 @@ class XUserTimeLineSpider extends BaseSpider {
                     throw new Error('Cookie string is required for API mode')
                 }
 
+                await apiClient.prepareUserOperations(id, {
+                    needTweets:
+                        task_type === 'article' &&
+                        (!sub_task_type ||
+                            sub_task_type.length === 0 ||
+                            sub_task_type.includes(XTweetsTaskType.tweets)),
+                    needReplies:
+                        task_type === 'article' &&
+                        (!sub_task_type ||
+                            sub_task_type.length === 0 ||
+                            sub_task_type.includes(XTweetsTaskType.replies)),
+                })
+
                 if (task_type === 'article') {
                     let res = []
                     if (
@@ -106,7 +162,7 @@ class XUserTimeLineSpider extends BaseSpider {
                         sub_task_type.includes(XTweetsTaskType.tweets)
                     ) {
                         this.log?.info(`Trying to grab tweets for ${id}.`)
-                        const tweets = await this.API_CLIENT.grabTweets(id, cookie_string)
+                        const tweets = await apiClient.grabTweets(id, cookie_string)
                         res.push(...tweets)
                     }
                     if (
@@ -115,7 +171,7 @@ class XUserTimeLineSpider extends BaseSpider {
                         sub_task_type.includes(XTweetsTaskType.replies)
                     ) {
                         this.log?.info(`Trying to grab replies for ${id}.`)
-                        const replies = await this.API_CLIENT.grabReplies(id, cookie_string)
+                        const replies = await apiClient.grabReplies(id, cookie_string)
                         res.push(...replies)
                     }
                     return res as TaskTypeResult<T, Platform.X>
@@ -123,7 +179,7 @@ class XUserTimeLineSpider extends BaseSpider {
 
                 if (task_type === 'follows') {
                     this.log?.info(`Trying to grab follows for ${id}.`)
-                    return [await this.API_CLIENT.grabFollowsNumber(id)] as TaskTypeResult<T, Platform.X>
+                    return [await apiClient.grabFollowsNumber(id, cookie_string)] as TaskTypeResult<T, Platform.X>
                 }
             } catch (e) {
                 this.log?.error(`[Engine Api] Failed to crawl with for ${id}: ${e}, fallback to browser`)
@@ -171,8 +227,6 @@ class XListSpider extends BaseSpider {
     PUBLIC_TOKEN =
         'Bearer AAAAAAAAAAAAAAAAAAAAAFQODgEAAAAAVHTp76lzh3rFzcHbmHVvQxYYpTw%3DckAlMINMjmCwxUcaXbAN4XqJVdgMJaHqNOFgPMK0zN1qLqLQCF'
 
-    GRAPHQL_API_CLIENT: XApiClient = new XApiClient()
-
     async _crawl<T extends TaskType>(
         url: string,
         page: Page | undefined,
@@ -180,7 +234,10 @@ class XListSpider extends BaseSpider {
             crawl_engine: CrawlEngine
             task_type: T
             sub_task_type?: Array<string>
+            hydrate_users?: Array<string>
+            hydrate_limit?: number
             cookieString?: string
+            requestHeaders?: Record<string, string>
         },
     ): Promise<TaskTypeResult<T, Platform.X>> {
         const result = super._match_valid_url(url, XListSpider)?.groups
@@ -192,7 +249,8 @@ class XListSpider extends BaseSpider {
             throw new Error(`Invalid URL: ${url}, id not found`)
         }
 
-        const { task_type, cookieString } = config
+        const { task_type, cookieString, requestHeaders, sub_task_type, hydrate_users, hydrate_limit } = config
+        const graphqlClient = new XApiClient(requestHeaders, page, this.log)
         let cookie_string = cookieString
         if (!cookie_string && page) {
             cookie_string = (await page.browserContext().cookies()).map((c) => `${c.name}=${c.value}`).join('; ')
@@ -200,19 +258,39 @@ class XListSpider extends BaseSpider {
         if (!cookie_string) {
             throw new Error('Cookie string is required for X List Spider')
         }
+        const normalizedEngine = config.crawl_engine === 'api-graphql' ? 'browser' : config.crawl_engine
+        const fetchTweets =
+            !sub_task_type || sub_task_type.length === 0 || sub_task_type.includes(XTweetsTaskType.tweets)
+        const fetchReplies =
+            !sub_task_type || sub_task_type.length === 0 || sub_task_type.includes(XTweetsTaskType.replies)
         if (task_type === 'article') {
-            this.log?.warn('Replies are not supported in this mode for now.')
             this.log?.info(`Trying to grab tweets for ${id}.`)
             let res = [] as Array<GenericArticle<Platform.X>>
-            if (config.crawl_engine === 'api-statuses') {
+            if (normalizedEngine === 'api-statuses') {
+                this.log?.warn('Replies are not supported in api-statuses mode for now.')
                 this.log?.debug('Using api-statuses engine')
-                res = await this.grabTweets(id, cookie_string)
-            } else if (config.crawl_engine === 'api-member') {
+                res = await this.grabTweets(id, cookie_string, requestHeaders)
+            } else if (normalizedEngine === 'api-member') {
+                this.log?.warn('Replies are not supported in api-member mode for now.')
                 this.log?.debug('Using api-member engine')
-                res = await this.grabTweetsPoor(id, cookie_string)
+                res = await this.grabTweetsPoor(id, cookie_string, requestHeaders)
+            } else if (normalizedEngine === 'api-unified') {
+                this.log?.debug('Using api-unified engine')
+                res = await this.grabTweetsUnified(id, cookie_string, graphqlClient, {
+                    fetchTweets,
+                    fetchReplies,
+                    hydrateUsers: hydrate_users,
+                    hydrateLimit: hydrate_limit,
+                })
             } else {
-                this.log?.debug('Using api-graphql engine (default)')
-                res = await this.GRAPHQL_API_CLIENT.grabTweetsFromList(id, cookie_string)
+                if (config.crawl_engine === 'api-graphql') {
+                    this.log?.warn('api-graphql is treated as a legacy alias for browser-assisted list graphql mode')
+                }
+                if (fetchReplies) {
+                    this.log?.warn('Replies are not supported in browser-assisted list graphql mode for now.')
+                }
+                this.log?.debug('Using browser-assisted graphql list engine')
+                res = fetchTweets ? await graphqlClient.grabTweetsFromList(id, cookie_string) : []
             }
             return res as TaskTypeResult<T, Platform.X>
         }
@@ -220,15 +298,179 @@ class XListSpider extends BaseSpider {
         if (task_type === 'follows') {
             this.log?.info(`Trying to grab follows for ${id}.`)
             let res = [] as Array<GenericFollows>
-            if (config.crawl_engine === 'api-graphql') {
-                res = await this.GRAPHQL_API_CLIENT.grabFollowsFromList(id, cookie_string)
+            if (normalizedEngine !== 'api-statuses' && normalizedEngine !== 'api-member') {
+                res = await graphqlClient.grabFollowsFromList(id, cookie_string)
             } else {
-                res = await this.grabFollows(id, cookie_string)
+                res = await this.grabFollows(id, cookie_string, requestHeaders)
             }
             return res as TaskTypeResult<T, Platform.X>
         }
 
         throw new Error('Invalid task type')
+    }
+
+    private async grabTweetsUnified(
+        list_id: string,
+        cookie: string,
+        client: XApiClient,
+        options: {
+            fetchTweets: boolean
+            fetchReplies: boolean
+            hydrateUsers?: Array<string>
+            hydrateLimit?: number
+        },
+    ): Promise<Array<GenericArticle<Platform.X>>> {
+        const discoveryTweets = await client.grabTweetsFromList(list_id, cookie)
+        const configuredUsers = this.sanitizeUserIds(options.hydrateUsers)
+        const activeUserIds = Array.from(
+            new Set(discoveryTweets.map((tweet) => tweet?.u_id?.trim()).filter(Boolean) as Array<string>),
+        )
+        const listMemberUserIds = await client
+            .grabFollowsFromList(list_id, cookie)
+            .then((follows) => this.sanitizeUserIds(follows.map((follow) => follow?.u_id)))
+            .catch((error) => {
+                this.log?.warn(`Unified list crawl failed to expand list members for ${list_id}: ${error}`)
+                return [] as Array<string>
+            })
+        const selectedUserIds = this.selectHydrationUsers({
+            listId: list_id,
+            configuredUsers,
+            activeUserIds,
+            listMemberUserIds,
+            hydrateLimit: options.hydrateLimit,
+        })
+
+        this.log?.info(
+            `Unified list crawl prepared ${selectedUserIds.length} accounts for ${list_id} (configured=${configuredUsers.length}, active=${activeUserIds.length}, members=${listMemberUserIds.length}).`,
+        )
+        if (configuredUsers.length + activeUserIds.length + listMemberUserIds.length > selectedUserIds.length) {
+            this.log?.warn(
+                `Unified list crawl truncated hydration candidates to ${selectedUserIds.length} for ${list_id} to limit request pressure.`,
+            )
+        }
+
+        if (selectedUserIds[0]) {
+            await client.prepareUserOperations(selectedUserIds[0], {
+                needTweets: options.fetchTweets,
+                needReplies: options.fetchReplies,
+            })
+        }
+
+        const hydratedArticles = await this.hydrateUsersFromListActivity(selectedUserIds, client, cookie, options)
+        return this.mergeArticles(options.fetchTweets ? discoveryTweets : [], hydratedArticles)
+    }
+
+    private async hydrateUsersFromListActivity(
+        userIds: Array<string>,
+        client: XApiClient,
+        cookie: string,
+        options: {
+            fetchTweets: boolean
+            fetchReplies: boolean
+        },
+    ) {
+        const articles = [] as Array<GenericArticle<Platform.X>>
+
+        for (let index = 0; index < userIds.length; index += X_UNIFIED_LIST_CONCURRENCY) {
+            const chunk = userIds.slice(index, index + X_UNIFIED_LIST_CONCURRENCY)
+            const chunkResults = await Promise.allSettled(
+                chunk.map(async (userId) => {
+                    const userArticles = [] as Array<GenericArticle<Platform.X>>
+                    if (options.fetchTweets) {
+                        userArticles.push(...(await client.grabTweets(userId, cookie)))
+                    }
+                    if (options.fetchReplies) {
+                        userArticles.push(...(await client.grabReplies(userId, cookie)))
+                    }
+                    return userArticles
+                }),
+            )
+
+            chunkResults.forEach((result, chunkIndex) => {
+                const userId = chunk[chunkIndex]
+                if (result.status === 'fulfilled') {
+                    articles.push(...result.value)
+                    return
+                }
+                this.log?.warn(`Unified list hydration failed for @${userId}: ${result.reason}`)
+            })
+        }
+
+        return articles
+    }
+
+    private mergeArticles(...articleGroups: Array<Array<GenericArticle<Platform.X>>>) {
+        const merged = new Map<string, GenericArticle<Platform.X>>()
+
+        for (const article of articleGroups.flat()) {
+            if (!article?.a_id) {
+                continue
+            }
+            const existing = merged.get(article.a_id)
+            if (!existing || this.scoreArticle(article) >= this.scoreArticle(existing)) {
+                merged.set(article.a_id, article)
+            }
+        }
+
+        return Array.from(merged.values()).sort((left, right) => (right.created_at || 0) - (left.created_at || 0))
+    }
+
+    private sanitizeUserIds(userIds?: Array<string | null | undefined>) {
+        return Array.from(
+            new Set(
+                (userIds || [])
+                    .map((userId) => String(userId || '').trim())
+                    .filter(Boolean)
+                    .map((userId) => userId.replace(/^@+/, '')),
+            ),
+        )
+    }
+
+    private selectHydrationUsers(options: {
+        listId: string
+        configuredUsers: Array<string>
+        activeUserIds: Array<string>
+        listMemberUserIds: Array<string>
+        hydrateLimit?: number
+    }) {
+        const effectiveLimit = Math.max(
+            options.configuredUsers.length,
+            options.hydrateLimit || X_UNIFIED_LIST_MAX_HYDRATED_USERS,
+        )
+        const priorityUsers = this.sanitizeUserIds([...options.configuredUsers, ...options.activeUserIds])
+        if (priorityUsers.length >= effectiveLimit) {
+            return priorityUsers.slice(0, effectiveLimit)
+        }
+
+        const prioritySet = new Set(priorityUsers)
+        const memberPool = this.sanitizeUserIds(options.listMemberUserIds).filter((userId) => !prioritySet.has(userId))
+        const rotatedMembers = this.rotateMemberPool(options.listId, memberPool, effectiveLimit - priorityUsers.length)
+
+        return [...priorityUsers, ...rotatedMembers].slice(0, effectiveLimit)
+    }
+
+    private rotateMemberPool(listId: string, userIds: Array<string>, take: number) {
+        if (take <= 0 || userIds.length === 0) {
+            return [] as Array<string>
+        }
+
+        const offset = X_UNIFIED_LIST_MEMBER_CURSORS.get(listId) || 0
+        const normalizedOffset = offset % userIds.length
+        const rotated = userIds.slice(normalizedOffset).concat(userIds.slice(0, normalizedOffset))
+        const selected = rotated.slice(0, take)
+        const advance = selected.length > 0 ? selected.length : 1
+        X_UNIFIED_LIST_MEMBER_CURSORS.set(listId, (normalizedOffset + advance) % userIds.length)
+        return selected
+    }
+
+    private scoreArticle(article: GenericArticle<Platform.X>) {
+        let score = 0
+        if (article.content?.trim()) score += 2
+        if (article.media?.length) score += 1
+        if (article.extra?.content) score += 1
+        if (article.ref && typeof article.ref === 'object') score += 2
+        if (article.type === ArticleTypeEnum.CONVERSATION) score += 1
+        return score
     }
 
     getCsrfToken(cookie: string) {
@@ -242,7 +484,11 @@ class XListSpider extends BaseSpider {
     /**
      * @deprecated This api endpoint was 404 not found at 2025-07-19 00:00 UTC.
      */
-    async grabTweets(id: string, cookie_string: string): Promise<Array<GenericArticle<Platform.X>>> {
+    async grabTweets(
+        id: string,
+        cookie_string: string,
+        requestHeaders?: Record<string, string>,
+    ): Promise<Array<GenericArticle<Platform.X>>> {
         const url = `${this.API_PREFIX}/1.1/lists/statuses.json`
         const params = new URLSearchParams({
             count: '20',
@@ -267,6 +513,7 @@ class XListSpider extends BaseSpider {
         // TODO: keep http header case sensitive
         const res = await fetch(`${url}?${params.toString()}`, {
             headers: {
+                ...normalizeRequestHeaders(requestHeaders),
                 authorization: this.PUBLIC_TOKEN,
                 cookie: cookie_string,
                 'x-csrf-token': this.getCsrfToken(cookie_string) || '',
@@ -285,7 +532,11 @@ class XListSpider extends BaseSpider {
         return json.map(XApiJsonParser.oldTweetParser).filter(Boolean) as Array<GenericArticle<Platform.X>>
     }
 
-    async grabTweetsPoor(id: string, cookie_string: string): Promise<Array<GenericArticle<Platform.X>>> {
+    async grabTweetsPoor(
+        id: string,
+        cookie_string: string,
+        requestHeaders?: Record<string, string>,
+    ): Promise<Array<GenericArticle<Platform.X>>> {
         const url = `${this.API_PREFIX}/1.1/lists/members.json`
         const params = new URLSearchParams({
             list_id: id,
@@ -301,6 +552,7 @@ class XListSpider extends BaseSpider {
             headers: {
                 authorization: this.PUBLIC_TOKEN,
                 'user-agent': UserAgent.CHROME,
+                ...normalizeRequestHeaders(requestHeaders),
                 cookie: cookie_string,
             },
         })
@@ -318,7 +570,11 @@ class XListSpider extends BaseSpider {
         >
     }
 
-    async grabFollows(id: string, cookie: string): Promise<Array<GenericFollows>> {
+    async grabFollows(
+        id: string,
+        cookie: string,
+        requestHeaders?: Record<string, string>,
+    ): Promise<Array<GenericFollows>> {
         const url = `${this.API_PREFIX}/1.1/lists/members.json`
         const params = new URLSearchParams({
             list_id: id,
@@ -328,6 +584,7 @@ class XListSpider extends BaseSpider {
             headers: {
                 authorization: this.PUBLIC_TOKEN,
                 'user-agent': UserAgent.CHROME,
+                ...normalizeRequestHeaders(requestHeaders),
                 cookie: cookie,
                 'x-csrf-token': this.getCsrfToken(cookie) || '',
             },
@@ -360,74 +617,65 @@ class XApiClient {
     BASE_URL = 'https://x.com'
     ASSETS_BASE_URL = 'https://abs.twimg.com/responsive-web/client-web'
     API_PREFIX = '/i/api/graphql'
-    BASE_HEADER = {
-        authorization: this.PUBLIC_TOKEN,
-        'user-agent': UserAgent.CHROME,
-        referer: 'https://x.com/',
-        origin: 'https://x.com',
-    }
+    BASE_HEADER: Record<string, string>
 
-    cache: SimpleExpiringCache = new SimpleExpiringCache()
-    api_with_queryid: Record<XApis, string>
-    name_to_rest_id: Record<string, number>
+    api_with_queryid: Partial<Record<XApis, string>>
+    name_to_rest_id: Record<string, string>
+    operationProfiles: Partial<Record<XApis, XOperationProfile>>
+    page?: Page
+    log?: Logger
 
-    constructor() {
-        this.api_with_queryid = {} as Record<XApis, string>
-        this.name_to_rest_id = {} as Record<string, number>
-    }
-
-    async getTransaction(): Promise<ClientTransaction> {
-        let transaction = this.cache.get(CACHE_KEYS.TransactionClient) as ClientTransaction | undefined
-        if (!transaction) {
-            const document = await handleXMigration()
-            const new_transaction = await ClientTransaction.create(document)
-            transaction = new_transaction
-
-            const html = document.documentElement.outerHTML
-            const js_url = html.match(/href="([^"]*\/main\.[^"]+\.js)"/)?.[1]
-            if (!js_url) {
-                throw new Error('Failed to extract api query id from document')
-            }
-            const js_code = await await await (await fetch(js_url)).text()
-
-            this.api_with_queryid = {} as Record<XApis, string>
-
-            for (const api of apis) {
-                const queryId = this.getQueryId(js_code, api)
-                if (queryId) {
-                    this.api_with_queryid[api] = queryId
-                } else {
-                    throw new Error(`Failed to extract ${api} query id from js code`)
-                }
-            }
-            // await this.getGraphqlQueryId();
-
-            this.cache.set(CACHE_KEYS.TransactionClient, transaction, 60 * 60 * 24) // 24h
+    constructor(requestHeaders?: Record<string, string>, page?: Page, log?: Logger) {
+        this.api_with_queryid = {}
+        this.name_to_rest_id = {}
+        this.operationProfiles = {}
+        this.page = page
+        this.log = log?.child({ subservice: 'XApiClient' })
+        this.BASE_HEADER = {
+            'user-agent': UserAgent.CHROME,
+            referer: 'https://x.com/',
+            origin: 'https://x.com',
+            ...normalizeRequestHeaders(requestHeaders),
+            authorization: this.PUBLIC_TOKEN,
         }
+    }
 
-        return transaction
+    async prepareUserOperations(
+        screenName: string,
+        options: {
+            needTweets: boolean
+            needReplies: boolean
+        },
+    ) {
+        await this.captureOperationsFromPage(`${this.BASE_URL}/${screenName}`, [
+            XApis.UserByScreenName,
+            ...(options.needTweets ? [XApis.UserTweets] : []),
+        ])
+        if (options.needReplies) {
+            await this.captureOperationsFromPage(`${this.BASE_URL}/${screenName}/with_replies`, [
+                XApis.UserTweetsAndReplies,
+            ])
+        }
+    }
+
+    async prepareListOperations(listId: string) {
+        await this.captureOperationsFromPage(`${this.BASE_URL}/i/lists/${listId}`, [XApis.ListLatestTweetsTimeline])
     }
 
     // 获取graphql query id, 备份用
-    async getGraphqlQueryId() {
-        //
-        let webpage = await fetch(this.BASE_URL, {
-            headers: {
-                'user-agent': UserAgent.CHROME,
-                referer: 'https://x.com/',
-                origin: 'https://x.com',
-            },
-        })
-        const html = await webpage.text()
+    async getGraphqlQueryId(html?: string) {
+        let resolvedHtml = html
+        if (!resolvedHtml) {
+            resolvedHtml = await this.fetchBaseHtml()
+        }
         // extract "": "md5/hash"
         {
             // List
             const lists_graphql_js_pattern = /"([^"]*AudioSpacebarScr)"\s*:\s*"(\w+)"/
-            const match = html.match(lists_graphql_js_pattern)
+            const match = resolvedHtml.match(lists_graphql_js_pattern)
             if (match) {
-                const js_url = `${this.ASSETS_BASE_URL}/${match[1]}.${match[2]}a.js` // a is magic maybe changed in the future
-                console.log(js_url)
-                const js_code = await (await fetch(js_url)).text()
+                const js_url = `${this.ASSETS_BASE_URL}/${match[1]}.${match[2]}a.js`
+                const js_code = await (await fetch(js_url, { headers: this.BASE_HEADER })).text()
                 const queryId = this.getQueryId(js_code, XApis.ListLatestTweetsTimeline)
                 if (queryId) {
                     this.api_with_queryid[XApis.ListLatestTweetsTimeline] = queryId
@@ -436,20 +684,253 @@ class XApiClient {
         }
     }
 
+    private async captureOperationsFromPage(targetUrl: string, expectedOperations: Array<XApis>) {
+        const missingOperations = expectedOperations.filter((operation) => !this.operationProfiles[operation])
+        if (!this.page || missingOperations.length === 0) {
+            return
+        }
+
+        const requestedOperations = new Set(missingOperations)
+        const onRequest = (request: { url: () => string; headers: () => Record<string, string> }) => {
+            const parsed = this.parseCapturedOperation(request.url())
+            if (!parsed || !requestedOperations.has(parsed.operationName)) {
+                return
+            }
+            this.storeOperationProfile(request.url(), request.headers())
+        }
+
+        this.page.on('request', onRequest)
+        try {
+            await this.navigateForCapture(targetUrl)
+
+            const deadline = Date.now() + 8000
+            while (Date.now() < deadline) {
+                if (missingOperations.every((operation) => Boolean(this.operationProfiles[operation]))) {
+                    return
+                }
+                await sleep(150)
+            }
+
+            const unresolved = missingOperations.filter((operation) => !this.operationProfiles[operation])
+            if (unresolved.length > 0) {
+                this.log?.debug(`Browser capture missed operations for ${targetUrl}: ${unresolved.join(', ')}`)
+            }
+        } finally {
+            this.page.off('request', onRequest)
+        }
+    }
+
+    private async navigateForCapture(targetUrl: string) {
+        if (!this.page) {
+            return
+        }
+
+        try {
+            const currentUrl = this.page.url().split('#')[0]
+            if (currentUrl === targetUrl) {
+                await this.page.reload({
+                    waitUntil: 'domcontentloaded',
+                    timeout: 15000,
+                })
+            } else {
+                await this.page.goto(targetUrl, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 15000,
+                })
+            }
+            await sleep(1200)
+        } catch (error) {
+            this.log?.warn(`Browser capture navigation failed for ${targetUrl}: ${error}`)
+        }
+    }
+
+    private storeOperationProfile(url: string, headers: Record<string, string>) {
+        const parsed = this.parseCapturedOperation(url)
+        if (!parsed) {
+            return
+        }
+
+        const filteredHeaders = this.filterCapturedHeaders(headers)
+        this.operationProfiles[parsed.operationName] = {
+            queryId: parsed.queryId,
+            url,
+            headers: filteredHeaders,
+            capturedAt: Date.now(),
+        }
+        this.api_with_queryid[parsed.operationName] = parsed.queryId
+    }
+
+    private parseCapturedOperation(url: string) {
+        const match = url.match(/\/i\/api\/graphql\/([^/]+)\/([^/?#]+)/)
+        if (!match) {
+            return null
+        }
+
+        const queryId = match[1]
+        const operationName = match[2] as XApis
+        if (!Object.values(XApis).includes(operationName)) {
+            return null
+        }
+
+        return {
+            queryId,
+            operationName,
+        }
+    }
+
+    private filterCapturedHeaders(headers: Record<string, string>) {
+        return Object.fromEntries(
+            Object.entries(headers || {}).filter(([key, value]) => {
+                const normalizedKey = String(key || '').toLowerCase()
+                return CAPTURED_HEADER_KEYS.has(normalizedKey) && typeof value === 'string' && value.trim()
+            }),
+        )
+    }
+
+    private getOperationProfile(operation: XApis, fallbackOperations: Array<XApis> = []) {
+        return this.operationProfiles[operation] || fallbackOperations.map((entry) => this.operationProfiles[entry]).find(Boolean)
+    }
+
+    private async ensureQueryIds(requiredApis: Array<XApis> = DEFAULT_QUERY_APIS) {
+        const targets = Array.from(new Set(requiredApis))
+        const missingBefore = targets.filter((api) => !this.api_with_queryid[api])
+        if (missingBefore.length === 0) {
+            return
+        }
+
+        const html = await this.fetchBaseHtml()
+
+        const jsUrls = this.extractJavascriptUrls(html)
+        for (const jsUrl of jsUrls) {
+            const jsCode = await fetch(jsUrl, { headers: this.BASE_HEADER })
+                .then((res) => res.text())
+                .catch(() => '')
+            if (!jsCode) {
+                continue
+            }
+
+            for (const api of targets) {
+                if (this.api_with_queryid[api]) {
+                    continue
+                }
+                const queryId = this.getQueryId(jsCode, api)
+                if (queryId) {
+                    this.api_with_queryid[api] = queryId
+                }
+            }
+
+            if (targets.every((api) => Boolean(this.api_with_queryid[api]))) {
+                return
+            }
+        }
+
+        if (targets.includes(XApis.ListLatestTweetsTimeline) && !this.api_with_queryid[XApis.ListLatestTweetsTimeline]) {
+            await this.getGraphqlQueryId(html)
+        }
+
+        const missingAfter = targets.filter((api) => !this.api_with_queryid[api])
+        if (missingAfter.length > 0) {
+            throw new Error(`Missing query ids: ${missingAfter.join(', ')}`)
+        }
+    }
+
+    private async fetchBaseHtml() {
+        if (this.page) {
+            const html = await this.page.content().catch(() => '')
+            if (html) {
+                return html
+            }
+        }
+
+        const webpage = await fetch(this.BASE_URL, {
+            headers: this.BASE_HEADER,
+        })
+        return await webpage.text()
+    }
+
+    private extractJavascriptUrls(html: string) {
+        const urls = Array.from(html.matchAll(/(?:src|href)="([^"]+\.js)"/g))
+            .map((match) => {
+                try {
+                    return new URL(match[1], this.BASE_URL).toString()
+                } catch {
+                    return null
+                }
+            })
+            .filter((url): url is string => Boolean(url))
+
+        return Array.from(new Set(urls)).sort((left, right) => {
+            const leftMain = /\/main\./.test(left) ? 0 : 1
+            const rightMain = /\/main\./.test(right) ? 0 : 1
+            return leftMain - rightMain
+        })
+    }
+
+    private async resolveQueryId(operation: XApis) {
+        if (!this.api_with_queryid[operation]) {
+            await this.ensureQueryIds([operation])
+        }
+
+        const queryId = this.api_with_queryid[operation]
+        if (!queryId) {
+            throw new Error(`Missing query id for ${operation}`)
+        }
+        return queryId
+    }
+
+    private buildOperationHeaders(
+        operation: XApis,
+        cookie: string,
+        options?: {
+            extraHeaders?: Record<string, string>
+            fallbackOperations?: Array<XApis>
+            includeGuestToken?: boolean
+            referer?: string
+        },
+    ) {
+        const profile = this.getOperationProfile(operation, options?.fallbackOperations)
+        const csrfToken = this.getCsrfToken(cookie)
+        const headers = {
+            ...this.BASE_HEADER,
+            ...(profile?.headers || {}),
+            ...(options?.referer ? { referer: options.referer } : {}),
+            cookie,
+            'x-csrf-token': csrfToken || profile?.headers['x-csrf-token'] || '',
+            'x-twitter-active-user': profile?.headers['x-twitter-active-user'] || 'yes',
+            'x-twitter-auth-type': profile?.headers['x-twitter-auth-type'] || 'OAuth2Session',
+            ...(options?.includeGuestToken ? { 'x-guest-token': this.guest_token } : {}),
+            ...(options?.extraHeaders || {}),
+        }
+        if (!headers.authorization) {
+            headers.authorization = this.PUBLIC_TOKEN
+        }
+        if (!headers.origin) {
+            headers.origin = 'https://x.com'
+        }
+        if (!headers.referer) {
+            headers.referer = options?.referer || `${this.BASE_URL}/`
+        }
+        return normalizeRequestHeaders(headers)
+    }
+
     /**
      * UserByScreenName
      */
-    async getRawUserInfo(id: string) {
-        const transaction = await this.getTransaction()
-        const query_id = this.api_with_queryid[XApis.UserByScreenName]
-        const query_path = `/graphql/${query_id}/${XApis.UserByScreenName}`
-        const transaction_id = await transaction.generateTransactionId('GET', query_path)
+    async getRawUserInfo(id: string, cookie: string) {
+        await this.prepareUserOperations(id, {
+            needTweets: false,
+            needReplies: false,
+        })
+        const query_id = await this.resolveQueryId(XApis.UserByScreenName)
+        const query_path = `${this.API_PREFIX}/${query_id}/${XApis.UserByScreenName}`
         const variables = {
             screen_name: id,
+            withGrokTranslatedBio: false,
         }
         const features = {
             hidden_profile_subscriptions_enabled: true,
             profile_label_improvements_pcf_label_in_post_enabled: true,
+            responsive_web_profile_redirect_enabled: false,
             rweb_tipjar_consumption_enabled: true,
             verified_phone_label_enabled: false,
             subscriptions_verification_info_is_identity_verified_enabled: true,
@@ -461,17 +942,15 @@ class XApiClient {
             responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
             responsive_web_graphql_timeline_navigation_enabled: true,
         }
-        const fieldToggles = { withAuxiliaryUserLabels: true }
+        const fieldToggles = { withPayments: false, withAuxiliaryUserLabels: true }
 
         const query = this.generateParams(features, variables, fieldToggles)
-        const url = `https://api.x.com${query_path}?${query.toString()}`
-        const headers = {
-            ...this.BASE_HEADER,
-            'x-client-transaction-id': transaction_id,
-            'x-guest-token': this.guest_token,
-        }
+        const url = `${this.BASE_URL}${query_path}?${query.toString()}`
         const res = await fetch(url, {
-            headers: headers,
+            headers: this.buildOperationHeaders(XApis.UserByScreenName, cookie, {
+                includeGuestToken: true,
+                referer: `${this.BASE_URL}/${id}`,
+            }),
         })
         if (!res.ok) {
             throw new Error(`Failed to fetch user info (${id}): ${res.statusText}`)
@@ -480,11 +959,11 @@ class XApiClient {
         return json
     }
 
-    async getRestId(id: string) {
+    async getRestId(id: string, cookie: string) {
         if (this.name_to_rest_id[id]) {
             return this.name_to_rest_id[id]
         }
-        const user_info = await this.getRawUserInfo(id)
+        const user_info = await this.getRawUserInfo(id, cookie)
         if (!user_info) {
             throw new Error(`Failed to fetch user info for ${id}`)
         }
@@ -492,8 +971,8 @@ class XApiClient {
         if (!rest_id) {
             throw new Error(`Failed to fetch rest id for ${id}`)
         }
-        this.name_to_rest_id[id] = rest_id
-        return rest_id as number
+        this.name_to_rest_id[id] = String(rest_id)
+        return String(rest_id)
     }
 
     getQueryId(js: string, targetOperationName: string) {
@@ -525,12 +1004,13 @@ class XApiClient {
     }
 
     async grabTweets(id: string, cookie: string) {
-        const rest_id = await this.getRestId(id)
-        const transaction = await this.getTransaction()
-        const query_id = this.api_with_queryid[XApis.UserTweets]
+        await this.prepareUserOperations(id, {
+            needTweets: true,
+            needReplies: false,
+        })
+        const rest_id = await this.getRestId(id, cookie)
+        const query_id = await this.resolveQueryId(XApis.UserTweets)
         const query_path = `${this.API_PREFIX}/${query_id}/${XApis.UserTweets}`
-        const transaction_id = await transaction.generateTransactionId('GET', query_path)
-        const csrf_token = this.getCsrfToken(cookie)
         const uuid = uuidv4({
             rng: cookie ? () => Buffer.from(cookie.padEnd(16, '0')) : undefined,
         })
@@ -580,15 +1060,10 @@ class XApiClient {
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
         const res = await fetch(url, {
-            headers: {
-                ...this.BASE_HEADER,
-                cookie: cookie,
-                'x-client-transaction-id': transaction_id,
-                'x-client-uuid': uuid,
-                'x-csrf-token': csrf_token || '',
-                'x-twitter-active-user': 'yes',
-                'x-twitter-auth-type': 'OAuth2Session',
-            },
+            headers: this.buildOperationHeaders(XApis.UserTweets, cookie, {
+                extraHeaders: { 'x-client-uuid': uuid },
+                referer: `${this.BASE_URL}/${id}`,
+            }),
         })
         if (!res.ok) {
             throw new Error(`Failed to fetch tweets: ${res.statusText}`)
@@ -600,12 +1075,13 @@ class XApiClient {
         return XApiJsonParser.tweetsArticleParser(json)
     }
     async grabReplies(id: string, cookie: string) {
-        const rest_id = await this.getRestId(id)
-        const transaction = await this.getTransaction()
-        const query_id = this.api_with_queryid[XApis.UserTweetsAndReplies]
+        await this.prepareUserOperations(id, {
+            needTweets: false,
+            needReplies: true,
+        })
+        const rest_id = await this.getRestId(id, cookie)
+        const query_id = await this.resolveQueryId(XApis.UserTweetsAndReplies)
         const query_path = `${this.API_PREFIX}/${query_id}/${XApis.UserTweetsAndReplies}`
-        const transaction_id = await transaction.generateTransactionId('GET', query_path)
-        const csrf_token = this.getCsrfToken(cookie)
         const uuid = uuidv4({
             rng: cookie ? () => Buffer.from(cookie.padEnd(16, '0')) : undefined,
         })
@@ -653,15 +1129,11 @@ class XApiClient {
         const query = this.generateParams(features, variables, fieldToggles)
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
         const res = await fetch(url, {
-            headers: {
-                ...this.BASE_HEADER,
-                cookie: cookie,
-                'x-client-transaction-id': transaction_id,
-                'x-client-uuid': uuid,
-                'x-csrf-token': csrf_token || '',
-                'x-twitter-active-user': 'yes',
-                'x-twitter-auth-type': 'OAuth2Session',
-            },
+            headers: this.buildOperationHeaders(XApis.UserTweetsAndReplies, cookie, {
+                extraHeaders: { 'x-client-uuid': uuid },
+                fallbackOperations: [XApis.UserTweets],
+                referer: `${this.BASE_URL}/${id}/with_replies`,
+            }),
         })
         if (!res.ok) {
             throw new Error(`Failed to fetch replies: ${res.statusText}`)
@@ -673,8 +1145,8 @@ class XApiClient {
         return XApiJsonParser.tweetsRepliesParser(json)
     }
 
-    async grabFollowsNumber(id: string) {
-        const user_info = await this.getRawUserInfo(id)
+    async grabFollowsNumber(id: string, cookie: string) {
+        const user_info = await this.getRawUserInfo(id, cookie)
         if (!user_info) {
             throw new Error(`Failed to fetch user info for ${id}`)
         }
@@ -682,12 +1154,10 @@ class XApiClient {
     }
 
     async grabTweetsFromList(list_id: string, cookie: string) {
-        const _ = await this.getTransaction()
-        const query_id = this.api_with_queryid[XApis.ListLatestTweetsTimeline] ?? 'NRigOCel0QKiWs_GuBgOzw' // abs.twimg.com\responsive-web\client-web\sharedloader.Dockbundle.Articlesbundle.AudioSpaceDetailbundle.AudioSpaceDiscoverybundle.AudioSpacebarScr.e8195e0a.js
-        // https://abs.twimg.com/responsive-web/client-web/shared~loader.Dock~bundle.Articles~bundle.AudioSpaceDetail~bundle.AudioSpaceDiscovery~bundle.AudioSpacebarScr.523665ea.js
+        await this.prepareListOperations(list_id)
+        await this.ensureQueryIds([XApis.ListLatestTweetsTimeline]).catch(() => null)
+        const query_id = this.api_with_queryid[XApis.ListLatestTweetsTimeline] ?? 'NRigOCel0QKiWs_GuBgOzw'
         const query_path = `${this.API_PREFIX}/${query_id}/ListLatestTweetsTimeline`
-        // const transaction_id = await transaction.generateTransactionId('GET', query_path)
-        const csrf_token = this.getCsrfToken(cookie)
         const variables = { listId: list_id, count: 20 }
         const features = {
             rweb_video_screen_enabled: false,
@@ -731,15 +1201,9 @@ class XApiClient {
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
         const res = await fetch(url, {
-            headers: {
-                ...this.BASE_HEADER,
-                cookie: cookie,
-                // 'x-client-transaction-id': transaction_id,
-                // 'x-client-uuid': uuid,
-                'x-csrf-token': csrf_token || '',
-                // 'x-twitter-active-user': 'yes',
-                // 'x-twitter-auth-type': 'OAuth2Session',
-            },
+            headers: this.buildOperationHeaders(XApis.ListLatestTweetsTimeline, cookie, {
+                referer: `${this.BASE_URL}/i/lists/${list_id}`,
+            }),
         })
         if (!res.ok) {
             throw new Error(`Failed to fetch tweets: ${res.statusText}`)
@@ -752,11 +1216,10 @@ class XApiClient {
     }
 
     async grabFollowsFromList(list_id: string, cookie: string) {
-        // const transaction = await this.getTransaction()
-        const query_id = '8oGwd_SHm0nGs91qI4znfA' // abs.twimg.com/responsive-web/client-web/shared~loader.Dock~bundle.Articles~bundle.AudioSpaceDetail~bundle.AudioSpaceDiscovery~bundle.AudioSpacebarScr.6cb481aa.js
+        await this.prepareListOperations(list_id)
+        await this.ensureQueryIds([XApis.ListMembers]).catch(() => null)
+        const query_id = this.api_with_queryid[XApis.ListMembers] ?? '8oGwd_SHm0nGs91qI4znfA'
         const query_path = `${this.API_PREFIX}/${query_id}/ListMembers`
-        // const transaction_id = await transaction.generateTransactionId('GET', query_path)
-        const csrf_token = this.getCsrfToken(cookie)
         const variables = { listId: list_id, count: 99 }
         const features = {
             rweb_video_screen_enabled: false,
@@ -799,15 +1262,10 @@ class XApiClient {
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
         const res = await fetch(url, {
-            headers: {
-                ...this.BASE_HEADER,
-                cookie: cookie,
-                // 'x-client-transaction-id': transaction_id,
-                // 'x-client-uuid': uuid,
-                'x-csrf-token': csrf_token || '',
-                // 'x-twitter-active-user': 'yes',
-                // 'x-twitter-auth-type': 'OAuth2Session',
-            },
+            headers: this.buildOperationHeaders(XApis.ListMembers, cookie, {
+                fallbackOperations: [XApis.ListLatestTweetsTimeline],
+                referer: `${this.BASE_URL}/i/lists/${list_id}`,
+            }),
         })
         if (!res.ok) {
             throw new Error(`Failed to fetch tweets: ${res.statusText}`)

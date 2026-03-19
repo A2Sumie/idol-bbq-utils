@@ -64,6 +64,14 @@ interface CrawlerConfig extends CommonCfgConfig {
      * 比如X的 article，需要分开爬取tweet和replies，具体设置依赖于爬虫的实现
      */
     sub_task_type?: Array<string>
+    /**
+     * Unified crawler: users that must always be hydrated in addition to discovered activity.
+     */
+    hydrate_users?: Array<string>
+    /**
+     * Unified crawler: cap the number of users to hydrate per run.
+     */
+    hydrate_limit?: number
 }
 
 interface Crawler {

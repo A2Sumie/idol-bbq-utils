@@ -7,6 +7,7 @@ import { Platform } from '@idol-bbq-utils/spider/types'
 import { CronJob } from 'cron'
 import dayjs from 'dayjs'
 import type { ProcessorConfig } from '@/types/processor'
+import type { Processor } from '@/types'
 
 interface AggregatePayload {
     platform: Platform
@@ -16,6 +17,7 @@ interface AggregatePayload {
     target_ids?: string[]
     bot_id?: string // legacy
     processorConfig?: ProcessorConfig & { provider: string; api_key?: string }
+    processorId?: string
     prompt?: string
 }
 
@@ -24,11 +26,13 @@ export class TaskManager extends BaseCompatibleModel {
     log?: Logger
     private forwarderPools: ForwarderPools
     private pollingJob: CronJob
+    private processors: Processor[]
 
-    constructor(forwarderPools: ForwarderPools, log?: Logger) {
+    constructor(forwarderPools: ForwarderPools, options: { processors?: Processor[] } = {}, log?: Logger) {
         super()
         this.forwarderPools = forwarderPools
         this.log = log?.child({ subservice: this.NAME })
+        this.processors = options.processors || []
         // Poll every minute
         this.pollingJob = new CronJob('*/1 * * * *', this.poll.bind(this))
     }
@@ -179,7 +183,7 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     private async handleDailyAggregation(payload: AggregatePayload) {
-        const { platform, u_id, start, end, bot_id, target_ids, processorConfig, prompt } = payload
+        const { platform, u_id, start, end, bot_id, target_ids, processorConfig, processorId, prompt } = payload
 
         this.log?.info(`Processing aggregation for ${u_id} on ${platform} (${dayjs.unix(start).format()} - ${dayjs.unix(end).format()})`)
 
@@ -197,14 +201,26 @@ export class TaskManager extends BaseCompatibleModel {
         })
         const textToProcess = contentLines.join('\n')
 
-        const provider = processorConfig?.provider || 'Google'
-        const apiKey = processorConfig?.api_key || process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || ''
+        const configuredProcessor = processorId
+            ? this.processors.find((processor) => processor.id === processorId || processor.name === processorId)
+            : null
+        const provider = configuredProcessor?.provider || processorConfig?.provider || 'Google'
+        const apiKey =
+            configuredProcessor?.api_key ||
+            processorConfig?.api_key ||
+            process.env.GEMINI_API_KEY ||
+            process.env.GOOGLE_API_KEY ||
+            ''
 
         const summaryPrompt = prompt || `You are a summarizer. Please summarize the following social media posts from today for a daily report. Format it nicely.`
 
         let summary = ''
         try {
-            const configWithPrompt = { ...processorConfig, prompt: summaryPrompt }
+            const configWithPrompt = {
+                ...(configuredProcessor?.cfg_processor || {}),
+                ...(processorConfig || {}),
+                prompt: summaryPrompt,
+            }
             const processor = await processorRegistry.create(provider, apiKey, this.log, configWithPrompt)
             summary = await processor.process(textToProcess)
         } catch (e) {

@@ -120,7 +120,7 @@ export class RenderService {
                 }
             }
         } else if (render_type?.startsWith('img')) {
-            // Case 4: Other img-based types (e.g. 'img')
+            // Case 4: Other img-based types (e.g. 'img', 'img-with-meta')
             // Concept: Rendered Image (at start) + Metaline/Empty Text.
 
             // Check Exemption Logic

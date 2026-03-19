@@ -1,5 +1,5 @@
 import { Logger } from '@idol-bbq-utils/log'
-import { spiderRegistry, parseNetscapeCookieToPuppeteerCookie } from '@idol-bbq-utils/spider'
+import { buildBrowserRequestHeaders, spiderRegistry, parseNetscapeCookieToPuppeteerCookie } from '@idol-bbq-utils/spider'
 import { Page } from 'puppeteer-core'
 import { CronJob } from 'cron'
 import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
@@ -32,6 +32,16 @@ interface CrawlerTaskResult {
     task_type: TaskType
     url: string
     data: Array<number>
+}
+
+interface BrowserCookieSnapshot {
+    name: string
+    value: string
+    domain: string
+    path: string
+    expires?: number
+    secure?: boolean
+    httpOnly?: boolean
 }
 
 /**
@@ -138,6 +148,9 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                                     end,
                                     bot_id: 'system',
                                     processorConfig: crawler.cfg_crawler?.processor,
+                                    processorId:
+                                        crawler.cfg_crawler?.aggregation?.processor_id ||
+                                        crawler.cfg_crawler?.processor_id,
                                     prompt: crawler.cfg_crawler?.aggregation?.prompt
                                 },
                                 now.unix()
@@ -318,7 +331,6 @@ class SpiderPools extends BaseCompatibleModel {
             },
             ...interval_time,
         }
-        const time = Math.floor(Math.random() * (interval_time.max - interval_time.min) + interval_time.min)
 
         let result: Array<CrawlerTaskResult> = []
         let errors: Array<any> = []
@@ -326,8 +338,6 @@ class SpiderPools extends BaseCompatibleModel {
         try {
             // 开始任务
             for (const website of websites) {
-                this.log?.info(`[${taskId}] crawler wait for ${time}ms`)
-                await delay(time)
                 // 单次系列爬虫任务
                 try {
                     const url = new URL(website)
@@ -344,11 +354,19 @@ class SpiderPools extends BaseCompatibleModel {
                     }
 
                     const crawl_engine = cfg_crawler?.engine
-                    const needsBrowser = spiderPlugin.platform === Platform.Website || !crawl_engine?.startsWith('api')
+                    const browserRequest = this.resolveBrowserRequest(cfg_crawler, url, spiderPlugin.platform)
+                    const requestHeaders = buildBrowserRequestHeaders(browserRequest.device_profile, {
+                        extraHeaders: browserRequest.extra_headers,
+                        locale: browserRequest.locale,
+                        timezone: browserRequest.timezone,
+                        userAgent: user_agent,
+                        viewport: browserRequest.viewport,
+                    })
+                    const needsBrowser = this.shouldUseBrowserAssist(crawl_engine, spiderPlugin.platform)
+                    const waitTime = this.resolveWaitTime(interval_time)
 
                     if (needsBrowser && !page) {
-                        ctx.log?.info(`Creating browser page for engine: ${crawl_engine || 'browser'}`)
-                        const browserRequest = this.resolveBrowserRequest(cfg_crawler, url, spiderPlugin.platform)
+                        ctx.log?.info(`Creating browser page for engine: ${crawl_engine || 'browser'} (browser-assist)`)
                         page = await this.browserPool.createPage({
                             ...browserRequest,
                             user_agent,
@@ -358,8 +376,20 @@ class SpiderPools extends BaseCompatibleModel {
                             await page.browserContext().setCookie(...parseNetscapeCookieToPuppeteerCookie(cookie_file))
                         }
                     } else if (!needsBrowser) {
-                        ctx.log?.debug(`Using API engine: ${crawl_engine}, no page needed`)
+                        ctx.log?.debug(`Using non-browser engine: ${crawl_engine}`)
                     }
+
+                    if (page && crawl_engine?.startsWith('api')) {
+                        await this.primeBrowserSession(page, url, ctx.log)
+                    }
+
+                    const sessionCookieString = page
+                        ? await this.getBrowserCookieString(page, url).catch(() => undefined)
+                        : undefined
+                    const effectiveCookieString = this.mergeCookieStrings(cookieString, sessionCookieString)
+
+                    ctx.log?.info(`[${taskId}] crawler wait for ${waitTime}ms before ${url.href}`)
+                    await delay(waitTime)
 
                     if (task_type === 'article') {
                         let saved_article_ids = await this.crawlArticle(
@@ -368,7 +398,8 @@ class SpiderPools extends BaseCompatibleModel {
                             url,
                             page,
                             processor,
-                            cookieString,
+                            effectiveCookieString,
+                            requestHeaders,
                         )
 
                         result.push({
@@ -386,7 +417,8 @@ class SpiderPools extends BaseCompatibleModel {
                                     task_type: 'follows',
                                     crawl_engine,
                                     sub_task_type,
-                                    cookieString,
+                                    cookieString: effectiveCookieString,
+                                    requestHeaders,
                                 }),
                             {
                                 retries: RETRY_LIMIT,
@@ -443,6 +475,90 @@ class SpiderPools extends BaseCompatibleModel {
         this.log?.info('Spider Pools dropped')
     }
 
+    async exportCrawlerCookies(
+        crawler: Crawler,
+    ): Promise<{
+        cookies: Array<BrowserCookieSnapshot>
+        visitedUrl: string
+        sessionProfile: string | null
+        domains: Array<string>
+    }> {
+        const websites = sanitizeWebsites({
+            websites: crawler.websites,
+            origin: crawler.origin,
+            paths: crawler.paths,
+        })
+        const visitedUrl = websites[0] || crawler.origin
+        if (!visitedUrl) {
+            throw new Error(`Crawler ${crawler.name || 'unknown'} has no usable URL for cookie sync`)
+        }
+
+        const url = new URL(visitedUrl)
+        const spiderPlugin = spiderRegistry.findByUrl(url.href)
+        const platform = spiderPlugin?.platform || Platform.Website
+        const browserRequest = this.resolveBrowserRequest(crawler.cfg_crawler, url, platform)
+        if (!browserRequest.session_profile) {
+            throw new Error(`Crawler ${crawler.name || visitedUrl} is missing session_profile`)
+        }
+
+        const targetDomains = this.resolveCookieDomains(websites, platform)
+        const page = await this.browserPool.createPage({
+            ...browserRequest,
+            user_agent: crawler.cfg_crawler?.user_agent,
+        })
+
+        try {
+            const existingCookies = await page.browserContext().cookies()
+            const existingRelevantCookies = existingCookies.filter((cookie) => this.matchCookieDomain(cookie.domain, targetDomains))
+            if (existingRelevantCookies.length === 0 && crawler.cfg_crawler?.cookie_file) {
+                try {
+                    await page.browserContext().setCookie(
+                        ...parseNetscapeCookieToPuppeteerCookie(crawler.cfg_crawler.cookie_file),
+                    )
+                    this.log?.info(
+                        `Seeded browser session ${browserRequest.session_profile} from ${crawler.cfg_crawler.cookie_file} before cookie export.`,
+                    )
+                } catch (error) {
+                    this.log?.warn(`Failed to seed browser session for ${crawler.name || visitedUrl}: ${error}`)
+                }
+            }
+
+            await page
+                .goto(visitedUrl, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 15000,
+                })
+                .catch(async () => {
+                    await page.goto(url.origin, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 15000,
+                    })
+                })
+
+            const cookies = await page.browserContext().cookies()
+            const filteredCookies = cookies
+                .filter((cookie) => this.matchCookieDomain(cookie.domain, targetDomains))
+                .map((cookie) => ({
+                    name: cookie.name,
+                    value: cookie.value,
+                    domain: cookie.domain,
+                    path: cookie.path,
+                    expires: cookie.expires,
+                    secure: cookie.secure,
+                    httpOnly: cookie.httpOnly,
+                }))
+
+            return {
+                cookies: filteredCookies.length > 0 ? filteredCookies : cookies,
+                visitedUrl,
+                sessionProfile: browserRequest.session_profile || null,
+                domains: targetDomains,
+            }
+        } finally {
+            await page.close().catch(() => null)
+        }
+    }
+
     private resolveBrowserRequest(
         cfg_crawler: Crawler['cfg_crawler'] | undefined,
         url: URL,
@@ -469,6 +585,134 @@ class SpiderPools extends BaseCompatibleModel {
         }
     }
 
+    private shouldUseBrowserAssist(crawl_engine: string | undefined, platform: Platform) {
+        if (platform === Platform.Website) {
+            return true
+        }
+
+        if (!crawl_engine || crawl_engine === 'browser') {
+            return true
+        }
+
+        return crawl_engine.startsWith('api')
+    }
+
+    private resolveWaitTime(interval_time: NonNullable<Crawler['cfg_crawler']>['interval_time']) {
+        const min = Math.max(0, interval_time?.min || 0)
+        const max = Math.max(min, interval_time?.max || min)
+
+        if (max === min) {
+            return min
+        }
+
+        return Math.floor(Math.random() * (max - min + 1)) + min
+    }
+
+    private async primeBrowserSession(page: Page, url: URL, log?: Logger) {
+        try {
+            await page.goto(url.href, {
+                waitUntil: 'domcontentloaded',
+                timeout: 15000,
+            })
+            await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', {
+                timeout: 5000,
+            }).catch(() => null)
+
+            const dwellTime = 900 + Math.floor(Math.random() * 1800)
+            await delay(dwellTime)
+
+            const viewport = page.viewport()
+            if (viewport) {
+                const targetX = Math.floor(viewport.width * (0.2 + Math.random() * 0.6))
+                const targetY = Math.floor(viewport.height * (0.2 + Math.random() * 0.5))
+                await page.mouse.move(targetX, targetY, { steps: 12 }).catch(() => null)
+            }
+
+            const scrollAmount = 160 + Math.floor(Math.random() * 520)
+            await page
+                .evaluate((amount) => {
+                    window.scrollBy({ top: amount, behavior: 'instant' })
+                }, scrollAmount)
+                .catch(() => null)
+            await delay(250 + Math.floor(Math.random() * 700))
+            await page
+                .evaluate((amount) => {
+                    window.scrollBy({ top: -Math.floor(amount * 0.4), behavior: 'instant' })
+                }, scrollAmount)
+                .catch(() => null)
+        } catch (error) {
+            log?.warn(`Browser session warmup failed for ${url.href}: ${error}`)
+        }
+    }
+
+    private async getBrowserCookieString(page: Page, url: URL) {
+        const cookies = await page.browserContext().cookies()
+        return cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+    }
+
+    private resolveCookieDomains(websites: Array<string>, platform: Platform) {
+        const domains = new Set<string>()
+        for (const website of websites) {
+            try {
+                domains.add(new URL(website).hostname.replace(/^\./, '').toLowerCase())
+            } catch {
+                continue
+            }
+        }
+
+        if (platform === Platform.X) {
+            domains.add('x.com')
+            domains.add('twitter.com')
+            domains.add('api.x.com')
+        } else if (platform === Platform.Instagram) {
+            domains.add('instagram.com')
+        } else if (platform === Platform.TikTok) {
+            domains.add('tiktok.com')
+        } else if (platform === Platform.YouTube) {
+            domains.add('youtube.com')
+            domains.add('youtu.be')
+        }
+
+        return Array.from(domains)
+    }
+
+    private matchCookieDomain(cookieDomain: string, targetDomains: Array<string>) {
+        const normalizedCookieDomain = String(cookieDomain || '').replace(/^\./, '').toLowerCase()
+        if (!normalizedCookieDomain || targetDomains.length === 0) {
+            return true
+        }
+
+        return targetDomains.some((targetDomain) => {
+            const normalizedTargetDomain = targetDomain.replace(/^\./, '').toLowerCase()
+            return (
+                normalizedCookieDomain === normalizedTargetDomain
+                || normalizedCookieDomain.endsWith(`.${normalizedTargetDomain}`)
+                || normalizedTargetDomain.endsWith(`.${normalizedCookieDomain}`)
+            )
+        })
+    }
+
+    private mergeCookieStrings(...cookieStrings: Array<string | undefined>) {
+        const merged = new Map<string, string>()
+
+        for (const cookieString of cookieStrings.filter(Boolean)) {
+            for (const entry of String(cookieString).split(';')) {
+                const [rawName, ...rawValue] = entry.split('=')
+                const name = rawName?.trim()
+                if (!name) {
+                    continue
+                }
+                merged.set(name, rawValue.join('=').trim())
+            }
+        }
+
+        return merged.size > 0
+            ? Array.from(merged.entries())
+                  .map(([name, value]) => `${name}=${value}`)
+                  .join('; ')
+            : undefined
+    }
+
     private async crawlArticle(
         ctx: TaskScheduler.TaskCtx,
         spider: BaseSpider,
@@ -476,16 +720,20 @@ class SpiderPools extends BaseCompatibleModel {
         page?: Page,
         processor?: BaseProcessor,
         cookieString?: string,
+        requestHeaders?: Record<string, string>,
     ): Promise<Array<number>> {
         const { cfg_crawler } = ctx.task.data as Crawler
-        const { engine, sub_task_type } = cfg_crawler || {}
+        const { engine, sub_task_type, hydrate_users, hydrate_limit } = cfg_crawler || {}
         const articles = await pRetry(
             () =>
                 spider.crawl(url.href, page, ctx.taskId, {
                     task_type: 'article',
                     crawl_engine: engine,
                     sub_task_type,
+                    hydrate_users,
+                    hydrate_limit,
                     cookieString,
+                    requestHeaders,
                 }),
             {
                 retries: RETRY_LIMIT,

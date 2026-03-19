@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { resolveBrowserProfile } from '../src/utils/browser'
+import { buildBrowserRequestHeaders, resolveBrowserProfile } from '../src/utils/browser'
 
 describe('resolveBrowserProfile', () => {
     test('keeps the selected mobile device profile metadata', () => {
@@ -20,5 +20,18 @@ describe('resolveBrowserProfile', () => {
         expect(profile.userAgent).toContain('Chrome/142.')
         expect(profile.extraHeaders?.['sec-ch-ua-platform']).toBe('"Windows"')
         expect(profile.plugins.length).toBeGreaterThan(0)
+    })
+
+    test('builds browser-style request headers for api-assisted crawls', () => {
+        const headers = buildBrowserRequestHeaders('desktop_chrome', {
+            extraHeaders: {
+                'x-test-header': 'ok',
+            },
+        })
+
+        expect(headers['user-agent']).toContain('Chrome/142.')
+        expect(headers['accept-language']).toContain('ja-JP')
+        expect(headers['sec-ch-ua-platform']).toBe('"Windows"')
+        expect(headers['x-test-header']).toBe('ok')
     })
 })
