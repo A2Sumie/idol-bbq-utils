@@ -223,14 +223,22 @@ export class RenderService {
                             const buffer = fs.readFileSync(path)
                             const hash = crypto.createHash('sha256').update(buffer).digest('hex')
                             const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
+                            const articleId = currentArticle?.a_id || ''
 
                             const exists = await DB.MediaHash.checkExist(platformStr, hash)
                             if (exists) {
-                                this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`)
-                                fs.unlinkSync(path)
-                                return undefined
+                                if (articleId && exists.a_id === articleId) {
+                                    this.log?.debug(
+                                        `Media hash ${hash.substring(0, 8)} already recorded for article ${articleId}, keeping file for another formatter/target.`,
+                                    )
+                                } else {
+                                    this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`)
+                                    fs.unlinkSync(path)
+                                    return undefined
+                                }
+                            } else {
+                                await DB.MediaHash.save(platformStr, hash, articleId)
                             }
-                            await DB.MediaHash.save(platformStr, hash, currentArticle?.a_id || '')
                         } catch (e) {
                             this.log?.error(`Error during duplicate check: ${e}`)
                         }

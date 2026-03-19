@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { formatPlatformTag, RenderService } from './render-service'
 import { fileURLToPath } from 'url'
+import DB from '@/db'
+import { MediaToolEnum } from '@/types/media'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
@@ -93,5 +95,109 @@ describe('RenderService text-compact', () => {
         expect(result.text).toContain('新视频标题')
         expect(result.text).toContain('[描述过长，已截断，完整内容请打开链接查看]')
         expect(result.text.length).toBeLessThan(520)
+    })
+})
+
+describe('RenderService media deduplication', () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    const dataUrl =
+        'data:image/png;base64,' +
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s1OtS8AAAAASUVORK5CYII='
+
+    function buildMediaArticle(a_id: string) {
+        return {
+            id: 100,
+            a_id,
+            u_id: 'nananijigram22_7',
+            username: '22/7',
+            created_at: 1710000000,
+            content: null,
+            translation: null,
+            translated_by: null,
+            url: `https://www.instagram.com/stories/${a_id}/`,
+            type: 'story',
+            ref: null,
+            has_media: true,
+            media: [
+                {
+                    type: 'photo' as const,
+                    url: dataUrl,
+                },
+            ],
+            extra: null,
+            u_avatar: null,
+            platform: Platform.Instagram,
+        }
+    }
+
+    test('keeps media for repeated processing of the same article id', async () => {
+        const hashStore = new Map<string, { platform: string; hash: string; a_id: string }>()
+        DB.MediaHash.checkExist = async (platform: string, hash: string) => hashStore.get(`${platform}:${hash}`) as any
+        DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+            const value = { platform, hash, a_id }
+            hashStore.set(`${platform}:${hash}`, value)
+            return value as any
+        }
+
+        const service = new RenderService()
+        const article = buildMediaArticle('story-same')
+        const config = {
+            taskId: 'test-story-same',
+            render_type: 'text-compact',
+            mediaConfig: {
+                type: 'no-storage' as const,
+                use: {
+                    tool: MediaToolEnum.DEFAULT,
+                },
+            },
+            deduplication: true,
+        }
+
+        const first = await service.process(article as any, config)
+        const second = await service.process(article as any, { ...config, taskId: 'test-story-same-2' })
+
+        expect(first.mediaFiles).toHaveLength(1)
+        expect(second.mediaFiles).toHaveLength(1)
+
+        service.cleanup([...first.mediaFiles, ...second.mediaFiles])
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    })
+
+    test('still skips media reused by a different article id', async () => {
+        const hashStore = new Map<string, { platform: string; hash: string; a_id: string }>()
+        DB.MediaHash.checkExist = async (platform: string, hash: string) => hashStore.get(`${platform}:${hash}`) as any
+        DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+            const value = { platform, hash, a_id }
+            hashStore.set(`${platform}:${hash}`, value)
+            return value as any
+        }
+
+        const service = new RenderService()
+        const config = {
+            taskId: 'test-story-cross',
+            render_type: 'text-compact',
+            mediaConfig: {
+                type: 'no-storage' as const,
+                use: {
+                    tool: MediaToolEnum.DEFAULT,
+                },
+            },
+            deduplication: true,
+        }
+
+        const first = await service.process(buildMediaArticle('story-a') as any, config)
+        const second = await service.process(buildMediaArticle('story-b') as any, {
+            ...config,
+            taskId: 'test-story-cross-2',
+        })
+
+        expect(first.mediaFiles).toHaveLength(1)
+        expect(second.mediaFiles).toHaveLength(0)
+
+        service.cleanup(first.mediaFiles)
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
     })
 })
