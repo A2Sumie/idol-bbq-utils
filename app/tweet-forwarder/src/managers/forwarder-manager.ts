@@ -17,6 +17,9 @@ import { followsToText } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
 
+type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
+type ForwarderTemplate = NonNullable<AppConfig['forwarders']>[number]
+
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
@@ -40,12 +43,59 @@ function resolveBatchTargetIds(
     return sortUnique(Array.from(targetIds))
 }
 
+function resolveMatchingForwarderTemplate(
+    crawler: CrawlerConfig,
+    forwarders?: AppConfig['forwarders'],
+): ForwarderTemplate {
+    return (
+        forwarders?.find((forwarder) => {
+            return forwarder.origin && crawler.origin && forwarder.origin === crawler.origin
+        }) || {
+            name: 'default-auto-bind',
+            origin: crawler.origin,
+            cfg_forwarder: {},
+        }
+    )
+}
+
+function buildAutoBoundForwarderTaskData(
+    crawler: CrawlerConfig,
+    props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders'>,
+) {
+    const matchedForwarder = resolveMatchingForwarderTemplate(crawler, props.forwarders)
+    const cfg_forwarder = {
+        cron: '*/30 * * * *',
+        media: {
+            type: 'no-storage' as const,
+            use: {
+                tool: MediaToolEnum.DEFAULT,
+            },
+        },
+        ...props.cfg_forwarder,
+        ...matchedForwarder.cfg_forwarder,
+        deduplication: matchedForwarder.cfg_forwarder?.deduplication ?? true,
+    }
+
+    return {
+        matchedForwarder,
+        forwarderTaskData: {
+            ...matchedForwarder,
+            name: crawler.name,
+            websites: crawler.websites,
+            origin: crawler.origin,
+            paths: crawler.paths,
+            cfg_forwarder,
+        } satisfies Forwarder,
+    }
+}
+
 type Forwarder = RealForwarder<TaskType>
 
 interface TaskResult {
     taskId: string
     result: Array<CrawlerTaskResult>
     immediate_notify?: boolean
+    crawlerName?: string
 }
 
 interface CrawlerTaskResult {
@@ -54,6 +104,8 @@ interface CrawlerTaskResult {
     data: Array<number>
 }
 
+type ArticleIdsByUrl = Record<string, Array<number>>
+
 /**
  * 根据cronjob dispatch任务
  * 根据结果查询数据库
@@ -61,13 +113,15 @@ interface CrawlerTaskResult {
 class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
     NAME: string = 'ForwarderTaskScheduler'
     protected log?: Logger
-    private props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters'>
+    private props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters' | 'forward_targets'>
     private taskEventBindings: Array<{ eventName: string; listener: (...args: any[]) => void }> = []
+    private spiderFinishedListener: (payload: TaskResult) => void
 
-    constructor(props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters'>, emitter: EventEmitter, log?: Logger) {
+    constructor(props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters' | 'forward_targets'>, emitter: EventEmitter, log?: Logger) {
         super(emitter)
         this.log = log?.child({ subservice: this.NAME })
         this.props = props
+        this.spiderFinishedListener = this.onSpiderTaskFinished.bind(this)
     }
 
     async init() {
@@ -81,54 +135,16 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         for (const binding of this.taskEventBindings) {
             this.emitter.on(binding.eventName, binding.listener)
         }
+        this.emitter.on(`spider:${TaskScheduler.TaskEvent.FINISHED}`, this.spiderFinishedListener)
 
         // 遍历爬虫配置，为每个爬虫创建定时任务
         // Auto-Bind Logic: Iterate Crawlers -> Find Matching Forwarder -> Spawn Task
         if (this.props.crawlers && this.props.crawlers.length > 0) {
             for (const crawler of this.props.crawlers) {
-                // Find matching forwarder by origin
-                let matchForwarder = this.props.forwarders?.find(f => {
-                    // Simple origin match. Could be improved with improved url matching if needed.
-                    return f.origin && crawler.origin && f.origin === crawler.origin
-                })
-
-                if (!matchForwarder) {
-                    this.log?.debug(`No matching forwarder template found for crawler ${crawler.name} (${crawler.origin}), using default...`)
-                    // Create a default forwarder template
-                    matchForwarder = {
-                        name: 'default-auto-bind',
-                        origin: crawler.origin,
-                        cfg_forwarder: {}
-                    }
-                }
-
-                // Use Crawler's Name so connections work!
+                const { matchedForwarder, forwarderTaskData } = buildAutoBoundForwarderTaskData(crawler, this.props)
                 const taskName = crawler.name
-                // Use Forwarder's Config as Template
-                const cfg_forwarder = {
-                    cron: '*/30 * * * *',
-                    media: {
-                        type: 'no-storage' as const,
-                        use: {
-                            tool: MediaToolEnum.DEFAULT,
-                        },
-                    },
-                    ...this.props.cfg_forwarder,
-                    ...matchForwarder.cfg_forwarder,
-                    // Default deduplication to true for auto-bound crawlers
-                    deduplication: matchForwarder.cfg_forwarder?.deduplication ?? true
-                }
+                const cfg_forwarder = forwarderTaskData.cfg_forwarder
                 const { cron } = cfg_forwarder
-
-                // Create the task using Crawler's paths/identity but Forwarder's settings
-                const forwarderTaskData: Forwarder = {
-                    ...matchForwarder, // Inherit base props/methods/id from template if any
-                    name: taskName,    // OVERRIDE Name
-                    websites: crawler.websites,
-                    origin: crawler.origin,
-                    paths: crawler.paths, // Use Crawler's Paths
-                    cfg_forwarder: cfg_forwarder // Use merged config
-                }
 
                 const job = new CronJob(cron as string, async () => {
                     const taskId = `${Math.random().toString(36).substring(2, 9)}`
@@ -148,7 +164,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                     })
                     this.tasks.set(taskId, task)
                 })
-                this.log?.info(`Auto-Bound Forwarder Task created: ${taskName} using template ${matchForwarder.name}`)
+                this.log?.info(`Auto-Bound Forwarder Task created: ${taskName} using template ${matchedForwarder.name}`)
                 this.cronJobs.push(job)
 
                 // --- BATCH MODE DISPATCHER ---
@@ -184,9 +200,9 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                         }
 
                         const websites = sanitizeWebsites({
-                            websites: crawler.websites || matchForwarder?.websites,
-                            origin: crawler.origin || matchForwarder?.origin,
-                            paths: crawler.paths || matchForwarder?.paths,
+                            websites: crawler.websites || matchedForwarder?.websites,
+                            origin: crawler.origin || matchedForwarder?.origin,
+                            paths: crawler.paths || matchedForwarder?.paths,
                         })
                         const end = Math.floor(Date.now() / 1000)
                         const start = end - 3600
@@ -217,6 +233,49 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         } else {
             this.log?.warn('No crawlers defined for auto-binding.')
         }
+    }
+
+    private onSpiderTaskFinished({ taskId, result, crawlerName }: TaskResult) {
+        if (!crawlerName || result.length === 0) {
+            return
+        }
+
+        const crawler = this.props.crawlers?.find((item) => item.name === crawlerName)
+        if (!crawler) {
+            this.log?.warn(`Spider finished for unknown crawler ${crawlerName}, skipping immediate forward dispatch.`)
+            return
+        }
+
+        const articleIdsByUrl = result.reduce((acc, item) => {
+            if (item.task_type !== 'article' || item.data.length === 0) {
+                return acc
+            }
+            acc[item.url] = item.data
+            return acc
+        }, {} as ArticleIdsByUrl)
+
+        if (Object.keys(articleIdsByUrl).length === 0) {
+            return
+        }
+
+        const { forwarderTaskData } = buildAutoBoundForwarderTaskData(crawler, this.props)
+        const forwardTaskId = `spider-${taskId}`
+        const task: TaskScheduler.Task = {
+            id: forwardTaskId,
+            status: TaskScheduler.TaskStatus.PENDING,
+            data: {
+                ...forwarderTaskData,
+                connections: this.props.connections,
+                article_ids_by_url: articleIdsByUrl,
+            },
+        }
+
+        this.log?.info(`Dispatching immediate forwarder task for crawler ${crawlerName}`)
+        this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, {
+            taskId: forwardTaskId,
+            task,
+        })
+        this.tasks.set(forwardTaskId, task)
     }
 
     /**
@@ -252,6 +311,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         for (const binding of this.taskEventBindings) {
             this.emitter.off(binding.eventName, binding.listener)
         }
+        this.emitter.off(`spider:${TaskScheduler.TaskEvent.FINISHED}`, this.spiderFinishedListener)
         this.taskEventBindings = []
         this.cronJobs = []
         this.log?.info('Manager dropped')
@@ -328,7 +388,7 @@ class ForwarderPools extends BaseCompatibleModel {
             cfg_forwarder: Forwarder['cfg_forwarder']
         }
     > = new Map()
-    private props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters'>
+    private props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters' | 'cfg_forwarder' | 'forwarders' | 'crawlers'>
     private renderService: RenderService
 
     /**
@@ -342,7 +402,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
 
     // private workers:
-    constructor(props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters'>, emitter: EventEmitter, log?: Logger) {
+    constructor(props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters' | 'cfg_forwarder' | 'forwarders' | 'crawlers'>, emitter: EventEmitter, log?: Logger) {
         super()
         this.log = log?.child({ subservice: this.NAME })
         this.renderService = new RenderService(this.log)
@@ -396,8 +456,12 @@ class ForwarderPools extends BaseCompatibleModel {
             subscribers,
             cfg_forward_target,
             id,
-            connections
-        } = task.data as Forwarder & { connections?: AppConfig['connections'] }
+            connections,
+            article_ids_by_url,
+        } = task.data as Forwarder & {
+            connections?: AppConfig['connections']
+            article_ids_by_url?: ArticleIdsByUrl
+        }
         ctx.log = this.log?.child({ label: name, trace_id: taskId })
         // prepare
         // maybe we will use workers in the future
@@ -438,7 +502,8 @@ class ForwarderPools extends BaseCompatibleModel {
                             cfg_forward_target,
                             id,
                             connections,
-                            name
+                            name,
+                            article_ids_by_url,
                         },
                     },
                 })
@@ -488,13 +553,14 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     async processArticleTask(ctx: TaskScheduler.TaskCtx) {
-        const { websites, subscribers, cfg_forwarder, cfg_forward_target, id, connections } = ctx.task.data as {
+        const { websites, subscribers, cfg_forwarder, cfg_forward_target, id, connections, article_ids_by_url } = ctx.task.data as {
             websites: Array<string>
             subscribers: Forwarder['subscribers']
             cfg_forwarder: Forwarder['cfg_forwarder']
             cfg_forward_target: Forwarder['cfg_forward_target']
             id?: string
             connections?: AppConfig['connections']
+            article_ids_by_url?: ArticleIdsByUrl
         }
         const batchId = crypto
             .createHash('md5')
@@ -528,7 +594,13 @@ class ForwarderPools extends BaseCompatibleModel {
                 /**
                  * 查询当前网站下的近10篇文章并查询转发
                  */
-                await this.processSingleArticleTask(ctx, url.href, path.targets, path.formatterConfig)
+                await this.processSingleArticleTask(
+                    ctx,
+                    url.href,
+                    path.targets,
+                    path.formatterConfig,
+                    article_ids_by_url?.[url.href],
+                )
             }
         }
     }
@@ -540,7 +612,21 @@ class ForwarderPools extends BaseCompatibleModel {
         cfg_forward_target?: Forwarder['cfg_forward_target'],
     ) {
         const taskLog = this.log?.child({ label: `manual-resend:${crawlerName}` })
-        const paths = this.resolveForwardingPaths(crawlerName, cfg_forwarder, cfg_forward_target, this.props.connections, taskLog)
+        const crawler = this.props.crawlers?.find((item) => item.name === crawlerName)
+        const baseForwarderConfig = crawler
+            ? buildAutoBoundForwarderTaskData(crawler, this.props).forwarderTaskData.cfg_forwarder
+            : undefined
+        const effectiveForwarderConfig = {
+            ...baseForwarderConfig,
+            ...cfg_forwarder,
+        }
+        const paths = this.resolveForwardingPaths(
+            crawlerName,
+            effectiveForwarderConfig,
+            cfg_forward_target,
+            this.props.connections,
+            taskLog,
+        )
         if (paths.length === 0) {
             throw new Error(`No forwarding paths found for crawler ${crawlerName}`)
         }
@@ -562,16 +648,29 @@ class ForwarderPools extends BaseCompatibleModel {
         url: string,
         forwarders: Array<ForwardTargetInstanceWithRuntimeConfig>,
         cfg_forwarder: Forwarder['cfg_forwarder'],
+        articleIds?: Array<number>,
     ) {
         const { u_id, platform } = spiderRegistry.extractBasicInfo(url) ?? {}
-        if (!u_id || !platform) {
+        if (!platform) {
             ctx.log?.error(`Invalid url: ${url}`)
             return
         }
 
+        let articles: Array<ArticleWithId> = []
+        if (articleIds && articleIds.length > 0) {
+            const resolvedArticles = await Promise.all(
+                articleIds.map((articleId) => DB.Article.getSingleArticle(articleId, platform)),
+            )
+            articles = resolvedArticles.filter((item): item is ArticleWithId => Boolean(item))
+        }
 
-
-        let articles = await DB.Article.getArticlesByName(u_id, platform)
+        if (articles.length === 0) {
+            if (!u_id) {
+                ctx.log?.warn(`[Trace] No article ids or u_id found for ${url}, skipping.`)
+                return
+            }
+            articles = await DB.Article.getArticlesByName(u_id, platform)
+        }
         if (articles.length <= 0) {
             ctx.log?.warn(`[Trace] No articles found for ${url} (u_id: ${u_id}, platform: ${platform})`)
             return
@@ -996,4 +1095,4 @@ class ForwarderPools extends BaseCompatibleModel {
 }
 
 export { ForwarderTaskScheduler, ForwarderPools }
-export { resolveBatchTargetIds }
+export { buildAutoBoundForwarderTaskData, resolveBatchTargetIds, resolveMatchingForwarderTemplate }

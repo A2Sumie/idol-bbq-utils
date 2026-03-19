@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { formatPlatformTag, RenderService } from './render-service'
+import { fileURLToPath } from 'url'
+
+process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
 describe('formatPlatformTag', () => {
     test('includes platform and display name for image-tag style labels', () => {

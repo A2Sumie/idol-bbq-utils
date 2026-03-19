@@ -137,5 +137,13 @@ export const languageFontMap = {
     kannada: 'Noto+Sans+Kannada',
     symbol: ['Noto+Sans+Symbols+2', 'Noto+Sans+Symbols'],
     math: 'Noto+Sans+Math',
-    unknown: 'Noto+Sans',
+    unknown: [
+        'Noto+Sans',
+        'Noto+Sans+Symbols+2',
+        'Noto+Sans+Symbols',
+        'Noto+Sans+Canadian+Aboriginal',
+        'Noto+Sans+Gujarati',
+        'Noto+Sans+Georgian',
+        'Noto+Sans+Oriya',
+    ],
 }

@@ -28,7 +28,7 @@ class TgForwarder extends Forwarder {
                     this.chat_id,
                     media
                         .map((i, idx) => {
-                            if (i.media_type === 'photo') {
+                            if (i.media_type === 'photo' || i.media_type === 'video_thumbnail') {
                                 return {
                                     media: Input.fromLocalFile(i.path),
                                     type: 'photo' as InputMediaPhoto['type'],

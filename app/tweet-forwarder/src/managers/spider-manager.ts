@@ -26,6 +26,7 @@ interface TaskResult {
     taskId: string
     result: Array<CrawlerTaskResult>
     immediate_notify?: boolean
+    crawlerName?: string
 }
 
 interface CrawlerTaskResult {
@@ -472,6 +473,7 @@ class SpiderPools extends BaseCompatibleModel {
                 taskId,
                 result,
                 immediate_notify: cfg_crawler?.immediate_notify,
+                crawlerName: name,
             } as TaskResult)
         }
     }

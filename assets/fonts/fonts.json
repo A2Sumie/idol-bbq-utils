@@ -16,5 +16,29 @@
         "font_file_name": "NotoSansMath-Regular.ttf",
         "style": "normal",
         "weight": 400
+    },
+    {
+        "name": "Noto Sans Canadian Aboriginal",
+        "font_file_name": "NotoSansCanadianAboriginal-Regular.ttf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Noto Sans Gujarati",
+        "font_file_name": "NotoSansGujarati-Regular.ttf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Noto Sans Georgian",
+        "font_file_name": "NotoSansGeorgian-Regular.ttf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Noto Sans Oriya",
+        "font_file_name": "NotoSansOriya-Regular.ttf",
+        "style": "normal",
+        "weight": 400
     }
 ]

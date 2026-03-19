@@ -37,7 +37,7 @@ async function main() {
         process.exit(1)
     }
 
-    const { forward_targets, cfg_forward_target, formatters } = config
+    const { forward_targets, cfg_forward_target, formatters, cfg_forwarder, forwarders, crawlers } = config
 
     // Init Emitter
     const emitter = new EventEmitter()
@@ -49,6 +49,9 @@ async function main() {
             cfg_forward_target,
             connections: config.connections,
             formatters,
+            cfg_forwarder,
+            forwarders,
+            crawlers,
         },
         emitter,
         log,
