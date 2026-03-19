@@ -52,6 +52,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
     NAME: string = 'SpiderTaskScheduler'
     protected log?: Logger
     private props: Pick<AppConfig, 'crawlers' | 'cfg_crawler'>
+    private taskEventBindings: Array<{ eventName: string; listener: (...args: any[]) => void }> = []
 
     constructor(props: Pick<AppConfig, 'crawlers' | 'cfg_crawler'>, emitter: EventEmitter, log?: Logger) {
         super(emitter)
@@ -68,8 +69,12 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
 
         // 注册基本的监听器
-        for (const [eventName, listener] of Object.entries(this.taskHandlers)) {
-            this.emitter.on(`spider:${eventName}`, listener)
+        this.taskEventBindings = Object.entries(this.taskHandlers).map(([eventName, listener]) => ({
+            eventName: `spider:${eventName}`,
+            listener,
+        }))
+        for (const binding of this.taskEventBindings) {
+            this.emitter.on(binding.eventName, binding.listener)
         }
 
         // 遍历爬虫配置，为每个爬虫创建定时任务
@@ -194,7 +199,11 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
     async drop() {
         // 清除所有任务
         this.tasks.clear()
-        this.emitter.removeAllListeners()
+        for (const binding of this.taskEventBindings) {
+            this.emitter.off(binding.eventName, binding.listener)
+        }
+        this.taskEventBindings = []
+        this.cronJobs = []
         this.log?.info('Spider Manager dropped')
     }
 
@@ -232,17 +241,19 @@ class SpiderPools extends BaseCompatibleModel {
      * BaseSpider._VALID_URL.source
      */
     private spiders: Map<string, BaseSpider> = new Map()
+    private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
     // private workers:
     constructor(cacheRoot: string, emitter: EventEmitter, log?: Logger) {
         super()
         this.log = log?.child({ subservice: this.NAME })
         this.emitter = emitter
         this.browserPool = new BrowserSessionPool(cacheRoot, this.log)
+        this.dispatchListener = this.onTaskReceived.bind(this)
     }
 
     async init() {
         this.log?.info('Spider Pools initializing...')
-        this.emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, this.onTaskReceived.bind(this))
+        this.emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
     }
 
     // handle task received
@@ -469,7 +480,7 @@ class SpiderPools extends BaseCompatibleModel {
         this.log?.info('Dropping Spider Pools...')
         this.spiders.clear()
         this.processors.clear()
-        this.emitter.removeAllListeners()
+        this.emitter.off(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
         await this.browserPool.closeAll()
         this.log?.info('Browser sessions closed')
         this.log?.info('Spider Pools dropped')

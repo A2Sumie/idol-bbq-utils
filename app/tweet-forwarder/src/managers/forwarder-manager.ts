@@ -62,6 +62,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
     NAME: string = 'ForwarderTaskScheduler'
     protected log?: Logger
     private props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters'>
+    private taskEventBindings: Array<{ eventName: string; listener: (...args: any[]) => void }> = []
 
     constructor(props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters'>, emitter: EventEmitter, log?: Logger) {
         super(emitter)
@@ -73,8 +74,12 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         this.log?.info('initializing...')
 
         // 注册基本的监听器
-        for (const [eventName, listener] of Object.entries(this.taskHandlers)) {
-            this.emitter.on(`forwarder:${eventName}`, listener)
+        this.taskEventBindings = Object.entries(this.taskHandlers).map(([eventName, listener]) => ({
+            eventName: `forwarder:${eventName}`,
+            listener,
+        }))
+        for (const binding of this.taskEventBindings) {
+            this.emitter.on(binding.eventName, binding.listener)
         }
 
         // 遍历爬虫配置，为每个爬虫创建定时任务
@@ -244,7 +249,11 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
     async drop() {
         // 清除所有任务
         this.tasks.clear()
-        this.emitter.removeAllListeners()
+        for (const binding of this.taskEventBindings) {
+            this.emitter.off(binding.eventName, binding.listener)
+        }
+        this.taskEventBindings = []
+        this.cronJobs = []
         this.log?.info('Manager dropped')
     }
 
@@ -330,6 +339,7 @@ class ForwarderPools extends BaseCompatibleModel {
      * platform:a_id -> error count
      */
     private errorCounter = new Map<string, number>()
+    private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
 
     // private workers:
     constructor(props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters'>, emitter: EventEmitter, log?: Logger) {
@@ -338,11 +348,12 @@ class ForwarderPools extends BaseCompatibleModel {
         this.renderService = new RenderService(this.log)
         this.emitter = emitter
         this.props = props
+        this.dispatchListener = this.onTaskReceived.bind(this)
     }
 
     async init() {
         this.log?.info('Forwarder Pools initializing...')
-        this.emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.onTaskReceived.bind(this))
+        this.emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
         // create targets
         const { cfg_forward_target } = this.props
         this.props.forward_targets?.forEach(async (t) => {
@@ -464,7 +475,15 @@ class ForwarderPools extends BaseCompatibleModel {
 
     async drop(...args: any[]): Promise<void> {
         this.log?.info('Dropping Pools...')
-        this.emitter.removeAllListeners()
+        this.emitter.off(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
+        for (const forwarder of this.forward_to.values()) {
+            await forwarder.drop().catch((error) => {
+                this.log?.warn(`Failed to drop forwarder ${forwarder.id}: ${error}`)
+            })
+        }
+        this.forward_to.clear()
+        this.subscribers.clear()
+        this.errorCounter.clear()
         this.log?.info('Pools dropped')
     }
 

@@ -23,10 +23,32 @@ interface ApiConfig {
     secret?: string
 }
 
-interface ApiRuntimeDeps {
+export interface ApiRuntimeDeps {
     emitter?: EventEmitter
     forwarderPools?: ForwarderPools
     spiderPools?: SpiderPools
+}
+
+export interface ApiRuntimeMeta {
+    generation: number
+    configPath: string
+    startedAt: string
+    lastReloadedAt: string
+    reloading: boolean
+}
+
+export interface ApiRuntimeReloadResult {
+    success: true
+    generation: number
+    reloadedAt: string
+    configPath: string
+}
+
+export interface ApiRuntimeControl {
+    getConfig: () => AppConfig
+    getDeps: () => ApiRuntimeDeps
+    getRuntimeMeta?: () => ApiRuntimeMeta
+    reloadRuntime?: (config?: AppConfig) => Promise<ApiRuntimeReloadResult>
 }
 
 interface NetscapeCookieLike {
@@ -212,15 +234,21 @@ function serializeCookiesToNetscape(cookies: Array<NetscapeCookieLike>) {
 export class APIManager extends BaseCompatibleModel {
     NAME = 'APIManager'
     log?: Logger
-    private config: AppConfig
     private server?: any
-    private deps: ApiRuntimeDeps
+    private runtime: ApiRuntimeControl
 
-    constructor(config: AppConfig, deps: ApiRuntimeDeps, log?: Logger) {
+    constructor(runtime: ApiRuntimeControl, log?: Logger) {
         super()
-        this.config = config
-        this.deps = deps
+        this.runtime = runtime
         this.log = log?.child({ subservice: this.NAME })
+    }
+
+    private get config() {
+        return this.runtime.getConfig()
+    }
+
+    private get deps() {
+        return this.runtime.getDeps()
     }
 
     async init() {
@@ -257,9 +285,8 @@ export class APIManager extends BaseCompatibleModel {
                 if (req.method === 'GET' && url.pathname === '/api/config') return this.handleConfigGet()
                 if (req.method === 'GET' && url.pathname === '/api/config/crawlers') return this.handleConfigList()
                 if (req.method === 'POST' && url.pathname === '/api/config/update') return this.handleConfigUpdate(req)
-                if (req.method === 'POST' && (url.pathname === '/api/server/restart' || url.pathname === '/api/runtime/reload')) {
-                    return this.handleServerRestart()
-                }
+                if (req.method === 'POST' && url.pathname === '/api/runtime/reload') return this.handleRuntimeReload()
+                if (req.method === 'POST' && url.pathname === '/api/server/restart') return this.handleServerRestart()
 
                 if (req.method === 'GET' && url.pathname === '/api/runtime/status') return this.handleRuntimeStatus()
                 if (req.method === 'GET' && url.pathname === '/api/runtime/logs') return this.handleRuntimeLogs(url)
@@ -498,16 +525,28 @@ export class APIManager extends BaseCompatibleModel {
             }
 
             const configPath = path.join(process.cwd(), 'config.yaml')
+            const previousConfigText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null
             if (fs.existsSync(configPath)) {
                 fs.copyFileSync(configPath, `${configPath}.bak`)
             }
 
             fs.writeFileSync(configPath, YAML.stringify(body), 'utf8')
-            this.config = body
+            let runtime: ApiRuntimeReloadResult | null = null
+            try {
+                runtime = this.runtime.reloadRuntime ? await this.runtime.reloadRuntime(body) : null
+            } catch (reloadError) {
+                if (previousConfigText !== null) {
+                    fs.writeFileSync(configPath, previousConfigText, 'utf8')
+                } else if (fs.existsSync(configPath)) {
+                    fs.unlinkSync(configPath)
+                }
+                throw reloadError
+            }
 
             return jsonResponse({
                 success: true,
-                message: 'Configuration saved. Restart server to apply changes.',
+                message: runtime ? 'Configuration saved and hot reloaded.' : 'Configuration saved.',
+                runtime,
             })
         } catch (error) {
             this.log?.error('Config update error:', error)
@@ -545,12 +584,26 @@ export class APIManager extends BaseCompatibleModel {
         return jsonResponse({ success: true, message: 'Server restarting...' })
     }
 
+    private async handleRuntimeReload(): Promise<Response> {
+        if (!this.runtime.reloadRuntime) {
+            return new Response('Runtime reload unavailable', { status: 503 })
+        }
+
+        const runtime = await this.runtime.reloadRuntime()
+        return jsonResponse({
+            success: true,
+            message: 'Runtime hot reloaded.',
+            runtime,
+        })
+    }
+
     private async handleConfigGet(): Promise<Response> {
         return jsonResponse(this.config)
     }
 
     private async handleRuntimeStatus(): Promise<Response> {
         const tasks = await DB.TaskQueue.list(50)
+        const runtime = this.runtime.getRuntimeMeta?.()
         return jsonResponse({
             uptime_sec: Math.floor(process.uptime()),
             crawlers: this.config.crawlers?.length || 0,
@@ -561,6 +614,7 @@ export class APIManager extends BaseCompatibleModel {
             pending_tasks: tasks.filter((task) => task.status === 'pending').length,
             processing_tasks: tasks.filter((task) => task.status === 'processing').length,
             latest_tasks: tasks.slice(0, 10),
+            runtime,
         })
     }
 

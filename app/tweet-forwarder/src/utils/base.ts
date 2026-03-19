@@ -60,6 +60,10 @@ namespace TaskScheduler {
         abstract drop(...args: any[]): Promise<void>
         abstract updateTaskStatus(...args: any[]): void
         abstract finishTask(...args: any[]): void
+
+        getActiveTaskCount() {
+            return this.tasks.size
+        }
     }
 }
 

@@ -1,118 +1,21 @@
-import { SpiderPools, SpiderTaskScheduler } from './managers/spider-manager'
-import { configParser, log, CACHE_DIR_ROOT } from './config'
-import EventEmitter from 'events'
-import { ForwarderPools, ForwarderTaskScheduler } from './managers/forwarder-manager'
-import { BaseCompatibleModel, TaskScheduler } from './utils/base'
-import { initializeCacheDirectories } from './utils/directories'
+import { log } from './config'
+import { RuntimeController } from './runtime-controller'
 
 async function main() {
-    initializeCacheDirectories(CACHE_DIR_ROOT)
-
-    const taskSchedulers: Array<TaskScheduler.TaskScheduler> = []
-    const compatibleModels: Array<BaseCompatibleModel> = []
-    const emitter = new EventEmitter()
-
-    const config = configParser('./config.yaml')
-    if (!config) {
-        log.error('Config file is empty or invalid, exiting...')
-        return
-    }
-    const { crawlers, cfg_crawler, forward_targets, cfg_forward_target, forwarders, cfg_forwarder, formatters } = config
-    log.info(`[Trace] Config loaded. Connections keys: ${config.connections ? Object.keys(config.connections).join(',') : 'UNDEFINED'}`)
-
-
-    let spiderPools: SpiderPools | undefined
-    if (crawlers && crawlers.length > 0) {
-        spiderPools = new SpiderPools(CACHE_DIR_ROOT, emitter, log)
-        compatibleModels.push(spiderPools)
-        const spiderTaskScheduler = new SpiderTaskScheduler(
-            {
-                crawlers,
-                cfg_crawler,
-            },
-            emitter,
-            log,
-        )
-        taskSchedulers.push(spiderTaskScheduler)
-    }
-
-    let forwarderPools: ForwarderPools | undefined
-    if (forward_targets && forward_targets.length > 0) {
-        forwarderPools = new ForwarderPools(
-            {
-                forward_targets,
-                cfg_forward_target,
-                connections: config.connections,
-                formatters,
-            },
-            emitter,
-            log,
-        )
-        compatibleModels.push(forwarderPools)
-    }
-
-    if (forwarderPools) {
-        const { TaskManager } = await import('./managers/task-manager')
-        const taskManager = new TaskManager(forwarderPools, { processors: config.processors }, log)
-        compatibleModels.push(taskManager)
-    }
-
-    log.info(`[Trace] Check forwarders: ${forwarders?.length}, crawlers: ${crawlers?.length}`)
-    if ((forwarders && forwarders.length > 0) || (crawlers && crawlers.length > 0)) {
-        const forwarderTaskScheduler = new ForwarderTaskScheduler(
-            {
-                forwarders,
-                cfg_forwarder,
-                connections: config.connections,
-                crawlers,
-                formatters,
-            },
-            emitter,
-            log,
-        )
-        taskSchedulers.push(forwarderTaskScheduler)
-    }
-
-    // Initialize APIManager
-    if (config.api || process.env.API_SECRET) {
-        const { APIManager } = await import('./managers/api-manager')
-        const apiManager = new APIManager(
-            config,
-            {
-                emitter,
-                forwarderPools,
-                spiderPools,
-            },
-            log,
-        )
-        compatibleModels.push(apiManager)
-    }
-
-    for (const c of compatibleModels) {
-        await c.init()
-    }
-
-    for (const taskScheduler of taskSchedulers) {
-        await taskScheduler.init()
-        await taskScheduler.start()
-    }
+    const runtime = new RuntimeController('./config.yaml')
+    await runtime.init()
 
     async function exitHandler() {
-        log.info('Shutting down gracefully...')
-
-        for (const taskScheduler of taskSchedulers) {
-            await taskScheduler.stop()
-            await taskScheduler.drop()
-        }
-        for (const c of compatibleModels) {
-            await c.drop()
-        }
-
-        log.info('Cleanup completed')
+        await runtime.shutdown()
         process.exit(0)
     }
+
     process.on('SIGINT', exitHandler)
     process.on('SIGTERM', exitHandler)
     process.on('SIGHUP', exitHandler)
 }
-main()
+
+main().catch(async (error) => {
+    log.error(`Fatal startup error: ${error instanceof Error ? error.stack || error.message : String(error)}`)
+    process.exit(1)
+})

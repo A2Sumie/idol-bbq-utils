@@ -9,3 +9,7 @@ const tweetForwarder = require('@idol-bbq-utils/tweet-forwarder');
 
 // TODO: DEMONSTRATE API
 ```
+
+## Operations
+
+- Runtime and direct-control commands: [`OPERATIONS.md`](./OPERATIONS.md)
