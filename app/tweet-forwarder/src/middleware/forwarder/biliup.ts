@@ -26,6 +26,7 @@ interface ResolvedBiliupVideoUploadConfig {
     python_path: string
     helper_path: string
     working_dir: string
+    cookie_file?: string
     submit_api: 'web'
     line: 'AUTO' | 'bda' | 'bda2' | 'ws' | 'qn' | 'bldsa' | 'tx' | 'txa'
     tid: number
@@ -43,6 +44,15 @@ interface BiliupUploadCandidate {
     videoPaths: Array<string>
     config: ResolvedBiliupVideoUploadConfig
 }
+
+type BiliupCookieDocument = {
+    cookie_info: Record<string, unknown> & {
+        cookies: Array<Record<string, unknown> & { name: string; value: string }>
+    }
+    sso: Array<unknown>
+    token_info: Record<string, unknown>
+    platform: unknown
+} & Record<string, unknown>
 
 function resolveExistingPath(candidates: Array<string | undefined>, fallback: string) {
     for (const candidate of candidates) {
@@ -73,6 +83,10 @@ function defaultHelperPath() {
 
 function normalizeTag(tag: string) {
     return tag.replace(/[\r\n,]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function uniqueStrings(values: Array<string>) {
@@ -121,8 +135,57 @@ function deriveTags(
     return uniqueStrings(['22/7', platformTag, article.username || '', ...configuredTags].map(normalizeTag)).filter(Boolean)
 }
 
-function buildCookieDocument(sessdata: string, bili_jct: string) {
+function normalizeBiliupCookieDocument(document: unknown): BiliupCookieDocument {
+    if (!isRecord(document)) {
+        throw new Error('biliup cookie document must be a JSON object')
+    }
+    if (!isRecord(document.cookie_info) || !Array.isArray(document.cookie_info.cookies)) {
+        throw new Error('biliup cookie document must contain cookie_info.cookies')
+    }
+
+    const cookies = document.cookie_info.cookies
+        .map((cookie) => {
+            if (!isRecord(cookie)) {
+                return null
+            }
+            const name = typeof cookie.name === 'string' ? cookie.name.trim() : ''
+            const value = typeof cookie.value === 'string' ? cookie.value : ''
+            if (!name || !value) {
+                return null
+            }
+            return {
+                ...cookie,
+                name,
+                value,
+            }
+        })
+        .filter((cookie): cookie is Record<string, unknown> & { name: string; value: string } => Boolean(cookie))
+
+    if (cookies.length === 0) {
+        throw new Error('biliup cookie document does not contain any usable cookies')
+    }
+
     return {
+        ...document,
+        cookie_info: {
+            ...document.cookie_info,
+            cookies,
+        },
+        sso: Array.isArray(document.sso) ? document.sso : [],
+        token_info: isRecord(document.token_info)
+            ? document.token_info
+            : {
+                  access_token: '',
+                  expires_in: 0,
+                  mid: 0,
+                  refresh_token: '',
+              },
+        platform: document.platform ?? null,
+    }
+}
+
+function buildCookieDocument(sessdata: string, bili_jct: string) {
+    return normalizeBiliupCookieDocument({
         cookie_info: {
             cookies: [
                 {
@@ -143,7 +206,14 @@ function buildCookieDocument(sessdata: string, bili_jct: string) {
             refresh_token: '',
         },
         platform: null,
+    })
+}
+
+function resolveConfiguredPath(candidate?: string) {
+    if (!candidate) {
+        return undefined
     }
+    return path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate)
 }
 
 function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBiliupVideoUploadConfig | null {
@@ -155,6 +225,7 @@ function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBil
         python_path: config.python_path || defaultPythonPath(),
         helper_path: config.helper_path || defaultHelperPath(),
         working_dir: config.working_dir || DEFAULT_BILIUP_WORKING_DIR,
+        cookie_file: resolveConfiguredPath(config.cookie_file),
         submit_api: config.submit_api === 'web' ? config.submit_api : DEFAULT_BILIUP_SUBMIT_API,
         line: config.line || DEFAULT_BILIUP_LINE,
         tid: Number(config.tid || DEFAULT_BILIUP_TID),
@@ -203,7 +274,7 @@ function buildBiliupUploadCandidate(
 async function runBiliupUpload(
     article: Pick<Article, 'a_id'>,
     candidate: BiliupUploadCandidate,
-    credentials: Pick<{ sessdata: string; bili_jct: string }, 'sessdata' | 'bili_jct'>,
+    credentials: Partial<Pick<{ sessdata: string; bili_jct: string }, 'sessdata' | 'bili_jct'>>,
     log?: Logger,
 ) {
     if (!fs.existsSync(candidate.config.helper_path)) {
@@ -213,7 +284,22 @@ async function runBiliupUpload(
     fs.mkdirSync(candidate.config.working_dir, { recursive: true })
     const uploadDir = fs.mkdtempSync(path.join(candidate.config.working_dir, `${article.a_id}-`))
     const cookieFile = path.join(uploadDir, 'cookies.json')
-    fs.writeFileSync(cookieFile, JSON.stringify(buildCookieDocument(credentials.sessdata, credentials.bili_jct), null, 2))
+    const cookieDocument = candidate.config.cookie_file
+        ? (() => {
+              if (!fs.existsSync(candidate.config.cookie_file as string)) {
+                  throw new Error(`biliup cookie file not found: ${candidate.config.cookie_file}`)
+              }
+              return normalizeBiliupCookieDocument(
+                  JSON.parse(fs.readFileSync(candidate.config.cookie_file as string, 'utf8')),
+              )
+          })()
+        : (() => {
+              if (!credentials.sessdata || !credentials.bili_jct) {
+                  throw new Error('biliup upload requires video_upload.cookie_file or both sessdata and bili_jct')
+              }
+              return buildCookieDocument(credentials.sessdata, credentials.bili_jct)
+          })()
+    fs.writeFileSync(cookieFile, JSON.stringify(cookieDocument, null, 2))
 
     const args = [
         candidate.config.helper_path,
@@ -294,6 +380,7 @@ export {
     DEFAULT_BILIUP_EXCLUDED_UIDS,
     buildBiliupUploadCandidate,
     buildCookieDocument,
+    normalizeBiliupCookieDocument,
     resolveVideoUploadConfig,
     runBiliupUpload,
 }

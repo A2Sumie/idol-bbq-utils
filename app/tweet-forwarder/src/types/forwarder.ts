@@ -14,6 +14,7 @@ type BiliupVideoUploadConfig = {
     python_path?: string
     helper_path?: string
     working_dir?: string
+    cookie_file?: string
     submit_api?: 'web'
     line?: 'AUTO' | 'bda' | 'bda2' | 'ws' | 'qn' | 'bldsa' | 'tx' | 'txa'
     tid?: number

@@ -24,6 +24,9 @@ bots:
       - type: 'bilibili'                      # (optional) forward type
         token: 'SESSDATA in cookies'          # (required) bilibili SESSDATA
         bili_jct: 'blit_jct in cookies'       # (required) bilibili bili_jct
+        video_upload:                         # (optional) direct biliup video upload
+          enabled: true
+          cookie_file: './assets/tweet-forwarder/bili.cookies.json' # (optional) preferred full biliup cookie JSON
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id
@@ -75,6 +78,9 @@ bots:
       - type: 'bilibili'                      # (optional) forward type
         token: 'SESSDATA in cookies'          # (required) bilibili SESSDATA
         bili_jct: 'blit_jct in cookies'       # (required) bilibili bili_jct
+        video_upload:                         # (optional) direct biliup video upload
+          enabled: true
+          cookie_file: './assets/tweet-forwarder/bili.cookies.json' # (optional) preferred full biliup cookie JSON
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id

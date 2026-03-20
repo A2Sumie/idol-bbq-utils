@@ -1,7 +1,10 @@
 import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import { BiliForwarder } from './bilibili'
-import { buildBiliupUploadCandidate, buildCookieDocument } from './biliup'
+import { buildBiliupUploadCandidate, buildCookieDocument, normalizeBiliupCookieDocument, resolveVideoUploadConfig } from './biliup'
 
 test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', () => {
     const candidate = buildBiliupUploadCandidate(
@@ -62,6 +65,43 @@ test('buildCookieDocument creates a biliup-compatible cookie scaffold', () => {
         { name: 'bili_jct', value: 'csrf-token' },
     ])
     expect(document.token_info.mid).toBe(0)
+})
+
+test('normalizeBiliupCookieDocument preserves full exported cookie documents', () => {
+    const document = normalizeBiliupCookieDocument({
+        cookie_info: {
+            cookies: [
+                { name: 'SESSDATA', value: 'sess-token', http_only: 1 },
+                { name: 'bili_jct', value: 'csrf-token' },
+                { name: 'DedeUserID', value: '123456' },
+            ],
+            domains: ['.bilibili.com'],
+        },
+        token_info: {
+            access_token: 'token',
+            expires_in: 100,
+            mid: 123456,
+            refresh_token: 'refresh',
+        },
+        platform: 'BiliTV',
+    })
+
+    expect(document.cookie_info.cookies.map((cookie) => cookie.name)).toEqual(['SESSDATA', 'bili_jct', 'DedeUserID'])
+    expect(document.token_info.mid).toBe(123456)
+    expect(document.platform).toBe('BiliTV')
+})
+
+test('resolveVideoUploadConfig keeps configured biliup cookie file path', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-cookie-config-'))
+    const cookieFile = path.join(tempRoot, 'cookies.json')
+    fs.writeFileSync(cookieFile, JSON.stringify(buildCookieDocument('sess-token', 'csrf-token')))
+
+    const config = resolveVideoUploadConfig({
+        enabled: true,
+        cookie_file: cookieFile,
+    })
+
+    expect(config?.cookie_file).toBe(cookieFile)
 })
 
 test('BiliForwarder skips dynamic posting when biliup upload succeeds', async () => {
