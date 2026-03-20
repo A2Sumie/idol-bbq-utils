@@ -255,6 +255,72 @@ describe('RenderService media deduplication', () => {
         expect(result.mediaFiles).toHaveLength(1)
         service.cleanup(result.mediaFiles)
     })
+
+    test('keeps source article metadata on downloaded media across ref chains', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 300,
+                a_id: 'root-post',
+                u_id: 'member_a',
+                username: 'Member A',
+                created_at: 1710000000,
+                content: 'root body',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/member_a/status/root-post',
+                type: 'tweet',
+                ref: {
+                    id: 301,
+                    a_id: 'ref-post',
+                    u_id: 'outsider_user',
+                    username: 'Outsider',
+                    created_at: 1710000001,
+                    content: 'ref body',
+                    translation: null,
+                    translated_by: null,
+                    url: 'https://x.com/outsider_user/status/ref-post',
+                    type: 'tweet',
+                    ref: null,
+                    has_media: true,
+                    media: [
+                        {
+                            type: 'photo' as const,
+                            url: dataUrl,
+                        },
+                    ],
+                    extra: null,
+                    u_avatar: null,
+                    platform: Platform.X,
+                } as any,
+                has_media: true,
+                media: [
+                    {
+                        type: 'photo' as const,
+                        url: dataUrl,
+                    },
+                ],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            },
+            {
+                taskId: 'test-source-metadata',
+                render_type: 'text-compact',
+                mediaConfig: {
+                    type: 'no-storage' as const,
+                    use: {
+                        tool: MediaToolEnum.DEFAULT,
+                    },
+                },
+                deduplication: false,
+            },
+        )
+
+        expect(result.originalMediaFiles.map((item) => item.sourceArticleId)).toEqual(['root-post', 'ref-post'])
+        expect(result.originalMediaFiles.map((item) => item.sourceUserId)).toEqual(['member_a', 'outsider_user'])
+        service.cleanup(result.mediaFiles)
+    })
 })
 
 describe('RenderService img-tag ordering', () => {

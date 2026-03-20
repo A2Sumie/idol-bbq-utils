@@ -23,6 +23,8 @@ import {
 type MediaFile = {
     media_type: MediaType
     path: string
+    sourceArticleId?: string
+    sourceUserId?: string
 }
 
 interface PreparedBatchItem {
@@ -230,6 +232,49 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         return item.media_type === 'photo' || item.media_type === 'video_thumbnail'
     }
 
+    private normalizeUserId(userId: unknown) {
+        const normalized = String(userId || '')
+            .trim()
+            .replace(/^@+/, '')
+        return normalized || null
+    }
+
+    private getAllowedListUserIds(article?: Article) {
+        const listContext = article?.extra?.data as Record<string, unknown> | undefined
+        const rawUserIds = listContext?.list_context
+        if (!rawUserIds || typeof rawUserIds !== 'object') {
+            return null
+        }
+
+        const userIds = (rawUserIds as Record<string, unknown>).user_ids
+        if (!Array.isArray(userIds)) {
+            return null
+        }
+
+        const normalizedUserIds = userIds
+            .map((userId) => this.normalizeUserId(userId))
+            .filter((userId): userId is string => Boolean(userId))
+        return normalizedUserIds.length > 0 ? new Set(normalizedUserIds) : null
+    }
+
+    private shouldCountSourceMedia(item: MediaFile, article?: Article, allowedListUserIds?: Set<string> | null) {
+        if (!this.isPhotoLikeMedia(item)) {
+            return false
+        }
+
+        const rootArticleId = article?.a_id?.trim()
+        if (!rootArticleId || !item.sourceArticleId || item.sourceArticleId === rootArticleId) {
+            return true
+        }
+
+        if (!allowedListUserIds || allowedListUserIds.size === 0) {
+            return true
+        }
+
+        const sourceUserId = this.normalizeUserId(item.sourceUserId)
+        return Boolean(sourceUserId && allowedListUserIds.has(sourceUserId))
+    }
+
     private createPreparedBatchItem(texts: string[], props?: SendProps): PreparedBatchItem {
         const cardMedia = props?.cardMedia || []
         const media = props?.media || []
@@ -237,12 +282,15 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         const contentMedia = props?.contentMedia || media.filter((item) => !cardPaths.has(item.path))
         const normalizedMedia = media.length > 0 ? media : [...cardMedia, ...contentMedia]
         const text = texts.filter(Boolean).join('\n')
-        const sourceImageCount = contentMedia.filter((item) => this.isPhotoLikeMedia(item)).length
+        const allowedListUserIds = this.getAllowedListUserIds(props?.article)
+        const sourceImageCount = contentMedia.filter((item) =>
+            this.shouldCountSourceMedia(item, props?.article, allowedListUserIds),
+        ).length
         const cardImageCount = cardMedia.filter((item) => this.isPhotoLikeMedia(item)).length
         const hasVideo =
             normalizedMedia.some((item) => item.media_type === 'video') ||
             contentMedia.some((item) => item.media_type === 'video')
-        const textUnitCount = cardImageCount === 0 && text.trim() ? 1 : 0
+        const textUnitCount = text.trim() ? 1 : 0
 
         return {
             article: props?.article,

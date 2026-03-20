@@ -341,6 +341,13 @@ class XListSpider extends BaseSpider {
             listMemberUserIds,
             hydrateLimit: options.hydrateLimit,
         })
+        const listContextUserIds = this.sanitizeUserIds([
+            ...configuredUsers,
+            ...sampledViewportUsers,
+            ...activeUserIds,
+            ...listMemberUserIds,
+            ...selectedUserIds,
+        ])
 
         this.log?.info(
             `Unified list crawl prepared ${selectedUserIds.length} accounts for ${list_id} (configured=${configuredUsers.length}, active=${activeUserIds.length}, sampled=${sampledViewportUsers.length}, members=${listMemberUserIds.length}).`,
@@ -359,7 +366,13 @@ class XListSpider extends BaseSpider {
         }
 
         const hydratedArticles = await this.hydrateUsersFromListActivity(selectedUserIds, client, cookie, options)
-        return this.mergeArticles(options.fetchTweets ? discoveryTweets : [], hydratedArticles)
+        return this.attachListContextToArticles(
+            this.mergeArticles(options.fetchTweets ? discoveryTweets : [], hydratedArticles),
+            {
+                listId: list_id,
+                userIds: listContextUserIds,
+            },
+        )
     }
 
     private async hydrateUsersFromListActivity(
@@ -426,6 +439,49 @@ class XListSpider extends BaseSpider {
                     .map((userId) => userId.replace(/^@+/, '')),
             ),
         )
+    }
+
+    private attachListContextToArticles(
+        articles: Array<GenericArticle<Platform.X>>,
+        context: {
+            listId: string
+            userIds: Array<string>
+        },
+    ) {
+        if (context.userIds.length === 0) {
+            return articles
+        }
+
+        return articles.map((article) => this.attachListContext(article, context))
+    }
+
+    private attachListContext(
+        article: GenericArticle<Platform.X>,
+        context: {
+            listId: string
+            userIds: Array<string>
+        },
+    ) {
+        const existingExtra = article.extra
+        const existingData =
+            existingExtra?.data && typeof existingExtra.data === 'object'
+                ? { ...(existingExtra.data as Record<string, unknown>) }
+                : {}
+
+        return {
+            ...article,
+            extra: {
+                ...(existingExtra || {}),
+                data: {
+                    ...existingData,
+                    list_context: {
+                        list_id: context.listId,
+                        user_ids: context.userIds,
+                    },
+                },
+                extra_type: existingExtra?.extra_type || 'x_list_meta',
+            },
+        } as GenericArticle<Platform.X>
     }
 
     private selectHydrationUsers(options: {

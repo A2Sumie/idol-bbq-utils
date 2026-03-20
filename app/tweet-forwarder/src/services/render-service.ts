@@ -16,20 +16,18 @@ import { cloneDeep } from 'lodash'
 import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spider/const'
 import type { MediaType } from '@idol-bbq-utils/spider/types'
 
+export interface RenderedMediaFile {
+    path: string
+    media_type: MediaType
+    sourceArticleId?: string
+    sourceUserId?: string
+}
+
 export interface RenderResult {
     text: string
-    cardMediaFiles: Array<{
-        path: string
-        media_type: MediaType
-    }>
-    originalMediaFiles: Array<{
-        path: string
-        media_type: MediaType
-    }>
-    mediaFiles: Array<{
-        path: string
-        media_type: MediaType
-    }>
+    cardMediaFiles: Array<RenderedMediaFile>
+    originalMediaFiles: Array<RenderedMediaFile>
+    mediaFiles: Array<RenderedMediaFile>
 }
 
 function formatPlatformTag(
@@ -72,8 +70,8 @@ export class RenderService {
         const { taskId, render_type, mediaConfig, deduplication } = config
         const cloned_article = cloneDeep(article)
 
-        let maybe_media_files: Array<{ path: string; media_type: MediaType }> = []
-        let card_media_files: Array<{ path: string; media_type: MediaType }> = []
+        let maybe_media_files: Array<RenderedMediaFile> = []
+        let card_media_files: Array<RenderedMediaFile> = []
 
         // 1. Download/Handle Media Files
         if (mediaConfig) {
@@ -134,6 +132,8 @@ export class RenderService {
                     const cardMedia = {
                         path: renderedPath,
                         media_type: 'photo' as MediaType,
+                        sourceArticleId: article.a_id,
+                        sourceUserId: article.u_id,
                     }
                     card_media_files.push(cardMedia)
                     maybe_media_files.unshift(cardMedia)
@@ -157,6 +157,8 @@ export class RenderService {
                     const cardMedia = {
                         path: renderedPath,
                         media_type: 'photo' as MediaType,
+                        sourceArticleId: article.a_id,
+                        sourceUserId: article.u_id,
                     }
                     card_media_files.push(cardMedia)
                     maybe_media_files.unshift(cardMedia)
@@ -214,11 +216,8 @@ export class RenderService {
         article: Article,
         media: Media,
         deduplication?: boolean,
-    ): Promise<Array<{ path: string; media_type: MediaType }>> {
-        let maybe_media_files = [] as Array<{
-            path: string
-            media_type: MediaType
-        }>
+    ): Promise<Array<RenderedMediaFile>> {
+        let maybe_media_files = [] as Array<RenderedMediaFile>
         let currentArticle: Article | null = article
 
         // Dynamic imports to avoid top-level issues during hot-reload or circular deps, and purely for this logic
@@ -227,13 +226,7 @@ export class RenderService {
         const DB = (await import('@/db')).default
 
         while (currentArticle) {
-            let new_files = [] as Array<
-                | {
-                      path: string
-                      media_type: MediaType
-                  }
-                | undefined
-            >
+            let new_files = [] as Array<RenderedMediaFile | undefined>
             if (currentArticle.has_media) {
                 this.log?.debug(`Downloading media files for ${currentArticle.a_id}`)
                 let cookie: string | undefined = undefined
@@ -272,6 +265,8 @@ export class RenderService {
                     return {
                         path,
                         media_type: preferredType || getMediaType(path),
+                        sourceArticleId: currentArticle?.a_id || undefined,
+                        sourceUserId: currentArticle?.u_id || undefined,
                     }
                 }
 
@@ -371,7 +366,7 @@ export class RenderService {
                 if (new_files.length > 0) {
                     // Filter defined
                     const validFiles = new_files.filter(
-                        (i): i is { path: string; media_type: MediaType } => i !== undefined,
+                        (i): i is RenderedMediaFile => i !== undefined,
                     )
                     this.log?.debug(`Downloaded media files: ${validFiles.map((f) => f.path).join(', ')}`)
                     maybe_media_files = maybe_media_files.concat(validFiles)

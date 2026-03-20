@@ -230,6 +230,48 @@ test('QQForwarder can send rendered cards separately from original media', async
     expect(payloads[1].some((segment: any) => segment.type === 'text')).toBe(false)
 })
 
+test('QQForwarder counts text as one unit even when a rendered card is present', async () => {
+    const forwarder = new QQForwarder(
+        {
+            group_id: '123',
+            url: 'http://127.0.0.1:3001',
+            token: '',
+            media_batch_threshold: 6,
+        } as any,
+        'qq-text-unit-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    const payloads: any[] = []
+    ;(forwarder as any).sendWithPayload = async (segments: any) => {
+        payloads.push(segments)
+        return { ok: true }
+    }
+
+    for (const index of [1, 2]) {
+        await forwarder.send(`card text ${index}`, {
+            media: [
+                { media_type: 'photo', path: `/tmp/card-${index}.jpg`, sourceArticleId: `article-${index}` },
+                { media_type: 'photo', path: `/tmp/photo-${index}.jpg`, sourceArticleId: `article-${index}` },
+            ] as any,
+            cardMedia: [{ media_type: 'photo', path: `/tmp/card-${index}.jpg`, sourceArticleId: `article-${index}` }] as any,
+            contentMedia: [
+                { media_type: 'photo', path: `/tmp/photo-${index}.jpg`, sourceArticleId: `article-${index}` },
+            ] as any,
+            article: {
+                platform: Platform.X,
+                a_id: `article-${index}`,
+                u_id: 'member_a',
+            } as any,
+        })
+    }
+
+    expect(payloads).toHaveLength(1)
+    expect(payloads[0].filter((segment: any) => segment.type === 'image')).toHaveLength(4)
+    expect(payloads[0][0]?.data?.text).toContain('card text 1')
+    expect(payloads[0][0]?.data?.text).toContain('card text 2')
+})
+
 test('QQForwarder does not batch non-X articles even when the target has a media batch threshold', async () => {
     const forwarder = new QQForwarder(
         {
@@ -262,4 +304,113 @@ test('QQForwarder does not batch non-X articles even when the target has a media
     })
 
     expect(payloads).toHaveLength(2)
+})
+
+test('QQForwarder does not count ref media from users outside the list context', async () => {
+    const forwarder = new QQForwarder(
+        {
+            group_id: '123',
+            url: 'http://127.0.0.1:3001',
+            token: '',
+            media_batch_threshold: 3,
+        } as any,
+        'qq-ref-filter-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    const payloads: any[] = []
+    ;(forwarder as any).sendWithPayload = async (segments: any) => {
+        payloads.push(segments)
+        return { ok: true }
+    }
+
+    await forwarder.send('root text', {
+        media: [
+            {
+                media_type: 'photo',
+                path: '/tmp/root.jpg',
+                sourceArticleId: 'root-1',
+                sourceUserId: 'member_a',
+            },
+            {
+                media_type: 'photo',
+                path: '/tmp/ref-outsider.jpg',
+                sourceArticleId: 'ref-1',
+                sourceUserId: 'outsider_user',
+            },
+        ] as any,
+        contentMedia: [
+            {
+                media_type: 'photo',
+                path: '/tmp/root.jpg',
+                sourceArticleId: 'root-1',
+                sourceUserId: 'member_a',
+            },
+            {
+                media_type: 'photo',
+                path: '/tmp/ref-outsider.jpg',
+                sourceArticleId: 'ref-1',
+                sourceUserId: 'outsider_user',
+            },
+        ] as any,
+        article: {
+            platform: Platform.X,
+            a_id: 'root-1',
+            u_id: 'member_a',
+            ref: {
+                platform: Platform.X,
+                a_id: 'ref-1',
+                u_id: 'outsider_user',
+            },
+            extra: {
+                data: {
+                    list_context: {
+                        list_id: 'list-1',
+                        user_ids: ['member_a'],
+                    },
+                },
+                extra_type: 'x_list_meta',
+            },
+        } as any,
+    })
+
+    expect(payloads).toHaveLength(0)
+
+    await forwarder.send('follow-up text', {
+        media: [
+            {
+                media_type: 'photo',
+                path: '/tmp/root-2.jpg',
+                sourceArticleId: 'root-2',
+                sourceUserId: 'member_a',
+            },
+        ] as any,
+        contentMedia: [
+            {
+                media_type: 'photo',
+                path: '/tmp/root-2.jpg',
+                sourceArticleId: 'root-2',
+                sourceUserId: 'member_a',
+            },
+        ] as any,
+        article: {
+            platform: Platform.X,
+            a_id: 'root-2',
+            u_id: 'member_a',
+            extra: {
+                data: {
+                    list_context: {
+                        list_id: 'list-1',
+                        user_ids: ['member_a'],
+                    },
+                },
+                extra_type: 'x_list_meta',
+            },
+        } as any,
+    })
+
+    expect(payloads).toHaveLength(1)
+    expect(payloads[0].filter((segment: any) => segment.type === 'image')).toHaveLength(3)
+    expect(payloads[0][0]?.data?.text).toContain('root text')
+    expect(payloads[0][0]?.data?.text).toContain('follow-up text')
 })
