@@ -493,3 +493,83 @@ test('ForwarderPools force resend bypasses block checks but still applies text t
     expect(target.sent[0]?.props?.forceSend).toBe(true)
     expect(cleanupCalled).toBe(true)
 })
+
+test('sendArticles skips delivery when render service marks a cross-platform duplicate', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+        } as any,
+        'target-duplicate',
+    )
+
+    let cleanupCalled = false
+    let claimedArticleId: number | null = null
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'duplicate short',
+            mediaFiles: [],
+            shouldSkipSend: true,
+            skipReason: 'Cross-platform short video duplicate matched 2:ig-short-1',
+        }),
+        cleanup: () => {
+            cleanupCalled = true
+        },
+    }
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        claimedArticleId = article.id
+        return true
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'manual-duplicate',
+        [
+            {
+                id: 204,
+                a_id: 'yt-short-dup',
+                platform: 4,
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+            },
+        ],
+        [
+            {
+                forwarder: target,
+                runtime_config: undefined,
+            },
+        ],
+        {
+            render_type: 'text-compact',
+        } as any,
+        { forceSend: true },
+    )
+
+    expect(target.sent).toHaveLength(0)
+    expect(claimedArticleId).toBe(204)
+    expect(cleanupCalled).toBe(true)
+})

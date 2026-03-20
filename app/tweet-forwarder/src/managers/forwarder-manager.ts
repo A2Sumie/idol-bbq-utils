@@ -912,6 +912,15 @@ class ForwarderPools extends BaseCompatibleModel {
                 deduplication: options?.forceSend ? false : cfg_forwarder?.deduplication,
             })
 
+            if (renderResult.shouldSkipSend) {
+                log?.info(`Skipping article ${article.a_id}: ${renderResult.skipReason || 'deduplicated media'}`)
+                for (const { forwarder: target } of to) {
+                    await this.claimArticleChain(article, platform, target.id)
+                }
+                this.renderService.cleanup(renderResult.mediaFiles)
+                continue
+            }
+
             let error_for_all = true
             let forceSendError: Error | null = null
             const cloned_article = cloneDeep(article)

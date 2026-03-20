@@ -15,12 +15,26 @@ import { existsSync, unlinkSync } from 'fs'
 import { cloneDeep } from 'lodash'
 import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spider/const'
 import type { MediaType } from '@idol-bbq-utils/spider/types'
+import {
+    buildArticleMarker,
+    buildShortVideoDedupCandidate,
+    checkExactCrossPlatformVideoDuplicate,
+    checkShortVideoCrossPlatformDuplicate,
+    isPersistentMediaPath,
+    markExactCrossPlatformVideoSeen,
+    markShortVideoCrossPlatformSeen,
+    persistMediaFile,
+} from './media-cache-service'
 
 export interface RenderedMediaFile {
     path: string
     media_type: MediaType
     sourceArticleId?: string
     sourceUserId?: string
+    content_hash?: string
+    size_bytes?: number
+    duration_seconds?: number
+    persistent?: boolean
 }
 
 export interface RenderResult {
@@ -28,6 +42,8 @@ export interface RenderResult {
     cardMediaFiles: Array<RenderedMediaFile>
     originalMediaFiles: Array<RenderedMediaFile>
     mediaFiles: Array<RenderedMediaFile>
+    shouldSkipSend?: boolean
+    skipReason?: string
 }
 
 function formatPlatformTag(
@@ -72,10 +88,13 @@ export class RenderService {
 
         let maybe_media_files: Array<RenderedMediaFile> = []
         let card_media_files: Array<RenderedMediaFile> = []
+        let skipReason: string | undefined
 
         // 1. Download/Handle Media Files
         if (mediaConfig) {
-            maybe_media_files = await this.handleMedia(taskId, cloned_article, mediaConfig, deduplication)
+            const mediaResult = await this.handleMedia(taskId, cloned_article, mediaConfig, deduplication)
+            maybe_media_files = mediaResult.files
+            skipReason = mediaResult.skipReason
         }
 
         let text = ''
@@ -105,6 +124,8 @@ export class RenderService {
                     cardMediaFiles: [],
                     originalMediaFiles: [],
                     mediaFiles: [],
+                    shouldSkipSend: Boolean(skipReason),
+                    skipReason,
                 }
             }
             text = this.formatPlatformFrom(article)
@@ -180,6 +201,21 @@ export class RenderService {
             text = articleToText(article)
         }
 
+        if (!skipReason && deduplication) {
+            const shortVideoCandidate = buildShortVideoDedupCandidate(article as any, maybe_media_files)
+            if (shortVideoCandidate) {
+                const existing = await checkShortVideoCrossPlatformDuplicate(shortVideoCandidate)
+                if (existing) {
+                    skipReason = `Cross-platform short video duplicate matched ${existing.a_id}`
+                    this.log?.info(
+                        `Skipping cross-platform short video duplicate for ${article.a_id} (${shortVideoCandidate.group}, ${shortVideoCandidate.duration_seconds.toFixed(2)}s).`,
+                    )
+                } else {
+                    await markShortVideoCrossPlatformSeen(shortVideoCandidate)
+                }
+            }
+        }
+
         return {
             text,
             cardMediaFiles: card_media_files,
@@ -187,6 +223,8 @@ export class RenderService {
                 (item) => !card_media_files.some((card) => card.path === item.path),
             ),
             mediaFiles: maybe_media_files,
+            shouldSkipSend: Boolean(skipReason),
+            skipReason,
         }
     }
 
@@ -198,7 +236,7 @@ export class RenderService {
             .map((i) => i.path)
             .forEach((path) => {
                 try {
-                    if (existsSync(path)) {
+                    if (existsSync(path) && !isPersistentMediaPath(path)) {
                         unlinkSync(path)
                     }
                 } catch (e) {
@@ -216,13 +254,15 @@ export class RenderService {
         article: Article,
         media: Media,
         deduplication?: boolean,
-    ): Promise<Array<RenderedMediaFile>> {
+    ): Promise<{
+        files: Array<RenderedMediaFile>
+        skipReason?: string
+    }> {
         let maybe_media_files = [] as Array<RenderedMediaFile>
         let currentArticle: Article | null = article
+        let skipReason: string | undefined
 
         // Dynamic imports to avoid top-level issues during hot-reload or circular deps, and purely for this logic
-        const fs = await import('fs')
-        const crypto = await import('crypto')
         const DB = (await import('@/db')).default
 
         while (currentArticle) {
@@ -234,13 +274,19 @@ export class RenderService {
                     cookie = await tryGetCookie(currentArticle.url)
                 }
 
-                const finalizeDownloadedFile = async (path: string, preferredType?: MediaType) => {
+                const finalizeDownloadedFile = async (path: string, sourceUrl?: string, preferredType?: MediaType) => {
+                    const resolvedMediaType = preferredType || getMediaType(path)
+                    const persisted = persistMediaFile(path, {
+                        article: currentArticle as any,
+                        media_type: resolvedMediaType,
+                        source_url: sourceUrl,
+                    })
                     if (deduplication) {
                         try {
-                            const buffer = fs.readFileSync(path)
-                            const hash = crypto.createHash('sha256').update(buffer).digest('hex')
                             const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
                             const articleId = currentArticle?.a_id || ''
+                            const articleMarker = buildArticleMarker(currentArticle as any)
+                            const hash = persisted.hash
 
                             const exists = await DB.MediaHash.checkExist(platformStr, hash)
                             if (exists) {
@@ -252,21 +298,36 @@ export class RenderService {
                                     this.log?.info(
                                         `Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`,
                                     )
-                                    fs.unlinkSync(path)
                                     return undefined
                                 }
                             } else {
                                 await DB.MediaHash.save(platformStr, hash, articleId)
+                            }
+
+                            if (resolvedMediaType === 'video') {
+                                const exactDuplicate = await checkExactCrossPlatformVideoDuplicate(hash, articleMarker)
+                                if (exactDuplicate) {
+                                    skipReason = `Cross-platform exact video duplicate matched ${exactDuplicate.a_id}`
+                                    this.log?.info(
+                                        `Skipping ${articleMarker} because video hash ${hash.substring(0, 8)} matches ${exactDuplicate.a_id}.`,
+                                    )
+                                    return undefined
+                                }
+                                await markExactCrossPlatformVideoSeen(hash, articleMarker)
                             }
                         } catch (e) {
                             this.log?.error(`Error during duplicate check: ${e}`)
                         }
                     }
                     return {
-                        path,
-                        media_type: preferredType || getMediaType(path),
+                        path: persisted.path,
+                        media_type: resolvedMediaType,
                         sourceArticleId: currentArticle?.a_id || undefined,
                         sourceUserId: currentArticle?.u_id || undefined,
+                        content_hash: persisted.hash,
+                        size_bytes: persisted.size_bytes,
+                        duration_seconds: persisted.duration_seconds,
+                        persistent: true,
                     }
                 }
 
@@ -285,7 +346,7 @@ export class RenderService {
                                         : {}),
                                 })
 
-                                return finalizeDownloadedFile(path, overrideType ? undefined : type)
+                                return finalizeDownloadedFile(path, url, overrideType ? undefined : type)
                             } catch (e) {
                                 this.log?.error(`Error while downloading media file: ${e}, skipping ${url}`)
                             }
@@ -330,7 +391,9 @@ export class RenderService {
                         media.use as MediaTool<MediaToolEnum.GALLERY_DL>,
                     )
 
-                    new_files = await Promise.all(paths.map((path) => finalizeDownloadedFile(path)))
+                    new_files = await Promise.all(
+                        paths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
+                    )
                     new_files = new_files.filter((f) => f !== undefined)
 
                     const uniqueExtraMedia = getUniqueExtraMedia()
@@ -353,7 +416,9 @@ export class RenderService {
                         media.use as MediaTool<MediaToolEnum.YT_DLP>,
                         `${taskId}-${currentArticle.a_id}`,
                     )
-                    const videoFiles = await Promise.all(videoPaths.map((path) => finalizeDownloadedFile(path)))
+                    const videoFiles = await Promise.all(
+                        videoPaths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
+                    )
                     new_files = new_files.concat(videoFiles)
 
                     const uniqueExtraMedia = getUniqueExtraMedia()
@@ -380,7 +445,10 @@ export class RenderService {
                 currentArticle = null
             }
         }
-        return maybe_media_files
+        return {
+            files: maybe_media_files,
+            skipReason,
+        }
     }
 }
 

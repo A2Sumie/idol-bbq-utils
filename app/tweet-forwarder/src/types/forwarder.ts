@@ -15,6 +15,7 @@ type BiliupVideoUploadConfig = {
     helper_path?: string
     working_dir?: string
     submit_api?: 'web'
+    line?: 'AUTO' | 'bda' | 'bda2' | 'ws' | 'qn' | 'bldsa' | 'tx' | 'txa'
     tid?: number
     threads?: number
     copyright?: 1 | 2

@@ -8,6 +8,7 @@ import { CronJob } from 'cron'
 import dayjs from 'dayjs'
 import type { ProcessorConfig } from '@/types/processor'
 import type { Processor } from '@/types'
+import { isPersistentMediaPath } from '@/services/media-cache-service'
 
 interface AggregatePayload {
     platform: Platform
@@ -176,7 +177,11 @@ export class TaskManager extends BaseCompatibleModel {
         if (mediaFiles.length > 0) {
             setTimeout(() => {
                 mediaFiles.forEach(f => {
-                    try { fs.unlinkSync(f.path) } catch (e) { }
+                    try {
+                        if (!isPersistentMediaPath(f.path)) {
+                            fs.unlinkSync(f.path)
+                        }
+                    } catch (e) { }
                 })
             }, 60000) // Delayed cleanup 1 minute
         }
@@ -255,7 +260,11 @@ export class TaskManager extends BaseCompatibleModel {
         // Cleanup
         if (mediaFiles.length > 0) {
             mediaFiles.forEach(f => {
-                try { fs.unlinkSync(f.path) } catch (e) { }
+                try {
+                    if (!isPersistentMediaPath(f.path)) {
+                        fs.unlinkSync(f.path)
+                    }
+                } catch (e) { }
             })
         }
     }

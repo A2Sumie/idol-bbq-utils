@@ -12,6 +12,7 @@ import path from 'path'
 const DEFAULT_BILIUP_TID = 171
 const DEFAULT_BILIUP_THREADS = 3
 const DEFAULT_BILIUP_SUBMIT_API = 'web'
+const DEFAULT_BILIUP_LINE = 'AUTO'
 const DEFAULT_BILIUP_WORKING_DIR = path.join(CACHE_DIR_ROOT, 'media', 'biliup')
 const DEFAULT_BILIUP_EXCLUDED_UIDS = ['22/7:radio', '22/7:movie']
 
@@ -26,6 +27,7 @@ interface ResolvedBiliupVideoUploadConfig {
     helper_path: string
     working_dir: string
     submit_api: 'web'
+    line: 'AUTO' | 'bda' | 'bda2' | 'ws' | 'qn' | 'bldsa' | 'tx' | 'txa'
     tid: number
     threads: number
     copyright: 1 | 2
@@ -154,6 +156,7 @@ function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBil
         helper_path: config.helper_path || defaultHelperPath(),
         working_dir: config.working_dir || DEFAULT_BILIUP_WORKING_DIR,
         submit_api: config.submit_api === 'web' ? config.submit_api : DEFAULT_BILIUP_SUBMIT_API,
+        line: config.line || DEFAULT_BILIUP_LINE,
         tid: Number(config.tid || DEFAULT_BILIUP_TID),
         threads: Math.max(1, Number(config.threads || DEFAULT_BILIUP_THREADS)),
         copyright: config.copyright === 1 ? 1 : 2,
@@ -228,6 +231,8 @@ async function runBiliupUpload(
         String(candidate.config.threads),
         '--submit-api',
         candidate.config.submit_api,
+        '--line',
+        candidate.config.line,
         '--copyright',
         String(candidate.config.copyright),
     ]
