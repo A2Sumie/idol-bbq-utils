@@ -200,6 +200,61 @@ describe('RenderService media deduplication', () => {
         DB.MediaHash.checkExist = originalCheckExist
         DB.MediaHash.save = originalSave
     })
+
+    test('does not duplicate media when extra.media mirrors the primary media list', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 200,
+                a_id: 'website-photo-album',
+                u_id: '22/7:photo',
+                username: '22/7 Photo',
+                created_at: 1710000000,
+                content: '【春のかおり】\n\n【北原実咲】\n窓開けてみんなでお昼寝♪',
+                translation: null,
+                translated_by: null,
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga',
+                type: 'article',
+                ref: null,
+                has_media: true,
+                media: [
+                    {
+                        type: 'photo' as const,
+                        url: dataUrl,
+                    },
+                ],
+                extra: {
+                    data: {
+                        site: '22/7',
+                        host: 'nanabunnonijyuuni-mobile.com',
+                        feed: 'photo',
+                    },
+                    media: [
+                        {
+                            type: 'photo' as const,
+                            url: dataUrl,
+                        },
+                    ],
+                    extra_type: 'website_meta',
+                },
+                u_avatar: null,
+                platform: Platform.Website,
+            },
+            {
+                taskId: 'test-website-photo-no-dup',
+                render_type: 'text-compact',
+                mediaConfig: {
+                    type: 'no-storage' as const,
+                    use: {
+                        tool: MediaToolEnum.DEFAULT,
+                    },
+                },
+            },
+        )
+
+        expect(result.mediaFiles).toHaveLength(1)
+        service.cleanup(result.mediaFiles)
+    })
 })
 
 describe('RenderService img-tag ordering', () => {

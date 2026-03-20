@@ -270,13 +270,29 @@ export class RenderService {
                     )
                 }
 
+                const getUniqueExtraMedia = () => {
+                    if (!currentArticle?.extra?.media) {
+                        return []
+                    }
+
+                    const seenUrls = new Set((currentArticle.media || []).map((item) => item.url))
+                    return currentArticle.extra.media.filter((item) => {
+                        if (!item?.url || seenUrls.has(item.url)) {
+                            return false
+                        }
+                        seenUrls.add(item.url)
+                        return true
+                    })
+                }
+
                 // Tool: Default HTTP Downloader
                 if (media.use.tool === MediaToolEnum.DEFAULT && currentArticle.media) {
                     this.log?.debug(`Downloading media with http downloader`)
                     new_files = await _handleMedia(currentArticle.media)
 
-                    if (currentArticle.extra?.media) {
-                        const extra_files = await _handleMedia(currentArticle.extra.media, true)
+                    const uniqueExtraMedia = getUniqueExtraMedia()
+                    if (uniqueExtraMedia.length > 0) {
+                        const extra_files = await _handleMedia(uniqueExtraMedia, true)
                         new_files = new_files.concat(extra_files)
                     }
                 }
@@ -293,8 +309,9 @@ export class RenderService {
                     new_files = await Promise.all(paths.map((path) => finalizeDownloadedFile(path)))
                     new_files = new_files.filter(f => f !== undefined)
 
-                    if (currentArticle.extra?.media) {
-                        const extra_files = await _handleMedia(currentArticle.extra.media, true)
+                    const uniqueExtraMedia = getUniqueExtraMedia()
+                    if (uniqueExtraMedia.length > 0) {
+                        const extra_files = await _handleMedia(uniqueExtraMedia, true)
                         new_files = new_files.concat(extra_files)
                     }
                 }
@@ -315,8 +332,9 @@ export class RenderService {
                     const videoFiles = await Promise.all(videoPaths.map((path) => finalizeDownloadedFile(path)))
                     new_files = new_files.concat(videoFiles)
 
-                    if (currentArticle.extra?.media) {
-                        const extra_files = await _handleMedia(currentArticle.extra.media, true)
+                    const uniqueExtraMedia = getUniqueExtraMedia()
+                    if (uniqueExtraMedia.length > 0) {
+                        const extra_files = await _handleMedia(uniqueExtraMedia, true)
                         new_files = new_files.concat(extra_files)
                     }
                 }
