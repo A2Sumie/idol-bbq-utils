@@ -11,6 +11,8 @@ const DEFAULT_LIVE_PLAYER_PLAYER_ID = 'relay'
 const DEFAULT_LIVE_PLAYER_STREAM_URL = 'https://stream.n2nj.moe/relay.m3u8'
 const DEFAULT_SYNC_INTERVAL_SECONDS = 300
 const STREAM_CAPTURE_TIMEOUT_MS = 15000
+const INSTAGRAM_ORIGIN = 'https://www.instagram.com'
+const LIVE_WEB_INFO_PATH = '/api/v1/live/web_info/'
 
 const ALLOWED_HEADER_KEYS = new Set([
     'user-agent',
@@ -138,8 +140,58 @@ function filterRelayHeaders(headers?: Record<string, string>) {
     return Object.fromEntries(
         Object.entries(headers || {}).filter(([key, value]) => {
             return typeof value === 'string' && value.trim().length > 0 && ALLOWED_HEADER_KEYS.has(key.toLowerCase())
-        }),
+        }).map(([key, value]) => [key.toLowerCase(), value.trim()]),
     )
+}
+
+function normalizeUrlValue(value: unknown) {
+    if (typeof value !== 'string') {
+        return null
+    }
+    const trimmed = value.trim()
+    if (!trimmed) {
+        return null
+    }
+    return trimmed.replace(/\\u0026/g, '&')
+}
+
+function isLiveWebInfoResponse(url: string) {
+    return url.includes(LIVE_WEB_INFO_PATH)
+}
+
+function parseInstagramLiveWebInfo(json: any) {
+    const payload = [json?.broadcast, json?.data, json].find((candidate) => {
+        return candidate?.dash_abr_playback_url || candidate?.dash_playback_url || candidate?.broadcast_status
+    }) || json
+    const streamUrls = Array.from(
+        new Set(
+            [payload?.dash_abr_playback_url, payload?.dash_playback_url, payload?.hls_playback_url]
+                .map((value) => normalizeUrlValue(value))
+                .filter((value): value is string => Boolean(value)),
+        ),
+    )
+
+    return {
+        broadcastStatus: payload?.broadcast_status ? String(payload.broadcast_status) : null,
+        coverUrl: normalizeUrlValue(payload?.cover_frame_url),
+        streamUrls,
+    }
+}
+
+function createEmptyMediaInfo(): StreamMediaInfo {
+    return {
+        size: 0,
+        variants_count: 0,
+        variants: [],
+        encrypted: false,
+        pssh: null,
+    }
+}
+
+function buildCookieHeader(cookieEntries: Record<string, string>) {
+    return Object.entries(cookieEntries)
+        .map(([name, value]) => `${name}=${value}`)
+        .join('; ')
 }
 
 function parseM3u8Variants(content: string, baseUrl: string) {
@@ -299,6 +351,7 @@ class InstagramLiveRelayService {
                     page: options.page,
                     profileUrl: options.profileUrl,
                     liveUrl: status.live_url,
+                    userId: status.numeric_id,
                     cookieString: options.cookieString,
                     requestHeaders: options.requestHeaders,
                     log: scopedLog,
@@ -435,6 +488,7 @@ class InstagramLiveRelayService {
         page,
         profileUrl,
         liveUrl,
+        userId,
         cookieString,
         requestHeaders,
         log,
@@ -442,6 +496,7 @@ class InstagramLiveRelayService {
         page: Page
         profileUrl: string
         liveUrl: string
+        userId?: string | null
         cookieString?: string
         requestHeaders?: Record<string, string>
         log?: Logger
@@ -453,45 +508,27 @@ class InstagramLiveRelayService {
 
         const responseListener = (response: any) => {
             const source = response.url()
-            if (!isStreamManifest(source)) {
+            const responseRequestHeaders = filterRelayHeaders(response.request().headers())
+            const headers = this.mergeCaptureHeaders(baseHeaders, cookieEntries, responseRequestHeaders, liveUrl)
+
+            if (isStreamManifest(source)) {
+                analysisTasks.push(this.registerStream(capturedStreams, source, headers, log, response.text()))
                 return
             }
-            const responseRequestHeaders = filterRelayHeaders(response.request().headers())
-            const headers = {
-                ...baseHeaders,
-                ...responseRequestHeaders,
+
+            if (isLiveWebInfoResponse(source)) {
+                analysisTasks.push(
+                    (async () => {
+                        try {
+                            const text = await response.text()
+                            const liveWebInfo = JSON.parse(text)
+                            await this.captureStreamsFromLiveWebInfo(capturedStreams, liveWebInfo, headers, log)
+                        } catch (error) {
+                            log?.warn(`Failed to parse Instagram live web_info ${source}: ${error}`)
+                        }
+                    })(),
+                )
             }
-            if (!headers.cookie) {
-                const cookieHeader = Object.entries(cookieEntries)
-                    .map(([name, value]) => `${name}=${value}`)
-                    .join('; ')
-                if (cookieHeader) {
-                    headers.cookie = cookieHeader
-                }
-            }
-            const record: EchoStreamRecord = {
-                source,
-                type: source.includes('.mpd') ? 'DASH' : 'HLS',
-                headers,
-                mediaInfo: {
-                    size: 0,
-                    variants_count: 0,
-                    variants: [],
-                    encrypted: false,
-                    pssh: null,
-                },
-            }
-            capturedStreams.set(source, record)
-            analysisTasks.push(
-                (async () => {
-                    try {
-                        const text = await response.text()
-                        record.mediaInfo = analyzeManifestText(source, text)
-                    } catch (error) {
-                        log?.warn(`Failed to analyze live manifest ${source}: ${error}`)
-                    }
-                })(),
-            )
         }
 
         page.on('response', responseListener)
@@ -521,6 +558,19 @@ class InstagramLiveRelayService {
                     break
                 }
             }
+
+            if (capturedStreams.size === 0 && userId) {
+                try {
+                    const liveWebInfo = await this.fetchLiveWebInfo(page, liveUrl, userId)
+                    const directHeaders = this.mergeCaptureHeaders(baseHeaders, cookieEntries, {
+                        accept: '*/*',
+                        'x-requested-with': 'XMLHttpRequest',
+                    }, liveUrl)
+                    analysisTasks.push(this.captureStreamsFromLiveWebInfo(capturedStreams, liveWebInfo, directHeaders, log))
+                } catch (error) {
+                    log?.warn(`Instagram live web_info fallback failed for ${userId}: ${error}`)
+                }
+            }
         } finally {
             page.off('response', responseListener)
         }
@@ -541,6 +591,112 @@ class InstagramLiveRelayService {
             licenses: [],
             keys: [],
         }
+    }
+
+    private mergeCaptureHeaders(
+        baseHeaders: Record<string, string>,
+        cookieEntries: Record<string, string>,
+        responseHeaders?: Record<string, string>,
+        referer?: string,
+    ) {
+        const headers = {
+            ...baseHeaders,
+            ...(responseHeaders || {}),
+        }
+        if (!headers.referer && referer) {
+            headers.referer = referer
+        }
+        if (!headers.origin) {
+            headers.origin = INSTAGRAM_ORIGIN
+        }
+        if (!headers.cookie) {
+            const cookieHeader = buildCookieHeader(cookieEntries)
+            if (cookieHeader) {
+                headers.cookie = cookieHeader
+            }
+        }
+        return headers
+    }
+
+    private async registerStream(
+        capturedStreams: Map<string, EchoStreamRecord>,
+        source: string,
+        headers: Record<string, string>,
+        log?: Logger,
+        manifestTextPromise?: Promise<string>,
+    ) {
+        if (capturedStreams.has(source)) {
+            return
+        }
+
+        const record: EchoStreamRecord = {
+            source,
+            type: source.includes('.mpd') ? 'DASH' : 'HLS',
+            headers: { ...headers },
+            mediaInfo: createEmptyMediaInfo(),
+        }
+        capturedStreams.set(source, record)
+
+        try {
+            const text = manifestTextPromise ? await manifestTextPromise : await this.fetchManifestText(source, record.headers)
+            record.mediaInfo = analyzeManifestText(source, text)
+        } catch (error) {
+            log?.warn(`Failed to analyze live manifest ${source}: ${error}`)
+        }
+    }
+
+    private async captureStreamsFromLiveWebInfo(
+        capturedStreams: Map<string, EchoStreamRecord>,
+        liveWebInfo: any,
+        headers: Record<string, string>,
+        log?: Logger,
+    ) {
+        const parsed = parseInstagramLiveWebInfo(liveWebInfo)
+        if (parsed.streamUrls.length === 0) {
+            return
+        }
+
+        await Promise.all(
+            parsed.streamUrls.map((streamUrl) => this.registerStream(capturedStreams, streamUrl, headers, log)),
+        )
+    }
+
+    private async fetchLiveWebInfo(page: Page, liveUrl: string, userId: string) {
+        await page.goto(liveUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000,
+        })
+
+        const result = await page.evaluate(async (targetUserId) => {
+            const response = await fetch(`/api/v1/live/web_info/?target_user_id=${encodeURIComponent(targetUserId)}`, {
+                credentials: 'include',
+                headers: {
+                    accept: '*/*',
+                    'x-requested-with': 'XMLHttpRequest',
+                },
+            })
+            return {
+                ok: response.ok,
+                status: response.status,
+                text: await response.text(),
+            }
+        }, userId)
+
+        if (!result.ok) {
+            throw new Error(`HTTP ${result.status}: ${result.text}`)
+        }
+
+        return JSON.parse(result.text)
+    }
+
+    private async fetchManifestText(source: string, headers: Record<string, string>) {
+        const response = await fetch(source, {
+            headers,
+        })
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`)
+        }
+        return await response.text()
     }
 
     private async collectCookies(page: Page, cookieString?: string) {
@@ -717,6 +873,7 @@ export {
     analyzeManifestText,
     buildPlayerUrl,
     filterRelayHeaders,
+    parseInstagramLiveWebInfo,
     parseCookieString,
 }
 export type { EchoPackage, InstagramLiveCacheEntry }

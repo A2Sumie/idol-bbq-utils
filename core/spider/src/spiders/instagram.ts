@@ -29,6 +29,7 @@ enum ArticleTypeEnum {
 interface InstagramProfileStatus {
     platform: Platform.Instagram
     u_id: string
+    numeric_id: string | null
     username: string
     u_avatar: string | null
     live_broadcast_id: string | null
@@ -287,6 +288,7 @@ namespace InsApiJsonParser {
         return {
             platform: Platform.Instagram,
             u_id: handle,
+            numeric_id: user?.id ? String(user.id) : null,
             username: displayName,
             u_avatar: avatar ? String(avatar).replace('\\u0026', '&') : null,
             live_broadcast_id: liveBroadcastId,

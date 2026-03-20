@@ -3,6 +3,7 @@ import {
     analyzeManifestText,
     buildPlayerUrl,
     filterRelayHeaders,
+    parseInstagramLiveWebInfo,
     parseCookieString,
 } from './instagram-live-relay-service'
 
@@ -43,4 +44,22 @@ high/index.m3u8
         resolution: '1280x720',
     })
     expect(buildPlayerUrl('relay')).toBe('https://stream.n2nj.moe/relay.m3u8')
+})
+
+test('instagram live relay parser extracts mpd urls from web_info payload', () => {
+    expect(
+        parseInstagramLiveWebInfo({
+            broadcast_status: 'active',
+            dash_abr_playback_url: 'https://example.com/live-abr.mpd?foo=1',
+            dash_playback_url: 'https://example.com/live-hd.mpd?foo=1',
+            cover_frame_url: 'https://example.com/cover.jpg',
+        }),
+    ).toEqual({
+        broadcastStatus: 'active',
+        coverUrl: 'https://example.com/cover.jpg',
+        streamUrls: [
+            'https://example.com/live-abr.mpd?foo=1',
+            'https://example.com/live-hd.mpd?foo=1',
+        ],
+    })
 })

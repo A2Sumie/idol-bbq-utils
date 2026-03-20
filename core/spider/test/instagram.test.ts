@@ -89,6 +89,7 @@ test('Instagram API JSON Parser', async () => {
     expect(InsApiJsonParser.profileStatusParser(profile_json)).toMatchObject({
         platform: 2,
         u_id: profile_json_result.u_id,
+        numeric_id: profile_json?.data?.user?.id ? String(profile_json.data.user.id) : null,
         username: profile_json_result.username,
         is_live: false,
         live_broadcast_id: null,
@@ -101,6 +102,7 @@ test('Instagram profile status parser detects live broadcasts', () => {
     const profile_json = {
         data: {
             user: {
+                id: '58726731378',
                 username: 'shiina_satsuki227',
                 full_name: '椎名桜月',
                 profile_pic_url_hd: 'https://example.com/avatar.jpg',
@@ -113,6 +115,7 @@ test('Instagram profile status parser detects live broadcasts', () => {
     expect(InsApiJsonParser.profileStatusParser(profile_json)).toMatchObject({
         platform: 2,
         u_id: 'shiina_satsuki227',
+        numeric_id: '58726731378',
         username: '椎名桜月',
         is_live: true,
         live_broadcast_id: '1234567890',
