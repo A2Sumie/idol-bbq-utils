@@ -104,10 +104,10 @@ function defaultBrowserCookieSyncScriptPath() {
     return resolveExistingPath(
         [
             process.env.BILIUP_BROWSER_COOKIE_SYNC_SCRIPT,
-            '/app/tools/export-biliup-browser-cookies.ts',
+            '/app/tools/export-biliup-browser-cookies.js',
             path.resolve(process.cwd(), 'app/tweet-forwarder/scripts/export-biliup-browser-cookies.ts'),
         ],
-        '/app/tools/export-biliup-browser-cookies.ts',
+        '/app/tools/export-biliup-browser-cookies.js',
     )
 }
 
