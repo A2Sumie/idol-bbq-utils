@@ -304,7 +304,7 @@ function buildMedia(detailMedia: Array<GenericMediaInfo>, fallbackThumbnail?: st
     return dedup.size > 0 ? Array.from(dedup.values()) : null
 }
 
-function buildWebsiteArticle(
+export function buildWebsiteArticle(
     config: FeedConfig,
     detailUrl: string,
     listItem: WebsiteListItem,

@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { buildPhotoAlbumArticle, NanabunnonijyuuniWebsiteSpider } from '../src/spiders/website'
+import { buildPhotoAlbumArticle, buildWebsiteArticle, NanabunnonijyuuniWebsiteSpider, type FeedConfig } from '../src/spiders/website'
 
 describe('NanabunnonijyuuniWebsiteSpider.resolveFeed', () => {
     test('matches supported 22/7 FC and live-report routes', () => {
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/ticket/list?ima=2101')?.feed).toBe('ticket')
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/news/list?ima=2148')?.feed).toBe('official-news')
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/news/list?ima=2149&ct=news')?.feed).toBe('fc-news')
+        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/official_blog/list?ima=2201')?.feed).toBe('official-blog')
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/contents_list?ima=2217&cd=133&ct=radio')?.feed).toBe('radio')
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/nananiji_movie?ima=2246')?.feed).toBe('movie')
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ima=2342&ct=photoga')?.feed).toBe('photo')
@@ -13,6 +14,7 @@ describe('NanabunnonijyuuniWebsiteSpider.resolveFeed', () => {
     })
 
     test('treats matching detail urls as their feed family', () => {
+        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447001?ima=3201')?.feed).toBe('official-blog')
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/contents/6390467233112?ima=3253')?.feed).toBe('radio')
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447178?ima=3255&cd=nananiji_movie')?.feed).toBe('movie')
         expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?ima=3300&cd=special')?.feed).toBe('live-report')
@@ -107,5 +109,89 @@ describe('buildPhotoAlbumArticle', () => {
         expect(article.extra?.data?.album_id).toBe('photoga')
         expect(article.extra?.data?.members).toEqual(['北原実咲', '黒崎ありす'])
         expect(article.extra?.data?.entries).toHaveLength(2)
+    })
+})
+
+describe('buildWebsiteArticle', () => {
+    const radioConfig: FeedConfig = {
+        feed: 'radio',
+        u_id: '22/7:radio',
+        label: '22/7 Radio',
+    }
+    const movieConfig: FeedConfig = {
+        feed: 'movie',
+        u_id: '22/7:movie',
+        label: '22/7 Movie',
+    }
+
+    test('keeps radio title and falls back to list cover when detail media is empty', () => {
+        const article = buildWebsiteArticle(
+            radioConfig,
+            'https://nanabunnonijyuuni-mobile.com/s/n110/contents/6390467233112',
+            {
+                detailUrl: 'https://nanabunnonijyuuni-mobile.com/s/n110/contents/6390467233112',
+                title: 'Radio Title',
+                dateText: '2026.03.20',
+                summary: null,
+                member: null,
+                thumbnail: 'https://example.com/radio-cover.jpg',
+            },
+            {
+                title: '',
+                dateText: '2026.03.20',
+                bodyText: 'Radio body',
+                bodyHtml: '<p>Radio body</p>',
+                member: null,
+                media: [],
+            },
+        )
+
+        expect(article.content).toContain('【Radio Title】')
+        expect(article.has_media).toBe(true)
+        expect(article.media).toEqual([
+            {
+                type: 'photo',
+                url: 'https://example.com/radio-cover.jpg',
+            },
+        ])
+        expect(article.extra?.data?.title).toBe('Radio Title')
+    })
+
+    test('keeps movie title and passes through extracted poster thumbnails', () => {
+        const article = buildWebsiteArticle(
+            movieConfig,
+            'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447178?cd=nananiji_movie',
+            {
+                detailUrl: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447178?cd=nananiji_movie',
+                title: 'Movie List Title',
+                dateText: '2026.03.20',
+                summary: null,
+                member: null,
+                thumbnail: null,
+            },
+            {
+                title: 'Movie Detail Title',
+                dateText: '2026.03.20',
+                bodyText: '',
+                bodyHtml: '',
+                member: null,
+                media: [
+                    {
+                        type: 'video_thumbnail',
+                        url: 'https://example.com/movie-poster.jpg',
+                    },
+                ],
+            },
+        )
+
+        expect(article.content).toContain('【Movie Detail Title】')
+        expect(article.has_media).toBe(true)
+        expect(article.media).toEqual([
+            {
+                type: 'video_thumbnail',
+                url: 'https://example.com/movie-poster.jpg',
+            },
+        ])
+        expect(article.extra?.data?.title).toBe('Movie Detail Title')
     })
 })
