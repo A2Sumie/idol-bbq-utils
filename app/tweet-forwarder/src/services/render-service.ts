@@ -113,7 +113,7 @@ export class RenderService {
                 text = this.formatPlatformFrom(article)
                 const renderedPath = await generateRenderedImage()
                 if (renderedPath) {
-                    maybe_media_files.push({
+                    maybe_media_files.unshift({
                         path: renderedPath,
                         media_type: 'photo' as MediaType,
                     })

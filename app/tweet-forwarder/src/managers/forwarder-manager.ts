@@ -16,6 +16,7 @@ import { RenderService } from '@/services/render-service'
 import { followsToText } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
+import { getWebsitePhotoBatchKey, isWebsitePhotoAlbumArticle, normalizeWebsitePhotoArticles } from '@/utils/website-photo'
 
 type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
 type ForwarderTemplate = NonNullable<AppConfig['forwarders']>[number]
@@ -631,11 +632,12 @@ class ForwarderPools extends BaseCompatibleModel {
             throw new Error(`No forwarding paths found for crawler ${crawlerName}`)
         }
 
+        const normalizedArticles = await this.normalizeForwardingArticles([article])
         for (const path of paths) {
             await this.sendArticles(
                 taskLog,
                 `manual-${article.a_id}`,
-                [article],
+                normalizedArticles,
                 path.targets,
                 path.formatterConfig,
                 { forceSend: true },
@@ -676,8 +678,41 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
 
+        articles = await this.normalizeForwardingArticles(articles)
         ctx.log?.info(`[Trace] Found ${articles.length} articles for ${url}`)
         await this.sendArticles(ctx.log, ctx.taskId, articles, forwarders, cfg_forwarder)
+    }
+
+    private async normalizeForwardingArticles(articles: Array<ArticleWithId>) {
+        const batchCache = new Map<string, Array<ArticleWithId>>()
+        const expanded = [...articles]
+
+        for (const article of articles) {
+            const batchKey = getWebsitePhotoBatchKey(article)
+            if (!batchKey || isWebsitePhotoAlbumArticle(article)) {
+                continue
+            }
+
+            if (!batchCache.has(batchKey)) {
+                const sameDayArticles = await DB.Article.getArticlesByTimeRange(
+                    article.u_id,
+                    article.platform,
+                    article.created_at,
+                    article.created_at,
+                )
+                batchCache.set(
+                    batchKey,
+                    sameDayArticles.filter((candidate) => getWebsitePhotoBatchKey(candidate) === batchKey),
+                )
+            }
+
+            expanded.push(...(batchCache.get(batchKey) || []))
+        }
+
+        const deduped = Array.from(
+            new Map(expanded.map((item) => [`${item.platform}:${item.a_id}`, item])).values(),
+        )
+        return normalizeWebsitePhotoArticles(orderBy(deduped, ['created_at', 'id'], ['desc', 'asc']))
     }
 
     private resolveForwardingPaths(

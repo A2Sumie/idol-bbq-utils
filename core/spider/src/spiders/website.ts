@@ -436,6 +436,25 @@ export function buildPhotoAlbumArticle(
     ]
 }
 
+export function splitPhotoAlbumPayloadByDate(payload: WebsitePhotoAlbumPayload): Array<WebsitePhotoAlbumPayload> {
+    if (payload.entries.length <= 1) {
+        return [payload]
+    }
+
+    const groups = new Map<string, Array<WebsitePhotoEntry>>()
+    for (const entry of payload.entries) {
+        const key = cleanText(entry.dateText) || '__undated__'
+        const bucket = groups.get(key) || []
+        bucket.push(entry)
+        groups.set(key, bucket)
+    }
+
+    return Array.from(groups.values()).map((entries) => ({
+        ...payload,
+        entries,
+    }))
+}
+
 async function extractStandardEntryList(page: Page, url: string, options: StandardEntryListOptions): Promise<WebsiteListPageResult> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector(options.waitForSelector, { timeout: 15000 })
@@ -1305,7 +1324,9 @@ async function extractPhotoDetailArticles(
         }
     }) as WebsitePhotoAlbumPayload
 
-    return buildPhotoAlbumArticle(config, listItem, payload)
+    return splitPhotoAlbumPayloadByDate(payload).flatMap((groupedPayload) =>
+        buildPhotoAlbumArticle(config, listItem, groupedPayload),
+    )
 }
 
 function extractListPage(page: Page, feedConfig: FeedConfig, url: string): Promise<WebsiteListPageResult> {

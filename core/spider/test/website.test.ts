@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { buildPhotoAlbumArticle, buildWebsiteArticle, NanabunnonijyuuniWebsiteSpider, type FeedConfig } from '../src/spiders/website'
+import {
+    buildPhotoAlbumArticle,
+    buildWebsiteArticle,
+    NanabunnonijyuuniWebsiteSpider,
+    splitPhotoAlbumPayloadByDate,
+    type FeedConfig,
+} from '../src/spiders/website'
 
 describe('NanabunnonijyuuniWebsiteSpider.resolveFeed', () => {
     test('matches supported 22/7 FC and live-report routes', () => {
@@ -109,6 +115,81 @@ describe('buildPhotoAlbumArticle', () => {
         expect(article.extra?.data?.album_id).toBe('photoga')
         expect(article.extra?.data?.members).toEqual(['北原実咲', '黒崎ありす'])
         expect(article.extra?.data?.entries).toHaveLength(2)
+    })
+})
+
+describe('splitPhotoAlbumPayloadByDate', () => {
+    test('keeps FC photo batches separated by posting day', () => {
+        const batches = splitPhotoAlbumPayloadByDate({
+            currentUrl: 'https://nanabunnonijyuuni-mobile.com/s/n110/contents_list?ct=member_photo_052',
+            albumId: 'member_photo_052',
+            pageTheme: '冬のアイテム',
+            entries: [
+                {
+                    modalId: 'modal-1',
+                    dataCode: 'photo260210_a13',
+                    detailUrl: 'https://example.com#modal-1',
+                    title: '冬のアイテム - 相川奈央',
+                    dateText: '2026.02.10',
+                    member: '相川奈央',
+                    bodyText: '冬の可愛いパジャマ',
+                    bodyHtml: '<p>冬の可愛いパジャマ</p>',
+                    media: [{ type: 'photo', url: 'https://example.com/1.jpg', alt: '相川奈央' }],
+                },
+                {
+                    modalId: 'modal-2',
+                    dataCode: 'photo260210_a14',
+                    detailUrl: 'https://example.com#modal-2',
+                    title: '冬のアイテム - 麻丘真央',
+                    dateText: '2026.02.10',
+                    member: '麻丘真央',
+                    bodyText: '上下逆さで泳ぐ鯛！',
+                    bodyHtml: '<p>上下逆さで泳ぐ鯛！</p>',
+                    media: [{ type: 'photo', url: 'https://example.com/2.jpg', alt: '麻丘真央' }],
+                },
+                {
+                    modalId: 'modal-3',
+                    dataCode: 'photo260217_a17',
+                    detailUrl: 'https://example.com#modal-3',
+                    title: '冬のアイテム - 椎名桜月',
+                    dateText: '2026.02.17',
+                    member: '椎名桜月',
+                    bodyText: 'あったかい飲み物',
+                    bodyHtml: '<p>あったかい飲み物</p>',
+                    media: [{ type: 'photo', url: 'https://example.com/3.jpg', alt: '椎名桜月' }],
+                },
+            ],
+        })
+
+        expect(batches).toHaveLength(2)
+        expect(batches[0]?.entries.map((entry) => entry.dataCode)).toEqual([
+            'photo260210_a13',
+            'photo260210_a14',
+        ])
+        expect(batches[1]?.entries.map((entry) => entry.dataCode)).toEqual(['photo260217_a17'])
+
+        const articles = batches.flatMap((batch) =>
+            buildPhotoAlbumArticle(
+                {
+                    feed: 'photo',
+                    u_id: '22/7:photo',
+                    label: '22/7 Photo',
+                },
+                {
+                    detailUrl: 'https://nanabunnonijyuuni-mobile.com/s/n110/contents_list?ct=member_photo_052',
+                    title: '冬のアイテム',
+                    dateText: '2026.02.17',
+                    summary: '冬のアイテム',
+                    member: null,
+                    thumbnail: null,
+                },
+                batch,
+            ),
+        )
+
+        expect(articles).toHaveLength(2)
+        expect(articles[0]?.a_id).toBe('photo:album:member_photo_052:photo260210_a13')
+        expect(articles[1]?.a_id).toBe('photo:album:member_photo_052:photo260217_a17')
     })
 })
 

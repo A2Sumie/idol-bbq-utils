@@ -3,6 +3,7 @@ import type { ArticleExtractType, GenericArticle, GenericFollows, GenericMediaIn
 import { prisma, Prisma } from './client'
 import { getSubtractTime } from '@/utils/time'
 import type { Article } from '@idol-bbq-utils/render/types'
+import { normalizeWebsitePhotoArticles } from '@/utils/website-photo'
 
 type ArticleWithId = Article & { id: number }
 
@@ -239,7 +240,7 @@ namespace DB {
                 take: count,
             })
             const articles = await Promise.all(res.map(async ({ id }: any) => getSingleArticle(id, platform)))
-            return articles.filter((item) => item) as ArticleWithId[]
+            return normalizeWebsitePhotoArticles(articles.filter((item) => item) as ArticleWithId[])
         }
 
         // New method for time-range query (User Requirement 2)
@@ -259,7 +260,7 @@ namespace DB {
             })
             // No need for full chain probably if just for summary, but safer to get it
             const articles = await Promise.all(res.map(async ({ id }: any) => getSingleArticle(id, platform)))
-            return articles.filter((item) => item) as ArticleWithId[]
+            return normalizeWebsitePhotoArticles(articles.filter((item) => item) as ArticleWithId[])
         }
 
         export async function query(params: ArticleQueryParams = {}) {
@@ -308,7 +309,9 @@ namespace DB {
                 }
             }
 
-            return results.sort((a, b) => b.created_at - a.created_at).slice(0, limit)
+            return normalizeWebsitePhotoArticles(results)
+                .sort((a, b) => b.created_at - a.created_at)
+                .slice(0, limit)
         }
     }
 

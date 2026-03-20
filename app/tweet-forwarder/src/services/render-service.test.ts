@@ -201,3 +201,62 @@ describe('RenderService media deduplication', () => {
         DB.MediaHash.save = originalSave
     })
 })
+
+describe('RenderService img-tag ordering', () => {
+    test('prepends the rendered card before original media files', async () => {
+        const service = new RenderService()
+        const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s1OtS8AAAAASUVORK5CYII='
+        ;(service as any).ArticleConverter = {
+            articleToImg: async () => Buffer.from(pngBase64, 'base64'),
+        }
+
+        const result = await service.process(
+            {
+                id: 300,
+                a_id: 'website-photo-1',
+                u_id: '22/7:photo',
+                username: '22/7 Photo',
+                created_at: 1710000000,
+                content: '【春のかおり】\n\n【北原実咲】\n窓開けてみんなでお昼寝♪',
+                translation: null,
+                translated_by: null,
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga',
+                type: 'article',
+                ref: null,
+                has_media: true,
+                media: [
+                    {
+                        type: 'photo' as const,
+                        url: `data:image/png;base64,${pngBase64}`,
+                    },
+                ],
+                extra: {
+                    data: {
+                        site: '22/7',
+                        host: 'nanabunnonijyuuni-mobile.com',
+                        feed: 'photo',
+                    },
+                    extra_type: 'website_meta',
+                },
+                u_avatar: null,
+                platform: Platform.Website,
+            },
+            {
+                taskId: 'test-img-tag-order',
+                render_type: 'img-tag',
+                mediaConfig: {
+                    type: 'no-storage' as const,
+                    use: {
+                        tool: MediaToolEnum.DEFAULT,
+                    },
+                },
+            },
+        )
+
+        expect(result.mediaFiles).toHaveLength(2)
+        expect(result.mediaFiles[0]?.path).toContain('rendered.png')
+        expect(result.mediaFiles[1]?.path).not.toContain('rendered.png')
+
+        service.cleanup(result.mediaFiles)
+    })
+})

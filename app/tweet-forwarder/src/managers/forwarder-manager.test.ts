@@ -245,6 +245,173 @@ test('ForwarderPools resendArticle reuses crawler template media config', async 
     })
 })
 
+test('ForwarderPools resendArticle groups website photo singles into a same-day album batch', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {
+                'crawler-formatter': {},
+                'crawler-processor': {},
+                'processor-formatter': {},
+                'formatter-target': {},
+            } as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'img-tag',
+            } as any,
+            forwarders: [],
+            crawlers: [
+                {
+                    name: '22/7官网FC抓取 - 日间轮询',
+                    websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga'],
+                },
+            ] as any,
+        },
+        new EventEmitter(),
+    )
+
+    ;(pools as any).resolveForwardingPaths = () => [
+        {
+            formatterConfig: {
+                render_type: 'img-tag',
+            },
+            targets: [],
+            source: 'graph',
+            formatterName: '官网卡片',
+        },
+    ]
+
+    let capturedArticles: any[] = []
+    ;(pools as any).sendArticles = async (_log: any, _taskId: string, articles: any[]) => {
+        capturedArticles = articles
+    }
+
+    const originalGetArticlesByTimeRange = DB.Article.getArticlesByTimeRange
+    ;(DB.Article as any).getArticlesByTimeRange = async () => [
+        {
+            id: 51,
+            a_id: 'photo:photoga:35054',
+            u_id: '22/7:photo',
+            username: '北原実咲',
+            created_at: 1773673200,
+            content: '【春のかおり - 北原実咲】\n\nメッセージ1',
+            translation: null,
+            translated_by: null,
+            url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga#photo-modal-a22',
+            type: 'article',
+            ref: null,
+            has_media: true,
+            media: [{ type: 'photo', url: 'https://example.com/1.jpg' }],
+            extra: {
+                data: {
+                    site: '22/7',
+                    host: 'nanabunnonijyuuni-mobile.com',
+                    feed: 'photo',
+                    title: '春のかおり - 北原実咲',
+                    member: '北原実咲',
+                    summary: '春のかおり',
+                    raw_html: '<p>メッセージ1</p>',
+                    album_id: 'photoga',
+                    theme: '春のかおり',
+                    modal_id: 'photo-modal-a22',
+                    photo_code: '35054',
+                },
+                content: '春のかおり',
+                media: [{ type: 'photo', url: 'https://example.com/1.jpg' }],
+                extra_type: 'website_meta',
+            },
+            u_avatar: 'https://example.com/a1.jpg',
+            platform: 5,
+        },
+        {
+            id: 52,
+            a_id: 'photo:photoga:35055',
+            u_id: '22/7:photo',
+            username: '黒崎ありす',
+            created_at: 1773673200,
+            content: '【春のかおり - 黒崎ありす】\n\nメッセージ2',
+            translation: null,
+            translated_by: null,
+            url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga#photo-modal-a23',
+            type: 'article',
+            ref: null,
+            has_media: true,
+            media: [{ type: 'photo', url: 'https://example.com/2.jpg' }],
+            extra: {
+                data: {
+                    site: '22/7',
+                    host: 'nanabunnonijyuuni-mobile.com',
+                    feed: 'photo',
+                    title: '春のかおり - 黒崎ありす',
+                    member: '黒崎ありす',
+                    summary: '春のかおり',
+                    raw_html: '<p>メッセージ2</p>',
+                    album_id: 'photoga',
+                    theme: '春のかおり',
+                    modal_id: 'photo-modal-a23',
+                    photo_code: '35055',
+                },
+                content: '春のかおり',
+                media: [{ type: 'photo', url: 'https://example.com/2.jpg' }],
+                extra_type: 'website_meta',
+            },
+            u_avatar: 'https://example.com/a2.jpg',
+            platform: 5,
+        },
+    ]
+
+    try {
+        await pools.resendArticle(
+            {
+                id: 51,
+                a_id: 'photo:photoga:35054',
+                u_id: '22/7:photo',
+                username: '北原実咲',
+                created_at: 1773673200,
+                content: '【春のかおり - 北原実咲】\n\nメッセージ1',
+                translation: null,
+                translated_by: null,
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga#photo-modal-a22',
+                type: 'article',
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: 'https://example.com/1.jpg' }],
+                extra: {
+                    data: {
+                        site: '22/7',
+                        host: 'nanabunnonijyuuni-mobile.com',
+                        feed: 'photo',
+                        title: '春のかおり - 北原実咲',
+                        member: '北原実咲',
+                        summary: '春のかおり',
+                        raw_html: '<p>メッセージ1</p>',
+                        album_id: 'photoga',
+                        theme: '春のかおり',
+                        modal_id: 'photo-modal-a22',
+                        photo_code: '35054',
+                    },
+                    content: '春のかおり',
+                    media: [{ type: 'photo', url: 'https://example.com/1.jpg' }],
+                    extra_type: 'website_meta',
+                },
+                u_avatar: 'https://example.com/a1.jpg',
+                platform: 5,
+            } as any,
+            '22/7官网FC抓取 - 日间轮询',
+            {
+                render_type: 'img-tag',
+            } as any,
+        )
+    } finally {
+        ;(DB.Article as any).getArticlesByTimeRange = originalGetArticlesByTimeRange
+    }
+
+    expect(capturedArticles).toHaveLength(1)
+    expect(capturedArticles[0]?.a_id).toBe('photo:album:photoga:35054')
+    expect(capturedArticles[0]?.media).toHaveLength(2)
+})
+
 test('ForwarderPools force resend bypasses block checks but still applies text transforms', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

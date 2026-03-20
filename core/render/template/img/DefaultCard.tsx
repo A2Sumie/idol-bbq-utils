@@ -25,19 +25,19 @@ const WEBSITE_BRAND_CONFIG = {
         badgeIcon: Website227Official,
         badgeRatio: 54.615 / 80,
         badgeWidth: 42,
-        badgeOpacity: 0.2,
+        badgeOpacity: 0.42,
         avatarBackground: 'linear-gradient(135deg, #f8fdff 0%, #e0f6ff 100%)',
         avatarBorderColor: '#b6e4f8',
-        avatarText: '22/7',
+        avatarText: 'HP',
         avatarTextColor: '#008fd0',
         avatarFontSizeAt64: 22,
-        avatarLetterSpacing: -0.8,
+        avatarLetterSpacing: -0.4,
     },
     fc: {
         badgeIcon: Website227FC,
         badgeRatio: 71.39 / 505.05,
         badgeWidth: 96,
-        badgeOpacity: 0.34,
+        badgeOpacity: 0.48,
         avatarBackground: 'linear-gradient(135deg, #fff6fb 0%, #f3f5ff 52%, #f5f9e7 100%)',
         avatarBorderColor: '#dccce9',
         avatarText: 'FC',
@@ -103,7 +103,8 @@ function getPlatformBadge(article: Article) {
 }
 
 function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
-    if (article.u_avatar) {
+    const websiteBrandKey = resolve227WebsiteBrandKey(article)
+    if (!websiteBrandKey && article.u_avatar) {
         return (
             <img
                 tw="rounded-full flex-none"
@@ -118,7 +119,6 @@ function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
         )
     }
 
-    const websiteBrandKey = resolve227WebsiteBrandKey(article)
     if (!websiteBrandKey) {
         return <div tw="rounded-full bg-gray-200 flex-none" style={{ width: size, height: size }} />
     }
