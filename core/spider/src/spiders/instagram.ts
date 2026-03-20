@@ -26,6 +26,17 @@ enum ArticleTypeEnum {
     // REEL = 'reel',
 }
 
+interface InstagramProfileStatus {
+    platform: Platform.Instagram
+    u_id: string
+    username: string
+    u_avatar: string | null
+    live_broadcast_id: string | null
+    live_broadcast_visibility: string | null
+    is_live: boolean
+    live_url: string | null
+}
+
 const INSTAGRAM_PROFILE_ID_PATTERN = /^[A-Za-z0-9._]+$/i
 const RESERVED_INSTAGRAM_PATHS = new Set(['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct'])
 
@@ -262,6 +273,29 @@ namespace InsApiJsonParser {
         }
     }
 
+    export function profileStatusParser(json: any): InstagramProfileStatus {
+        if (!json) {
+            throw new Error('Profile format may have changed')
+        }
+        const user = json?.data?.user
+        const handle = fallbackUsername(user?.username)
+        const displayName = fallbackUsername(user?.full_name, handle)
+        const liveBroadcastId = user?.live_broadcast_id ? String(user.live_broadcast_id) : null
+        const visibility = user?.live_broadcast_visibility ? String(user.live_broadcast_visibility) : null
+        const avatar = user?.hd_profile_pic_url_info?.url || user?.profile_pic_url_hd || user?.profile_pic_url || null
+
+        return {
+            platform: Platform.Instagram,
+            u_id: handle,
+            username: displayName,
+            u_avatar: avatar ? String(avatar).replace('\\u0026', '&') : null,
+            live_broadcast_id: liveBroadcastId,
+            live_broadcast_visibility: visibility,
+            is_live: Boolean(liveBroadcastId),
+            live_url: handle && liveBroadcastId ? `https://www.instagram.com/${handle}/live/` : null,
+        }
+    }
+
     const USERNAME_REGEX_FROM_OG_TITLE =
         /(?:趁\s*(?<username>.*?)\s*的这条快拍|Watch this story by (?<username>.*?) on Instagram)/i
     async function storiesParser(json: any, page: Page): Promise<Array<GenericArticle<Platform.Instagram>>> {
@@ -397,6 +431,16 @@ namespace InsApiJsonParser {
     }
 
     export async function grabFollowsNumber(page: Page, url: string): Promise<GenericFollows> {
+        const follows_json = await grabProfileUserPayload(page, url)
+        return followsParser(follows_json)
+    }
+
+    export async function grabProfileStatus(page: Page, url: string): Promise<InstagramProfileStatus> {
+        const profile_json = await grabProfileUserPayload(page, url)
+        return profileStatusParser(profile_json)
+    }
+
+    async function grabProfileUserPayload(page: Page, url: string) {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
             if (url.includes('graphql/query') && response.request().method() === 'POST') {
@@ -429,10 +473,10 @@ namespace InsApiJsonParser {
         if (!data.success) {
             throw data.error
         }
-        const follows_json = data.data
-        return followsParser(follows_json)
+        return data.data
     }
 }
 
 export { ArticleTypeEnum, InsApiJsonParser }
+export type { InstagramProfileStatus }
 export { InstagramSpider }

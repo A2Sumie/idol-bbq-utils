@@ -21,6 +21,7 @@ import { shuffle } from 'lodash'
 import crypto from 'crypto'
 import dayjs from 'dayjs'
 import { BrowserSessionPool } from '@/services/browser-session-pool'
+import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
 
 interface TaskResult {
     taskId: string
@@ -238,6 +239,7 @@ class SpiderPools extends BaseCompatibleModel {
     private emitter: EventEmitter
     private processors: Map<string, BaseProcessor> = new Map()
     private browserPool: BrowserSessionPool
+    private instagramLiveRelay: InstagramLiveRelayService
     /**
      * BaseSpider._VALID_URL.source
      */
@@ -249,6 +251,7 @@ class SpiderPools extends BaseCompatibleModel {
         this.log = log?.child({ subservice: this.NAME })
         this.emitter = emitter
         this.browserPool = new BrowserSessionPool(cacheRoot, this.log)
+        this.instagramLiveRelay = new InstagramLiveRelayService(cacheRoot, this.log)
         this.dispatchListener = this.onTaskReceived.bind(this)
     }
 
@@ -757,6 +760,7 @@ class SpiderPools extends BaseCompatibleModel {
                 },
             },
         )
+        await this.maybeSyncInstagramLiveRelay(ctx, url, page, cookieString, requestHeaders)
         const reuseExistingArticleIdsForImmediateForward = spiderRegistry.findByUrl(url.href)?.id === 'x-list'
         let new_articles: Array<Article> = []
         let dispatch_article_ids: Array<number> = []
@@ -803,6 +807,42 @@ class SpiderPools extends BaseCompatibleModel {
         }
         ctx.log?.info(`[${url.href}] ${saved_articles_count} articles saved.`)
         return Array.from(new Set(dispatch_article_ids))
+    }
+
+    private async maybeSyncInstagramLiveRelay(
+        ctx: TaskScheduler.TaskCtx,
+        url: URL,
+        page?: Page,
+        cookieString?: string,
+        requestHeaders?: Record<string, string>,
+    ) {
+        if (!page) {
+            return
+        }
+
+        const spiderPlugin = spiderRegistry.findByUrl(url.href)
+        if (spiderPlugin?.platform !== Platform.Instagram) {
+            return
+        }
+
+        const handle = spiderRegistry.extractBasicInfo(url.href)?.u_id
+        if (!handle) {
+            return
+        }
+
+        try {
+            await this.instagramLiveRelay.syncProfile({
+                handle,
+                profileUrl: url.href,
+                page,
+                crawlerConfig: (ctx.task.data as Crawler).cfg_crawler,
+                cookieString,
+                requestHeaders,
+                log: ctx.log,
+            })
+        } catch (error) {
+            ctx.log?.warn(`[${url.href}] Instagram live relay sync failed: ${error}`)
+        }
     }
 
     private async doProcess(

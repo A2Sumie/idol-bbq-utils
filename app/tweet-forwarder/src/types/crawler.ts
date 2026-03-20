@@ -9,6 +9,23 @@ interface AggregationConfig {
     processor_id?: string
 }
 
+interface LiveRelayTargetConfig {
+    enabled?: boolean
+    player_id?: string
+    player_name?: string
+    player_url?: string
+    live_player_url?: string
+    auth_username?: string
+    auth_password?: string
+    waf_bypass_header?: string
+    sync_interval_seconds?: number
+    stop_offline?: boolean
+}
+
+interface LiveRelayConfig extends LiveRelayTargetConfig {
+    targets?: Record<string, LiveRelayTargetConfig>
+}
+
 interface CrawlerConfig extends CommonCfgConfig {
     /**
      * crontab format, reference: https://crontab.guru/
@@ -53,6 +70,7 @@ interface CrawlerConfig extends CommonCfgConfig {
 
     // Aggregation (Batch Formatting) Configuration
     aggregation?: AggregationConfig
+    live_relay?: LiveRelayConfig
 
     /**
      * Default use browser, it depends on the spider behavior.
@@ -105,4 +123,4 @@ interface Crawler {
     cfg_crawler?: CrawlerConfig
 }
 
-export type { Crawler, CrawlerConfig, AggregationConfig }
+export type { Crawler, CrawlerConfig, AggregationConfig, LiveRelayConfig, LiveRelayTargetConfig }

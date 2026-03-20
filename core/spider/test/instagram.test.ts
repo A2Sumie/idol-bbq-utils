@@ -86,6 +86,39 @@ test('Instagram API JSON Parser', async () => {
         username: profile_json_result.username,
         followers: profile_json_result.followers,
     })
+    expect(InsApiJsonParser.profileStatusParser(profile_json)).toMatchObject({
+        platform: 2,
+        u_id: profile_json_result.u_id,
+        username: profile_json_result.username,
+        is_live: false,
+        live_broadcast_id: null,
+        live_broadcast_visibility: null,
+        live_url: null,
+    })
+})
+
+test('Instagram profile status parser detects live broadcasts', () => {
+    const profile_json = {
+        data: {
+            user: {
+                username: 'shiina_satsuki227',
+                full_name: '椎名桜月',
+                profile_pic_url_hd: 'https://example.com/avatar.jpg',
+                live_broadcast_id: '1234567890',
+                live_broadcast_visibility: 'public',
+            },
+        },
+    }
+
+    expect(InsApiJsonParser.profileStatusParser(profile_json)).toMatchObject({
+        platform: 2,
+        u_id: 'shiina_satsuki227',
+        username: '椎名桜月',
+        is_live: true,
+        live_broadcast_id: '1234567890',
+        live_broadcast_visibility: 'public',
+        live_url: 'https://www.instagram.com/shiina_satsuki227/live/',
+    })
 })
 
 test('Instagram extractBasicInfo preserves dotted profile handles', () => {
