@@ -757,15 +757,28 @@ class SpiderPools extends BaseCompatibleModel {
                 },
             },
         )
+        const reuseExistingArticleIdsForImmediateForward = spiderRegistry.findByUrl(url.href)?.id === 'x-list'
         let new_articles: Array<Article> = []
-        let saved_article_ids = []
+        let dispatch_article_ids: Array<number> = []
+        let saved_articles_count = 0
         for (const article of articles) {
             const isExist = await DB.Article.checkExist(article)
             if (!isExist) {
                 new_articles.push(article)
+                continue
+            }
+            if (reuseExistingArticleIdsForImmediateForward) {
+                dispatch_article_ids.push(isExist.id)
             }
         }
         if (new_articles.length === 0) {
+            if (dispatch_article_ids.length > 0) {
+                const dedupedDispatchIds = Array.from(new Set(dispatch_article_ids))
+                ctx.log?.info(
+                    `[${url.href}] No new articles found, reusing ${dedupedDispatchIds.length} existing article ids for immediate forward.`,
+                )
+                return dedupedDispatchIds
+            }
             ctx.log?.info(`[${url.href}] No new articles found.`)
             return []
         }
@@ -780,10 +793,16 @@ class SpiderPools extends BaseCompatibleModel {
              * TODO 这里可以尝试更新翻译
              */
             const res = await DB.Article.trySave(article)
-            if (res) saved_article_ids.push(res)
+            if (res) {
+                saved_articles_count += 1
+            }
+            const persisted = res || (await DB.Article.checkExist(article))
+            if (persisted) {
+                dispatch_article_ids.push(persisted.id)
+            }
         }
-        ctx.log?.info(`[${url.href}] ${saved_article_ids.length} articles saved.`)
-        return saved_article_ids.filter((i) => i !== undefined).map((i) => i.id) as Array<number>
+        ctx.log?.info(`[${url.href}] ${saved_articles_count} articles saved.`)
+        return Array.from(new Set(dispatch_article_ids))
     }
 
     private async doProcess(
