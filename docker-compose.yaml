@@ -31,3 +31,5 @@ services:
       - '/tmp/tweet-forwarder/logs:/tmp/tweet-forwarder/logs'
       # 5. 挂载媒体文件临时目录
       - '/tmp/tweet-forwarder/media:/tmp/tweet-forwarder/media'
+      # 6. 挂载 Instagram live relay 缓存目录
+      - '/tmp/tweet-forwarder/instagram-live:/tmp/tweet-forwarder/instagram-live'
