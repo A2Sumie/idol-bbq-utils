@@ -18,13 +18,24 @@ import type { MediaType } from '@idol-bbq-utils/spider/types'
 
 export interface RenderResult {
     text: string
+    cardMediaFiles: Array<{
+        path: string
+        media_type: MediaType
+    }>
+    originalMediaFiles: Array<{
+        path: string
+        media_type: MediaType
+    }>
     mediaFiles: Array<{
         path: string
         media_type: MediaType
     }>
 }
 
-function formatPlatformTag(article: Pick<Article, 'platform' | 'username' | 'a_id'>, log?: Pick<Logger, 'warn'>): string {
+function formatPlatformTag(
+    article: Pick<Article, 'platform' | 'username' | 'a_id'>,
+    log?: Pick<Logger, 'warn'>,
+): string {
     const platformName = platformNameMap[article.platform] || 'Unknown'
     if (platformName === 'Unknown') {
         log?.warn(`Unknown platform for article ${article.a_id}: ${article.platform}`)
@@ -56,12 +67,13 @@ export class RenderService {
             render_type?: string
             mediaConfig?: Media
             deduplication?: boolean
-        }
+        },
     ): Promise<RenderResult> {
         const { taskId, render_type, mediaConfig, deduplication } = config
         const cloned_article = cloneDeep(article)
 
         let maybe_media_files: Array<{ path: string; media_type: MediaType }> = []
+        let card_media_files: Array<{ path: string; media_type: MediaType }> = []
 
         // 1. Download/Handle Media Files
         if (mediaConfig) {
@@ -90,22 +102,28 @@ export class RenderService {
             // Skip if no media
             if (maybe_media_files.length === 0) {
                 this.log?.debug(`Skipping 'tag' mode for text-only article ${article.a_id}`)
-                return { text: '', mediaFiles: [] }
+                return {
+                    text: '',
+                    cardMediaFiles: [],
+                    originalMediaFiles: [],
+                    mediaFiles: [],
+                }
             }
             text = this.formatPlatformFrom(article)
         } else if (render_type === 'img-tag' || render_type === 'img-tag-dynamic') {
             // Case 2 & 3: img-tag family
             // Check Exemption Logic
-            const isVideoPlatform = [
-                Platform.TikTok,
-                Platform.YouTube
-            ].includes(article.platform)
+            const isVideoPlatform = [Platform.TikTok, Platform.YouTube].includes(article.platform)
 
-            const isVideoType = article.media?.some(m => m.type === 'video') || article.media?.some(m => m.type === 'video_thumbnail')
+            const isVideoType =
+                article.media?.some((m) => m.type === 'video') ||
+                article.media?.some((m) => m.type === 'video_thumbnail')
 
             // User requested Bilibili (future) and Video types NOT to be merged
             if (isVideoPlatform || isVideoType) {
-                this.log?.info(`Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id}`)
+                this.log?.info(
+                    `Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id}`,
+                )
                 // Fallback to standard text + media
                 text = articleToText(article)
             } else {
@@ -113,10 +131,12 @@ export class RenderService {
                 text = this.formatPlatformFrom(article)
                 const renderedPath = await generateRenderedImage()
                 if (renderedPath) {
-                    maybe_media_files.unshift({
+                    const cardMedia = {
                         path: renderedPath,
                         media_type: 'photo' as MediaType,
-                    })
+                    }
+                    card_media_files.push(cardMedia)
+                    maybe_media_files.unshift(cardMedia)
                 }
             }
         } else if (render_type?.startsWith('img')) {
@@ -124,21 +144,22 @@ export class RenderService {
             // Concept: Rendered Image (at start) + Metaline/Empty Text.
 
             // Check Exemption Logic
-            const isVideoPlatform = [
-                Platform.TikTok,
-                Platform.YouTube
-            ].includes(article.platform)
+            const isVideoPlatform = [Platform.TikTok, Platform.YouTube].includes(article.platform)
             if (isVideoPlatform) {
-                this.log?.info(`Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id} in img mode`)
+                this.log?.info(
+                    `Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id} in img mode`,
+                )
                 text = articleToText(article)
             } else {
                 const renderedPath = await generateRenderedImage()
                 let articleToImgSuccess = false
                 if (renderedPath) {
-                    maybe_media_files.unshift({
+                    const cardMedia = {
                         path: renderedPath,
                         media_type: 'photo' as MediaType,
-                    })
+                    }
+                    card_media_files.push(cardMedia)
+                    maybe_media_files.unshift(cardMedia)
                     articleToImgSuccess = true
                 }
 
@@ -150,7 +171,6 @@ export class RenderService {
                     text = '' // No text for pure img mode
                 }
             }
-
         } else if (render_type === 'text-compact') {
             text = compactArticleToText(article)
         } else {
@@ -160,6 +180,10 @@ export class RenderService {
 
         return {
             text,
+            cardMediaFiles: card_media_files,
+            originalMediaFiles: maybe_media_files.filter(
+                (item) => !card_media_files.some((card) => card.path === item.path),
+            ),
             mediaFiles: maybe_media_files,
         }
     }
@@ -189,7 +213,7 @@ export class RenderService {
         taskId: string,
         article: Article,
         media: Media,
-        deduplication?: boolean
+        deduplication?: boolean,
     ): Promise<Array<{ path: string; media_type: MediaType }>> {
         let maybe_media_files = [] as Array<{
             path: string
@@ -205,9 +229,9 @@ export class RenderService {
         while (currentArticle) {
             let new_files = [] as Array<
                 | {
-                    path: string
-                    media_type: MediaType
-                }
+                      path: string
+                      media_type: MediaType
+                  }
                 | undefined
             >
             if (currentArticle.has_media) {
@@ -232,7 +256,9 @@ export class RenderService {
                                         `Media hash ${hash.substring(0, 8)} already recorded for article ${articleId}, keeping file for another formatter/target.`,
                                     )
                                 } else {
-                                    this.log?.info(`Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`)
+                                    this.log?.info(
+                                        `Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`,
+                                    )
                                     fs.unlinkSync(path)
                                     return undefined
                                 }
@@ -250,7 +276,10 @@ export class RenderService {
                 }
 
                 // Helper to download a list of media items
-                const _handleMedia = async (mediaList: Array<{ url: string; type: MediaType }>, overrideType?: boolean) => {
+                const _handleMedia = async (
+                    mediaList: Array<{ url: string; type: MediaType }>,
+                    overrideType?: boolean,
+                ) => {
                     return Promise.all(
                         mediaList.map(async ({ url, type }) => {
                             try {
@@ -307,7 +336,7 @@ export class RenderService {
                     )
 
                     new_files = await Promise.all(paths.map((path) => finalizeDownloadedFile(path)))
-                    new_files = new_files.filter(f => f !== undefined)
+                    new_files = new_files.filter((f) => f !== undefined)
 
                     const uniqueExtraMedia = getUniqueExtraMedia()
                     if (uniqueExtraMedia.length > 0) {
@@ -341,8 +370,10 @@ export class RenderService {
 
                 if (new_files.length > 0) {
                     // Filter defined
-                    const validFiles = new_files.filter((i): i is { path: string; media_type: MediaType } => i !== undefined)
-                    this.log?.debug(`Downloaded media files: ${validFiles.map(f => f.path).join(', ')}`)
+                    const validFiles = new_files.filter(
+                        (i): i is { path: string; media_type: MediaType } => i !== undefined,
+                    )
+                    this.log?.debug(`Downloaded media files: ${validFiles.map((f) => f.path).join(', ')}`)
                     maybe_media_files = maybe_media_files.concat(validFiles)
                 }
             }

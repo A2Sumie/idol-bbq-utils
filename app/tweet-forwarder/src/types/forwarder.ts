@@ -53,6 +53,19 @@ type TaskConfig<T extends TaskType> = TaskConfigMap[T]
 interface ForwardTargetPlatformCommonConfig {
     replace_regex?: string | [string, string] | Array<[string, string]>
     /**
+     * Accumulate image-like message units until the threshold is reached, then send once.
+     * Card images count as one unit. When no card image is generated, non-empty text counts as one unit.
+     */
+    media_batch_threshold?: number
+    /**
+     * If a single article already contains this many source images, bypass the pending batch and send immediately.
+     */
+    media_batch_breakout_images?: number
+    /**
+     * When enabled, rendered card images are sent separately from the original media set.
+     */
+    separate_card_media?: boolean
+    /**
      *
      * if 1d, the forwarder will only forward the article that created within 1 day
      * "7d", "1w", "30d", "2h"...
@@ -174,9 +187,9 @@ interface Forwarder<T extends TaskType> {
     subscribers?: Array<
         | string
         | {
-            id: string
-            cfg_forward_target?: ForwardTargetPlatformCommonConfig
-        }
+              id: string
+              cfg_forward_target?: ForwardTargetPlatformCommonConfig
+          }
     >
 
     cfg_forwarder?: ForwarderConfig

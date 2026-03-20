@@ -7,9 +7,8 @@ import {
 } from '@/types/forwarder'
 import { BaseCompatibleModel } from '@/utils/base'
 import { Logger } from '@idol-bbq-utils/log'
-import type { MediaType } from '@idol-bbq-utils/spider/types'
+import { Platform, type MediaType } from '@idol-bbq-utils/spider/types'
 import { pRetry } from '@idol-bbq-utils/utils'
-import { noop } from 'lodash'
 import {
     MiddlewarePipeline,
     TimeFilterMiddleware,
@@ -21,11 +20,33 @@ import {
     type ForwarderMiddleware,
 } from './pipeline'
 
+type MediaFile = {
+    media_type: MediaType
+    path: string
+}
+
+interface PreparedBatchItem {
+    article?: Article
+    timestamp?: number
+    text: string
+    media: MediaFile[]
+    cardMedia: MediaFile[]
+    contentMedia: MediaFile[]
+    unitCount: number
+    sourceImageCount: number
+    hasVideo: boolean
+}
+
+interface MediaBatchConfig {
+    threshold: number
+    breakoutImages: number
+    separateCardMedia: boolean
+}
+
 export interface SendProps {
-    media?: Array<{
-        media_type: MediaType
-        path: string
-    }>
+    media?: MediaFile[]
+    cardMedia?: MediaFile[]
+    contentMedia?: MediaFile[]
     timestamp?: number
     runtime_config?: ForwardTargetPlatformCommonConfig
     article?: Article
@@ -38,6 +59,10 @@ abstract class BaseForwarder extends BaseCompatibleModel {
     id: string
     protected config: ForwardTarget['cfg_platform']
     protected pipeline: MiddlewarePipeline
+    private pendingMediaBatches: Map<
+        string,
+        { config: MediaBatchConfig; items: PreparedBatchItem[]; unitCount: number }
+    > = new Map()
 
     constructor(config: ForwardTarget['cfg_platform'], id: string, log?: Logger) {
         super()
@@ -53,7 +78,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
     }
 
     async drop(..._args: any[]): Promise<void> {
-        noop()
+        await this.flushPendingMediaBatches()
     }
 
     protected createDefaultPipeline(): MiddlewarePipeline {
@@ -66,7 +91,9 @@ abstract class BaseForwarder extends BaseCompatibleModel {
     }
 
     protected createForceSendPipeline(): MiddlewarePipeline {
-        return new MiddlewarePipeline().use(new TextReplaceMiddleware()).use(new TextChunkMiddleware(this.getTextLimit()))
+        return new MiddlewarePipeline()
+            .use(new TextReplaceMiddleware())
+            .use(new TextChunkMiddleware(this.getTextLimit()))
     }
 
     protected getTextLimit(): number {
@@ -135,11 +162,21 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         }
 
         const chunks = (context.metadata.get('chunks') as string[]) || [context.text]
+        const handledByBatch = await this.maybeHandleMediaBatch(chunks, props, mergedConfig)
+        if (handledByBatch) {
+            return
+        }
+
+        await this.sendPrepared(chunks, props)
+    }
+
+    protected async sendPrepared(texts: string[], props?: SendProps): Promise<any> {
+        const normalizedTexts = texts.filter((item) => item !== undefined)
+        const textLength = normalizedTexts.join('\n').length
         const _log = this.log
 
-        _log?.debug(`trying to send text with length ${context.text.length}`)
+        _log?.debug(`trying to send prepared payload with text length ${textLength}`)
 
-        // Rate Limit Check
         if (this.minInterval > 0) {
             const now = Date.now()
             const timeSinceLastSend = now - this.lastSentTime
@@ -150,15 +187,212 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             }
         }
 
-        // Update timestamp BEFORE attempt to space out *starts* of attempts (conservative approach)
         this.lastSentTime = Date.now()
 
-        await pRetry(() => this.realSend(chunks, props), {
+        await pRetry(() => this.realSend(normalizedTexts, props), {
             retries: RETRY_LIMIT,
             onFailedAttempt(e) {
                 _log?.error(`send texts failed, retrying...: ${e.originalError.message}`)
             },
         })
+    }
+
+    private async flushPendingMediaBatches() {
+        const batches = Array.from(this.pendingMediaBatches.values())
+        this.pendingMediaBatches.clear()
+        for (const batch of batches) {
+            if (batch.items.length === 0) {
+                continue
+            }
+            await this.sendPreparedBatchItems(batch.items, batch.config)
+        }
+    }
+
+    private resolveMediaBatchConfig(config: ForwardTargetPlatformCommonConfig): MediaBatchConfig | null {
+        const rawThreshold = Number(config.media_batch_threshold ?? 0)
+        if (!Number.isFinite(rawThreshold) || rawThreshold < 2) {
+            return null
+        }
+
+        const rawBreakout = Number(config.media_batch_breakout_images ?? 3)
+        return {
+            threshold: Math.max(2, Math.floor(rawThreshold)),
+            breakoutImages: Number.isFinite(rawBreakout) && rawBreakout >= 1 ? Math.floor(rawBreakout) : 3,
+            separateCardMedia: config.separate_card_media === true,
+        }
+    }
+
+    private buildMediaBatchKey(config: MediaBatchConfig) {
+        return JSON.stringify(config)
+    }
+
+    private isPhotoLikeMedia(item: MediaFile) {
+        return item.media_type === 'photo' || item.media_type === 'video_thumbnail'
+    }
+
+    private createPreparedBatchItem(texts: string[], props?: SendProps): PreparedBatchItem {
+        const cardMedia = props?.cardMedia || []
+        const media = props?.media || []
+        const cardPaths = new Set(cardMedia.map((item) => item.path))
+        const contentMedia = props?.contentMedia || media.filter((item) => !cardPaths.has(item.path))
+        const normalizedMedia = media.length > 0 ? media : [...cardMedia, ...contentMedia]
+        const text = texts.filter(Boolean).join('\n')
+        const sourceImageCount = contentMedia.filter((item) => this.isPhotoLikeMedia(item)).length
+        const cardImageCount = cardMedia.filter((item) => this.isPhotoLikeMedia(item)).length
+        const hasVideo =
+            normalizedMedia.some((item) => item.media_type === 'video') ||
+            contentMedia.some((item) => item.media_type === 'video')
+        const textUnitCount = cardImageCount === 0 && text.trim() ? 1 : 0
+
+        return {
+            article: props?.article,
+            timestamp: props?.timestamp,
+            text,
+            media: normalizedMedia,
+            cardMedia,
+            contentMedia,
+            unitCount: sourceImageCount + cardImageCount + textUnitCount,
+            sourceImageCount,
+            hasVideo,
+        }
+    }
+
+    private buildTextChunksFromItems(items: PreparedBatchItem[]) {
+        const combinedText = items
+            .map((item) => item.text.trim())
+            .filter(Boolean)
+            .join('\n\n----------\n\n')
+
+        return this.chunkText(combinedText)
+    }
+
+    private chunkText(text: string) {
+        const normalized = text.trim()
+        if (!normalized) {
+            return [] as string[]
+        }
+
+        const basicTextLimit = this.getTextLimit()
+        if (normalized.length <= basicTextLimit) {
+            return [normalized]
+        }
+
+        const separatorNext = '\n\n----⬇️----'
+        const separatorPrev = '----⬆️----\n\n'
+        const paddingLength = 24
+        const textLimit = basicTextLimit - separatorNext.length - separatorPrev.length - paddingLength
+
+        const chunks: string[] = []
+        let remaining = normalized
+        let index = 0
+
+        while (remaining.length > basicTextLimit) {
+            const current = remaining.slice(0, textLimit)
+            chunks.push(`${index > 0 ? separatorPrev : ''}${current}${separatorNext}`)
+            remaining = remaining.slice(textLimit)
+            index += 1
+        }
+
+        chunks.push(`${index > 0 ? separatorPrev : ''}${remaining}`)
+        return chunks
+    }
+
+    private async sendPreparedBatchItems(items: PreparedBatchItem[], config: MediaBatchConfig) {
+        const firstItem = items[0]
+        if (!firstItem) {
+            return
+        }
+
+        const baseProps: SendProps = {
+            article: firstItem.article,
+            timestamp: firstItem.timestamp,
+        }
+
+        if (!config.separateCardMedia) {
+            await this.sendPrepared(this.buildTextChunksFromItems(items), {
+                ...baseProps,
+                media: items.flatMap((item) => item.media),
+            })
+            return
+        }
+
+        const cardItems = items.filter((item) => item.cardMedia.length > 0)
+        const normalItems = items.filter((item) => item.cardMedia.length === 0)
+        const splitMediaItems = items.filter((item) => item.cardMedia.length > 0 && item.contentMedia.length > 0)
+
+        if (cardItems.length > 0) {
+            await this.sendPrepared(this.buildTextChunksFromItems(cardItems), {
+                ...baseProps,
+                media: cardItems.flatMap((item) => item.cardMedia),
+            })
+        }
+
+        if (normalItems.length > 0) {
+            await this.sendPrepared(this.buildTextChunksFromItems(normalItems), {
+                ...baseProps,
+                media: normalItems.flatMap((item) => item.media),
+            })
+        }
+
+        if (splitMediaItems.length > 0) {
+            await this.sendPrepared([], {
+                ...baseProps,
+                media: splitMediaItems.flatMap((item) => item.contentMedia),
+            })
+        }
+    }
+
+    private async maybeHandleMediaBatch(
+        texts: string[],
+        props: SendProps | undefined,
+        mergedConfig: ForwardTargetPlatformCommonConfig,
+    ) {
+        if (props?.forceSend) {
+            return false
+        }
+
+        const batchConfig = this.resolveMediaBatchConfig(mergedConfig)
+        if (!batchConfig) {
+            return false
+        }
+
+        if (!props?.article || ![Platform.X, Platform.Twitter].includes(props.article.platform)) {
+            return false
+        }
+
+        const item = this.createPreparedBatchItem(texts, props)
+        if (item.unitCount === 0) {
+            return false
+        }
+
+        if (item.hasVideo || item.sourceImageCount >= batchConfig.breakoutImages) {
+            this.log?.debug(
+                `Bypassing pending media batch for ${this.id}: source images=${item.sourceImageCount}, hasVideo=${item.hasVideo}`,
+            )
+            await this.sendPreparedBatchItems([item], batchConfig)
+            return true
+        }
+
+        const batchKey = this.buildMediaBatchKey(batchConfig)
+        const batch = this.pendingMediaBatches.get(batchKey) || {
+            config: batchConfig,
+            items: [] as PreparedBatchItem[],
+            unitCount: 0,
+        }
+
+        batch.items.push(item)
+        batch.unitCount += item.unitCount
+        this.pendingMediaBatches.set(batchKey, batch)
+        this.log?.debug(
+            `Queued media batch item for ${this.id}: +${item.unitCount}, pending=${batch.unitCount}/${batchConfig.threshold}`,
+        )
+
+        if (batch.unitCount >= batchConfig.threshold) {
+            this.pendingMediaBatches.delete(batchKey)
+            await this.sendPreparedBatchItems(batch.items, batch.config)
+        }
+
+        return true
     }
 
     protected abstract realSend(texts: string[], props?: SendProps): Promise<any>

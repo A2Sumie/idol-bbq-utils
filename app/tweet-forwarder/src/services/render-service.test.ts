@@ -309,6 +309,8 @@ describe('RenderService img-tag ordering', () => {
         )
 
         expect(result.mediaFiles).toHaveLength(2)
+        expect(result.cardMediaFiles).toHaveLength(1)
+        expect(result.originalMediaFiles).toHaveLength(1)
         expect(result.mediaFiles[0]?.path).toContain('rendered.png')
         expect(result.mediaFiles[1]?.path).not.toContain('rendered.png')
 

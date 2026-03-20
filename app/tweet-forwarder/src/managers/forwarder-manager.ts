@@ -16,7 +16,11 @@ import { RenderService } from '@/services/render-service'
 import { followsToText } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
-import { getWebsitePhotoBatchKey, isWebsitePhotoAlbumArticle, normalizeWebsitePhotoArticles } from '@/utils/website-photo'
+import {
+    getWebsitePhotoBatchKey,
+    isWebsitePhotoAlbumArticle,
+    normalizeWebsitePhotoArticles,
+} from '@/utils/website-photo'
 
 type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
 type ForwarderTemplate = NonNullable<AppConfig['forwarders']>[number]
@@ -114,11 +118,21 @@ type ArticleIdsByUrl = Record<string, Array<number>>
 class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
     NAME: string = 'ForwarderTaskScheduler'
     protected log?: Logger
-    private props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters' | 'forward_targets'>
+    private props: Pick<
+        AppConfig,
+        'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters' | 'forward_targets'
+    >
     private taskEventBindings: Array<{ eventName: string; listener: (...args: any[]) => void }> = []
     private spiderFinishedListener: (payload: TaskResult) => void
 
-    constructor(props: Pick<AppConfig, 'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters' | 'forward_targets'>, emitter: EventEmitter, log?: Logger) {
+    constructor(
+        props: Pick<
+            AppConfig,
+            'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters' | 'forward_targets'
+        >,
+        emitter: EventEmitter,
+        log?: Logger,
+    ) {
         super(emitter)
         this.log = log?.child({ subservice: this.NAME })
         this.props = props
@@ -156,7 +170,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                         data: {
                             ...forwarderTaskData,
                             // Inject connections into task data so pools can access it
-                            connections: this.props.connections
+                            connections: this.props.connections,
                         },
                     }
                     this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, {
@@ -179,17 +193,17 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                     ...directFormatterIds,
                     ...((processorId ? processorFormatterMap[processorId] : []) || []),
                 ])
-                const aggregatingFormatters = this.props.connections ? connectedFormatterIds
-                    .map((fid: string) => this.props.formatters?.find(f => f.id === fid))
-                    .filter(f => f?.aggregation) : []
+                const aggregatingFormatters = this.props.connections
+                    ? connectedFormatterIds
+                          .map((fid: string) => this.props.formatters?.find((f) => f.id === fid))
+                          .filter((f) => f?.aggregation)
+                    : []
 
                 if (aggregatingFormatters.length > 0 || (cfg_forwarder as any).batch_mode) {
                     const batchJob = new CronJob('0 * * * *', async () => {
                         this.log?.info(`Dispatching Hourly Batch for ${taskName}`)
-                        const formatterTargetMap = ((this.props.connections as any)?.['formatter-target'] || {}) as Record<
-                            string,
-                            Array<string>
-                        >
+                        const formatterTargetMap = ((this.props.connections as any)?.['formatter-target'] ||
+                            {}) as Record<string, Array<string>>
                         const targetIds = resolveBatchTargetIds(
                             aggregatingFormatters.map((formatter: any) => formatter.id).filter(Boolean),
                             formatterTargetMap,
@@ -226,7 +240,9 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                             )
                         }
                     })
-                    this.log?.info(`Batch Job created for ${taskName} to send to ${aggregatingFormatters.length} aggregating formatters`)
+                    this.log?.info(
+                        `Batch Job created for ${taskName} to send to ${aggregatingFormatters.length} aggregating formatters`,
+                    )
                     this.cronJobs.push(batchJob)
                 }
                 // -----------------------------
@@ -288,8 +304,6 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
             job.start()
             this.log?.debug(`CronJob started: ${job.cronTime.source}`)
         })
-
-
     }
 
     /**
@@ -389,7 +403,16 @@ class ForwarderPools extends BaseCompatibleModel {
             cfg_forwarder: Forwarder['cfg_forwarder']
         }
     > = new Map()
-    private props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters' | 'cfg_forwarder' | 'forwarders' | 'crawlers'>
+    private props: Pick<
+        AppConfig,
+        | 'forward_targets'
+        | 'cfg_forward_target'
+        | 'connections'
+        | 'formatters'
+        | 'cfg_forwarder'
+        | 'forwarders'
+        | 'crawlers'
+    >
     private renderService: RenderService
 
     /**
@@ -403,7 +426,20 @@ class ForwarderPools extends BaseCompatibleModel {
     private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
 
     // private workers:
-    constructor(props: Pick<AppConfig, 'forward_targets' | 'cfg_forward_target' | 'connections' | 'formatters' | 'cfg_forwarder' | 'forwarders' | 'crawlers'>, emitter: EventEmitter, log?: Logger) {
+    constructor(
+        props: Pick<
+            AppConfig,
+            | 'forward_targets'
+            | 'cfg_forward_target'
+            | 'connections'
+            | 'formatters'
+            | 'cfg_forwarder'
+            | 'forwarders'
+            | 'crawlers'
+        >,
+        emitter: EventEmitter,
+        log?: Logger,
+    ) {
         super()
         this.log = log?.child({ subservice: this.NAME })
         this.renderService = new RenderService(this.log)
@@ -473,7 +509,9 @@ class ForwarderPools extends BaseCompatibleModel {
         ctx.log?.debug(`Task received: ${JSON.stringify(task)}`)
 
         if (!websites && !origin && !paths) {
-            ctx.log?.error(`[Trace] No websites or origin or paths found. Task data keys: ${Object.keys(task.data).join(',')}`)
+            ctx.log?.error(
+                `[Trace] No websites or origin or paths found. Task data keys: ${Object.keys(task.data).join(',')}`,
+            )
             this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
                 taskId,
                 status: TaskScheduler.TaskStatus.CANCELLED,
@@ -486,7 +524,6 @@ class ForwarderPools extends BaseCompatibleModel {
             paths,
         })
         ctx.log?.info(`[Trace] Sanitized websites: ${websites?.length || 0} found. List: ${websites?.join(', ')}`)
-
 
         try {
             let result: Array<CrawlerTaskResult> = []
@@ -518,7 +555,14 @@ class ForwarderPools extends BaseCompatibleModel {
                     .createHash('md5')
                     .update(`${task_type}:${websites.join(',')}`)
                     .digest('hex')
-                const forwarders = this.getOrInitForwarders(batchId, subscribers, cfg_forwarder, cfg_forward_target, id, connections)
+                const forwarders = this.getOrInitForwarders(
+                    batchId,
+                    subscribers,
+                    cfg_forwarder,
+                    cfg_forward_target,
+                    id,
+                    connections,
+                )
                 if (forwarders.length === 0) {
                     ctx.log?.warn(`No forwarders found for ${task_title || batchId}`)
                     return
@@ -554,7 +598,8 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     async processArticleTask(ctx: TaskScheduler.TaskCtx) {
-        const { websites, subscribers, cfg_forwarder, cfg_forward_target, id, connections, article_ids_by_url } = ctx.task.data as {
+        const { websites, subscribers, cfg_forwarder, cfg_forward_target, id, connections, article_ids_by_url } = ctx
+            .task.data as {
             websites: Array<string>
             subscribers: Forwarder['subscribers']
             cfg_forwarder: Forwarder['cfg_forwarder']
@@ -581,7 +626,13 @@ class ForwarderPools extends BaseCompatibleModel {
             const url = new URL(website)
 
             const crawlerName = ctx.task.data.name
-            const allPaths = this.resolveForwardingPaths(crawlerName, cfg_forwarder, cfg_forward_target, connections, ctx.log)
+            const allPaths = this.resolveForwardingPaths(
+                crawlerName,
+                cfg_forwarder,
+                cfg_forward_target,
+                connections,
+                ctx.log,
+            )
 
             // 3. Execute All Paths
             if (allPaths.length === 0) {
@@ -591,7 +642,9 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             for (const path of allPaths) {
-                ctx.log?.info(`Processing via path [${path.source}]: ${path.formatterName} for ${path.targets.length} targets`)
+                ctx.log?.info(
+                    `Processing via path [${path.source}]: ${path.formatterName} for ${path.targets.length} targets`,
+                )
                 /**
                  * 查询当前网站下的近10篇文章并查询转发
                  */
@@ -709,9 +762,7 @@ class ForwarderPools extends BaseCompatibleModel {
             expanded.push(...(batchCache.get(batchKey) || []))
         }
 
-        const deduped = Array.from(
-            new Map(expanded.map((item) => [`${item.platform}:${item.a_id}`, item])).values(),
-        )
+        const deduped = Array.from(new Map(expanded.map((item) => [`${item.platform}:${item.a_id}`, item])).values())
         return normalizeWebsitePhotoArticles(orderBy(deduped, ['created_at', 'id'], ['desc', 'asc']))
     }
 
@@ -724,15 +775,15 @@ class ForwarderPools extends BaseCompatibleModel {
     ) {
         const allPaths: ForwardingPath[] = []
         if (!crawlerName || !connections || !connections['formatter-target']) {
-            log?.warn(`[Trace] Missing connections or crawler name. Name: ${crawlerName}, Connections present: ${!!connections}`)
+            log?.warn(
+                `[Trace] Missing connections or crawler name. Name: ${crawlerName}, Connections present: ${!!connections}`,
+            )
             return allPaths
         }
 
         const directFormatterIds = connections['crawler-formatter']?.[crawlerName] || []
         const processorId = connections['crawler-processor']?.[crawlerName]
-        const viaProcessorFormatterIds = processorId
-            ? connections['processor-formatter']?.[processorId] || []
-            : []
+        const viaProcessorFormatterIds = processorId ? connections['processor-formatter']?.[processorId] || [] : []
         const connectedFormatterIds = sortUnique([...directFormatterIds, ...viaProcessorFormatterIds])
         log?.info(
             `[Trace] Crawler '${crawlerName}' connected formatters: ${connectedFormatterIds.length} (${connectedFormatterIds.join(', ')})`,
@@ -761,7 +812,9 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             if (validTargets.length <= 0) {
-                log?.warn(`[Trace] No valid targets found for formatter ${formatterId} (Original IDs: ${targetIds.join(', ')})`)
+                log?.warn(
+                    `[Trace] No valid targets found for formatter ${formatterId} (Original IDs: ${targetIds.join(', ')})`,
+                )
                 continue
             }
 
@@ -802,7 +855,12 @@ class ForwarderPools extends BaseCompatibleModel {
                     to.push(forwarder)
                     continue
                 }
-                const exist = await DB.ForwardBy.checkExist(article.id, article.platform, forwarder.forwarder.id, 'article')
+                const exist = await DB.ForwardBy.checkExist(
+                    article.id,
+                    article.platform,
+                    forwarder.forwarder.id,
+                    'article',
+                )
                 if (!exist) {
                     to.push(forwarder)
                 } else {
@@ -911,6 +969,8 @@ class ForwarderPools extends BaseCompatibleModel {
 
                         await target.send(renderResult.text, {
                             media: renderResult.mediaFiles,
+                            cardMedia: renderResult.cardMediaFiles,
+                            contentMedia: renderResult.originalMediaFiles,
                             timestamp: article.created_at,
                             runtime_config,
                             article: cloned_article,
@@ -936,7 +996,9 @@ class ForwarderPools extends BaseCompatibleModel {
                     let errorCount = this.errorCounter.get(`${platform}:${cloned_article.a_id}`) || 0
                     errorCount += 1
                     if (errorCount > this.MAX_ERROR_COUNT) {
-                        log?.error(`Error count exceeded for ${cloned_article.a_id}, skipping this and tag forwarded...`)
+                        log?.error(
+                            `Error count exceeded for ${cloned_article.a_id}, skipping this and tag forwarded...`,
+                        )
                         for (const { forwarder: target } of to) {
                             let currentArticle: ArticleWithId | null = cloned_article
                             while (currentArticle && typeof currentArticle === 'object') {
@@ -1058,7 +1120,7 @@ class ForwarderPools extends BaseCompatibleModel {
         cfg: Forwarder['cfg_forwarder'],
         cfg_forward_target?: Forwarder['cfg_forward_target'],
         forwarderId?: string,
-        connections?: AppConfig['connections']
+        connections?: AppConfig['connections'],
     ): Array<ForwardTargetInstanceWithRuntimeConfig> {
         // Resolve targets from subscribers
         const subscribersList = subscribers || []
@@ -1067,9 +1129,9 @@ class ForwarderPools extends BaseCompatibleModel {
         if (forwarderId && connections && connections['forwarder-target']) {
             const targetIds = connections['forwarder-target'][forwarderId]
             if (targetIds && targetIds.length > 0) {
-                targetIds.forEach(targetId => {
+                targetIds.forEach((targetId) => {
                     // Avoid duplicates if already in subscribers
-                    const exists = subscribersList.some(s => (typeof s === 'string' ? s : s.id) === targetId)
+                    const exists = subscribersList.some((s) => (typeof s === 'string' ? s : s.id) === targetId)
                     if (!exists) {
                         subscribersList.push(targetId)
                     }
@@ -1081,23 +1143,24 @@ class ForwarderPools extends BaseCompatibleModel {
         let wrap = this.subscribers.get(id)
         if (!wrap) {
             const newWrap = {
-                to: subscribersList.length > 0
-                    ? subscribersList.reduce((acc, s) => {
-                        if (typeof s === 'string') {
-                            acc[s] = common_cfg
-                        }
-                        if (typeof s === 'object') {
-                            acc[s.id] = {
-                                ...common_cfg,
-                                ...s.cfg_forward_target,
-                            }
-                        }
-                        return acc
-                    }, {} as ForwardTargetIdWithRuntimeConfig)
-                    : this.forward_to.keys().reduce((acc, id) => {
-                        acc[id] = undefined
-                        return acc
-                    }, {} as ForwardTargetIdWithRuntimeConfig),
+                to:
+                    subscribersList.length > 0
+                        ? subscribersList.reduce((acc, s) => {
+                              if (typeof s === 'string') {
+                                  acc[s] = common_cfg
+                              }
+                              if (typeof s === 'object') {
+                                  acc[s.id] = {
+                                      ...common_cfg,
+                                      ...s.cfg_forward_target,
+                                  }
+                              }
+                              return acc
+                          }, {} as ForwardTargetIdWithRuntimeConfig)
+                        : this.forward_to.keys().reduce((acc, id) => {
+                              acc[id] = undefined
+                              return acc
+                          }, {} as ForwardTargetIdWithRuntimeConfig),
                 cfg_forwarder: cfg,
             }
             this.subscribers.set(id, newWrap)
@@ -1114,9 +1177,9 @@ class ForwarderPools extends BaseCompatibleModel {
                     typeof s === 'string'
                         ? common_cfg
                         : {
-                            ...common_cfg,
-                            ...s.cfg_forward_target,
-                        }
+                              ...common_cfg,
+                              ...s.cfg_forward_target,
+                          }
             }
         })
         return Object.entries(to)

@@ -1,6 +1,7 @@
 import { Input, Telegraf } from 'telegraf'
 import { Forwarder, type SendProps } from './base'
 import type { InputMediaPhoto, InputMediaVideo } from 'telegraf/types'
+import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 
 class TgForwarder extends Forwarder {
@@ -22,33 +23,48 @@ class TgForwarder extends Forwarder {
 
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
         const { media } = props || {}
-        for (const text of texts) {
-            if (media && media.length !== 0) {
+        if (media && media.length !== 0) {
+            const mediaGroups = chunk(
+                media
+                    .map((item) => {
+                        if (item.media_type === 'photo' || item.media_type === 'video_thumbnail') {
+                            return {
+                                media: Input.fromLocalFile(item.path),
+                                type: 'photo' as InputMediaPhoto['type'],
+                            }
+                        }
+                        if (item.media_type === 'video') {
+                            return {
+                                media: Input.fromLocalFile(item.path),
+                                type: 'video' as InputMediaVideo['type'],
+                            }
+                        }
+                        return undefined
+                    })
+                    .filter((item) => item !== undefined),
+                10,
+            )
+
+            const [firstText, ...remainingTexts] = texts
+
+            for (const [index, group] of mediaGroups.entries()) {
                 await this.bot.telegram.sendMediaGroup(
                     this.chat_id,
-                    media
-                        .map((i, idx) => {
-                            if (i.media_type === 'photo' || i.media_type === 'video_thumbnail') {
-                                return {
-                                    media: Input.fromLocalFile(i.path),
-                                    type: 'photo' as InputMediaPhoto['type'],
-                                    caption: idx === 0 ? text : undefined,
-                                }
-                            }
-                            if (i.media_type === 'video') {
-                                return {
-                                    media: Input.fromLocalFile(i.path),
-                                    type: 'video' as InputMediaVideo['type'],
-                                    caption: idx === 0 ? text : undefined,
-                                }
-                            }
-                            return
-                        })
-                        .filter((i) => i !== undefined),
+                    group.map((item, itemIndex) => ({
+                        ...item,
+                        caption: index === 0 && itemIndex === 0 ? firstText : undefined,
+                    })),
                 )
-            } else {
+            }
+
+            for (const text of remainingTexts) {
                 await this.bot.telegram.sendMessage(this.chat_id, text)
             }
+            return
+        }
+
+        for (const text of texts) {
+            await this.bot.telegram.sendMessage(this.chat_id, text)
         }
         return
     }

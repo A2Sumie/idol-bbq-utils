@@ -25,7 +25,7 @@ const WEBSITE_BRAND_CONFIG = {
         badgeIcon: Website227Official,
         badgeRatio: 54.615 / 80,
         badgeWidth: 42,
-        badgeOpacity: 0.42,
+        badgeOpacity: 0.5,
         avatarBackground: 'linear-gradient(135deg, #f8fdff 0%, #e0f6ff 100%)',
         avatarBorderColor: '#b6e4f8',
         avatarText: 'HP',
@@ -37,7 +37,11 @@ const WEBSITE_BRAND_CONFIG = {
         badgeIcon: Website227FC,
         badgeRatio: 71.39 / 505.05,
         badgeWidth: 96,
-        badgeOpacity: 0.48,
+        badgeOpacity: 0.62,
+        backdropIcon: Website227Official,
+        backdropRatio: 54.615 / 80,
+        backdropWidth: 54,
+        backdropOpacity: 0.26,
         avatarBackground: 'linear-gradient(135deg, #fff6fb 0%, #f3f5ff 52%, #f5f9e7 100%)',
         avatarBorderColor: '#dccce9',
         avatarText: 'FC',
@@ -86,19 +90,47 @@ function getPlatformBadge(article: Article) {
     const websiteBrandKey = resolve227WebsiteBrandKey(article)
     if (!websiteBrandKey) {
         return {
-            width: DEFAULT_PLATFORM_BADGE_WIDTH,
-            ratio: SVG[article.platform].ratio,
-            icon: SVG[article.platform].icon,
-            opacity: 0.2,
+            layers: [
+                {
+                    width: DEFAULT_PLATFORM_BADGE_WIDTH,
+                    ratio: SVG[article.platform].ratio,
+                    icon: SVG[article.platform].icon,
+                    opacity: 0.2,
+                    right: 16,
+                    top: 16,
+                    rotate: 6,
+                },
+            ],
         }
     }
 
     const brand = WEBSITE_BRAND_CONFIG[websiteBrandKey]
+    const fcBrand = websiteBrandKey === 'fc' ? WEBSITE_BRAND_CONFIG.fc : null
     return {
-        width: brand.badgeWidth,
-        ratio: brand.badgeRatio,
-        icon: brand.badgeIcon,
-        opacity: brand.badgeOpacity,
+        layers: [
+            ...(fcBrand
+                ? [
+                      {
+                          width: fcBrand.backdropWidth,
+                          ratio: fcBrand.backdropRatio,
+                          icon: fcBrand.backdropIcon,
+                          opacity: fcBrand.backdropOpacity,
+                          right: 54,
+                          top: 10,
+                          rotate: -10,
+                      },
+                  ]
+                : []),
+            {
+                width: brand.badgeWidth,
+                ratio: brand.badgeRatio,
+                icon: brand.badgeIcon,
+                opacity: brand.badgeOpacity,
+                right: 16,
+                top: 16,
+                rotate: 6,
+            },
+        ],
     }
 }
 
@@ -160,10 +192,10 @@ function Metaline({ article }: { article: Article }) {
             <span tw="font-bold" lang="zh-CN" style={{ fontWeight: 700 }}>
                 {article.username}
             </span>
-            <span tw="font-normal text-[#536471]" lang="zh-CN">
+            <span tw="font-normal text-[#46556a]" lang="zh-CN" style={{ fontWeight: 500 }}>
                 @{article.u_id} · {dayjs.unix(article.created_at).format('YY年MM月DD日 HH:mmZ')}
             </span>
-            <span tw="text-xs text-[#536471]" lang="zh-CN">
+            <span tw="text-xs text-[#46556a]" lang="zh-CN" style={{ fontWeight: 600 }}>
                 {platformArticleMapToActionText[article.platform][article.type]}
             </span>
         </div>
@@ -337,9 +369,10 @@ function ArticleContent({ article, level = 0 }: { article: Article; level: numbe
                 )}
                 {article.translation && (
                     <pre
-                        tw="w-full my-0 text-base leading-tight"
+                        tw="w-full my-0 text-base leading-snug text-[#1f2937]"
                         style={{
                             whiteSpace: 'pre-wrap',
+                            fontWeight: 500,
                         }}
                     >
                         {parseTranslationContent(article)}
@@ -350,9 +383,10 @@ function ArticleContent({ article, level = 0 }: { article: Article; level: numbe
                 )}
                 {article.content && (
                     <pre
-                        tw="w-full text-[#525252] my-0 text-base leading-tight"
+                        tw="w-full text-[#202733] my-0 text-base leading-snug"
                         style={{
                             whiteSpace: 'pre-wrap',
+                            fontWeight: 500,
                         }}
                     >
                         {parseRawContent(article)}
@@ -408,26 +442,41 @@ function flatArticle(article: Article): Array<Article> {
     return articles
 }
 
+function articleHasVisualMedia(article: Article) {
+    return flatArticle(article).some((item) =>
+        item.media?.some((media) => ['photo', 'video', 'video_thumbnail'].includes(media.type)),
+    )
+}
+
 function BaseCard({ article, paddingHeight }: { article: Article; paddingHeight: number }) {
     const flattedArticle = flatArticle(article)
     const badge = getPlatformBadge(article)
+    const hasVisualMedia = articleHasVisualMedia(article)
     return (
         <div
-            tw="p-4 pb-5 bg-white rounded-2xl shadow-sm h-full w-full flex flex-col relative"
+            tw={clsx('p-4 bg-white rounded-2xl shadow-sm h-full w-full flex flex-col relative', {
+                'pb-5': hasVisualMedia,
+                'pb-3': !hasVisualMedia,
+            })}
             style={{
                 rowGap: '6px',
             }}
         >
-            <img
-                tw="absolute right-4 top-4"
-                style={{
-                    transform: 'rotate(6deg)',
-                    opacity: badge.opacity,
-                }}
-                width={badge.width}
-                height={badge.width * badge.ratio}
-                src={badge.icon}
-            />
+            {badge.layers.map((layer, index) => (
+                <img
+                    key={`${layer.icon}-${index}`}
+                    tw="absolute"
+                    style={{
+                        right: `${layer.right}px`,
+                        top: `${layer.top}px`,
+                        transform: `rotate(${layer.rotate}deg)`,
+                        opacity: layer.opacity,
+                    }}
+                    width={layer.width}
+                    height={layer.width * layer.ratio}
+                    src={layer.icon}
+                />
+            ))}
             {flattedArticle.map((item, index) => (
                 <ArticleContent key={index} article={item} level={0} />
             ))}
@@ -468,6 +517,7 @@ function articleParser(article: Article): {
     component: JSX.Element
     height: number
 } {
+    const hasVisualMedia = articleHasVisualMedia(article)
     let flattedArticleHeightArray = flatArticle(article).map((item) => estimatedArticleHeight(item, 0))
     let estimatedHeight = [
         16, // padding top
@@ -476,14 +526,15 @@ function articleParser(article: Article): {
             .flatMap((item) => [item, 24 + 6])
             .dropRight(1) // content
             .reduce((a, b) => a + b, 0),
-        20, // padding bottom
+        hasVisualMedia ? 20 : 12, // padding bottom
     ]
         .flat()
         .reduce((a, b) => a + b, 0)
 
     let paddingHeight = 0
-    if (estimatedHeight / CARD_WIDTH < 1 / 3) {
-        paddingHeight = (CARD_WIDTH * 1) / 3 - estimatedHeight
+    const minimumCardRatio = hasVisualMedia ? 1 / 3 : 0.27
+    if (estimatedHeight / CARD_WIDTH < minimumCardRatio) {
+        paddingHeight = CARD_WIDTH * minimumCardRatio - estimatedHeight
     }
     return {
         component: <BaseCard article={article} paddingHeight={paddingHeight} />,
