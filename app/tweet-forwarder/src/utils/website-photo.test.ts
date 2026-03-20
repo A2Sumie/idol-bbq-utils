@@ -83,3 +83,44 @@ test('normalizeWebsitePhotoArticles prefers an album article over matching singl
     expect(normalized[0]?.a_id).toBe('photo:album:photoga:35054')
     expect(normalized[0]?.media).toHaveLength(2)
 })
+
+test('normalizeWebsitePhotoArticles ignores legacy mixed-date albums when same-day singles are available', () => {
+    const singles = [
+        buildSinglePhotoArticle(56, '35031', 1773068400),
+        buildSinglePhotoArticle(57, '35032', 1773068400),
+    ]
+    const legacyAlbum = {
+        ...buildWebsitePhotoAlbumArticle(singles)!,
+        extra: {
+            data: {
+                site: '22/7',
+                host: 'nanabunnonijyuuni-mobile.com',
+                feed: 'photo',
+                title: '春のかおり',
+                member: null,
+                summary: '春のかおり',
+                raw_html: '<p>legacy</p>',
+                album_id: 'photoga',
+                album_anchor: '35031',
+                entry_count: 4,
+                members: ['北原実咲', '黒崎ありす'],
+                entries: [
+                    { dateText: '2026.03.10' },
+                    { dateText: '2026.03.17' },
+                ],
+            },
+            content: '春のかおり',
+            media: [],
+            extra_type: 'website_meta',
+        },
+    }
+
+    const normalized = normalizeWebsitePhotoArticles([
+        legacyAlbum,
+        ...singles,
+    ])
+
+    expect(normalized).toHaveLength(1)
+    expect(normalized[0]?.a_id).toBe('photo:album:photoga:35031')
+    expect(normalized[0]?.extra?.data?.entry_count).toBe(2)
+})

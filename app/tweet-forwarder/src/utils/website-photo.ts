@@ -87,6 +87,21 @@ export function isWebsitePhotoAlbumArticle(article: Pick<ArticleWithIdLike, 'pla
     return isWebsitePhotoArticle(article) && article.a_id.startsWith('photo:album:')
 }
 
+function isMixedDateLegacyAlbum(article: Pick<ArticleWithIdLike, 'platform' | 'u_id' | 'extra' | 'a_id'>) {
+    if (!isWebsitePhotoAlbumArticle(article)) {
+        return false
+    }
+
+    const entries = (getWebsitePhotoData(article)?.entries as Array<Record<string, unknown>> | undefined) || []
+    const uniqueDates = new Set(
+        entries
+            .map((entry) => asString(entry?.dateText))
+            .filter((value): value is string => Boolean(value)),
+    )
+
+    return uniqueDates.size > 1
+}
+
 export function getWebsitePhotoBatchKey(article: Pick<ArticleWithIdLike, 'platform' | 'u_id' | 'extra' | 'created_at'>) {
     const data = getWebsitePhotoData(article)
     const albumId = asString(data?.album_id)
@@ -212,7 +227,7 @@ export function normalizeWebsitePhotoArticles<T extends ArticleWithIdLike>(artic
 
         const group = grouped.get(key) || []
         const album = group
-            .filter((item) => isWebsitePhotoAlbumArticle(item))
+            .filter((item) => isWebsitePhotoAlbumArticle(item) && !isMixedDateLegacyAlbum(item))
             .sort((a, b) => {
                 const aCount = Number((getWebsitePhotoData(a)?.entry_count as number | undefined) || 0)
                 const bCount = Number((getWebsitePhotoData(b)?.entry_count as number | undefined) || 0)
@@ -224,7 +239,7 @@ export function normalizeWebsitePhotoArticles<T extends ArticleWithIdLike>(artic
             continue
         }
 
-        const syntheticAlbum = buildWebsitePhotoAlbumArticle(group)
+        const syntheticAlbum = buildWebsitePhotoAlbumArticle(group.filter((item) => !isWebsitePhotoAlbumArticle(item)))
         if (syntheticAlbum) {
             normalized.push(syntheticAlbum as T)
             continue
