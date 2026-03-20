@@ -44,10 +44,9 @@ bots:
               原链接: {{url}}
           collision_placeholder_part:         # (optional) append a logo-only P2 to avoid duplicate-hit collisions
             enabled: true
-            image_path: './assets/branding/live-player-gx-logo.png'
-            background_color: '#d1e5fc'
+            video_path: './assets/branding/live-player-background-collision-pad-7s.mp4'
             title: '###'
-            duration_seconds: 2
+            duration_seconds: 7
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id
@@ -119,10 +118,9 @@ bots:
               原链接: {{url}}
           collision_placeholder_part:
             enabled: true
-            image_path: './assets/branding/live-player-gx-logo.png'
-            background_color: '#d1e5fc'
+            video_path: './assets/branding/live-player-background-collision-pad-7s.mp4'
             title: '###'
-            duration_seconds: 2
+            duration_seconds: 7
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id

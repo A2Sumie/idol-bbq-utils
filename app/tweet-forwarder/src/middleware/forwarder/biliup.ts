@@ -24,11 +24,17 @@ const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_WIDTH = 1920
 const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_HEIGHT = 1080
 const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_FPS = 30
 const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_BACKGROUND_COLOR = '#d1e5fc'
+const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO = path.resolve(
+    process.cwd(),
+    'assets',
+    'branding',
+    'live-player-background-collision-pad-7s.mp4',
+)
 const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_IMAGE = path.resolve(
     process.cwd(),
     'assets',
     'branding',
-    'live-player-gx-logo.png',
+    'live-player-background.png',
 )
 const DEFAULT_BILIUP_METADATA_TIMEZONE = 'Asia/Tokyo'
 
@@ -64,6 +70,7 @@ interface ResolvedBiliupMetadataTemplatesConfig {
 
 interface ResolvedBiliupCollisionPlaceholderPartConfig {
     enabled: true
+    video_path?: string
     image_path: string
     title: string
     duration_seconds: number
@@ -364,6 +371,14 @@ function resolveCollisionPlaceholderImagePath(candidate?: string) {
     return resolveConfiguredPath(candidate) || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_IMAGE
 }
 
+function resolveCollisionPlaceholderVideoPath(candidate?: string) {
+    const configured = resolveConfiguredPath(candidate)
+    if (configured) {
+        return configured
+    }
+    return fs.existsSync(DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO) ? DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO : undefined
+}
+
 function resolveMetadataTemplatesConfig(
     config?: NonNullable<BiliupVideoUploadConfig['metadata_templates']>,
 ): ResolvedBiliupMetadataTemplatesConfig | undefined {
@@ -392,6 +407,7 @@ function resolveCollisionPlaceholderPartConfig(
 
     return {
         enabled: true,
+        video_path: resolveCollisionPlaceholderVideoPath(config.video_path),
         image_path: resolveCollisionPlaceholderImagePath(config.image_path),
         title: normalizeTextBlock(config.title) || DEFAULT_BILIUP_COLLISION_PART_TITLE,
         duration_seconds: Math.max(1, Number(config.duration_seconds || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_DURATION_SECONDS)),
@@ -696,6 +712,13 @@ async function ensureCollisionPlaceholderVideo(
     workingDir: string,
     log?: Logger,
 ) {
+    if (config.video_path) {
+        if (!fs.existsSync(config.video_path)) {
+            throw new Error(`biliup collision placeholder video not found: ${config.video_path}`)
+        }
+        return config.video_path
+    }
+
     if (!fs.existsSync(config.image_path)) {
         throw new Error(`biliup collision placeholder image not found: ${config.image_path}`)
     }

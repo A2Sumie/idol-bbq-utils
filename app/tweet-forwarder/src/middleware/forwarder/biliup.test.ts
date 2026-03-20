@@ -176,6 +176,8 @@ test('resolveVideoUploadConfig includes browser cookie sync settings', () => {
 
 test('resolveVideoUploadConfig keeps metadata template and collision placeholder settings', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-upload-template-'))
+    const videoPath = path.join(tempRoot, 'pad.mp4')
+    fs.writeFileSync(videoPath, 'video')
     const config = resolveVideoUploadConfig({
         enabled: true,
         metadata_templates: {
@@ -184,6 +186,7 @@ test('resolveVideoUploadConfig keeps metadata template and collision placeholder
         },
         collision_placeholder_part: {
             enabled: true,
+            video_path: videoPath,
             image_path: path.join(tempRoot, 'logo.png'),
             title: '###',
             background_color: '#d1e5fc',
@@ -191,8 +194,56 @@ test('resolveVideoUploadConfig keeps metadata template and collision placeholder
     })
 
     expect(config?.metadata_templates?.title).toBe('【{{platform_type_label}}】{{display_name}} {{summary}}')
+    expect(config?.collision_placeholder_part?.video_path).toBe(videoPath)
     expect(config?.collision_placeholder_part?.title).toBe('###')
     expect(config?.collision_placeholder_part?.background_color).toBe('#d1e5fc')
+})
+
+test('prepareUploadVideoParts reuses persistent collision placeholder video when configured', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-parts-persistent-'))
+    const uploadDir = path.join(tempRoot, 'upload')
+    fs.mkdirSync(uploadDir, { recursive: true })
+
+    const videoPath = path.join(tempRoot, 'source-video.mp4')
+    fs.writeFileSync(videoPath, 'video')
+
+    const placeholderPath = path.join(tempRoot, 'collision-pad.mp4')
+    fs.writeFileSync(placeholderPath, 'pad')
+
+    const parts = await prepareUploadVideoParts(
+        {
+            videoPaths: [videoPath],
+            config: {
+                enabled: true,
+                python_path: 'python3',
+                helper_path: '/tmp/helper.py',
+                working_dir: tempRoot,
+                submit_api: 'web',
+                line: 'AUTO',
+                tid: 171,
+                threads: 3,
+                copyright: 2,
+                tags: [],
+                exclude_uids: [],
+                collision_placeholder_part: {
+                    enabled: true,
+                    video_path: placeholderPath,
+                    image_path: path.join(tempRoot, 'unused.png'),
+                    title: '###',
+                    duration_seconds: 7,
+                    width: 1920,
+                    height: 1080,
+                    fps: 30,
+                    ffmpeg_path: '/usr/bin/ffmpeg',
+                    background_color: '#d1e5fc',
+                },
+            },
+        },
+        uploadDir,
+    )
+
+    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '###.mp4'])
+    expect(fs.existsSync(parts[1]!.stagedPath)).toBe(true)
 })
 
 test('prepareUploadVideoParts appends collision placeholder part with clean multi-p titles', async () => {

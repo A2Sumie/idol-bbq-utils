@@ -29,6 +29,7 @@ type BiliupMetadataTemplatesConfig = {
 
 type BiliupCollisionPlaceholderPartConfig = {
     enabled?: boolean
+    video_path?: string
     image_path?: string
     title?: string
     duration_seconds?: number
