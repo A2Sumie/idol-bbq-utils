@@ -19,6 +19,7 @@ interface LiveRelayTargetConfig {
     auth_password?: string
     waf_bypass_header?: string
     sync_interval_seconds?: number
+    post_live_grace_seconds?: number
     stop_offline?: boolean
 }
 

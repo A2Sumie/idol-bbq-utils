@@ -10,9 +10,11 @@ const DEFAULT_LIVE_PLAYER_URL = 'https://tv.n2nj.moe'
 const DEFAULT_LIVE_PLAYER_PLAYER_ID = 'relay'
 const DEFAULT_LIVE_PLAYER_STREAM_URL = 'https://stream.n2nj.moe/relay.m3u8'
 const DEFAULT_SYNC_INTERVAL_SECONDS = 300
+const DEFAULT_POST_LIVE_GRACE_SECONDS = 6 * 60 * 60
 const STREAM_CAPTURE_TIMEOUT_MS = 15000
 const INSTAGRAM_ORIGIN = 'https://www.instagram.com'
 const LIVE_WEB_INFO_PATH = '/api/v1/live/web_info/'
+const N2NJ_REQUEST_USER_AGENT = 'N2NJ-Stream-Bot/1.0'
 
 const ALLOWED_HEADER_KEYS = new Set([
     'user-agent',
@@ -80,6 +82,7 @@ interface LiveRelayResolution extends LiveRelayTargetConfig {
     auth_password?: string
     waf_bypass_header?: string
     sync_interval_seconds: number
+    post_live_grace_seconds: number
     stop_offline: boolean
 }
 
@@ -93,6 +96,7 @@ interface InstagramLiveCacheEntry {
     liveUrl: string | null
     displayName: string
     avatarUrl: string | null
+    lastLiveAt?: string | null
     package: EchoPackage | null
     lastError?: string | null
     syncedAt?: string | null
@@ -194,6 +198,24 @@ function buildCookieHeader(cookieEntries: Record<string, string>) {
         .join('; ')
 }
 
+function isPostLiveGraceActive(lastLiveAt?: string | null, graceSeconds: number = DEFAULT_POST_LIVE_GRACE_SECONDS, now = Date.now()) {
+    if (!lastLiveAt || graceSeconds <= 0) {
+        return false
+    }
+    const lastLiveMs = new Date(lastLiveAt).getTime()
+    if (!Number.isFinite(lastLiveMs)) {
+        return false
+    }
+    return now - lastLiveMs <= graceSeconds * 1000
+}
+
+function resolveLastLiveAt(cache?: InstagramLiveCacheEntry | null) {
+    if (!cache) {
+        return null
+    }
+    return cache.lastLiveAt || (cache.isLive ? cache.checkedAt : null) || cache.syncedAt || null
+}
+
 function parseM3u8Variants(content: string, baseUrl: string) {
     const variants: Array<{ url: string; bandwidth: number; resolution: string }> = []
     const lines = content.split('\n')
@@ -287,6 +309,15 @@ function applyWafBypassHeader(headers: Headers, rawHeader?: string) {
     headers.set('x-bypass-waf', normalized)
 }
 
+function applyN2njRequestIdentity(headers: Headers) {
+    if (!headers.has('User-Agent')) {
+        headers.set('User-Agent', process.env.LIVE_PLAYER_REQUEST_USER_AGENT || N2NJ_REQUEST_USER_AGENT)
+    }
+    if (!headers.has('Accept')) {
+        headers.set('Accept', 'application/json')
+    }
+}
+
 class InstagramLiveRelayService {
     private readonly cacheDir: string
     private readonly log?: Logger
@@ -306,6 +337,7 @@ class InstagramLiveRelayService {
         const scopedLog = options.log || this.log
         const now = new Date().toISOString()
         const previousCache = this.readCache(options.handle)
+        const previousLastLiveAt = resolveLastLiveAt(previousCache)
 
         try {
             const status = await Instagram.InsApiJsonParser.grabProfileStatus(options.page, options.profileUrl)
@@ -319,6 +351,7 @@ class InstagramLiveRelayService {
                 liveUrl: status.live_url,
                 displayName: status.username,
                 avatarUrl: status.u_avatar,
+                lastLiveAt: status.is_live ? now : previousLastLiveAt,
                 package: previousCache?.package || null,
                 syncedAt: previousCache?.syncedAt || null,
                 relay: previousCache?.relay,
@@ -326,6 +359,35 @@ class InstagramLiveRelayService {
             }
 
             if (!status.is_live || !status.live_url) {
+                const postLivePackage = await this.refreshPostLivePackage(previousCache, relayConfig, scopedLog)
+                if (postLivePackage) {
+                    nextCache.package = postLivePackage
+
+                    const shouldSyncPostLive =
+                        !previousCache?.relay?.active
+                        || !previousCache?.syncedAt
+                        || Date.now() - new Date(previousCache.syncedAt).getTime() >= relayConfig.sync_interval_seconds * 1000
+
+                    if (shouldSyncPostLive) {
+                        const relayResponse = await this.syncRelay(relayConfig, postLivePackage, {
+                            title: relayConfig.player_name || `【IG Live】${status.username || previousCache?.displayName || options.handle}`,
+                            coverUrl: status.u_avatar || previousCache?.avatarUrl || undefined,
+                            description: `Instagram Live relay for ${status.username || previousCache?.displayName || options.handle}`,
+                        })
+                        nextCache.syncedAt = now
+                        nextCache.relay = {
+                            baseUrl: relayConfig.live_player_url,
+                            playerId: relayConfig.player_id,
+                            active: true,
+                            status: relayResponse.status,
+                            body: relayResponse.body,
+                        }
+                    }
+
+                    this.writeCache(options.handle, nextCache)
+                    return nextCache
+                }
+
                 if (relayConfig.stop_offline && previousCache?.relay?.active) {
                     const relayResponse = await this.stopRelay(relayConfig)
                     nextCache.relay = {
@@ -402,6 +464,7 @@ class InstagramLiveRelayService {
                 liveUrl: previousCache?.liveUrl || null,
                 displayName: previousCache?.displayName || options.handle,
                 avatarUrl: previousCache?.avatarUrl || null,
+                lastLiveAt: previousLastLiveAt,
                 package: previousCache?.package || null,
                 syncedAt: previousCache?.syncedAt || null,
                 relay: previousCache?.relay,
@@ -455,6 +518,15 @@ class InstagramLiveRelayService {
                     || liveRelay.sync_interval_seconds
                     || process.env.LIVE_PLAYER_SYNC_INTERVAL_SECONDS
                     || DEFAULT_SYNC_INTERVAL_SECONDS,
+                ),
+            ),
+            post_live_grace_seconds: Math.max(
+                0,
+                Number(
+                    handleConfig?.post_live_grace_seconds
+                    ?? liveRelay.post_live_grace_seconds
+                    ?? process.env.LIVE_PLAYER_POST_LIVE_GRACE_SECONDS
+                    ?? DEFAULT_POST_LIVE_GRACE_SECONDS,
                 ),
             ),
             stop_offline: Boolean(handleConfig?.stop_offline ?? liveRelay.stop_offline),
@@ -699,6 +771,51 @@ class InstagramLiveRelayService {
         return await response.text()
     }
 
+    private async refreshPostLivePackage(
+        previousCache: InstagramLiveCacheEntry | null,
+        relayConfig: LiveRelayResolution,
+        log?: Logger,
+    ) {
+        const lastLiveAt = resolveLastLiveAt(previousCache)
+        const previousPackage = previousCache?.package
+        if (!previousPackage || previousPackage.streams_detected === 0) {
+            return null
+        }
+        if (!isPostLiveGraceActive(lastLiveAt, relayConfig.post_live_grace_seconds)) {
+            return null
+        }
+
+        const refreshedStreams = (
+            await Promise.all(
+                previousPackage.streams.map(async (stream) => {
+                    try {
+                        const text = await this.fetchManifestText(stream.source, stream.headers)
+                        return {
+                            ...stream,
+                            mediaInfo: analyzeManifestText(stream.source, text),
+                        }
+                    } catch (error) {
+                        log?.warn(`Post-live relay manifest expired for ${stream.source}: ${error}`)
+                        return null
+                    }
+                }),
+            )
+        ).filter((stream): stream is EchoStreamRecord => Boolean(stream))
+
+        if (refreshedStreams.length === 0) {
+            return null
+        }
+
+        return {
+            ...previousPackage,
+            timestamp: Date.now(),
+            streams_detected: refreshedStreams.length,
+            streams: refreshedStreams.sort((a, b) => {
+                return (b.mediaInfo?.variants_count || 0) - (a.mediaInfo?.variants_count || 0)
+            }),
+        }
+    }
+
     private async collectCookies(page: Page, cookieString?: string) {
         const cookies = parseCookieString(cookieString)
         for (const cookie of await page.browserContext().cookies().catch(() => [] as Array<any>)) {
@@ -776,6 +893,7 @@ class InstagramLiveRelayService {
             'Content-Type': 'application/json',
             Cookie: authCookie,
         })
+        applyN2njRequestIdentity(headers)
         applyWafBypassHeader(headers, relayConfig.waf_bypass_header)
 
         const response = await fetch(`${relayConfig.live_player_url}/api/players`, {
@@ -805,6 +923,7 @@ class InstagramLiveRelayService {
         const headers = new Headers({
             'Content-Type': 'application/json',
         })
+        applyN2njRequestIdentity(headers)
         applyWafBypassHeader(headers, relayConfig.waf_bypass_header)
 
         const response = await fetch(`${relayConfig.live_player_url}/api/auth/login`, {
@@ -840,6 +959,7 @@ class InstagramLiveRelayService {
             'Content-Type': 'application/json',
             Cookie: authCookie,
         })
+        applyN2njRequestIdentity(headers)
         applyWafBypassHeader(headers, relayConfig.waf_bypass_header)
 
         const response = await fetch(
@@ -869,10 +989,12 @@ export {
     DEFAULT_LIVE_PLAYER_PLAYER_ID,
     DEFAULT_LIVE_PLAYER_STREAM_URL,
     DEFAULT_LIVE_PLAYER_URL,
+    N2NJ_REQUEST_USER_AGENT,
     InstagramLiveRelayService,
     analyzeManifestText,
     buildPlayerUrl,
     filterRelayHeaders,
+    isPostLiveGraceActive,
     parseInstagramLiveWebInfo,
     parseCookieString,
 }

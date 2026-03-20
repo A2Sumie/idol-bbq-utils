@@ -3,6 +3,8 @@ import {
     analyzeManifestText,
     buildPlayerUrl,
     filterRelayHeaders,
+    isPostLiveGraceActive,
+    N2NJ_REQUEST_USER_AGENT,
     parseInstagramLiveWebInfo,
     parseCookieString,
 } from './instagram-live-relay-service'
@@ -62,4 +64,12 @@ test('instagram live relay parser extracts mpd urls from web_info payload', () =
             'https://example.com/live-hd.mpd?foo=1',
         ],
     })
+})
+
+test('instagram live relay post-live grace window keeps recent captures only', () => {
+    const now = Date.UTC(2026, 2, 20, 6, 30, 0)
+
+    expect(isPostLiveGraceActive('2026-03-20T06:00:00.000Z', 3 * 60 * 60, now)).toBeTrue()
+    expect(isPostLiveGraceActive('2026-03-19T23:00:00.000Z', 3 * 60 * 60, now)).toBeFalse()
+    expect(N2NJ_REQUEST_USER_AGENT).toBe('N2NJ-Stream-Bot/1.0')
 })
