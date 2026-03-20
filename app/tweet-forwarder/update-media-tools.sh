@@ -32,5 +32,6 @@ fi
 "$BILIUP_VENV/bin/python" -m pip install --upgrade pip setuptools wheel
 "$BILIUP_VENV/bin/python" -m pip install --upgrade biliup
 ln -sf ../biliup-venv/bin/biliup "$BIN_DIR/biliup"
-ln -sf ../biliup-venv/bin/python "$BIN_DIR/biliup-python"
+printf '%s\n' '#!/bin/sh' "exec \"$BILIUP_VENV/bin/python\" \"\$@\"" > "$BIN_DIR/biliup-python"
+chmod +x "$BIN_DIR/biliup-python"
 "$BIN_DIR/biliup" --help >/dev/null
