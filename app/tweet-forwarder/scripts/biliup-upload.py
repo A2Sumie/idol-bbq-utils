@@ -5,7 +5,33 @@ import json
 import sys
 
 from biliup.engine.upload import UploadBase
-from biliup.plugins.bili_webup import BiliWeb
+from biliup.plugins.bili_webup import BiliBili, BiliWeb
+
+DEFAULT_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/146.0.0.0 Safari/537.36"
+)
+
+
+def patch_biliup_headers(user_agent: str):
+    original_init = BiliBili.__init__
+
+    def patched_init(self, video):
+        original_init(self, video)
+        session = getattr(self, "_BiliBili__session", None)
+        if session is None:
+            return
+        session.headers.update(
+            {
+                "user-agent": user_agent,
+                "referer": "https://www.bilibili.com/",
+                "origin": "https://www.bilibili.com",
+                "accept": "application/json, text/plain, */*",
+            }
+        )
+
+    BiliBili.__init__ = patched_init
 
 
 def parse_args():
@@ -21,12 +47,14 @@ def parse_args():
     parser.add_argument("--threads", type=int, default=3)
     parser.add_argument("--copyright", type=int, choices=(1, 2), default=2)
     parser.add_argument("--tag", action="append", default=[])
+    parser.add_argument("--user-agent", default=DEFAULT_BROWSER_UA)
     parser.add_argument("files", nargs="+")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    patch_biliup_headers(args.user_agent)
     uploader = BiliWeb(
         principal="idol-bbq-utils",
         data={
