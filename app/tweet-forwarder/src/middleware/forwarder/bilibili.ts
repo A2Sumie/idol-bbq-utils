@@ -5,6 +5,7 @@ import FormData from 'form-data'
 import fs from 'fs'
 import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
+import { buildBiliupUploadCandidate, runBiliupUpload } from './biliup'
 
 interface BiliImageUploaded {
     img_src: string
@@ -19,6 +20,7 @@ class BiliForwarder extends Forwarder {
     private bili_jct: string
     private sessdata: string
     private media_check_level: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['media_check_level']
+    private video_upload: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['video_upload']
     protected override BASIC_TEXT_LIMIT = 1000
 
     constructor(...[config, ...rest]: [...ConstructorParameters<typeof Forwarder>]) {
@@ -28,6 +30,7 @@ class BiliForwarder extends Forwarder {
             bili_jct,
             sessdata,
             media_check_level = 'none',
+            video_upload,
         } = config as ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>
         if (!bili_jct || !sessdata) {
             throw new Error(`forwarder ${this.NAME} bili_jct and sessdata are required`)
@@ -35,9 +38,41 @@ class BiliForwarder extends Forwarder {
         this.bili_jct = bili_jct
         this.sessdata = sessdata
         this.media_check_level = media_check_level
+        this.video_upload = video_upload
     }
 
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
+        if (await this.tryVideoUpload(texts, props)) {
+            return [{ ok: true, mode: 'biliup' }]
+        }
+        return this.sendDynamicContent(texts, props)
+    }
+
+    private async tryVideoUpload(texts: string[], props?: SendProps) {
+        const media = props?.media || []
+        const candidate = buildBiliupUploadCandidate(props?.article, texts, media, this.video_upload)
+        if (!candidate) {
+            return false
+        }
+
+        try {
+            await runBiliupUpload(
+                props?.article || { a_id: 'unknown' } as any,
+                candidate,
+                {
+                    sessdata: this.sessdata,
+                    bili_jct: this.bili_jct,
+                },
+                this.log,
+            )
+            return true
+        } catch (error) {
+            this.log?.error(`biliup upload failed for ${props?.article?.a_id || 'unknown'}, fallback to dynamic: ${error}`)
+            return false
+        }
+    }
+
+    private async sendDynamicContent(texts: string[], props?: SendProps): Promise<any> {
         let { media } = props || {}
         media = media || []
         const _log = this.log

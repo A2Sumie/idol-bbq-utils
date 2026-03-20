@@ -26,7 +26,7 @@ FROM base AS runner
 ARG CHROME_VERSION
 ARG GALLERY_DL_VERSION
 RUN apt-get update \
-    && apt-get install -y wget gnupg curl unzip ffmpeg xvfb dbus-x11 \
+    && apt-get install -y wget gnupg curl unzip ffmpeg xvfb dbus-x11 python3 python3-venv \
     # Required for Chrome
     && apt-get install -y fonts-ipafont-gothic fonts-ipafont-mincho fonts-liberation fonts-noto-cjk libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 libcairo2 libcups2 libcurl4 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libu2f-udev libvulkan1 libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 libxrandr2 libxshmfence1 libxss1 xdg-utils \
     --no-install-recommends \
@@ -43,7 +43,9 @@ RUN wget https://github.com/mikf/gallery-dl/releases/download/${GALLERY_DL_VERSI
 
 WORKDIR /app
 COPY app/tweet-forwarder/update-media-tools.sh /app/tools/update-media-tools.sh
+COPY app/tweet-forwarder/scripts/biliup-upload.py /app/tools/biliup-upload.py
 RUN chmod +x /app/tools/update-media-tools.sh \
+    && chmod +x /app/tools/biliup-upload.py \
     && /app/tools/update-media-tools.sh
 COPY --from=builder /app/app/tweet-forwarder/build/main.js /app/bin.js
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/

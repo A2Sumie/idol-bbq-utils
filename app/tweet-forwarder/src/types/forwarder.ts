@@ -9,6 +9,19 @@ enum ForwardTargetPlatformEnum {
     QQ = 'qq',
 }
 
+type BiliupVideoUploadConfig = {
+    enabled?: boolean
+    python_path?: string
+    helper_path?: string
+    working_dir?: string
+    submit_api?: 'web'
+    tid?: number
+    threads?: number
+    copyright?: 1 | 2
+    tags?: Array<string>
+    exclude_uids?: Array<string>
+}
+
 type PlatformConfigMap = {
     [ForwardTargetPlatformEnum.None]: {}
     [ForwardTargetPlatformEnum.Telegram]: {
@@ -19,6 +32,7 @@ type PlatformConfigMap = {
         bili_jct: string
         sessdata: string
         media_check_level?: 'strict' | 'loose' | 'none'
+        video_upload?: BiliupVideoUploadConfig
     }
     /**
      * one11 bot protocol
@@ -205,4 +219,5 @@ export type {
     ForwarderConfig,
     ForwardTargetPlatformConfig,
     ForwardTargetPlatformCommonConfig,
+    BiliupVideoUploadConfig,
 }
