@@ -146,6 +146,8 @@ assets/fonts/*.ttf
 !assets/fonts/NotoSansOriya-Regular.ttf
 assets/config.yaml.bak.*
 app/tweet-forwarder/config.yaml.bak.*
+__pycache__/
+*.pyc
 
 # Ignored assets
 assets/cookies/

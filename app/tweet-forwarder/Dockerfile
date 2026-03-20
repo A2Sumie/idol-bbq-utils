@@ -13,6 +13,7 @@ COPY package.json bun.lock tsconfig.json ./
 COPY ./app/tweet-forwarder ./app/tweet-forwarder
 COPY ./core ./core
 COPY ./assets/fonts ./assets/fonts
+COPY ./assets/branding ./assets/branding
 
 ENV PUPPETEER_SKIP_DOWNLOAD true
 ENV DATABASE_URL="file:/app/data.db"
@@ -53,6 +54,7 @@ COPY --from=builder /app/app/tweet-forwarder/build/export-biliup-browser-cookies
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
 # Copy assets
 COPY --from=builder /app/assets/fonts /app/assets/fonts
+COPY --from=builder /app/assets/branding /app/assets/branding
 # Copy node_modules (including prisma)
 COPY --from=builder /app/node_modules /app/node_modules
 

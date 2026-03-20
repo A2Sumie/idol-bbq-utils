@@ -22,11 +22,29 @@ type BiliupBrowserCookieSyncConfig = {
     timezone?: string
 }
 
+type BiliupMetadataTemplatesConfig = {
+    title?: string
+    description?: string
+}
+
+type BiliupCollisionPlaceholderPartConfig = {
+    enabled?: boolean
+    image_path?: string
+    title?: string
+    duration_seconds?: number
+    width?: number
+    height?: number
+    fps?: number
+    ffmpeg_path?: string
+    background_color?: string
+}
+
 type BiliupVideoUploadConfig = {
     enabled?: boolean
     python_path?: string
     helper_path?: string
     working_dir?: string
+    metadata_timezone?: string
     cookie_file?: string
     browser_cookie_sync?: BiliupBrowserCookieSyncConfig
     submit_api?: 'web'
@@ -36,6 +54,8 @@ type BiliupVideoUploadConfig = {
     copyright?: 1 | 2
     tags?: Array<string>
     exclude_uids?: Array<string>
+    metadata_templates?: BiliupMetadataTemplatesConfig
+    collision_placeholder_part?: BiliupCollisionPlaceholderPartConfig
 }
 
 type PlatformConfigMap = {

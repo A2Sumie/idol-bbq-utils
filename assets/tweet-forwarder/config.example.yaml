@@ -26,11 +26,28 @@ bots:
         bili_jct: 'blit_jct in cookies'       # (required) bilibili bili_jct
         video_upload:                         # (optional) direct biliup video upload
           enabled: true
+          metadata_timezone: 'Asia/Tokyo'
           cookie_file: './assets/tweet-forwarder/bili.cookies.json' # (optional) preferred full biliup cookie JSON
           browser_cookie_sync:                # (optional) refresh cookie_file from project browser profile before upload
             enabled: true
             session_profile: 'bilibili-uploader'
             url: 'https://www.bilibili.com'
+          metadata_templates:                 # (optional) placeholders: display_name user_id summary body_or_summary platform_type_label datetime url
+            title: '【{{platform_type_label}}】{{display_name}} {{summary}}'
+            description: |
+              {{body_or_summary}}
+
+              来源平台: {{platform_type_label}}
+              来源账号: {{display_name}}
+              账号标识: {{user_id}}
+              发布时间: {{datetime}}
+              原链接: {{url}}
+          collision_placeholder_part:         # (optional) append a logo-only P2 to avoid duplicate-hit collisions
+            enabled: true
+            image_path: './assets/branding/live-player-gx-logo.png'
+            background_color: '#d1e5fc'
+            title: '###'
+            duration_seconds: 2
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id
@@ -84,11 +101,28 @@ bots:
         bili_jct: 'blit_jct in cookies'       # (required) bilibili bili_jct
         video_upload:                         # (optional) direct biliup video upload
           enabled: true
+          metadata_timezone: 'Asia/Tokyo'
           cookie_file: './assets/tweet-forwarder/bili.cookies.json' # (optional) preferred full biliup cookie JSON
           browser_cookie_sync:                # (optional) refresh cookie_file from project browser profile before upload
             enabled: true
             session_profile: 'bilibili-uploader'
             url: 'https://www.bilibili.com'
+          metadata_templates:
+            title: '【{{platform_type_label}}】{{display_name}} {{summary}}'
+            description: |
+              {{body_or_summary}}
+
+              来源平台: {{platform_type_label}}
+              来源账号: {{display_name}}
+              账号标识: {{user_id}}
+              发布时间: {{datetime}}
+              原链接: {{url}}
+          collision_placeholder_part:
+            enabled: true
+            image_path: './assets/branding/live-player-gx-logo.png'
+            background_color: '#d1e5fc'
+            title: '###'
+            duration_seconds: 2
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id

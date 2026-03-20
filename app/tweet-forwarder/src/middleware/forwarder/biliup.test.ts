@@ -8,6 +8,7 @@ import {
     buildBiliupUploadCandidate,
     buildCookieDocument,
     normalizeBiliupCookieDocument,
+    prepareUploadVideoParts,
     resolveBrowserCookieSyncConfig,
     resolveVideoUploadConfig,
 } from './biliup'
@@ -40,6 +41,32 @@ test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', (
     expect(candidate?.videoPaths).toEqual(['/tmp/video.mp4'])
     expect(candidate?.config.tags).toContain('YouTube')
     expect(candidate?.config.tags).toContain('长视频')
+})
+
+test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads without text', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'post',
+            u_id: 'satsuki_shiina',
+            username: '椎名桜月',
+            a_id: 'ig-live-replay',
+            content: null,
+            created_at: 1773985020,
+            url: 'https://www.instagram.com/p/example/',
+        } as any,
+        [],
+        [{ media_type: 'video', path: '/tmp/replay.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate?.title).toBe('【Instagram投稿】椎名桜月 2026-03-20 14:37')
+    expect(candidate?.description).toContain('来源平台: Instagram投稿')
+    expect(candidate?.description).toContain('来源账号: 椎名桜月')
+    expect(candidate?.description).toContain('账号标识: satsuki_shiina')
+    expect(candidate?.description).toContain('原链接: https://www.instagram.com/p/example/')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
@@ -145,6 +172,87 @@ test('resolveVideoUploadConfig includes browser cookie sync settings', () => {
 
     expect(config?.browser_cookie_sync?.session_profile).toBe('bilibili-uploader')
     expect(config?.browser_cookie_sync?.script_path).toBe(helperScript)
+})
+
+test('resolveVideoUploadConfig keeps metadata template and collision placeholder settings', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-upload-template-'))
+    const config = resolveVideoUploadConfig({
+        enabled: true,
+        metadata_templates: {
+            title: '【{{platform_type_label}}】{{display_name}} {{summary}}',
+            description: '{{body_or_summary}}\n\n原链接: {{url}}',
+        },
+        collision_placeholder_part: {
+            enabled: true,
+            image_path: path.join(tempRoot, 'logo.png'),
+            title: '###',
+            background_color: '#d1e5fc',
+        },
+    })
+
+    expect(config?.metadata_templates?.title).toBe('【{{platform_type_label}}】{{display_name}} {{summary}}')
+    expect(config?.collision_placeholder_part?.title).toBe('###')
+    expect(config?.collision_placeholder_part?.background_color).toBe('#d1e5fc')
+})
+
+test('prepareUploadVideoParts appends collision placeholder part with clean multi-p titles', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-parts-'))
+    const uploadDir = path.join(tempRoot, 'upload')
+    fs.mkdirSync(uploadDir, { recursive: true })
+
+    const logoPath = path.join(tempRoot, 'logo.png')
+    fs.writeFileSync(logoPath, 'logo')
+
+    const videoPath = path.join(tempRoot, 'source-video.mp4')
+    fs.writeFileSync(videoPath, 'video')
+
+    const ffmpegPath = path.join(tempRoot, 'ffmpeg')
+    fs.writeFileSync(
+        ffmpegPath,
+        `#!/bin/sh
+out=""
+for arg in "$@"; do
+  out="$arg"
+done
+printf 'placeholder' > "$out"
+`,
+        { mode: 0o755 },
+    )
+
+    const parts = await prepareUploadVideoParts(
+        {
+            videoPaths: [videoPath],
+            config: {
+                enabled: true,
+                python_path: 'python3',
+                helper_path: '/tmp/helper.py',
+                working_dir: tempRoot,
+                submit_api: 'web',
+                line: 'AUTO',
+                tid: 171,
+                threads: 3,
+                copyright: 2,
+                tags: [],
+                exclude_uids: [],
+                collision_placeholder_part: {
+                    enabled: true,
+                    image_path: logoPath,
+                    title: '###',
+                    duration_seconds: 1,
+                    width: 1280,
+                    height: 720,
+                    fps: 24,
+                    ffmpeg_path: ffmpegPath,
+                    background_color: '#d1e5fc',
+                },
+            },
+        },
+        uploadDir,
+    )
+
+    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '###.mp4'])
+    expect(parts[1]?.partTitle).toBe('###')
+    expect(fs.existsSync(parts[1]!.stagedPath)).toBe(true)
 })
 
 test('BiliForwarder skips dynamic posting when biliup upload succeeds', async () => {
