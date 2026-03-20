@@ -16,8 +16,8 @@ const BASE_FONT_SIZE = 16
 
 type WebsiteBrandKey = 'official' | 'fc'
 
-const OFFICIAL_227_WEBSITE_FEEDS = new Set(['official-news', 'official-blog'])
-const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'photo', 'live-report'])
+const OFFICIAL_227_WEBSITE_FEEDS = new Set(['official-news', 'official-blog', 'live-report'])
+const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'photo'])
 const DEFAULT_PLATFORM_BADGE_WIDTH = 32
 
 const WEBSITE_BRAND_CONFIG = {

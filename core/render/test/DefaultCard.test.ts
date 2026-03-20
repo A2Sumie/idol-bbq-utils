@@ -18,8 +18,9 @@ function buildWebsiteArticle(feed: string, site: string = '22/7') {
 test('resolve227WebsiteBrandKey distinguishes official and FC website feeds', () => {
     expect(resolve227WebsiteBrandKey(buildWebsiteArticle('official-news'))).toBe('official')
     expect(resolve227WebsiteBrandKey(buildWebsiteArticle('official-blog'))).toBe('official')
+    expect(resolve227WebsiteBrandKey(buildWebsiteArticle('live-report'))).toBe('official')
 
-    for (const feed of ['fc-news', 'ticket', 'radio', 'movie', 'photo', 'live-report']) {
+    for (const feed of ['fc-news', 'ticket', 'radio', 'movie', 'photo']) {
         expect(resolve227WebsiteBrandKey(buildWebsiteArticle(feed))).toBe('fc')
     }
 })
