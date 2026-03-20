@@ -29,6 +29,7 @@ export interface SendProps {
     timestamp?: number
     runtime_config?: ForwardTargetPlatformCommonConfig
     article?: Article
+    forceSend?: boolean
 }
 
 abstract class BaseForwarder extends BaseCompatibleModel {
@@ -64,11 +65,18 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             .use(new TextChunkMiddleware(this.getTextLimit()))
     }
 
+    protected createForceSendPipeline(): MiddlewarePipeline {
+        return new MiddlewarePipeline().use(new TextReplaceMiddleware()).use(new TextChunkMiddleware(this.getTextLimit()))
+    }
+
     protected getTextLimit(): number {
         return 1000
     }
 
     public async check_blocked(text: string, props: SendProps): Promise<boolean> {
+        if (props?.forceSend) {
+            return false
+        }
         const { timestamp, runtime_config, article } = props || {}
         const mergedConfig: ForwardTargetPlatformCommonConfig = {
             ...this.config,
@@ -118,7 +126,8 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             aborted: false,
         }
 
-        const shouldSend = await this.pipeline.execute(context)
+        const pipeline = props?.forceSend ? this.createForceSendPipeline() : this.pipeline
+        const shouldSend = await pipeline.execute(context)
 
         if (!shouldSend) {
             this.log?.warn(context.abortReason || 'Message blocked by middleware')

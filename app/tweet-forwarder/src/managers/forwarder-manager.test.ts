@@ -3,6 +3,8 @@ import EventEmitter from 'events'
 import { ForwarderPools, ForwarderTaskScheduler, buildAutoBoundForwarderTaskData, resolveBatchTargetIds } from './forwarder-manager'
 import { TaskScheduler } from '@/utils/base'
 import { fileURLToPath } from 'url'
+import { Forwarder } from '@/middleware/forwarder/base'
+import DB from '@/db'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
@@ -241,4 +243,86 @@ test('ForwarderPools resendArticle reuses crawler template media config', async 
             tool: 'default',
         },
     })
+})
+
+test('ForwarderPools force resend bypasses block checks but still applies text transforms', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            replace_regex: [['hello', 'hi']],
+        } as any,
+        'target-1',
+    )
+
+    let cleanupCalled = false
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'hello world',
+            mediaFiles: [],
+        }),
+        cleanup: () => {
+            cleanupCalled = true
+        },
+    }
+
+    const originalSave = DB.ForwardBy.save
+    ;(DB.ForwardBy as any).save = async () => undefined
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-11230',
+            [
+                {
+                    id: 162,
+                    a_id: '11230',
+                    platform: 5,
+                    created_at: Math.floor(Date.now() / 1000) - 40 * 3600,
+                    ref: null,
+                },
+            ],
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text-compact',
+            } as any,
+            { forceSend: true },
+        )
+    } finally {
+        ;(DB.ForwardBy as any).save = originalSave
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts).toEqual(['hi world'])
+    expect(target.sent[0]?.props?.forceSend).toBe(true)
+    expect(cleanupCalled).toBe(true)
 })

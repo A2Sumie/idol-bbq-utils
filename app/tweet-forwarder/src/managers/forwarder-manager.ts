@@ -790,16 +790,19 @@ class ForwarderPools extends BaseCompatibleModel {
         log?.info(`[Trace] Ready to send ${articles_forwarders.length} articles`)
         for (const { article, to } of articles_forwarders) {
             const platform = article.platform
-            const blockResults = await Promise.all(
-                to.map(({ forwarder: target, runtime_config }) =>
-                    target.check_blocked('', {
-                        timestamp: article.created_at,
-                        runtime_config,
-                        article: cloneDeep(article),
-                    }),
-                ),
-            )
-            const article_is_blocked = blockResults.every((result) => result)
+            const article_is_blocked = options?.forceSend
+                ? false
+                : (
+                      await Promise.all(
+                          to.map(({ forwarder: target, runtime_config }) =>
+                              target.check_blocked('', {
+                                  timestamp: article.created_at,
+                                  runtime_config,
+                                  article: cloneDeep(article),
+                              }),
+                          ),
+                      )
+                  ).every((result) => result)
 
             if (article_is_blocked) {
                 log?.warn(`[Trace] Article ${article.a_id} is blocked by all forwarders, skipping...`)
@@ -817,6 +820,7 @@ class ForwarderPools extends BaseCompatibleModel {
             })
 
             let error_for_all = true
+            let forceSendError: Error | null = null
             const cloned_article = cloneDeep(article)
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
@@ -875,6 +879,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             timestamp: article.created_at,
                             runtime_config,
                             article: cloned_article,
+                            forceSend: options?.forceSend,
                         })
                         if (options?.forceSend) {
                             await DB.ForwardBy.save(article.id, platform, target.id, 'article')
@@ -890,25 +895,32 @@ class ForwarderPools extends BaseCompatibleModel {
             )
 
             if (error_for_all) {
-                let errorCount = this.errorCounter.get(`${platform}:${cloned_article.a_id}`) || 0
-                errorCount += 1
-                if (errorCount > this.MAX_ERROR_COUNT) {
-                    log?.error(`Error count exceeded for ${cloned_article.a_id}, skipping this and tag forwarded...`)
-                    for (const { forwarder: target } of to) {
-                        let currentArticle: ArticleWithId | null = cloned_article
-                        while (currentArticle && typeof currentArticle === 'object') {
-                            await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
-                            currentArticle = currentArticle.ref as ArticleWithId | null
-                        }
-                    }
-                    this.errorCounter.delete(`${platform}:${cloned_article.a_id}`)
+                if (options?.forceSend) {
+                    forceSendError = new Error(`Failed to send article ${cloned_article.a_id} to all targets`)
                 } else {
-                    this.errorCounter.set(`${platform}:${cloned_article.a_id}`, errorCount)
-                    log?.error(`Error count for ${cloned_article.a_id}: ${errorCount}`)
+                    let errorCount = this.errorCounter.get(`${platform}:${cloned_article.a_id}`) || 0
+                    errorCount += 1
+                    if (errorCount > this.MAX_ERROR_COUNT) {
+                        log?.error(`Error count exceeded for ${cloned_article.a_id}, skipping this and tag forwarded...`)
+                        for (const { forwarder: target } of to) {
+                            let currentArticle: ArticleWithId | null = cloned_article
+                            while (currentArticle && typeof currentArticle === 'object') {
+                                await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
+                                currentArticle = currentArticle.ref as ArticleWithId | null
+                            }
+                        }
+                        this.errorCounter.delete(`${platform}:${cloned_article.a_id}`)
+                    } else {
+                        this.errorCounter.set(`${platform}:${cloned_article.a_id}`, errorCount)
+                        log?.error(`Error count for ${cloned_article.a_id}: ${errorCount}`)
+                    }
                 }
             }
 
             this.renderService.cleanup(renderResult.mediaFiles)
+            if (forceSendError) {
+                throw forceSendError
+            }
         }
     }
 
