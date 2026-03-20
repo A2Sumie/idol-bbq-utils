@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import dayjs from 'dayjs'
 import {
     buildPhotoAlbumArticle,
     buildWebsiteArticle,
@@ -274,5 +275,62 @@ describe('buildWebsiteArticle', () => {
             },
         ])
         expect(article.extra?.data?.title).toBe('Movie Detail Title')
+    })
+
+    test('uses current crawl time for same-day website entries that only expose a date', () => {
+        const before = dayjs().unix()
+        const article = buildWebsiteArticle(
+            {
+                feed: 'live-report',
+                u_id: '22/7:live-report',
+                label: '22/7 Live Report',
+            },
+            'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?cd=special',
+            {
+                detailUrl: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?cd=special',
+                title: 'Live Report Title',
+                dateText: '2026.03.20',
+                summary: null,
+                member: null,
+                thumbnail: null,
+            },
+            {
+                title: 'Live Report Title',
+                dateText: '2026.03.20',
+                bodyText: 'Live Report Body',
+                bodyHtml: '<p>Live Report Body</p>',
+                member: null,
+                media: [],
+            },
+        )
+        const after = dayjs().unix()
+
+        expect(article.created_at).toBeGreaterThanOrEqual(before)
+        expect(article.created_at).toBeLessThanOrEqual(after)
+    })
+
+    test('preserves explicit time from website date text', () => {
+        const article = buildWebsiteArticle(
+            radioConfig,
+            'https://nanabunnonijyuuni-mobile.com/s/n110/contents/6390467233112',
+            {
+                detailUrl: 'https://nanabunnonijyuuni-mobile.com/s/n110/contents/6390467233112',
+                title: 'Radio Title',
+                dateText: '2026.03.20 18:15',
+                summary: null,
+                member: null,
+                thumbnail: null,
+            },
+            {
+                title: 'Radio Title',
+                dateText: '2026.03.20 18:15',
+                bodyText: 'Radio body',
+                bodyHtml: '<p>Radio body</p>',
+                member: null,
+                media: [],
+            },
+        )
+
+        expect(article.created_at).toBe(dayjs('2026-03-20 18:15').unix())
     })
 })

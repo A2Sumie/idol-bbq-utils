@@ -922,8 +922,10 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             let error_for_all = true
+            let hadNonErrorOutcome = false
             let forceSendError: Error | null = null
             const cloned_article = cloneDeep(article)
+            const errorCounterKey = `${platform}:${cloned_article.a_id}`
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     try {
@@ -937,6 +939,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                         `Skipping old article ${article.a_id} (created at ${dayjs.unix(article.created_at).format()}) for target ${target.id}`,
                                     )
                                 }
+                                hadNonErrorOutcome = true
                                 return
                             }
 
@@ -948,6 +951,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                         `Skipping real-time send for ${article.a_id} to ${target.id} (Aggregation/Batch Mode ON)`,
                                     )
                                 }
+                                hadNonErrorOutcome = true
                                 return
                             }
 
@@ -962,6 +966,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                             `Article ${article.a_id} does not contain any required keywords, skipping for ${target.id}`,
                                         )
                                     }
+                                    hadNonErrorOutcome = true
                                     return
                                 }
                             }
@@ -972,6 +977,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             claimed = await this.claimArticleChain(article, platform, target.id)
                             if (!claimed) {
                                 log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
+                                hadNonErrorOutcome = true
                                 return
                             }
                         }
@@ -989,6 +995,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             await DB.ForwardBy.save(article.id, platform, target.id, 'article')
                         }
                         error_for_all = false
+                        hadNonErrorOutcome = true
                     } catch (error) {
                         log?.error(`Error while sending to ${target.id}: ${error}`)
                         if (!options?.forceSend) {
@@ -998,11 +1005,11 @@ class ForwarderPools extends BaseCompatibleModel {
                 }),
             )
 
-            if (error_for_all) {
+            if (error_for_all && !hadNonErrorOutcome) {
                 if (options?.forceSend) {
                     forceSendError = new Error(`Failed to send article ${cloned_article.a_id} to all targets`)
                 } else {
-                    let errorCount = this.errorCounter.get(`${platform}:${cloned_article.a_id}`) || 0
+                    let errorCount = this.errorCounter.get(errorCounterKey) || 0
                     errorCount += 1
                     if (errorCount > this.MAX_ERROR_COUNT) {
                         log?.error(
@@ -1015,12 +1022,14 @@ class ForwarderPools extends BaseCompatibleModel {
                                 currentArticle = currentArticle.ref as ArticleWithId | null
                             }
                         }
-                        this.errorCounter.delete(`${platform}:${cloned_article.a_id}`)
+                        this.errorCounter.delete(errorCounterKey)
                     } else {
-                        this.errorCounter.set(`${platform}:${cloned_article.a_id}`, errorCount)
+                        this.errorCounter.set(errorCounterKey, errorCount)
                         log?.error(`Error count for ${cloned_article.a_id}: ${errorCount}`)
                     }
                 }
+            } else {
+                this.errorCounter.delete(errorCounterKey)
             }
 
             this.renderService.cleanup(renderResult.mediaFiles)

@@ -573,3 +573,79 @@ test('sendArticles skips delivery when render service marks a cross-platform dup
     expect(claimedArticleId).toBe(204)
     expect(cleanupCalled).toBe(true)
 })
+
+test('sendArticles does not increment article error count when every target is intentionally skipped as old', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+        } as any,
+        'target-old-skip',
+    )
+
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'old article',
+            mediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+    ;(pools as any).claimArticleChain = async () => true
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => false
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-old-skip',
+            [
+                {
+                    id: 205,
+                    a_id: 'website-old-skip',
+                    platform: 5,
+                    created_at: Math.floor(Date.now() / 1000) - 3 * 3600,
+                    ref: null,
+                },
+            ],
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text-compact',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(0)
+    expect((pools as any).errorCounter.get('5:website-old-skip')).toBeUndefined()
+})

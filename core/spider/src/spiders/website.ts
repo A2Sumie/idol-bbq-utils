@@ -160,6 +160,15 @@ function cleanMultilineText(value?: string | null): string {
     return collapsed.join('\n').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+function hasExplicitTime(dateText?: string | null): boolean {
+    const value = cleanText(dateText)
+    if (!value) {
+        return false
+    }
+
+    return /\b\d{1,2}:\d{2}(?::\d{2})?\b/.test(value) || /\b\d{1,2}時(?:\d{1,2}分?)?\b/.test(value)
+}
+
 function resolveAbsoluteUrl(url: string, value?: string | null): string | null {
     if (!value) {
         return null
@@ -172,9 +181,19 @@ function resolveAbsoluteUrl(url: string, value?: string | null): string | null {
 }
 
 function parseDateToUnix(dateText?: string | null): number {
-    const normalized = cleanText(dateText).replace(/[./]/g, '-')
+    const raw = cleanText(dateText)
+    const normalized = raw.replace(/[./]/g, '-')
     const parsed = dayjs(normalized)
     if (parsed.isValid()) {
+        if (hasExplicitTime(raw)) {
+            return parsed.unix()
+        }
+
+        const now = dayjs()
+        if (parsed.isSame(now, 'day')) {
+            return now.unix()
+        }
+
         return parsed.startOf('day').unix()
     }
     return Math.floor(Date.now() / 1000)
