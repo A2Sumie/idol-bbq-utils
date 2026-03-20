@@ -88,9 +88,19 @@ def main():
     )
 
 
+def explain_upload_error(exc: Exception) -> str:
+    message = str(exc)
+    if message == "'chunk_size'":
+        return (
+            "biliup preupload response did not contain chunk_size; "
+            "Bilibili likely rejected preupload first (common causes: upload rate limit code 601 or stale upload line)"
+        )
+    return message
+
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(str(exc), file=sys.stderr)
+        print(explain_upload_error(exc), file=sys.stderr)
         raise

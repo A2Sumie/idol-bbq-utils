@@ -44,8 +44,10 @@ RUN wget https://github.com/mikf/gallery-dl/releases/download/${GALLERY_DL_VERSI
 WORKDIR /app
 COPY app/tweet-forwarder/update-media-tools.sh /app/tools/update-media-tools.sh
 COPY app/tweet-forwarder/scripts/biliup-upload.py /app/tools/biliup-upload.py
+COPY app/tweet-forwarder/scripts/export-biliup-browser-cookies.ts /app/tools/export-biliup-browser-cookies.ts
 RUN chmod +x /app/tools/update-media-tools.sh \
     && chmod +x /app/tools/biliup-upload.py \
+    && chmod +x /app/tools/export-biliup-browser-cookies.ts \
     && /app/tools/update-media-tools.sh
 COPY --from=builder /app/app/tweet-forwarder/build/main.js /app/bin.js
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/

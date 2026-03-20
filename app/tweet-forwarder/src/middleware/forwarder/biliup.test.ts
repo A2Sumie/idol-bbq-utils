@@ -4,7 +4,13 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { BiliForwarder } from './bilibili'
-import { buildBiliupUploadCandidate, buildCookieDocument, normalizeBiliupCookieDocument, resolveVideoUploadConfig } from './biliup'
+import {
+    buildBiliupUploadCandidate,
+    buildCookieDocument,
+    normalizeBiliupCookieDocument,
+    resolveBrowserCookieSyncConfig,
+    resolveVideoUploadConfig,
+} from './biliup'
 
 test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', () => {
     const candidate = buildBiliupUploadCandidate(
@@ -102,6 +108,43 @@ test('resolveVideoUploadConfig keeps configured biliup cookie file path', () => 
     })
 
     expect(config?.cookie_file).toBe(cookieFile)
+})
+
+test('resolveBrowserCookieSyncConfig keeps browser profile sync settings', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-cookie-sync-'))
+    const helperScript = path.join(tempRoot, 'export-biliup-browser-cookies.ts')
+    fs.writeFileSync(helperScript, 'console.log("ok")')
+
+    const config = resolveBrowserCookieSyncConfig({
+        enabled: true,
+        session_profile: 'bilibili-uploader',
+        script_path: helperScript,
+        url: 'https://www.bilibili.com',
+        browser_mode: 'headed-xvfb',
+    })
+
+    expect(config?.session_profile).toBe('bilibili-uploader')
+    expect(config?.script_path).toBe(helperScript)
+    expect(config?.browser_mode).toBe('headed-xvfb')
+})
+
+test('resolveVideoUploadConfig includes browser cookie sync settings', () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-upload-sync-'))
+    const helperScript = path.join(tempRoot, 'export-biliup-browser-cookies.ts')
+    fs.writeFileSync(helperScript, 'console.log("ok")')
+
+    const config = resolveVideoUploadConfig({
+        enabled: true,
+        cookie_file: path.join(tempRoot, 'cookies.json'),
+        browser_cookie_sync: {
+            enabled: true,
+            session_profile: 'bilibili-uploader',
+            script_path: helperScript,
+        },
+    })
+
+    expect(config?.browser_cookie_sync?.session_profile).toBe('bilibili-uploader')
+    expect(config?.browser_cookie_sync?.script_path).toBe(helperScript)
 })
 
 test('BiliForwarder skips dynamic posting when biliup upload succeeds', async () => {

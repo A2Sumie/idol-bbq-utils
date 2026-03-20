@@ -1,3 +1,4 @@
+import type { BrowserMode } from '@idol-bbq-utils/spider'
 import type { Platform, TaskType } from '@idol-bbq-utils/spider/types'
 import type { CommonCfgConfig } from './common'
 import type { Media } from './media'
@@ -9,12 +10,25 @@ enum ForwardTargetPlatformEnum {
     QQ = 'qq',
 }
 
+type BiliupBrowserCookieSyncConfig = {
+    enabled?: boolean
+    bun_path?: string
+    script_path?: string
+    session_profile?: string
+    url?: string
+    browser_mode?: BrowserMode
+    user_agent?: string
+    locale?: string
+    timezone?: string
+}
+
 type BiliupVideoUploadConfig = {
     enabled?: boolean
     python_path?: string
     helper_path?: string
     working_dir?: string
     cookie_file?: string
+    browser_cookie_sync?: BiliupBrowserCookieSyncConfig
     submit_api?: 'web'
     line?: 'AUTO' | 'bda' | 'bda2' | 'ws' | 'qn' | 'bldsa' | 'tx' | 'txa'
     tid?: number
@@ -216,6 +230,7 @@ interface Forwarder<T extends TaskType> {
 export { ForwardTargetPlatformEnum }
 
 export type {
+    BiliupBrowserCookieSyncConfig,
     ForwardTarget,
     Forwarder,
     ForwarderConfig,

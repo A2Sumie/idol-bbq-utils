@@ -3,6 +3,7 @@ import type { Article } from '@/db'
 import { formatPlatformTag } from '@/services/render-service'
 import type { BiliupVideoUploadConfig } from '@/types/forwarder'
 import type { Logger } from '@idol-bbq-utils/log'
+import type { BrowserMode } from '@idol-bbq-utils/spider'
 import { Platform, type MediaType } from '@idol-bbq-utils/spider/types'
 import { spawn } from 'child_process'
 import dayjs from 'dayjs'
@@ -15,10 +16,23 @@ const DEFAULT_BILIUP_SUBMIT_API = 'web'
 const DEFAULT_BILIUP_LINE = 'AUTO'
 const DEFAULT_BILIUP_WORKING_DIR = path.join(CACHE_DIR_ROOT, 'media', 'biliup')
 const DEFAULT_BILIUP_EXCLUDED_UIDS = ['22/7:radio', '22/7:movie']
+const DEFAULT_BILIUP_COOKIE_SYNC_URL = 'https://www.bilibili.com'
 
 type MediaFile = {
     media_type: MediaType
     path: string
+}
+
+interface ResolvedBiliupBrowserCookieSyncConfig {
+    enabled: true
+    bun_path: string
+    script_path: string
+    session_profile: string
+    url: string
+    browser_mode: BrowserMode
+    user_agent?: string
+    locale?: string
+    timezone?: string
 }
 
 interface ResolvedBiliupVideoUploadConfig {
@@ -27,6 +41,7 @@ interface ResolvedBiliupVideoUploadConfig {
     helper_path: string
     working_dir: string
     cookie_file?: string
+    browser_cookie_sync?: ResolvedBiliupBrowserCookieSyncConfig
     submit_api: 'web'
     line: 'AUTO' | 'bda' | 'bda2' | 'ws' | 'qn' | 'bldsa' | 'tx' | 'txa'
     tid: number
@@ -78,6 +93,21 @@ function defaultHelperPath() {
             path.resolve(process.cwd(), 'app/tweet-forwarder/scripts/biliup-upload.py'),
         ],
         '/app/tools/biliup-upload.py',
+    )
+}
+
+function defaultBunPath() {
+    return resolveExistingPath([process.env.BUN_PATH, '/usr/local/bin/bun', '/usr/bin/bun', 'bun'], 'bun')
+}
+
+function defaultBrowserCookieSyncScriptPath() {
+    return resolveExistingPath(
+        [
+            process.env.BILIUP_BROWSER_COOKIE_SYNC_SCRIPT,
+            '/app/tools/export-biliup-browser-cookies.ts',
+            path.resolve(process.cwd(), 'app/tweet-forwarder/scripts/export-biliup-browser-cookies.ts'),
+        ],
+        '/app/tools/export-biliup-browser-cookies.ts',
     )
 }
 
@@ -216,6 +246,35 @@ function resolveConfiguredPath(candidate?: string) {
     return path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate)
 }
 
+function normalizeBrowserMode(value?: BrowserMode) {
+    return value === 'headed' || value === 'headed-xvfb' || value === 'headless' ? value : 'headless'
+}
+
+function resolveBrowserCookieSyncConfig(
+    config?: NonNullable<BiliupVideoUploadConfig['browser_cookie_sync']>,
+): ResolvedBiliupBrowserCookieSyncConfig | undefined {
+    if (!config?.enabled) {
+        return undefined
+    }
+
+    const session_profile = String(config.session_profile || '').trim()
+    if (!session_profile) {
+        throw new Error('biliup video_upload.browser_cookie_sync.session_profile is required when enabled')
+    }
+
+    return {
+        enabled: true,
+        bun_path: config.bun_path || defaultBunPath(),
+        script_path: resolveConfiguredPath(config.script_path) || defaultBrowserCookieSyncScriptPath(),
+        session_profile,
+        url: config.url || DEFAULT_BILIUP_COOKIE_SYNC_URL,
+        browser_mode: normalizeBrowserMode(config.browser_mode),
+        user_agent: config.user_agent,
+        locale: config.locale,
+        timezone: config.timezone,
+    }
+}
+
 function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBiliupVideoUploadConfig | null {
     if (!config?.enabled) {
         return null
@@ -226,6 +285,7 @@ function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBil
         helper_path: config.helper_path || defaultHelperPath(),
         working_dir: config.working_dir || DEFAULT_BILIUP_WORKING_DIR,
         cookie_file: resolveConfiguredPath(config.cookie_file),
+        browser_cookie_sync: resolveBrowserCookieSyncConfig(config.browser_cookie_sync),
         submit_api: config.submit_api === 'web' ? config.submit_api : DEFAULT_BILIUP_SUBMIT_API,
         line: config.line || DEFAULT_BILIUP_LINE,
         tid: Number(config.tid || DEFAULT_BILIUP_TID),
@@ -271,6 +331,78 @@ function buildBiliupUploadCandidate(
     }
 }
 
+async function runBrowserCookieSync(config: ResolvedBiliupVideoUploadConfig, log?: Logger) {
+    const syncConfig = config.browser_cookie_sync
+    if (!syncConfig || !config.cookie_file) {
+        return
+    }
+
+    if (!fs.existsSync(syncConfig.script_path)) {
+        throw new Error(`biliup browser cookie sync helper not found: ${syncConfig.script_path}`)
+    }
+
+    fs.mkdirSync(path.dirname(config.cookie_file), { recursive: true })
+
+    const args = [
+        syncConfig.script_path,
+        '--session-profile',
+        syncConfig.session_profile,
+        '--output',
+        config.cookie_file,
+        '--url',
+        syncConfig.url,
+        '--browser-mode',
+        syncConfig.browser_mode,
+    ]
+
+    if (syncConfig.user_agent) {
+        args.push('--user-agent', syncConfig.user_agent)
+    }
+    if (syncConfig.locale) {
+        args.push('--locale', syncConfig.locale)
+    }
+    if (syncConfig.timezone) {
+        args.push('--timezone', syncConfig.timezone)
+    }
+
+    const stdoutChunks: string[] = []
+    const stderrChunks: string[] = []
+
+    await new Promise<void>((resolve, reject) => {
+        const child = spawn(syncConfig.bun_path, args, {
+            cwd: config.working_dir,
+            env: {
+                ...process.env,
+                BROWSER_PROFILE_DIR:
+                    process.env.BROWSER_PROFILE_DIR || path.join(process.cwd(), 'assets', 'cookies', 'browser-profiles'),
+            },
+        })
+
+        child.stdout.on('data', (chunk) => {
+            const text = chunk.toString()
+            stdoutChunks.push(text)
+            text.trim() && log?.debug(`[biliup-cookie-sync] ${text.trim()}`)
+        })
+        child.stderr.on('data', (chunk) => {
+            const text = chunk.toString()
+            stderrChunks.push(text)
+            text.trim() && log?.warn(`[biliup-cookie-sync] ${text.trim()}`)
+        })
+        child.on('error', (error) => reject(error))
+        child.on('close', (code) => {
+            if (code === 0) {
+                resolve()
+                return
+            }
+            reject(
+                new Error(
+                    `biliup browser cookie sync exited with code ${code}: ${stderrChunks.join('').trim() || stdoutChunks.join('').trim()}`,
+                ),
+            )
+        })
+    })
+}
+
 async function runBiliupUpload(
     article: Pick<Article, 'a_id'>,
     candidate: BiliupUploadCandidate,
@@ -284,21 +416,41 @@ async function runBiliupUpload(
     fs.mkdirSync(candidate.config.working_dir, { recursive: true })
     const uploadDir = fs.mkdtempSync(path.join(candidate.config.working_dir, `${article.a_id}-`))
     const cookieFile = path.join(uploadDir, 'cookies.json')
-    const cookieDocument = candidate.config.cookie_file
-        ? (() => {
-              if (!fs.existsSync(candidate.config.cookie_file as string)) {
-                  throw new Error(`biliup cookie file not found: ${candidate.config.cookie_file}`)
-              }
-              return normalizeBiliupCookieDocument(
-                  JSON.parse(fs.readFileSync(candidate.config.cookie_file as string, 'utf8')),
-              )
-          })()
-        : (() => {
-              if (!credentials.sessdata || !credentials.bili_jct) {
-                  throw new Error('biliup upload requires video_upload.cookie_file or both sessdata and bili_jct')
-              }
-              return buildCookieDocument(credentials.sessdata, credentials.bili_jct)
-          })()
+    let browserCookieSyncError: Error | null = null
+
+    if (candidate.config.browser_cookie_sync && candidate.config.cookie_file) {
+        try {
+            await runBrowserCookieSync(candidate.config, log)
+        } catch (error) {
+            browserCookieSyncError = error instanceof Error ? error : new Error(String(error))
+            log?.warn(`Biliup browser cookie sync failed, will try fallback credentials: ${browserCookieSyncError.message}`)
+        }
+    }
+
+    let cookieDocument: BiliupCookieDocument | null = null
+    if (candidate.config.cookie_file && fs.existsSync(candidate.config.cookie_file)) {
+        try {
+            cookieDocument = normalizeBiliupCookieDocument(
+                JSON.parse(fs.readFileSync(candidate.config.cookie_file, 'utf8')),
+            )
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            log?.warn(`Invalid biliup cookie file ${candidate.config.cookie_file}, falling back if possible: ${message}`)
+        }
+    }
+
+    if (!cookieDocument) {
+        if (!credentials.sessdata || !credentials.bili_jct) {
+            if (candidate.config.cookie_file && !fs.existsSync(candidate.config.cookie_file)) {
+                throw new Error(
+                    `biliup cookie file not found: ${candidate.config.cookie_file}${browserCookieSyncError ? ` (${browserCookieSyncError.message})` : ''}`,
+                )
+            }
+            throw new Error('biliup upload requires video_upload.cookie_file or both sessdata and bili_jct')
+        }
+        cookieDocument = buildCookieDocument(credentials.sessdata, credentials.bili_jct)
+    }
+
     fs.writeFileSync(cookieFile, JSON.stringify(cookieDocument, null, 2))
 
     const args = [
@@ -381,7 +533,9 @@ export {
     buildBiliupUploadCandidate,
     buildCookieDocument,
     normalizeBiliupCookieDocument,
+    resolveBrowserCookieSyncConfig,
     resolveVideoUploadConfig,
     runBiliupUpload,
+    runBrowserCookieSync,
 }
 export type { BiliupUploadCandidate, ResolvedBiliupVideoUploadConfig }

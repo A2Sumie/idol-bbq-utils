@@ -27,6 +27,10 @@ bots:
         video_upload:                         # (optional) direct biliup video upload
           enabled: true
           cookie_file: './assets/tweet-forwarder/bili.cookies.json' # (optional) preferred full biliup cookie JSON
+          browser_cookie_sync:                # (optional) refresh cookie_file from project browser profile before upload
+            enabled: true
+            session_profile: 'bilibili-uploader'
+            url: 'https://www.bilibili.com'
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id
@@ -81,6 +85,10 @@ bots:
         video_upload:                         # (optional) direct biliup video upload
           enabled: true
           cookie_file: './assets/tweet-forwarder/bili.cookies.json' # (optional) preferred full biliup cookie JSON
+          browser_cookie_sync:                # (optional) refresh cookie_file from project browser profile before upload
+            enabled: true
+            session_profile: 'bilibili-uploader'
+            url: 'https://www.bilibili.com'
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id
