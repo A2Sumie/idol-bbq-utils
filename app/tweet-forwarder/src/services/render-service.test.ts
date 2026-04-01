@@ -7,6 +7,10 @@ import { MediaToolEnum } from '@/types/media'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
+const SAMPLE_PNG_DATA_URL =
+    'data:image/png;base64,' +
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s1OtS8AAAAASUVORK5CYII='
+
 describe('formatPlatformTag', () => {
     test('includes platform and display name for image-tag style labels', () => {
         expect(
@@ -98,12 +102,90 @@ describe('RenderService text-compact', () => {
     })
 })
 
+describe('RenderService text-card', () => {
+    test('appends a rendered card after the original media', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 11,
+                a_id: 'ig-text-card',
+                u_id: 'nananijigram22_7',
+                username: '22/7',
+                created_at: 1710000000,
+                content: '短文标题\n\n这里是正文',
+                translation: null,
+                translated_by: null,
+                url: 'https://www.instagram.com/p/card/',
+                type: 'post',
+                ref: null,
+                has_media: true,
+                media: [
+                    {
+                        type: 'photo',
+                        url: SAMPLE_PNG_DATA_URL,
+                    },
+                ],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.Instagram,
+            } as any,
+            {
+                taskId: 'test-text-card',
+                render_type: 'text-card',
+                mediaConfig: {
+                    type: 'no-storage',
+                    use: {
+                        tool: MediaToolEnum.DEFAULT,
+                    },
+                },
+            },
+        )
+
+        expect(result.text).toContain('短文标题')
+        expect(result.cardMediaFiles).toHaveLength(1)
+        expect(result.mediaFiles).toHaveLength(2)
+        expect(result.mediaFiles[1]?.path).toBe(result.cardMediaFiles[0]?.path)
+
+        service.cleanup(result.mediaFiles)
+    })
+
+    test('uses only the headline when article text is too long', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 12,
+                a_id: 'web-text-card-long',
+                u_id: 'live-report',
+                username: 'LIVE REPORT',
+                created_at: 1710000000,
+                content: `需要保留的标题\n\n${'很长的正文'.repeat(260)}`,
+                translation: null,
+                translated_by: null,
+                url: 'https://www.227-official.com/live/report',
+                type: 'article',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.Website,
+            } as any,
+            {
+                taskId: 'test-text-card-long',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(result.text).toBe('需要保留的标题')
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
+})
+
 describe('RenderService media deduplication', () => {
     const originalCheckExist = DB.MediaHash.checkExist
     const originalSave = DB.MediaHash.save
-    const dataUrl =
-        'data:image/png;base64,' +
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s1OtS8AAAAASUVORK5CYII='
 
     function buildMediaArticle(a_id: string) {
         return {
@@ -122,7 +204,7 @@ describe('RenderService media deduplication', () => {
             media: [
                 {
                     type: 'photo' as const,
-                    url: dataUrl,
+                    url: SAMPLE_PNG_DATA_URL,
                 },
             ],
             extra: null,
@@ -220,7 +302,7 @@ describe('RenderService media deduplication', () => {
                 media: [
                     {
                         type: 'photo' as const,
-                        url: dataUrl,
+                        url: SAMPLE_PNG_DATA_URL,
                     },
                 ],
                 extra: {
@@ -232,7 +314,7 @@ describe('RenderService media deduplication', () => {
                     media: [
                         {
                             type: 'photo' as const,
-                            url: dataUrl,
+                            url: SAMPLE_PNG_DATA_URL,
                         },
                     ],
                     extra_type: 'website_meta',
@@ -286,7 +368,7 @@ describe('RenderService media deduplication', () => {
                     media: [
                         {
                             type: 'photo' as const,
-                            url: dataUrl,
+                            url: SAMPLE_PNG_DATA_URL,
                         },
                     ],
                     extra: null,
@@ -297,7 +379,7 @@ describe('RenderService media deduplication', () => {
                 media: [
                     {
                         type: 'photo' as const,
-                        url: dataUrl,
+                        url: SAMPLE_PNG_DATA_URL,
                     },
                 ],
                 extra: null,

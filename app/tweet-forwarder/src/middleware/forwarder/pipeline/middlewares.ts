@@ -1,7 +1,7 @@
 import type { ForwarderContext, ForwarderMiddleware } from './types'
 import { formatTime, getSubtractTime } from '@/utils/time'
 import { isStringArrayArray } from '@/utils/typeguards'
-import { articleToText } from '@idol-bbq-utils/render'
+import { articleToText, extractArticleHeadline, extractTextHeadline } from '@idol-bbq-utils/render'
 import { SimpleExpiringCache } from '@idol-bbq-utils/spider'
 import type { Article } from '@/db'
 import dayjs from 'dayjs'
@@ -172,10 +172,6 @@ export class TextReplaceMiddleware implements ForwarderMiddleware {
 export class TextChunkMiddleware implements ForwarderMiddleware {
     readonly name = 'TextChunk'
 
-    private readonly SEPARATOR_NEXT = '\n\n----⬇️----'
-    private readonly SEPARATOR_PREV = '----⬆️----\n\n'
-    private readonly PADDING_LENGTH = 24
-
     constructor(private basicTextLimit: number = 1000) {}
 
     async process(context: ForwarderContext, next: () => Promise<void>): Promise<boolean> {
@@ -187,22 +183,14 @@ export class TextChunkMiddleware implements ForwarderMiddleware {
             return true
         }
 
-        const textLimit =
-            this.basicTextLimit - this.SEPARATOR_NEXT.length - this.SEPARATOR_PREV.length - this.PADDING_LENGTH
+        const fallbackText = context.article
+            ? extractArticleHeadline(context.article, Math.min(120, this.basicTextLimit))
+            : extractTextHeadline(text, Math.min(120, this.basicTextLimit))
 
-        const chunks: string[] = []
-        let remaining = text
-        let i = 0
-
-        while (remaining.length > this.basicTextLimit) {
-            const current = remaining.slice(0, textLimit)
-            chunks.push(`${i > 0 ? this.SEPARATOR_PREV : ''}${current}${this.SEPARATOR_NEXT}`)
-            remaining = remaining.slice(textLimit)
-            i++
-        }
-
-        chunks.push(`${i > 0 ? this.SEPARATOR_PREV : ''}${remaining}`)
-        context.metadata.set('chunks', chunks)
+        const singleChunk = fallbackText || text.slice(0, this.basicTextLimit).trimEnd()
+        context.text = singleChunk
+        context.metadata.set('chunks', [singleChunk])
+        context.metadata.set('text_truncated', true)
 
         await next()
         return true

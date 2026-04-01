@@ -7,6 +7,7 @@ import {
 } from '@/types/forwarder'
 import { BaseCompatibleModel } from '@/utils/base'
 import { Logger } from '@idol-bbq-utils/log'
+import { extractTextHeadline } from '@idol-bbq-utils/render'
 import { Platform, type MediaType } from '@idol-bbq-utils/spider/types'
 import { pRetry } from '@idol-bbq-utils/utils'
 import {
@@ -325,24 +326,8 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             return [normalized]
         }
 
-        const separatorNext = '\n\n----⬇️----'
-        const separatorPrev = '----⬆️----\n\n'
-        const paddingLength = 24
-        const textLimit = basicTextLimit - separatorNext.length - separatorPrev.length - paddingLength
-
-        const chunks: string[] = []
-        let remaining = normalized
-        let index = 0
-
-        while (remaining.length > basicTextLimit) {
-            const current = remaining.slice(0, textLimit)
-            chunks.push(`${index > 0 ? separatorPrev : ''}${current}${separatorNext}`)
-            remaining = remaining.slice(textLimit)
-            index += 1
-        }
-
-        chunks.push(`${index > 0 ? separatorPrev : ''}${remaining}`)
-        return chunks
+        const fallback = extractTextHeadline(normalized, Math.min(120, basicTextLimit))
+        return [fallback || normalized.slice(0, basicTextLimit).trimEnd()]
     }
 
     private async sendPreparedBatchItems(items: PreparedBatchItem[], config: MediaBatchConfig) {

@@ -74,6 +74,44 @@ function truncateCompactText(text: string, maxLength: number) {
     return `${slice.slice(0, cutIndex).trimEnd()}……`
 }
 
+function extractTextHeadline(text: string, maxLength: number = 80) {
+    const lines = text
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+
+    if (lines.length === 0) {
+        return ''
+    }
+
+    const headline =
+        lines.find((line) => !/^[-~～—─＿=]+$/.test(line) && !/^(photo|图片)\d+\s+alt:/i.test(line)) ||
+        lines[0] ||
+        ''
+
+    return truncateCompactText(headline.replace(/\s+/g, ' '), maxLength)
+}
+
+function extractArticleHeadline(article: Article, maxLength: number = 80) {
+    const candidates = [
+        article.content,
+        article.translation,
+        article.extra?.content,
+        article.extra?.translation,
+        `${article.username || ''} ${platformNameMap[article.platform] || ''}`.trim(),
+    ]
+
+    for (const candidate of candidates) {
+        const headline = extractTextHeadline(String(candidate || ''), maxLength)
+        if (headline) {
+            return headline
+        }
+    }
+
+    return truncateCompactText(formatCompactMetaline(article).replace(/\s+/g, ' '), maxLength)
+}
+
 function parseCompactRawContent(article: Article) {
     const raw = parseRawContent(article)
     if (article.platform !== Platform.YouTube) {
@@ -208,6 +246,8 @@ function formatCompactMetaline(article: Article) {
 export {
     articleToText,
     compactArticleToText,
+    extractArticleHeadline,
+    extractTextHeadline,
     followsToText,
     formatCompactMetaline,
     formatMetaline,

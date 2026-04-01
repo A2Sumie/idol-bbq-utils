@@ -2,14 +2,13 @@ import { ForwardTargetPlatformEnum } from '@/types/forwarder'
 import { BaseForwarder } from './base'
 import { BiliForwarder } from './bilibili'
 import { QQForwarder } from './qq'
-import { TgForwarder } from './telegram'
 
 interface ForwarderConstructor {
     _PLATFORM: ForwardTargetPlatformEnum
     new (...args: ConstructorParameters<typeof BaseForwarder>): BaseForwarder
 }
 
-const forwarders: Array<ForwarderConstructor> = [BiliForwarder, QQForwarder, TgForwarder]
+const forwarders: Array<ForwarderConstructor> = [BiliForwarder, QQForwarder]
 
 function getForwarder(platform: ForwardTargetPlatformEnum): ForwarderConstructor | null {
     for (const forwarder of forwarders) {

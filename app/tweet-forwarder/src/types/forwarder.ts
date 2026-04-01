@@ -5,7 +5,6 @@ import type { Media } from './media'
 
 enum ForwardTargetPlatformEnum {
     None = 'none',
-    Telegram = 'telegram',
     Bilibili = 'bilibili',
     QQ = 'qq',
 }
@@ -61,10 +60,6 @@ type BiliupVideoUploadConfig = {
 
 type PlatformConfigMap = {
     [ForwardTargetPlatformEnum.None]: {}
-    [ForwardTargetPlatformEnum.Telegram]: {
-        token: string
-        chat_id: string
-    }
     [ForwardTargetPlatformEnum.Bilibili]: {
         bili_jct: string
         sessdata: string
@@ -175,7 +170,16 @@ type ForwardTargetPlatformConfig<T extends ForwardTargetPlatformEnum = ForwardTa
 interface ForwarderConfig extends CommonCfgConfig {
     cron?: string
     media?: Media
-    render_type?: 'text' | 'text-compact' | 'img' | 'tag' | 'img-tag' | 'img-tag-dynamic' | 'img-with-meta'
+    render_type?:
+        | 'text'
+        | 'text-card'
+        | 'text-compact'
+        | 'text-compact-card'
+        | 'img'
+        | 'tag'
+        | 'img-tag'
+        | 'img-tag-dynamic'
+        | 'img-with-meta'
     keywords?: Array<string>
     aggregation?: boolean
     deduplication?: boolean

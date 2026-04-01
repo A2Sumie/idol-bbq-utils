@@ -1,7 +1,6 @@
 import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { QQForwarder } from './qq'
-import { TgForwarder } from './telegram'
 
 test('QQForwarder treats video thumbnails as images', async () => {
     const forwarder = new QQForwarder(
@@ -57,42 +56,28 @@ test('QQForwarder treats video thumbnails as images', async () => {
     ])
 })
 
-test('TgForwarder treats video thumbnails as photos in media groups', async () => {
-    const forwarder = new TgForwarder(
+test('QQForwarder keeps long text as a single payload instead of chunking', async () => {
+    const forwarder = new QQForwarder(
         {
-            chat_id: '-100123',
-            token: 'telegram-bot-token',
+            group_id: '123',
+            url: 'http://127.0.0.1:3001',
+            token: '',
         } as any,
-        'tg-test',
+        'qq-text-limit-test',
     )
-    const calls: any[] = []
-    ;(forwarder as any).bot = {
-        telegram: {
-            sendMediaGroup: async (...args: any[]) => {
-                calls.push(args)
-            },
-            sendMessage: async () => undefined,
-        },
+    ;(forwarder as any).minInterval = 0
+
+    const payloads: any[] = []
+    ;(forwarder as any).sendWithPayload = async (segments: any) => {
+        payloads.push(segments)
+        return { ok: true }
     }
 
-    await (forwarder as any).realSend(['shorts update'], {
-        media: [
-            {
-                media_type: 'video_thumbnail',
-                path: '/tmp/shorts-cover.jpg',
-            },
-            {
-                media_type: 'video',
-                path: '/tmp/shorts.mp4',
-            },
-        ],
-    })
+    await forwarder.send(`保留标题\n\n${'很长的正文'.repeat(260)}`)
 
-    expect(calls).toHaveLength(1)
-    expect(calls[0][0]).toBe('-100123')
-    expect(calls[0][1].map((item: any) => item.type)).toEqual(['photo', 'video'])
-    expect(calls[0][1][0].caption).toBe('shorts update')
-    expect(calls[0][1][1].caption).toBeUndefined()
+    expect(payloads).toHaveLength(1)
+    expect(payloads[0]).toHaveLength(1)
+    expect(payloads[0][0]?.data?.text).toBe('保留标题')
 })
 
 test('QQForwarder batches image-like units until the configured threshold is reached', async () => {

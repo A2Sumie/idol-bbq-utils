@@ -10,7 +10,13 @@ import {
     ytDlpDownloadMediaFile,
     writeImgToFile,
 } from '@/middleware/media'
-import { articleToText, compactArticleToText, formatMetaline, ImgConverter } from '@idol-bbq-utils/render'
+import {
+    articleToText,
+    compactArticleToText,
+    extractArticleHeadline,
+    formatMetaline,
+    ImgConverter,
+} from '@idol-bbq-utils/render'
 import { existsSync, unlinkSync } from 'fs'
 import { cloneDeep } from 'lodash'
 import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spider/const'
@@ -45,6 +51,8 @@ export interface RenderResult {
     shouldSkipSend?: boolean
     skipReason?: string
 }
+
+const CARD_TEXT_TITLE_THRESHOLD = 1000
 
 function formatPlatformTag(
     article: Pick<Article, 'platform' | 'username' | 'a_id'>,
@@ -113,6 +121,26 @@ export class RenderService {
             }
         }
 
+        const appendRenderedCardToMedia = async (position: 'start' | 'end' = 'start') => {
+            const renderedPath = await generateRenderedImage()
+            if (!renderedPath) {
+                return
+            }
+
+            const cardMedia = {
+                path: renderedPath,
+                media_type: 'photo' as MediaType,
+                sourceArticleId: article.a_id,
+                sourceUserId: article.u_id,
+            }
+            card_media_files.push(cardMedia)
+            if (position === 'start') {
+                maybe_media_files.unshift(cardMedia)
+            } else {
+                maybe_media_files.push(cardMedia)
+            }
+        }
+
         if (render_type === 'tag') {
             // Case 1: tag (was source)
             // Output: "From [Platform]"
@@ -148,17 +176,7 @@ export class RenderService {
             } else {
                 // Standard Card Logic
                 text = this.formatPlatformFrom(article)
-                const renderedPath = await generateRenderedImage()
-                if (renderedPath) {
-                    const cardMedia = {
-                        path: renderedPath,
-                        media_type: 'photo' as MediaType,
-                        sourceArticleId: article.a_id,
-                        sourceUserId: article.u_id,
-                    }
-                    card_media_files.push(cardMedia)
-                    maybe_media_files.unshift(cardMedia)
-                }
+                await appendRenderedCardToMedia('start')
             }
         } else if (render_type?.startsWith('img')) {
             // Case 4: Other img-based types (e.g. 'img', 'img-with-meta')
@@ -172,17 +190,10 @@ export class RenderService {
                 )
                 text = articleToText(article)
             } else {
-                const renderedPath = await generateRenderedImage()
                 let articleToImgSuccess = false
-                if (renderedPath) {
-                    const cardMedia = {
-                        path: renderedPath,
-                        media_type: 'photo' as MediaType,
-                        sourceArticleId: article.a_id,
-                        sourceUserId: article.u_id,
-                    }
-                    card_media_files.push(cardMedia)
-                    maybe_media_files.unshift(cardMedia)
+                const originalMediaCount = maybe_media_files.length
+                await appendRenderedCardToMedia('start')
+                if (maybe_media_files.length > originalMediaCount) {
                     articleToImgSuccess = true
                 }
 
@@ -194,6 +205,12 @@ export class RenderService {
                     text = '' // No text for pure img mode
                 }
             }
+        } else if (render_type === 'text-card' || render_type === 'text-compact-card') {
+            text = render_type === 'text-card' ? articleToText(article) : compactArticleToText(article)
+            if (text.length > CARD_TEXT_TITLE_THRESHOLD) {
+                text = extractArticleHeadline(article)
+            }
+            await appendRenderedCardToMedia('end')
         } else if (render_type === 'text-compact') {
             text = compactArticleToText(article)
         } else {
