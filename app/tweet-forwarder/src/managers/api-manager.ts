@@ -76,6 +76,8 @@ function jsonResponse(payload: unknown, status = 200) {
     })
 }
 
+const MAX_BUN_IDLE_TIMEOUT_SECONDS = 255
+
 function resolvePlatform(value?: string | null): Platform | null {
     if (!value) {
         return null
@@ -276,11 +278,11 @@ export class APIManager extends BaseCompatibleModel {
 
         this.server = Bun.serve({
             port,
-            idleTimeout: 600,
+            idleTimeout: MAX_BUN_IDLE_TIMEOUT_SECONDS,
             fetch: async (req, server) => {
                 const url = new URL(req.url)
                 if (url.pathname === '/api/archives' || url.pathname.startsWith('/api/archives/')) {
-                    server.timeout(req, 14_400)
+                    server.timeout(req, MAX_BUN_IDLE_TIMEOUT_SECONDS)
                 }
 
                 const authHeader = req.headers.get('Authorization')
