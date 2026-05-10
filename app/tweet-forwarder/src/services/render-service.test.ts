@@ -277,6 +277,56 @@ describe('RenderService media deduplication', () => {
 
         expect(first.mediaFiles).toHaveLength(1)
         expect(second.mediaFiles).toHaveLength(0)
+        expect(second.shouldSkipSend).toBe(true)
+        expect(second.skipReason).toContain('Duplicate media hash matched')
+
+        service.cleanup(first.mediaFiles)
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    })
+
+    test('skips the whole article when an exact image was already sent from another platform', async () => {
+        const hashStore = new Map<string, { platform: string; hash: string; a_id: string }>()
+        DB.MediaHash.checkExist = async (platform: string, hash: string) => hashStore.get(`${platform}:${hash}`) as any
+        DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+            const value = { platform, hash, a_id }
+            hashStore.set(`${platform}:${hash}`, value)
+            return value as any
+        }
+
+        const service = new RenderService()
+        const config = {
+            taskId: 'test-cross-platform-photo',
+            render_type: 'text-compact',
+            mediaConfig: {
+                type: 'no-storage' as const,
+                use: {
+                    tool: MediaToolEnum.DEFAULT,
+                },
+            },
+            deduplication: true,
+        }
+
+        const first = await service.process(buildMediaArticle('ig-photo-a') as any, config)
+        const second = await service.process(
+            {
+                ...buildMediaArticle('website-photo-b'),
+                platform: Platform.Website,
+                type: 'article',
+                u_id: '22/7:photo',
+                username: '22/7 Photo',
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery/detail/1',
+            } as any,
+            {
+                ...config,
+                taskId: 'test-cross-platform-photo-2',
+            },
+        )
+
+        expect(first.mediaFiles).toHaveLength(1)
+        expect(second.mediaFiles).toHaveLength(0)
+        expect(second.shouldSkipSend).toBe(true)
+        expect(second.skipReason).toContain('Cross-platform exact media duplicate matched')
 
         service.cleanup(first.mediaFiles)
         DB.MediaHash.checkExist = originalCheckExist

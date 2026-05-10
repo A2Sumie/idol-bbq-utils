@@ -11,6 +11,7 @@ const MEDIA_STORE_ROOT = path.join(CACHE_DIR_ROOT, 'media', 'store')
 const MEDIA_STORE_VIDEO_ROOT = path.join(MEDIA_STORE_ROOT, 'videos')
 const MEDIA_STORE_IMAGE_ROOT = path.join(MEDIA_STORE_ROOT, 'images')
 const EXACT_CROSS_PLATFORM_VIDEO_PLATFORM = 'cross-platform-video'
+const EXACT_CROSS_PLATFORM_MEDIA_PREFIX = 'cross-platform-media'
 const SHORT_VIDEO_MAX_DURATION_SECONDS = 180
 const SHORT_VIDEO_DURATION_BUCKET_MS = 500
 const SHORT_VIDEO_DURATION_TOLERANCE_BUCKETS = 2
@@ -244,6 +245,37 @@ async function markExactCrossPlatformVideoSeen(hash: string, articleMarker: stri
     return await DB.MediaHash.save(EXACT_CROSS_PLATFORM_VIDEO_PLATFORM, hash, articleMarker)
 }
 
+function resolveExactCrossPlatformMediaStorage(mediaType: MediaType) {
+    if (mediaType === 'video') {
+        return EXACT_CROSS_PLATFORM_VIDEO_PLATFORM
+    }
+    if (mediaType === 'photo') {
+        return `${EXACT_CROSS_PLATFORM_MEDIA_PREFIX}:photo`
+    }
+    return null
+}
+
+async function checkExactCrossPlatformMediaDuplicate(mediaType: MediaType, hash: string, articleMarker: string) {
+    const storagePlatform = resolveExactCrossPlatformMediaStorage(mediaType)
+    if (!storagePlatform) {
+        return null
+    }
+
+    const existing = await DB.MediaHash.checkExist(storagePlatform, hash)
+    if (existing && existing.a_id !== articleMarker) {
+        return existing
+    }
+    return null
+}
+
+async function markExactCrossPlatformMediaSeen(mediaType: MediaType, hash: string, articleMarker: string) {
+    const storagePlatform = resolveExactCrossPlatformMediaStorage(mediaType)
+    if (!storagePlatform) {
+        return null
+    }
+    return await DB.MediaHash.save(storagePlatform, hash, articleMarker)
+}
+
 function persistMediaFile(sourcePath: string, options: PersistMediaFileOptions): StoredMediaMetadata {
     ensureDirectory(MEDIA_STORE_ROOT)
     ensureDirectory(MEDIA_STORE_VIDEO_ROOT)
@@ -293,9 +325,11 @@ function isPersistentMediaPath(filePath: string) {
 export {
     buildArticleMarker,
     buildShortVideoDedupCandidate,
+    checkExactCrossPlatformMediaDuplicate,
     checkExactCrossPlatformVideoDuplicate,
     checkShortVideoCrossPlatformDuplicate,
     isPersistentMediaPath,
+    markExactCrossPlatformMediaSeen,
     markExactCrossPlatformVideoSeen,
     markShortVideoCrossPlatformSeen,
     persistMediaFile,

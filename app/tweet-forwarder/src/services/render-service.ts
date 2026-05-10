@@ -24,10 +24,10 @@ import type { MediaType } from '@idol-bbq-utils/spider/types'
 import {
     buildArticleMarker,
     buildShortVideoDedupCandidate,
-    checkExactCrossPlatformVideoDuplicate,
+    checkExactCrossPlatformMediaDuplicate,
     checkShortVideoCrossPlatformDuplicate,
     isPersistentMediaPath,
-    markExactCrossPlatformVideoSeen,
+    markExactCrossPlatformMediaSeen,
     markShortVideoCrossPlatformSeen,
     persistMediaFile,
 } from './media-cache-service'
@@ -278,6 +278,9 @@ export class RenderService {
         let maybe_media_files = [] as Array<RenderedMediaFile>
         let currentArticle: Article | null = article
         let skipReason: string | undefined
+        let processedMediaCount = 0
+        let duplicateMediaCount = 0
+        let duplicateMediaReason: string | undefined
 
         // Dynamic imports to avoid top-level issues during hot-reload or circular deps, and purely for this logic
         const DB = (await import('@/db')).default
@@ -298,6 +301,7 @@ export class RenderService {
                         media_type: resolvedMediaType,
                         source_url: sourceUrl,
                     })
+                    processedMediaCount += 1
                     if (deduplication) {
                         try {
                             const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
@@ -315,23 +319,29 @@ export class RenderService {
                                     this.log?.info(
                                         `Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`,
                                     )
+                                    duplicateMediaCount += 1
+                                    duplicateMediaReason = `Duplicate media hash matched ${exists.a_id || 'previous article'}`
                                     return undefined
                                 }
                             } else {
                                 await DB.MediaHash.save(platformStr, hash, articleId)
                             }
 
-                            if (resolvedMediaType === 'video') {
-                                const exactDuplicate = await checkExactCrossPlatformVideoDuplicate(hash, articleMarker)
-                                if (exactDuplicate) {
-                                    skipReason = `Cross-platform exact video duplicate matched ${exactDuplicate.a_id}`
-                                    this.log?.info(
-                                        `Skipping ${articleMarker} because video hash ${hash.substring(0, 8)} matches ${exactDuplicate.a_id}.`,
-                                    )
-                                    return undefined
-                                }
-                                await markExactCrossPlatformVideoSeen(hash, articleMarker)
+                            const exactMediaDuplicate = await checkExactCrossPlatformMediaDuplicate(
+                                resolvedMediaType,
+                                hash,
+                                articleMarker,
+                            )
+                            if (exactMediaDuplicate) {
+                                duplicateMediaCount += 1
+                                const duplicateKind = resolvedMediaType === 'video' ? 'video' : 'media'
+                                skipReason = `Cross-platform exact ${duplicateKind} duplicate matched ${exactMediaDuplicate.a_id}`
+                                this.log?.info(
+                                    `Skipping ${articleMarker} because ${duplicateKind} hash ${hash.substring(0, 8)} matches ${exactMediaDuplicate.a_id}.`,
+                                )
+                                return undefined
                             }
+                            await markExactCrossPlatformMediaSeen(resolvedMediaType, hash, articleMarker)
                         } catch (e) {
                             this.log?.error(`Error during duplicate check: ${e}`)
                         }
@@ -461,6 +471,9 @@ export class RenderService {
             } else {
                 currentArticle = null
             }
+        }
+        if (!skipReason && deduplication && processedMediaCount > 0 && duplicateMediaCount === processedMediaCount) {
+            skipReason = duplicateMediaReason || 'All downloaded media were duplicates'
         }
         return {
             files: maybe_media_files,
