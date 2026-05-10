@@ -887,11 +887,13 @@ test('sendArticles keeps high-frequency hashtags digestized and extracts non-tag
     }
 
     expect(target.sent).toHaveLength(2)
-    expect(target.sent[0]?.texts[0]).toContain('【Tag更新摘要】#ナナニジ / 3 条')
+    expect(target.sent[0]?.texts[0]).toContain('【话题更新摘要】#ナナニジ / 3 条')
+    expect(target.sent[0]?.texts[0]).not.toContain('/ target-tag-digest')
     expect(target.sent[0]?.texts[0]).toContain('正文: ライブ最高 0')
     expect(target.sent[0]?.texts[0]).not.toContain('正文: ライブ最高 0 #')
-    expect(target.sent[0]?.texts[0]).toContain('标签: #ナナニジ #live')
-    expect(target.sent[1]?.texts[0]).toContain('【Tag更新摘要】#ナナニジ / 1 条')
+    expect(target.sent[0]?.texts[0]).toContain('其他标签: #LIVE')
+    expect(target.sent[0]?.texts[0]).not.toContain('标签: #ナナニジ #LIVE')
+    expect(target.sent[1]?.texts[0]).toContain('【话题更新摘要】#ナナニジ / 1 条')
     expect(target.sent[1]?.texts[0]).toContain('正文: 追加のお知らせ')
     expect(claimed).toEqual([400, 401, 402, 410])
 })

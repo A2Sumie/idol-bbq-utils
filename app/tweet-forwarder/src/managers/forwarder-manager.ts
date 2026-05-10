@@ -35,6 +35,7 @@ type TagDigestEvent = {
 type TagDigestState = {
     events: Array<TagDigestEvent>
     digestUntil: number
+    displayTag: string
 }
 type TagDigestGroup = {
     tag: string
@@ -60,7 +61,11 @@ function extractHashtagsFromText(text?: string | null) {
         return []
     }
     const tags = text.match(HASHTAG_REGEX) || []
-    return tags.map((tag) => `#${tag.slice(1).toLocaleLowerCase()}`)
+    return tags.map((tag) => `#${tag.slice(1)}`)
+}
+
+function normalizeHashtagKey(tag: string) {
+    return `#${tag.slice(1).toLocaleLowerCase()}`
 }
 
 function stripHashtagsFromText(text?: string | null) {
@@ -1412,7 +1417,7 @@ class ForwarderPools extends BaseCompatibleModel {
             tagsByArticle.set(article.id, tags)
             for (const tag of tags) {
                 const stateKey = this.getTagDigestStateKey(targetId, tag)
-                const state = this.tagDigestStates.get(stateKey) || { events: [], digestUntil: 0 }
+                const state = this.tagDigestStates.get(stateKey) || { events: [], digestUntil: 0, displayTag: tag }
                 state.events = state.events.filter((event) => event.timestamp >= now - detectionWindow)
                 state.events.push({
                     timestamp: now,
@@ -1435,9 +1440,11 @@ class ForwarderPools extends BaseCompatibleModel {
             if (!activeTag) {
                 continue
             }
-            const existing = groups.get(activeTag) || []
+            const state = this.tagDigestStates.get(this.getTagDigestStateKey(targetId, activeTag))
+            const displayTag = state?.displayTag || activeTag
+            const existing = groups.get(displayTag) || []
             existing.push(article)
-            groups.set(activeTag, existing)
+            groups.set(displayTag, existing)
         }
 
         return Array.from(groups.entries()).map(([tag, tagArticles]) => ({
@@ -1458,7 +1465,7 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private getTagDigestStateKey(targetId: string, tag: string) {
-        return `${targetId}:${tag}`
+        return `${targetId}:${normalizeHashtagKey(tag)}`
     }
 
     private buildDispatchDigestText(
@@ -1481,8 +1488,10 @@ class ForwarderPools extends BaseCompatibleModel {
             const author = article.username || article.u_id || 'unknown'
             if (options?.tag) {
                 const nonTagText = extractArticleNonTagText(article, 120)
-                const tags = extractArticleHashtags(article)
-                const tagLine = tags.length > 0 ? `标签: ${tags.join(' ')}` : undefined
+                const tags = extractArticleHashtags(article).filter(
+                    (tag) => normalizeHashtagKey(tag) !== normalizeHashtagKey(options.tag || ''),
+                )
+                const tagLine = tags.length > 0 ? `其他标签: ${tags.join(' ')}` : undefined
                 return [
                     `${index + 1}. [${time}] ${replyMark}${author}`,
                     `正文: ${nonTagText}`,
@@ -1502,8 +1511,8 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const title = options?.tag
-            ? `【Tag更新摘要】${options.tag} / ${sorted.length} 条 / ${start}-${end} / ${targetId}`
-            : `【更新摘要】${sorted.length} 条 / ${start}-${end} / ${targetId}`
+            ? `【话题更新摘要】${options.tag} / ${sorted.length} 条 / ${start}-${end}`
+            : `【更新摘要】${sorted.length} 条 / ${start}-${end}`
         return [title, ...lines].join('\n\n')
     }
 
