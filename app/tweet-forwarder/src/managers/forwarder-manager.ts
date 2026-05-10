@@ -28,15 +28,94 @@ type ArticleForwarderDispatch = {
     article: ArticleWithId
     to: Array<ForwardTargetInstanceWithRuntimeConfig>
 }
+type TagDigestEvent = {
+    timestamp: number
+    authorKey: string
+}
+type TagDigestState = {
+    events: Array<TagDigestEvent>
+    digestUntil: number
+}
+type TagDigestGroup = {
+    tag: string
+    articles: Array<ArticleWithId>
+}
+
+const DEFAULT_TAG_DIGEST_THRESHOLD = 3
+const DEFAULT_TAG_DIGEST_MIN_AUTHORS = 2
+const DEFAULT_TAG_DIGEST_DETECTION_WINDOW_SECONDS = 5 * 60
+const DEFAULT_TAG_DIGEST_WINDOW_SECONDS = 20 * 60
+const HASHTAG_REGEX = /[#＃][\p{L}\p{N}_ー一-龯ぁ-んァ-ヶ]+/gu
 
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
 
-function lookupConnectionValues<T>(
-    map: Record<string, T> | undefined,
-    keys: Array<string | undefined>,
-): T | undefined {
+function uniquePreserveOrder(values: Array<string>) {
+    return Array.from(new Set(values.filter(Boolean)))
+}
+
+function extractHashtagsFromText(text?: string | null) {
+    if (!text) {
+        return []
+    }
+    const tags = text.match(HASHTAG_REGEX) || []
+    return tags.map((tag) => `#${tag.slice(1).toLocaleLowerCase()}`)
+}
+
+function stripHashtagsFromText(text?: string | null) {
+    if (!text) {
+        return ''
+    }
+    return text
+        .replace(HASHTAG_REGEX, ' ')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\s*\n\s*/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
+function truncateDigestText(text: string, maxLength: number) {
+    if (text.length <= maxLength) {
+        return text
+    }
+    return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
+}
+
+function extractArticleHashtags(article: ArticleWithId) {
+    const extra = article.extra as any
+    return uniquePreserveOrder([
+        ...extractHashtagsFromText(article.content),
+        ...extractHashtagsFromText(article.translation),
+        ...extractHashtagsFromText(extra?.content),
+        ...extractHashtagsFromText(extra?.translation),
+    ])
+}
+
+function extractArticleNonTagText(article: ArticleWithId, maxLength = 120) {
+    const extra = article.extra as any
+    const candidates = [
+        article.content,
+        article.translation,
+        extra?.content,
+        extra?.translation,
+        extractArticleHeadline(article as any, maxLength),
+    ]
+
+    for (const candidate of candidates) {
+        const stripped = stripHashtagsFromText(candidate)
+        if (stripped) {
+            return truncateDigestText(stripped, maxLength)
+        }
+    }
+    return article.url || article.a_id
+}
+
+function getArticleAuthorKey(article: ArticleWithId) {
+    return article.u_id || article.username || article.a_id
+}
+
+function lookupConnectionValues<T>(map: Record<string, T> | undefined, keys: Array<string | undefined>): T | undefined {
     if (!map) {
         return undefined
     }
@@ -447,6 +526,7 @@ class ForwarderPools extends BaseCompatibleModel {
      * platform:a_id -> error count
      */
     private errorCounter = new Map<string, number>()
+    private tagDigestStates = new Map<string, TagDigestState>()
     private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
 
     // private workers:
@@ -477,30 +557,32 @@ class ForwarderPools extends BaseCompatibleModel {
         this.emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
         // create targets
         const { cfg_forward_target } = this.props
-        await Promise.all((this.props.forward_targets || []).map(async (t) => {
-            const forwarderBuilder = getForwarder(t.platform)
-            if (!forwarderBuilder) {
-                this.log?.warn(`Forwarder not found for ${t.platform}`)
-                return
-            }
-            t.cfg_platform = {
-                ...cfg_forward_target,
-                ...t.cfg_platform,
-            }
-            const { block_until, replace_regex, ...restToBeHashed } = t.cfg_platform
-            const forwarderToBeHashed = {
-                ...t,
-                cfg_platform: {
-                    ...restToBeHashed,
-                },
-            }
-            const id =
-                t.id ||
-                `${t.platform}-${crypto.createHash('md5').update(JSON.stringify(forwarderToBeHashed)).digest('hex')}`
-            const forwarder = new forwarderBuilder(t.cfg_platform, id, this.log)
-            await forwarder.init()
-            this.forward_to.set(id, forwarder)
-        }))
+        await Promise.all(
+            (this.props.forward_targets || []).map(async (t) => {
+                const forwarderBuilder = getForwarder(t.platform)
+                if (!forwarderBuilder) {
+                    this.log?.warn(`Forwarder not found for ${t.platform}`)
+                    return
+                }
+                t.cfg_platform = {
+                    ...cfg_forward_target,
+                    ...t.cfg_platform,
+                }
+                const { block_until, replace_regex, ...restToBeHashed } = t.cfg_platform
+                const forwarderToBeHashed = {
+                    ...t,
+                    cfg_platform: {
+                        ...restToBeHashed,
+                    },
+                }
+                const id =
+                    t.id ||
+                    `${t.platform}-${crypto.createHash('md5').update(JSON.stringify(forwarderToBeHashed)).digest('hex')}`
+                const forwarder = new forwarderBuilder(t.cfg_platform, id, this.log)
+                await forwarder.init()
+                this.forward_to.set(id, forwarder)
+            }),
+        )
     }
 
     // handle task received
@@ -625,8 +707,16 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     async processArticleTask(ctx: TaskScheduler.TaskCtx) {
-        const { websites, subscribers, cfg_forwarder, cfg_forward_target, id, crawler_id, connections, article_ids_by_url } = ctx
-            .task.data as {
+        const {
+            websites,
+            subscribers,
+            cfg_forwarder,
+            cfg_forward_target,
+            id,
+            crawler_id,
+            connections,
+            article_ids_by_url,
+        } = ctx.task.data as {
             websites: Array<string>
             subscribers: Forwarder['subscribers']
             cfg_forwarder: Forwarder['cfg_forwarder']
@@ -699,7 +789,9 @@ class ForwarderPools extends BaseCompatibleModel {
         cfg_forward_target?: Forwarder['cfg_forward_target'],
     ) {
         const taskLog = this.log?.child({ label: `manual-resend:${crawlerName}` })
-        const crawler = this.props.crawlers?.find((item) => item.name === crawlerName || (item as any).id === crawlerName)
+        const crawler = this.props.crawlers?.find(
+            (item) => item.name === crawlerName || (item as any).id === crawlerName,
+        )
         const matchedForwarder = crawler ? resolveMatchingForwarderTemplate(crawler, this.props.forwarders) : undefined
         const baseForwarderConfig = crawler
             ? buildAutoBoundForwarderTaskData(crawler, this.props).forwarderTaskData.cfg_forwarder
@@ -1206,39 +1298,32 @@ class ForwarderPools extends BaseCompatibleModel {
         const digestedArticleIdsByTarget = new Map<string, Set<number>>()
         for (const [targetId, group] of byTarget) {
             const config = group.target.getEffectiveConfig(group.runtime_config)
-            const threshold = Math.floor(Number(config.digest_threshold || 0))
-            if (threshold < 2 || group.articles.length < threshold) {
-                continue
-            }
+            const targetDigestedIds = digestedArticleIdsByTarget.get(targetId) || new Set<number>()
 
-            const claimedArticles: Array<ArticleWithId> = []
-            for (const article of group.articles) {
-                const claimed = await this.claimArticleChain(article, article.platform, targetId)
-                if (claimed) {
-                    claimedArticles.push(article)
-                }
-            }
-
-            if (claimedArticles.length < threshold) {
-                for (const article of claimedArticles) {
-                    await this.releaseArticleChain(article, article.platform, targetId)
-                }
-                continue
-            }
-
-            const digestText = this.buildDispatchDigestText(targetId, claimedArticles, config)
-            try {
-                await group.target.send(digestText, {
-                    timestamp: Math.floor(Date.now() / 1000),
-                    runtime_config: group.runtime_config,
+            for (const tagGroup of this.resolveTagDigestGroups(targetId, group.articles, config)) {
+                const sentIds = await this.claimAndSendDigest(log, targetId, group, tagGroup.articles, config, {
+                    tag: tagGroup.tag,
                 })
-                digestedArticleIdsByTarget.set(targetId, new Set(claimedArticles.map((article) => article.id)))
-                log?.info(`Sent digest for ${claimedArticles.length} articles to ${targetId}`)
-            } catch (error) {
-                log?.error(`Failed to send digest to ${targetId}: ${error}`)
-                for (const article of claimedArticles) {
-                    await this.releaseArticleChain(article, article.platform, targetId)
+                for (const id of sentIds) {
+                    targetDigestedIds.add(id)
                 }
+            }
+
+            const threshold = Math.floor(Number(config.digest_threshold || 0))
+            const remainingArticles = group.articles.filter((article) => !targetDigestedIds.has(article.id))
+            if (threshold < 2 || remainingArticles.length < threshold) {
+                if (targetDigestedIds.size > 0) {
+                    digestedArticleIdsByTarget.set(targetId, targetDigestedIds)
+                }
+                continue
+            }
+
+            const sentIds = await this.claimAndSendDigest(log, targetId, group, remainingArticles, config)
+            for (const id of sentIds) {
+                targetDigestedIds.add(id)
+            }
+            if (targetDigestedIds.size > 0) {
+                digestedArticleIdsByTarget.set(targetId, targetDigestedIds)
             }
         }
 
@@ -1250,28 +1335,176 @@ class ForwarderPools extends BaseCompatibleModel {
             .filter(({ to }) => to.length > 0)
     }
 
+    private async claimAndSendDigest(
+        log: Logger | undefined,
+        targetId: string,
+        group: {
+            target: BaseForwarder
+            runtime_config?: ForwardTargetPlatformCommonConfig
+            articles: Array<ArticleWithId>
+        },
+        articles: Array<ArticleWithId>,
+        config: ForwardTargetPlatformCommonConfig,
+        options?: { tag?: string },
+    ) {
+        const claimedArticles: Array<ArticleWithId> = []
+        for (const article of articles) {
+            const claimed = await this.claimArticleChain(article, article.platform, targetId)
+            if (claimed) {
+                claimedArticles.push(article)
+            }
+        }
+
+        const requiredCount = options?.tag ? 1 : Math.floor(Number(config.digest_threshold || 0))
+        if (claimedArticles.length < Math.max(1, requiredCount)) {
+            for (const article of claimedArticles) {
+                await this.releaseArticleChain(article, article.platform, targetId)
+            }
+            return []
+        }
+
+        const digestText = this.buildDispatchDigestText(targetId, claimedArticles, config, options)
+        try {
+            await group.target.send(digestText, {
+                timestamp: Math.floor(Date.now() / 1000),
+                runtime_config: group.runtime_config,
+            })
+            log?.info(
+                `Sent ${options?.tag ? `${options.tag} tag ` : ''}digest for ${claimedArticles.length} articles to ${targetId}`,
+            )
+            return claimedArticles.map((article) => article.id)
+        } catch (error) {
+            log?.error(`Failed to send digest to ${targetId}: ${error}`)
+            for (const article of claimedArticles) {
+                await this.releaseArticleChain(article, article.platform, targetId)
+            }
+            return []
+        }
+    }
+
+    private resolveTagDigestGroups(
+        targetId: string,
+        articles: Array<ArticleWithId>,
+        config: ForwardTargetPlatformCommonConfig,
+    ): Array<TagDigestGroup> {
+        if (!this.isTagDigestEnabled(config)) {
+            return []
+        }
+
+        const now = Math.floor(Date.now() / 1000)
+        const detectionWindow = this.resolvePositiveSeconds(
+            config.tag_digest_detection_window_seconds,
+            DEFAULT_TAG_DIGEST_DETECTION_WINDOW_SECONDS,
+        )
+        const digestWindow = this.resolvePositiveSeconds(
+            config.tag_digest_window_seconds,
+            DEFAULT_TAG_DIGEST_WINDOW_SECONDS,
+        )
+        const threshold = Math.max(2, Math.floor(Number(config.tag_digest_threshold || DEFAULT_TAG_DIGEST_THRESHOLD)))
+        const minAuthors = Math.max(
+            1,
+            Math.floor(Number(config.tag_digest_min_authors || DEFAULT_TAG_DIGEST_MIN_AUTHORS)),
+        )
+        const tagsByArticle = new Map<number, Array<string>>()
+
+        for (const article of articles) {
+            const tags = extractArticleHashtags(article)
+            tagsByArticle.set(article.id, tags)
+            for (const tag of tags) {
+                const stateKey = this.getTagDigestStateKey(targetId, tag)
+                const state = this.tagDigestStates.get(stateKey) || { events: [], digestUntil: 0 }
+                state.events = state.events.filter((event) => event.timestamp >= now - detectionWindow)
+                state.events.push({
+                    timestamp: now,
+                    authorKey: getArticleAuthorKey(article),
+                })
+                const distinctAuthorCount = new Set(state.events.map((event) => event.authorKey)).size
+                if (state.events.length >= threshold && distinctAuthorCount >= Math.min(minAuthors, threshold)) {
+                    state.digestUntil = Math.max(state.digestUntil, now + digestWindow)
+                }
+                this.tagDigestStates.set(stateKey, state)
+            }
+        }
+
+        const groups = new Map<string, Array<ArticleWithId>>()
+        for (const article of articles) {
+            const activeTag = (tagsByArticle.get(article.id) || []).find((tag) => {
+                const state = this.tagDigestStates.get(this.getTagDigestStateKey(targetId, tag))
+                return Boolean(state && state.digestUntil >= now)
+            })
+            if (!activeTag) {
+                continue
+            }
+            const existing = groups.get(activeTag) || []
+            existing.push(article)
+            groups.set(activeTag, existing)
+        }
+
+        return Array.from(groups.entries()).map(([tag, tagArticles]) => ({
+            tag,
+            articles: tagArticles,
+        }))
+    }
+
+    private isTagDigestEnabled(config: ForwardTargetPlatformCommonConfig) {
+        const explicitThreshold = Math.floor(Number(config.tag_digest_threshold || 0))
+        const targetDigestThreshold = Math.floor(Number(config.digest_threshold || 0))
+        return explicitThreshold >= 2 || targetDigestThreshold >= 2
+    }
+
+    private resolvePositiveSeconds(value: unknown, fallback: number) {
+        const seconds = Math.floor(Number(value || 0))
+        return seconds > 0 ? seconds : fallback
+    }
+
+    private getTagDigestStateKey(targetId: string, tag: string) {
+        return `${targetId}:${tag}`
+    }
+
     private buildDispatchDigestText(
         targetId: string,
         articles: Array<ArticleWithId>,
         config: ForwardTargetPlatformCommonConfig,
+        options?: { tag?: string },
     ) {
         const sorted = orderBy(articles, ['created_at', 'id'], ['asc', 'asc'])
-        const maxItems = Math.max(3, Math.min(Math.floor(Number(config.digest_max_items || 8)), 20))
+        const maxItemsConfig = options?.tag
+            ? config.tag_digest_max_items || config.digest_max_items
+            : config.digest_max_items
+        const maxItems = Math.max(3, Math.min(Math.floor(Number(maxItemsConfig || 8)), 20))
         const shown = sorted.slice(0, maxItems)
         const start = dayjs.unix(sorted[0]?.created_at || Math.floor(Date.now() / 1000)).format('HH:mm')
         const end = dayjs.unix(sorted[sorted.length - 1]?.created_at || Math.floor(Date.now() / 1000)).format('HH:mm')
         const lines = shown.map((article, index) => {
             const time = dayjs.unix(article.created_at).format('HH:mm')
             const replyMark = String(article.type || '').includes('reply') ? '↪ ' : ''
+            const author = article.username || article.u_id || 'unknown'
+            if (options?.tag) {
+                const nonTagText = extractArticleNonTagText(article, 120)
+                const tags = extractArticleHashtags(article)
+                const tagLine = tags.length > 0 ? `标签: ${tags.join(' ')}` : undefined
+                return [
+                    `${index + 1}. [${time}] ${replyMark}${author}`,
+                    `正文: ${nonTagText}`,
+                    tagLine,
+                    article.url || '',
+                ]
+                    .filter(Boolean)
+                    .join('\n')
+                    .trim()
+            }
             const headline = extractArticleHeadline(article as any, 96) || article.url || article.a_id
-            return `${index + 1}. [${time}] ${replyMark}${article.username || article.u_id || 'unknown'}: ${headline}\n${article.url || ''}`.trim()
+            return `${index + 1}. [${time}] ${replyMark}${author}: ${headline}\n${article.url || ''}`.trim()
         })
         const omitted = sorted.length - shown.length
         if (omitted > 0) {
             lines.push(`... 另有 ${omitted} 条更新已合并`)
         }
 
-        return [`【更新摘要】${sorted.length} 条 / ${start}-${end} / ${targetId}`, ...lines].join('\n\n')
+        const title = options?.tag
+            ? `【Tag更新摘要】${options.tag} / ${sorted.length} 条 / ${start}-${end} / ${targetId}`
+            : `【更新摘要】${sorted.length} 条 / ${start}-${end} / ${targetId}`
+        return [title, ...lines].join('\n\n')
     }
 
     private async claimArticleChain(article: ArticleWithId, platform: Platform, targetId: string) {

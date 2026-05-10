@@ -1,6 +1,11 @@
 import { expect, test } from 'bun:test'
 import EventEmitter from 'events'
-import { ForwarderPools, ForwarderTaskScheduler, buildAutoBoundForwarderTaskData, resolveBatchTargetIds } from './forwarder-manager'
+import {
+    ForwarderPools,
+    ForwarderTaskScheduler,
+    buildAutoBoundForwarderTaskData,
+    resolveBatchTargetIds,
+} from './forwarder-manager'
 import { TaskScheduler } from '@/utils/base'
 import { fileURLToPath } from 'url'
 import { Forwarder } from '@/middleware/forwarder/base'
@@ -136,7 +141,6 @@ test('ForwarderTaskScheduler dispatches immediate tasks with article_ids_by_url 
     emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => {
         dispatched.push(payload)
     })
-
     ;(scheduler as any).onSpiderTaskFinished({
         taskId: 'spider-1',
         crawlerName: '22/7-cast-成员统一列表',
@@ -209,10 +213,7 @@ test('ForwarderPools resendArticle reuses crawler template media config', async 
     )
 
     let capturedFormatterConfig: any
-    ;(pools as any).resolveForwardingPaths = (
-        _crawlerName: string,
-        formatterConfig: any,
-    ) => {
+    ;(pools as any).resolveForwardingPaths = (_crawlerName: string, formatterConfig: any) => {
         capturedFormatterConfig = formatterConfig
         return [
             {
@@ -772,6 +773,296 @@ test('sendArticles sends a target-level digest for lower-noise targets', async (
     expect(target.sent[0]?.texts[0]).toContain('↪ member-2')
     expect(target.sent[0]?.texts[0]).toContain('另有 1 条更新已合并')
     expect(claimed).toEqual([300, 301, 302, 303])
+})
+
+test('sendArticles keeps high-frequency hashtags digestized and extracts non-tag text', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            digest_threshold: 99,
+            tag_digest_threshold: 3,
+            tag_digest_detection_window_seconds: 300,
+            tag_digest_window_seconds: 1200,
+            tag_digest_max_items: 4,
+        } as any,
+        'target-tag-digest',
+    )
+
+    const claimed: Array<number> = []
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        claimed.push(article.id)
+        return true
+    }
+    ;(pools as any).renderService = {
+        process: async () => {
+            throw new Error('tag digest should bypass per-article render')
+        },
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-tag-digest',
+            [0, 1, 2].map((index) => ({
+                id: 400 + index,
+                a_id: `tag-digest-${index}`,
+                platform: Platform.X,
+                username: `member-${index}`,
+                u_id: `member-${index}`,
+                content: `ライブ最高 ${index} #ナナニジ #LIVE`,
+                url: `https://x.com/member/status/tag-${index}`,
+                type: 'tweet',
+                created_at: now + index,
+                ref: null,
+            })),
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-tag-digest-followup',
+            [
+                {
+                    id: 410,
+                    a_id: 'tag-digest-followup',
+                    platform: Platform.X,
+                    username: 'member-next',
+                    u_id: 'member-next',
+                    content: '追加のお知らせ #ナナニジ',
+                    url: 'https://x.com/member/status/tag-followup',
+                    type: 'tweet',
+                    created_at: now + 10,
+                    ref: null,
+                },
+            ],
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(2)
+    expect(target.sent[0]?.texts[0]).toContain('【Tag更新摘要】#ナナニジ / 3 条')
+    expect(target.sent[0]?.texts[0]).toContain('正文: ライブ最高 0')
+    expect(target.sent[0]?.texts[0]).not.toContain('正文: ライブ最高 0 #')
+    expect(target.sent[0]?.texts[0]).toContain('标签: #ナナニジ #live')
+    expect(target.sent[1]?.texts[0]).toContain('【Tag更新摘要】#ナナニジ / 1 条')
+    expect(target.sent[1]?.texts[0]).toContain('正文: 追加のお知らせ')
+    expect(claimed).toEqual([400, 401, 402, 410])
+})
+
+test('sendArticles does not enable hashtag digest for high-tolerance targets without digest config', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+        } as any,
+        'target-high-tolerance',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            mediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-no-tag-digest',
+            [0, 1, 2].map((index) => ({
+                id: 420 + index,
+                a_id: `no-tag-digest-${index}`,
+                platform: Platform.X,
+                username: `member-${index}`,
+                u_id: `member-${index}`,
+                content: `高容忍 ${index} #ナナニジ`,
+                url: `https://x.com/member/status/no-tag-${index}`,
+                type: 'tweet',
+                created_at: now + index,
+                ref: null,
+            })),
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(3)
+    expect(target.sent.map((item) => item.texts[0])).toEqual([
+        '高容忍 0 #ナナニジ',
+        '高容忍 1 #ナナニジ',
+        '高容忍 2 #ナナニジ',
+    ])
+})
+
+test('sendArticles requires multiple authors before entering hashtag storm digest', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            digest_threshold: 99,
+            tag_digest_threshold: 3,
+            tag_digest_min_authors: 2,
+        } as any,
+        'target-tag-author-gate',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            mediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-single-author-tag',
+            [0, 1, 2].map((index) => ({
+                id: 430 + index,
+                a_id: `single-author-tag-${index}`,
+                platform: Platform.X,
+                username: 'same-member',
+                u_id: 'same-member',
+                content: `同一作者 ${index} #ナナニジ`,
+                url: `https://x.com/member/status/same-author-${index}`,
+                type: 'tweet',
+                created_at: now + index,
+                ref: null,
+            })),
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(3)
+    expect(target.sent.map((item) => item.texts[0])).toEqual([
+        '同一作者 0 #ナナニジ',
+        '同一作者 1 #ナナニジ',
+        '同一作者 2 #ナナニジ',
+    ])
 })
 
 test('sendArticles does not increment article error count when every target is intentionally skipped as old', async () => {

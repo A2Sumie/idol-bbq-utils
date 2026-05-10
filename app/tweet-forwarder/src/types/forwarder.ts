@@ -121,6 +121,27 @@ interface ForwardTargetPlatformCommonConfig {
      */
     digest_max_items?: number
     /**
+     * Enable hashtag storm digesting after this many same-tag articles arrive within the detection window.
+     * Defaults to 3 when digest_threshold is configured.
+     */
+    tag_digest_threshold?: number
+    /**
+     * Rolling hashtag storm detection window, in seconds. Defaults to 5 minutes.
+     */
+    tag_digest_detection_window_seconds?: number
+    /**
+     * How long to keep same-tag articles digestized after storm detection, in seconds. Defaults to 20 minutes.
+     */
+    tag_digest_window_seconds?: number
+    /**
+     * Minimum distinct authors needed before a hashtag is treated as a shared storm. Defaults to 2.
+     */
+    tag_digest_min_authors?: number
+    /**
+     * Maximum article lines included in one hashtag digest message.
+     */
+    tag_digest_max_items?: number
+    /**
      *
      * if 1d, the forwarder will only forward the article that created within 1 day
      * "7d", "1w", "30d", "2h"...
