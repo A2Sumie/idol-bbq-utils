@@ -62,6 +62,9 @@ abstract class BaseForwarder extends BaseCompatibleModel {
     id: string
     protected config: ForwardTarget['cfg_platform']
     protected pipeline: MiddlewarePipeline
+    protected readonly timeFilterMiddleware = new TimeFilterMiddleware()
+    protected readonly keywordFilterMiddleware = new KeywordFilterMiddleware()
+    protected readonly blockRuleMiddleware = new BlockRuleMiddleware()
     private pendingMediaBatches: Map<
         string,
         { config: MediaBatchConfig; items: PreparedBatchItem[]; unitCount: number }
@@ -86,9 +89,9 @@ abstract class BaseForwarder extends BaseCompatibleModel {
 
     protected createDefaultPipeline(): MiddlewarePipeline {
         return new MiddlewarePipeline()
-            .use(new TimeFilterMiddleware())
-            .use(new KeywordFilterMiddleware())
-            .use(new BlockRuleMiddleware())
+            .use(this.timeFilterMiddleware)
+            .use(this.keywordFilterMiddleware)
+            .use(this.blockRuleMiddleware)
             .use(new TextReplaceMiddleware())
             .use(new TextChunkMiddleware(this.getTextLimit()))
     }
@@ -124,9 +127,9 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         }
 
         const blockCheckPipeline = new MiddlewarePipeline()
-            .use(new TimeFilterMiddleware())
-            .use(new KeywordFilterMiddleware())
-            .use(new BlockRuleMiddleware())
+            .use(this.timeFilterMiddleware)
+            .use(this.keywordFilterMiddleware)
+            .use(this.blockRuleMiddleware)
 
         try {
             const result = await blockCheckPipeline.execute(context)
@@ -167,10 +170,12 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         const chunks = (context.metadata.get('chunks') as string[]) || [context.text]
         const handledByBatch = await this.maybeHandleMediaBatch(chunks, props, mergedConfig)
         if (handledByBatch) {
+            this.blockRuleMiddleware.commitPending(context)
             return
         }
 
         await this.sendPrepared(chunks, props)
+        this.blockRuleMiddleware.commitPending(context)
     }
 
     protected async sendPrepared(texts: string[], props?: SendProps): Promise<any> {
@@ -449,9 +454,9 @@ abstract class Forwarder extends BaseForwarder {
 
     protected override createDefaultPipeline(): MiddlewarePipeline {
         return new MiddlewarePipeline()
-            .use(new TimeFilterMiddleware())
-            .use(new KeywordFilterMiddleware())
-            .use(new BlockRuleMiddleware())
+            .use(this.timeFilterMiddleware)
+            .use(this.keywordFilterMiddleware)
+            .use(this.blockRuleMiddleware)
             .use(new TextReplaceMiddleware())
             .use(new TextChunkMiddleware(this.BASIC_TEXT_LIMIT))
     }

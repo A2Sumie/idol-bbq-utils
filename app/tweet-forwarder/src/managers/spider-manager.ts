@@ -23,6 +23,25 @@ import dayjs from 'dayjs'
 import { BrowserSessionPool } from '@/services/browser-session-pool'
 import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
 
+function sortUnique(values: Array<string>) {
+    return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
+}
+
+function lookupConnectionValues<T>(
+    map: Record<string, T> | undefined,
+    keys: Array<string | undefined>,
+): T | undefined {
+    if (!map) {
+        return undefined
+    }
+    for (const key of keys) {
+        if (key && Object.prototype.hasOwnProperty.call(map, key)) {
+            return map[key]
+        }
+    }
+    return undefined
+}
+
 interface TaskResult {
     taskId: string
     result: Array<CrawlerTaskResult>
@@ -53,10 +72,14 @@ interface BrowserCookieSnapshot {
 class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
     NAME: string = 'SpiderTaskScheduler'
     protected log?: Logger
-    private props: Pick<AppConfig, 'crawlers' | 'cfg_crawler'>
+    private props: Pick<AppConfig, 'crawlers' | 'cfg_crawler' | 'connections' | 'formatters' | 'forward_targets'>
     private taskEventBindings: Array<{ eventName: string; listener: (...args: any[]) => void }> = []
 
-    constructor(props: Pick<AppConfig, 'crawlers' | 'cfg_crawler'>, emitter: EventEmitter, log?: Logger) {
+    constructor(
+        props: Pick<AppConfig, 'crawlers' | 'cfg_crawler' | 'connections' | 'formatters' | 'forward_targets'>,
+        emitter: EventEmitter,
+        log?: Logger,
+    ) {
         super(emitter)
         this.props = props
         this.log = log?.child({ subservice: this.NAME })
@@ -96,11 +119,11 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                     status: TaskScheduler.TaskStatus.PENDING,
                     data: crawler,
                 }
+                this.tasks.set(taskId, task)
                 this.emitter.emit(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, {
                     taskId,
                     task: task,
                 })
-                this.tasks.set(taskId, task)
             })
             this.log?.debug(`Task dispatcher created with detail: ${JSON.stringify(crawler)}`)
             this.cronJobs.push(job)
@@ -114,6 +137,9 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                     const now = dayjs()
                     const start = now.startOf('day').unix()
                     const end = now.endOf('day').unix()
+                    const targetIds =
+                        crawler.cfg_crawler?.aggregation?.target_ids ||
+                        this.resolveAggregationTargetIds(crawler)
 
                     const websites = crawler.websites || []
                     const paths = crawler.paths || []
@@ -153,7 +179,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                                     u_id,
                                     start,
                                     end,
-                                    bot_id: 'system',
+                                    target_ids: targetIds,
                                     processorConfig: crawler.cfg_crawler?.processor,
                                     processorId:
                                         crawler.cfg_crawler?.aggregation?.processor_id ||
@@ -172,6 +198,32 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
 
         }
 
+    }
+
+    private resolveAggregationTargetIds(crawler: Crawler) {
+        const connections = this.props.connections
+        const formatterTargetMap = connections?.['formatter-target']
+        if (!connections || !formatterTargetMap) {
+            return []
+        }
+
+        const crawlerKeys = [(crawler as any).id, crawler.name]
+        const directFormatterIds = lookupConnectionValues(connections['crawler-formatter'], crawlerKeys) || []
+        const processorId = lookupConnectionValues(connections['crawler-processor'], crawlerKeys)
+        const viaProcessorFormatterIds = processorId ? connections['processor-formatter']?.[processorId] || [] : []
+        const formatterIds = sortUnique([...directFormatterIds, ...viaProcessorFormatterIds])
+
+        const targetIds = new Set<string>()
+        for (const formatterId of formatterIds) {
+            for (const targetId of formatterTargetMap[formatterId] || []) {
+                const targetDef = this.props.forward_targets?.find((target) => target.id === targetId)
+                if ((targetDef?.cfg_platform as any)?.bypass_batch === true) {
+                    continue
+                }
+                targetIds.add(targetId)
+            }
+        }
+        return sortUnique(Array.from(targetIds))
     }
 
     /**
@@ -216,7 +268,11 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
 
         // TODO: delete task later or manually
-        if (status === TaskScheduler.TaskStatus.COMPLETED || status === TaskScheduler.TaskStatus.FAILED) {
+        if (
+            status === TaskScheduler.TaskStatus.COMPLETED ||
+            status === TaskScheduler.TaskStatus.FAILED ||
+            status === TaskScheduler.TaskStatus.CANCELLED
+        ) {
             this.tasks.delete(taskId)
         }
     }
@@ -330,6 +386,7 @@ class SpiderPools extends BaseCompatibleModel {
 
         let cookieString: string | undefined
         let page: Page | undefined
+        let pageKey: string | undefined
 
         const cookie_file = cfg_crawler?.cookie_file
         if (cookie_file) {
@@ -380,12 +437,40 @@ class SpiderPools extends BaseCompatibleModel {
                     const needsBrowser = this.shouldUseBrowserAssist(crawl_engine, spiderPlugin.platform)
                     const waitTime = this.resolveWaitTime(interval_time)
 
+                    const nextPageKey = needsBrowser
+                        ? JSON.stringify({
+                              browser_mode: browserRequest.browser_mode,
+                              device_profile: browserRequest.device_profile,
+                              session_profile: browserRequest.session_profile,
+                              locale: browserRequest.locale,
+                              timezone: browserRequest.timezone,
+                              viewport: browserRequest.viewport,
+                              user_agent,
+                              host: url.hostname,
+                          })
+                        : undefined
+
+                    if (!needsBrowser && page) {
+                        await page.close()
+                        page = undefined
+                        pageKey = undefined
+                        ctx.log?.info('Browser page closed before non-browser crawl')
+                    }
+
+                    if (needsBrowser && page && pageKey !== nextPageKey) {
+                        await page.close()
+                        page = undefined
+                        pageKey = undefined
+                        ctx.log?.info('Browser page closed before profile switch')
+                    }
+
                     if (needsBrowser && !page) {
                         ctx.log?.info(`Creating browser page for engine: ${crawl_engine || 'browser'} (browser-assist)`)
                         page = await this.browserPool.createPage({
                             ...browserRequest,
                             user_agent,
                         })
+                        pageKey = nextPageKey
 
                         if (cookie_file) {
                             await page.browserContext().setCookie(...parseNetscapeCookieToPuppeteerCookie(cookie_file))
@@ -398,7 +483,7 @@ class SpiderPools extends BaseCompatibleModel {
                         await this.primeBrowserSession(page, url, ctx.log)
                     }
 
-                    const sessionCookieString = page
+                    const sessionCookieString = needsBrowser && page
                         ? await this.getBrowserCookieString(page, url).catch(() => undefined)
                         : undefined
                     const effectiveCookieString = this.mergeCookieStrings(cookieString, sessionCookieString)

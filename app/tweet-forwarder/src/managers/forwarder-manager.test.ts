@@ -245,6 +245,119 @@ test('ForwarderPools resendArticle reuses crawler template media config', async 
     })
 })
 
+test('ForwarderPools resolves article subscribers as inline forwarding paths', () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        protected async realSend(): Promise<any> {
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+    const target = new RecordingForwarder({} as any, 'target-inline')
+    ;(pools as any).forward_to.set('target-inline', target)
+
+    const paths = (pools as any).resolveForwardingPaths(
+        'crawler-a',
+        { render_type: 'text-card' },
+        { replace_regex: [['foo', 'bar']] },
+        {},
+        undefined,
+        {
+            subscribers: [
+                {
+                    id: 'target-inline',
+                    cfg_forward_target: {
+                        block_until: '1h',
+                    },
+                },
+            ],
+        },
+    )
+
+    expect(paths).toHaveLength(1)
+    expect(paths[0].source).toBe('inline')
+    expect(paths[0].targets[0].forwarder.id).toBe('target-inline')
+    expect(paths[0].targets[0].runtime_config).toEqual({
+        replace_regex: [['foo', 'bar']],
+        block_until: '1h',
+    })
+})
+
+test('Forwarder block_rules once.media allows the first media article then blocks matching articles in the window', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        protected async realSend(): Promise<any> {
+            return
+        }
+    }
+
+    const forwarder = new RecordingForwarder(
+        {
+            block_rules: [
+                {
+                    platform: 1,
+                    sub_type: ['retweet'],
+                    block_type: 'once.media',
+                    block_until: '6h',
+                },
+            ],
+        } as any,
+        'target-block',
+    )
+
+    const firstArticle = {
+        platform: 1,
+        a_id: 'rt-1',
+        type: 'retweet',
+        has_media: true,
+        created_at: Math.floor(Date.now() / 1000),
+    } as any
+
+    const first = await forwarder.check_blocked('', {
+        article: firstArticle,
+    })
+    await forwarder.send('', {
+        article: firstArticle,
+    })
+
+    const second = await forwarder.check_blocked('', {
+        article: {
+            platform: 1,
+            a_id: 'rt-2',
+            type: 'retweet',
+            has_media: true,
+            created_at: Math.floor(Date.now() / 1000),
+        } as any,
+    })
+    const textOnly = await forwarder.check_blocked('', {
+        article: {
+            platform: 1,
+            a_id: 'rt-3',
+            type: 'retweet',
+            has_media: false,
+            created_at: Math.floor(Date.now() / 1000),
+        } as any,
+    })
+
+    expect(first).toBe(false)
+    expect(second).toBe(true)
+    expect(textOnly).toBe(false)
+})
+
 test('ForwarderPools resendArticle groups website photo singles into a same-day album batch', async () => {
     const pools = new ForwarderPools(
         {

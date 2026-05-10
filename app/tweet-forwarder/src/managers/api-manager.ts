@@ -15,6 +15,14 @@ import { processorRegistry } from '@/middleware/processor'
 import type { Article } from '@idol-bbq-utils/render/types'
 import dayjs from 'dayjs'
 import { CACHE_DIR_ROOT, RETRY_LIMIT } from '@/config'
+import {
+    getArchiveDetail,
+    getArchiveDownloadFile,
+    getArchiveFramePreviews,
+    getArchiveWaveformFile,
+    listArchives,
+    uploadArchiveToBilibili,
+} from '@/services/archive-admin-service'
 import { getCookiesRoot } from '@/utils/directories'
 import { pRetry } from '@idol-bbq-utils/utils'
 
@@ -268,8 +276,12 @@ export class APIManager extends BaseCompatibleModel {
 
         this.server = Bun.serve({
             port,
-            fetch: async (req) => {
+            idleTimeout: 600,
+            fetch: async (req, server) => {
                 const url = new URL(req.url)
+                if (url.pathname === '/api/archives' || url.pathname.startsWith('/api/archives/')) {
+                    server.timeout(req, 14_400)
+                }
 
                 const authHeader = req.headers.get('Authorization')
                 if (!authHeader || authHeader !== `Bearer ${secret}`) {
@@ -298,6 +310,28 @@ export class APIManager extends BaseCompatibleModel {
                 if (req.method === 'GET' && url.pathname.startsWith('/api/articles/')) return this.handleArticleView(url)
                 if (req.method === 'GET' && url.pathname === '/api/tasks') return this.handleTasks(url)
                 if (req.method === 'GET' && url.pathname === '/api/processor-runs') return this.handleProcessorRuns(url)
+
+                if (req.method === 'GET' && url.pathname === '/api/archives') return this.handleArchiveList(url)
+                if (req.method === 'GET' && url.pathname.endsWith('/download') && url.pathname.startsWith('/api/archives/')) {
+                    const archiveId = url.pathname.slice('/api/archives/'.length, -'/download'.length)
+                    return this.handleArchiveDownload(archiveId)
+                }
+                if (req.method === 'GET' && url.pathname.endsWith('/waveform') && url.pathname.startsWith('/api/archives/')) {
+                    const archiveId = url.pathname.slice('/api/archives/'.length, -'/waveform'.length)
+                    return this.handleArchiveWaveform(archiveId)
+                }
+                if (req.method === 'GET' && url.pathname.endsWith('/frames') && url.pathname.startsWith('/api/archives/')) {
+                    const archiveId = url.pathname.slice('/api/archives/'.length, -'/frames'.length)
+                    return this.handleArchiveFrames(archiveId, url)
+                }
+                if (req.method === 'POST' && url.pathname.endsWith('/upload') && url.pathname.startsWith('/api/archives/')) {
+                    const archiveId = url.pathname.slice('/api/archives/'.length, -'/upload'.length)
+                    return this.handleArchiveUpload(archiveId, req)
+                }
+                if (req.method === 'GET' && url.pathname.startsWith('/api/archives/')) {
+                    const archiveId = url.pathname.slice('/api/archives/'.length)
+                    return this.handleArchiveDetail(archiveId)
+                }
 
                 if (req.method === 'POST' && url.pathname === '/api/actions/crawlers/run') return this.handleCrawlerRun(req)
                 if (req.method === 'POST' && url.pathname === '/api/actions/articles/simulate') return this.handleArticleSimulate(req)
@@ -563,6 +597,7 @@ export class APIManager extends BaseCompatibleModel {
     private resolveCrawlerByFinder(finder: string) {
         const crawlers = this.config.crawlers || []
         return crawlers.find((crawler) => {
+            if ((crawler as any).id === finder) return true
             if (crawler.name === finder) return true
             if (crawler.websites?.some((website) => website.includes(finder))) return true
             return false
@@ -684,6 +719,107 @@ export class APIManager extends BaseCompatibleModel {
         const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '100'), 200))
         const source_ref = url.searchParams.get('source_ref') || undefined
         return jsonResponse(await DB.ProcessorRun.list(limit, source_ref))
+    }
+
+    private async handleArchiveList(url: URL): Promise<Response> {
+        try {
+            const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '80'), 200))
+            const query = String(url.searchParams.get('q') || '').trim()
+            return jsonResponse(listArchives(this.config, { limit, query }))
+        } catch (error) {
+            this.log?.error('Archive list error:', error)
+            return new Response(`Failed to list archives: ${error instanceof Error ? error.message : String(error)}`, {
+                status: 500,
+            })
+        }
+    }
+
+    private async handleArchiveDetail(archiveId: string): Promise<Response> {
+        try {
+            return jsonResponse(getArchiveDetail(this.config, decodeURIComponent(archiveId)))
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
+        }
+    }
+
+    private async handleArchiveDownload(archiveId: string): Promise<Response> {
+        try {
+            const file = getArchiveDownloadFile(decodeURIComponent(archiveId))
+            return new Response(Bun.file(file.filePath), {
+                status: 200,
+                headers: {
+                    'Content-Type': file.contentType,
+                    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`,
+                    'Cache-Control': 'no-store',
+                },
+            })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
+        }
+    }
+
+    private async handleArchiveWaveform(archiveId: string): Promise<Response> {
+        try {
+            const waveformPath = getArchiveWaveformFile(this.config, decodeURIComponent(archiveId))
+            return new Response(Bun.file(waveformPath), {
+                status: 200,
+                headers: {
+                    'Content-Type': 'image/png',
+                    'Cache-Control': 'no-store',
+                },
+            })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
+        }
+    }
+
+    private async handleArchiveFrames(archiveId: string, url: URL): Promise<Response> {
+        try {
+            const count = Math.max(1, Math.min(Number(url.searchParams.get('count') || '6'), 12))
+            const trimStartSeconds = Math.max(0, Number(url.searchParams.get('trimStartSeconds') || '0'))
+            const trimEndSeconds = Math.max(0, Number(url.searchParams.get('trimEndSeconds') || '0'))
+            const times = (url.searchParams.get('times') || '')
+                .split(',')
+                .map((entry) => Number(entry.trim()))
+                .filter((value) => Number.isFinite(value))
+            const includeKeyframes = ['1', 'true', 'yes', 'on'].includes(
+                String(url.searchParams.get('includeKeyframes') || '').trim().toLowerCase(),
+            )
+            const anchorTimeSeconds = url.searchParams.get('anchorTimeSeconds')
+            const keyframeRangeStartSeconds = url.searchParams.get('keyframeRangeStartSeconds')
+            const keyframeRangeEndSeconds = url.searchParams.get('keyframeRangeEndSeconds')
+            return jsonResponse({
+                ...getArchiveFramePreviews(this.config, decodeURIComponent(archiveId), {
+                    count,
+                    trimStartSeconds,
+                    trimEndSeconds,
+                    times,
+                    anchorTimeSeconds: anchorTimeSeconds === null ? null : Number(anchorTimeSeconds),
+                    includeKeyframes,
+                    keyframeRangeStartSeconds: keyframeRangeStartSeconds === null ? null : Number(keyframeRangeStartSeconds),
+                    keyframeRangeEndSeconds: keyframeRangeEndSeconds === null ? null : Number(keyframeRangeEndSeconds),
+                }),
+            })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
+        }
+    }
+
+    private async handleArchiveUpload(archiveId: string, req: Request): Promise<Response> {
+        try {
+            const body = await req.json() as any
+            const result = await uploadArchiveToBilibili(this.config, decodeURIComponent(archiveId), body, this.log)
+            return jsonResponse(result)
+        } catch (error) {
+            this.log?.error('Archive upload error:', error)
+            return new Response(`Failed to upload archive: ${error instanceof Error ? error.message : String(error)}`, {
+                status: 500,
+            })
+        }
     }
 
     private async handleCrawlerRun(req: Request): Promise<Response> {
@@ -891,7 +1027,9 @@ export class APIManager extends BaseCompatibleModel {
         if (!article) {
             return new Response('Article not found', { status: 404 })
         }
-        const crawler = this.config.crawlers?.find((item) => item.name === body.crawlerName)
+        const crawler = this.config.crawlers?.find(
+            (item) => item.name === body.crawlerName || (item as any).id === body.crawlerName,
+        )
         if (!crawler) {
             return new Response('Crawler not found', { status: 404 })
         }

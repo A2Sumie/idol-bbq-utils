@@ -7,6 +7,7 @@ interface AggregationConfig {
     cron?: string
     prompt?: string
     processor_id?: string
+    target_ids?: Array<string>
 }
 
 interface LiveRelayTargetConfig {
@@ -94,6 +95,10 @@ interface CrawlerConfig extends CommonCfgConfig {
 }
 
 interface Crawler {
+    /**
+     * Stable identifier for connection maps. Prefer this over `name` when present.
+     */
+    id?: string
     /**
      * Display only
      */

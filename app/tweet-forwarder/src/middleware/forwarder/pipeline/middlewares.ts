@@ -4,7 +4,31 @@ import { isStringArrayArray } from '@/utils/typeguards'
 import { articleToText, extractArticleHeadline, extractTextHeadline } from '@idol-bbq-utils/render'
 import { SimpleExpiringCache } from '@idol-bbq-utils/spider'
 import type { Article } from '@/db'
-import dayjs from 'dayjs'
+import dayjs, { type ManipulateType } from 'dayjs'
+
+const BLOCK_RULE_PENDING_COMMITS_KEY = 'block_rule_pending_commits'
+
+type BlockRuleCommit = {
+    cacheKey: string
+    value: string
+    ttlSeconds: number
+}
+
+function parseDurationSeconds(value: string, fallbackSeconds: number) {
+    if (value === 'once') {
+        return 365 * 24 * 3600
+    }
+
+    const match = value.match(/^(\d+)([a-zA-Z]+)$/)
+    if (!match || !match[1] || !match[2]) {
+        return fallbackSeconds
+    }
+
+    const start = dayjs.unix(0)
+    const end = start.add(Number(match[1]), match[2] as ManipulateType)
+    const seconds = end.diff(start, 'second')
+    return Number.isFinite(seconds) && seconds > 0 ? seconds : fallbackSeconds
+}
 
 export class TimeFilterMiddleware implements ForwarderMiddleware {
     readonly name = 'TimeFilter'
@@ -70,6 +94,22 @@ export class BlockRuleMiddleware implements ForwarderMiddleware {
     readonly name = 'BlockRule'
     private cache: SimpleExpiringCache = new SimpleExpiringCache()
 
+    commitPending(context: ForwarderContext): number {
+        const pendingCommits = context.metadata.get(BLOCK_RULE_PENDING_COMMITS_KEY) as
+            | BlockRuleCommit[]
+            | undefined
+
+        if (!pendingCommits || pendingCommits.length === 0) {
+            return 0
+        }
+
+        for (const commit of pendingCommits) {
+            this.cache.set(commit.cacheKey, commit.value, commit.ttlSeconds)
+        }
+        context.metadata.delete(BLOCK_RULE_PENDING_COMMITS_KEY)
+        return pendingCommits.length
+    }
+
     async process(context: ForwarderContext, next: () => Promise<void>): Promise<boolean> {
         const { article, config } = context
         const { block_rules } = config
@@ -79,11 +119,18 @@ export class BlockRuleMiddleware implements ForwarderMiddleware {
             return true
         }
 
-        const blocked = block_rules.some((rule) => this.shouldBlock(article, rule))
+        const pendingCommits: BlockRuleCommit[] = []
+        const blocked = block_rules.some((rule) => this.shouldBlock(article, rule, pendingCommits))
 
         if (blocked) {
             context.abortReason = 'blocked: block rules matched'
             return false
+        }
+
+        if (pendingCommits.length > 0) {
+            const existingCommits =
+                (context.metadata.get(BLOCK_RULE_PENDING_COMMITS_KEY) as BlockRuleCommit[] | undefined) || []
+            context.metadata.set(BLOCK_RULE_PENDING_COMMITS_KEY, [...existingCommits, ...pendingCommits])
         }
 
         await next()
@@ -93,6 +140,7 @@ export class BlockRuleMiddleware implements ForwarderMiddleware {
     private shouldBlock(
         article: Article,
         rule: NonNullable<ForwarderContext['config']['block_rules']>[number],
+        pendingCommits: BlockRuleCommit[],
     ): boolean {
         const { platform, task_type = 'article', sub_type = [], block_type = 'none', block_until = '6h' } = rule
 
@@ -108,36 +156,54 @@ export class BlockRuleMiddleware implements ForwarderMiddleware {
             return false
         }
 
-        if (!sub_type.includes(article.type)) {
+        if (sub_type.length > 0 && !sub_type.includes(article.type)) {
             return false
         }
 
-        const cache_key = `${article.platform}::${article.a_id}::block`
-        const cached = this.cache.get(cache_key)
+        if (block_type === 'always') {
+            return true
+        }
 
-        if (!cached && block_type.startsWith('once')) {
+        if (block_type === 'once.media') {
+            let currentArticle: Article | null = article
             let has_media = false
-            if (block_type === 'once.media') {
-                let currentArticle: Article | null = article
-                while (currentArticle) {
-                    if (currentArticle.has_media) {
-                        has_media = true
-                        break
-                    }
-                    if (currentArticle.ref && typeof currentArticle.ref === 'object') {
-                        currentArticle = currentArticle.ref
-                    } else {
-                        currentArticle = null
-                    }
+            while (currentArticle) {
+                if (currentArticle.has_media) {
+                    has_media = true
+                    break
+                }
+                if (currentArticle.ref && typeof currentArticle.ref === 'object') {
+                    currentArticle = currentArticle.ref
+                } else {
+                    currentArticle = null
                 }
             }
-            if (block_until === 'once' || has_media) {
-                this.cache.set(cache_key, block_type, getSubtractTime(dayjs().unix(), block_until))
+            if (!has_media) {
+                return false
             }
+        }
+
+        const cache_key = [
+            article.platform,
+            task_type,
+            sub_type.length > 0 ? sub_type.slice().sort().join(',') : '*',
+            block_type,
+        ].join('::')
+        const cached = this.cache.get(cache_key)
+        if (cached) {
+            return true
+        }
+
+        if (block_type.startsWith('once')) {
+            pendingCommits.push({
+                cacheKey: cache_key,
+                value: block_type,
+                ttlSeconds: parseDurationSeconds(block_until, 6 * 3600),
+            })
             return false
         }
 
-        return true
+        return false
     }
 }
 

@@ -29,6 +29,21 @@ function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
 
+function lookupConnectionValues<T>(
+    map: Record<string, T> | undefined,
+    keys: Array<string | undefined>,
+): T | undefined {
+    if (!map) {
+        return undefined
+    }
+    for (const key of keys) {
+        if (key && Object.prototype.hasOwnProperty.call(map, key)) {
+            return map[key]
+        }
+    }
+    return undefined
+}
+
 function resolveBatchTargetIds(
     formatterIds: Array<string>,
     formatterTargetMap: Record<string, Array<string>>,
@@ -86,6 +101,7 @@ function buildAutoBoundForwarderTaskData(
         forwarderTaskData: {
             ...matchedForwarder,
             name: crawler.name,
+            crawler_id: (crawler as any).id,
             websites: crawler.websites,
             origin: crawler.origin,
             paths: crawler.paths,
@@ -173,11 +189,11 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                             connections: this.props.connections,
                         },
                     }
+                    this.tasks.set(taskId, task)
                     this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, {
                         taskId,
                         task: task,
                     })
-                    this.tasks.set(taskId, task)
                 })
                 this.log?.info(`Auto-Bound Forwarder Task created: ${taskName} using template ${matchedForwarder.name}`)
                 this.cronJobs.push(job)
@@ -339,7 +355,11 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
 
         // TODO: delete task later or manually
-        if (status === TaskScheduler.TaskStatus.COMPLETED || status === TaskScheduler.TaskStatus.FAILED) {
+        if (
+            status === TaskScheduler.TaskStatus.COMPLETED ||
+            status === TaskScheduler.TaskStatus.FAILED ||
+            status === TaskScheduler.TaskStatus.CANCELLED
+        ) {
             this.tasks.delete(taskId)
         }
     }
@@ -453,7 +473,7 @@ class ForwarderPools extends BaseCompatibleModel {
         this.emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
         // create targets
         const { cfg_forward_target } = this.props
-        this.props.forward_targets?.forEach(async (t) => {
+        await Promise.all((this.props.forward_targets || []).map(async (t) => {
             const forwarderBuilder = getForwarder(t.platform)
             if (!forwarderBuilder) {
                 this.log?.warn(`Forwarder not found for ${t.platform}`)
@@ -476,7 +496,7 @@ class ForwarderPools extends BaseCompatibleModel {
             const forwarder = new forwarderBuilder(t.cfg_platform, id, this.log)
             await forwarder.init()
             this.forward_to.set(id, forwarder)
-        })
+        }))
     }
 
     // handle task received
@@ -493,9 +513,11 @@ class ForwarderPools extends BaseCompatibleModel {
             subscribers,
             cfg_forward_target,
             id,
+            crawler_id,
             connections,
             article_ids_by_url,
         } = task.data as Forwarder & {
+            crawler_id?: string
             connections?: AppConfig['connections']
             article_ids_by_url?: ArticleIdsByUrl
         }
@@ -539,6 +561,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             subscribers,
                             cfg_forward_target,
                             id,
+                            crawler_id,
                             connections,
                             name,
                             article_ids_by_url,
@@ -598,13 +621,14 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     async processArticleTask(ctx: TaskScheduler.TaskCtx) {
-        const { websites, subscribers, cfg_forwarder, cfg_forward_target, id, connections, article_ids_by_url } = ctx
+        const { websites, subscribers, cfg_forwarder, cfg_forward_target, id, crawler_id, connections, article_ids_by_url } = ctx
             .task.data as {
             websites: Array<string>
             subscribers: Forwarder['subscribers']
             cfg_forwarder: Forwarder['cfg_forwarder']
             cfg_forward_target: Forwarder['cfg_forward_target']
             id?: string
+            crawler_id?: string
             connections?: AppConfig['connections']
             article_ids_by_url?: ArticleIdsByUrl
         }
@@ -632,6 +656,11 @@ class ForwarderPools extends BaseCompatibleModel {
                 cfg_forward_target,
                 connections,
                 ctx.log,
+                {
+                    crawlerId: crawler_id,
+                    forwarderId: id,
+                    subscribers,
+                },
             )
 
             // 3. Execute All Paths
@@ -666,7 +695,8 @@ class ForwarderPools extends BaseCompatibleModel {
         cfg_forward_target?: Forwarder['cfg_forward_target'],
     ) {
         const taskLog = this.log?.child({ label: `manual-resend:${crawlerName}` })
-        const crawler = this.props.crawlers?.find((item) => item.name === crawlerName)
+        const crawler = this.props.crawlers?.find((item) => item.name === crawlerName || (item as any).id === crawlerName)
+        const matchedForwarder = crawler ? resolveMatchingForwarderTemplate(crawler, this.props.forwarders) : undefined
         const baseForwarderConfig = crawler
             ? buildAutoBoundForwarderTaskData(crawler, this.props).forwarderTaskData.cfg_forwarder
             : undefined
@@ -680,6 +710,11 @@ class ForwarderPools extends BaseCompatibleModel {
             cfg_forward_target,
             this.props.connections,
             taskLog,
+            {
+                crawlerId: (crawler as any)?.id,
+                forwarderId: matchedForwarder?.id,
+                subscribers: matchedForwarder?.subscribers,
+            },
         )
         if (paths.length === 0) {
             throw new Error(`No forwarding paths found for crawler ${crawlerName}`)
@@ -772,66 +807,151 @@ class ForwarderPools extends BaseCompatibleModel {
         cfg_forward_target: Forwarder['cfg_forward_target'],
         connections: AppConfig['connections'] | undefined,
         log?: Logger,
+        options?: {
+            crawlerId?: string
+            forwarderId?: string
+            subscribers?: Forwarder['subscribers']
+        },
     ) {
         const allPaths: ForwardingPath[] = []
-        if (!crawlerName || !connections || !connections['formatter-target']) {
+        const formatterTargetMap = connections?.['formatter-target']
+        const crawlerKeys = [options?.crawlerId, crawlerName]
+
+        if (!crawlerName || !connections || !formatterTargetMap) {
             log?.warn(
                 `[Trace] Missing connections or crawler name. Name: ${crawlerName}, Connections present: ${!!connections}`,
             )
-            return allPaths
+        } else {
+            const directFormatterIds = lookupConnectionValues(connections['crawler-formatter'], crawlerKeys) || []
+            const processorId = lookupConnectionValues(connections['crawler-processor'], crawlerKeys)
+            const viaProcessorFormatterIds = processorId ? connections['processor-formatter']?.[processorId] || [] : []
+            const connectedFormatterIds = sortUnique([...directFormatterIds, ...viaProcessorFormatterIds])
+            log?.info(
+                `[Trace] Crawler '${crawlerName}' connected formatters: ${connectedFormatterIds.length} (${connectedFormatterIds.join(', ')})`,
+            )
+
+            const { formatters } = this.props
+            for (const formatterId of connectedFormatterIds) {
+                const formatterConfig = formatters?.find((f) => f.id === formatterId)
+                if (!formatterConfig) {
+                    log?.warn(`[Trace] Formatter config NOT found for ID: ${formatterId}`)
+                    continue
+                }
+
+                const targetIds = formatterTargetMap[formatterId] || []
+                const validTargets = this.resolveTargetInstances(
+                    targetIds.map((targetId) => ({ id: targetId, runtime_config: cfg_forward_target })),
+                    log,
+                )
+
+                if (validTargets.length <= 0) {
+                    log?.warn(
+                        `[Trace] No valid targets found for formatter ${formatterId} (Original IDs: ${targetIds.join(', ')})`,
+                    )
+                    continue
+                }
+
+                allPaths.push({
+                    formatterConfig: {
+                        ...cfg_forwarder,
+                        render_type: formatterConfig.render_type,
+                        aggregation: formatterConfig.aggregation,
+                        deduplication: formatterConfig.deduplication,
+                    },
+                    targets: validTargets,
+                    source: 'graph',
+                    formatterName: formatterConfig.name || formatterId,
+                })
+            }
         }
 
-        const directFormatterIds = connections['crawler-formatter']?.[crawlerName] || []
-        const processorId = connections['crawler-processor']?.[crawlerName]
-        const viaProcessorFormatterIds = processorId ? connections['processor-formatter']?.[processorId] || [] : []
-        const connectedFormatterIds = sortUnique([...directFormatterIds, ...viaProcessorFormatterIds])
-        log?.info(
-            `[Trace] Crawler '${crawlerName}' connected formatters: ${connectedFormatterIds.length} (${connectedFormatterIds.join(', ')})`,
+        const inlineTargets = this.resolveInlineForwardingTargets(
+            options?.subscribers,
+            cfg_forward_target,
+            options?.forwarderId,
+            connections,
+            allPaths.flatMap((path) => path.targets.map(({ forwarder }) => forwarder.id)),
+            log,
         )
 
-        const { formatters } = this.props
-        for (const formatterId of connectedFormatterIds) {
-            const formatterConfig = formatters?.find((f) => f.id === formatterId)
-            if (!formatterConfig) {
-                log?.warn(`[Trace] Formatter config NOT found for ID: ${formatterId}`)
-                continue
-            }
-
-            const targetIds = connections['formatter-target']?.[formatterId] || []
-            const validTargets: Array<ForwardTargetInstanceWithRuntimeConfig> = []
-            for (const targetId of targetIds) {
-                const forwarderInstance = this.forward_to.get(targetId)
-                if (forwarderInstance) {
-                    validTargets.push({
-                        forwarder: forwarderInstance,
-                        runtime_config: cfg_forward_target,
-                    })
-                } else {
-                    log?.warn(`[Trace] Forwarder Instance NOT found for Target ID: ${targetId}`)
-                }
-            }
-
-            if (validTargets.length <= 0) {
-                log?.warn(
-                    `[Trace] No valid targets found for formatter ${formatterId} (Original IDs: ${targetIds.join(', ')})`,
-                )
-                continue
-            }
-
+        if (inlineTargets.length > 0) {
             allPaths.push({
-                formatterConfig: {
-                    ...cfg_forwarder,
-                    render_type: formatterConfig.render_type,
-                    aggregation: formatterConfig.aggregation,
-                    deduplication: formatterConfig.deduplication,
-                },
-                targets: validTargets,
-                source: 'graph',
-                formatterName: formatterConfig.name || formatterId,
+                formatterConfig: cfg_forwarder,
+                targets: inlineTargets,
+                source: 'inline',
+                formatterName: options?.forwarderId || crawlerName || 'inline',
             })
         }
 
         return allPaths
+    }
+
+    private resolveTargetInstances(
+        targets: Array<{ id: string; runtime_config?: ForwardTargetPlatformCommonConfig }>,
+        log?: Logger,
+    ) {
+        return targets
+            .map(({ id, runtime_config }) => {
+                const forwarder = this.forward_to.get(id)
+                if (!forwarder) {
+                    log?.warn(`[Trace] Forwarder Instance NOT found for Target ID: ${id}`)
+                    return undefined
+                }
+                return {
+                    forwarder,
+                    runtime_config,
+                }
+            })
+            .filter((item): item is ForwardTargetInstanceWithRuntimeConfig => Boolean(item))
+    }
+
+    private resolveInlineForwardingTargets(
+        subscribers: Forwarder['subscribers'],
+        commonConfig: Forwarder['cfg_forward_target'],
+        forwarderId: string | undefined,
+        connections: AppConfig['connections'] | undefined,
+        graphTargetIds: Array<string>,
+        log?: Logger,
+    ) {
+        const resolved: Array<{ id: string; runtime_config?: ForwardTargetPlatformCommonConfig }> = []
+        const seen = new Set(graphTargetIds)
+
+        const pushTarget = (id: string, runtime_config?: ForwardTargetPlatformCommonConfig) => {
+            if (!id || seen.has(id)) {
+                return
+            }
+            seen.add(id)
+            resolved.push({ id, runtime_config })
+        }
+
+        for (const subscriber of subscribers || []) {
+            if (typeof subscriber === 'string') {
+                pushTarget(subscriber, commonConfig)
+                continue
+            }
+            pushTarget(subscriber.id, {
+                ...commonConfig,
+                ...subscriber.cfg_forward_target,
+            })
+        }
+
+        const connectedTargetIds = forwarderId
+            ? lookupConnectionValues(connections?.['forwarder-target'], [forwarderId])
+            : undefined
+        for (const targetId of connectedTargetIds || []) {
+            pushTarget(targetId, commonConfig)
+        }
+
+        if (resolved.length === 0 && graphTargetIds.length === 0 && !connections?.['formatter-target']) {
+            for (const targetId of this.forward_to.keys()) {
+                pushTarget(targetId, commonConfig)
+            }
+        }
+
+        if (resolved.length > 0) {
+            log?.info(`[Trace] Resolved ${resolved.length} inline forwarding targets`)
+        }
+        return this.resolveTargetInstances(resolved, log)
     }
 
     private async sendArticles(
@@ -1141,7 +1261,7 @@ class ForwarderPools extends BaseCompatibleModel {
         connections?: AppConfig['connections'],
     ): Array<ForwardTargetInstanceWithRuntimeConfig> {
         // Resolve targets from subscribers
-        const subscribersList = subscribers || []
+        const subscribersList = [...(subscribers || [])]
 
         // Resolve targets from connections map if forwarderId is present
         if (forwarderId && connections && connections['forwarder-target']) {

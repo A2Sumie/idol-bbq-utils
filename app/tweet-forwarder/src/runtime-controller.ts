@@ -190,6 +190,9 @@ export class RuntimeController {
                     {
                         crawlers,
                         cfg_crawler,
+                        connections: config.connections,
+                        formatters,
+                        forward_targets,
                     },
                     emitter,
                     log,
@@ -220,7 +223,7 @@ export class RuntimeController {
         }
 
         this.log.info(`[Trace] Check forwarders: ${forwarders?.length}, crawlers: ${crawlers?.length}`)
-        if ((forwarders && forwarders.length > 0) || (crawlers && crawlers.length > 0)) {
+        if (forwarderPools && ((forwarders && forwarders.length > 0) || (crawlers && crawlers.length > 0))) {
             taskSchedulers.push(
                 new ForwarderTaskScheduler(
                     {

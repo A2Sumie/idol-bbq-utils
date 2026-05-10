@@ -470,6 +470,22 @@ namespace DB {
             })
         }
 
+        export async function recoverStaleProcessing(now: number, staleAfterSeconds: number) {
+            return await prisma.task_queue.updateMany({
+                where: {
+                    status: 'processing',
+                    updated_at: {
+                        lte: now - staleAfterSeconds,
+                    },
+                },
+                data: {
+                    status: 'pending',
+                    updated_at: now,
+                    last_error: 'Recovered stale processing task after runtime interruption',
+                },
+            })
+        }
+
         export async function updateStatus(
             id: number,
             status: string,

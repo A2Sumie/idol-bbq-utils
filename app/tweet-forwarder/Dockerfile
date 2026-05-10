@@ -65,6 +65,9 @@ COPY --from=builder /app/app/tweet-forwarder/prisma/client /app/prisma/client
 # Copy startup script
 COPY app/tweet-forwarder/start.sh /app/start.sh
 
+RUN mkdir -p /tmp/tweet-forwarder \
+    && chown -R bun:bun /tmp/tweet-forwarder
+
 RUN chown -R bun:bun /app/ \
     && chmod +x /app/start.sh
 

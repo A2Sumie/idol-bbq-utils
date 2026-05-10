@@ -56,14 +56,17 @@ class SimpleExpiringCache {
      * @param ttl seconds
      */
     set(key: string, value: any, ttl: number) {
-        const expiresAt = Date.now() + ttl * 1000
+        const ttlMs = Math.max(0, ttl * 1000)
+        const expiresAt = Date.now() + ttlMs
         this.cache.set(key, { value, expiresAt })
 
-        setTimeout(() => {
-            if (this.cache.get(key)?.expiresAt <= Date.now()) {
-                this.cache.delete(key)
-            }
-        }, ttl)
+        if (ttlMs > 0) {
+            setTimeout(() => {
+                if (this.cache.get(key)?.expiresAt <= Date.now()) {
+                    this.cache.delete(key)
+                }
+            }, Math.min(ttlMs, 2_147_483_647))
+        }
     }
 
     get(key: string) {

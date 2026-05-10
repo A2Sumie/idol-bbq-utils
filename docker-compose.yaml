@@ -19,6 +19,8 @@ services:
       - TZ=Asia/Tokyo
       # 设置日志级别
       - LOG_LEVEL=info
+      # TV 存档上传单独走天津风 biliup cookies，不影响其他 bilibili 任务
+      - ARCHIVE_UPLOAD_COOKIE_SOURCE=/app/assets/cookies/biliup.tianjinfeng.cookies.json
     volumes:
       # --- 以下是文件挂载，将主机文件映射到容器内部 ---
       # 1. 挂载配置文件

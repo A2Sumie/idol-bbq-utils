@@ -205,6 +205,10 @@ interface Forwarder<T extends TaskType> {
      */
     id?: string
     /**
+     * Runtime-only stable crawler id used by auto-bound tasks.
+     */
+    crawler_id?: string
+    /**
      * Group tag for UI grouping
      */
     group?: string

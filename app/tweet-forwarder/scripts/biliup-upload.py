@@ -3,9 +3,10 @@
 import argparse
 import json
 import sys
+import time
 
 from biliup.engine.upload import UploadBase
-from biliup.plugins.bili_webup import BiliBili, BiliWeb
+from biliup.plugins.bili_webup import BiliBili, BiliWeb, Data
 
 DEFAULT_BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -74,7 +75,7 @@ def main():
         description=args.desc,
     )
     file_list = [UploadBase.FileInfo(video=video_path, danmaku=None) for video_path in args.files]
-    uploader.upload(file_list)
+    submit_result = upload_and_submit(uploader, file_list)
     print(
         json.dumps(
             {
@@ -82,10 +83,46 @@ def main():
                 "title": args.title,
                 "files": args.files,
                 "tid": args.tid,
+                "submit_result": submit_result,
             },
             ensure_ascii=False,
         )
     )
+
+
+def upload_and_submit(uploader: BiliWeb, file_list):
+    video = Data()
+    video.dynamic = uploader.dynamic
+    with BiliBili(video) as bili:
+        bili.app_key = uploader.user.get("app_key")
+        bili.appsec = uploader.user.get("appsec")
+        bili.login(uploader.persistence_path, uploader.user_cookie)
+        for file in file_list:
+            video_part = bili.upload_file(file.video, uploader.lines, uploader.threads)
+            video_part["title"] = video_part["title"][:80]
+            video.append(video_part)
+        video.title = uploader.data["format_title"][:80]
+        if uploader.credits:
+            video.desc_v2 = uploader.creditsToDesc_v2()
+        else:
+            video.desc_v2 = [
+                {
+                    "raw_text": uploader.desc,
+                    "biz_id": "",
+                    "type": 1,
+                }
+            ]
+        video.desc = uploader.desc
+        video.copyright = uploader.copyright
+        if uploader.copyright == 2:
+            video.source = uploader.data["url"]
+        video.tid = uploader.tid
+        video.set_tag(uploader.tags)
+        if uploader.dtime:
+            video.delay_time(int(time.time()) + uploader.dtime)
+        if uploader.cover_path:
+            video.cover = bili.cover_up(uploader.cover_path).replace("http:", "")
+        return bili.submit(uploader.submit_api)
 
 
 def explain_upload_error(exc: Exception) -> str:

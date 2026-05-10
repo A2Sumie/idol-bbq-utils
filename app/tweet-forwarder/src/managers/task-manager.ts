@@ -28,6 +28,7 @@ export class TaskManager extends BaseCompatibleModel {
     private forwarderPools: ForwarderPools
     private pollingJob: CronJob
     private processors: Processor[]
+    private readonly staleProcessingSeconds = 30 * 60
 
     constructor(forwarderPools: ForwarderPools, options: { processors?: Processor[] } = {}, log?: Logger) {
         super()
@@ -54,6 +55,10 @@ export class TaskManager extends BaseCompatibleModel {
     private async poll() {
         const now = Math.floor(Date.now() / 1000)
         try {
+            const recovered = await DB.TaskQueue.recoverStaleProcessing(now, this.staleProcessingSeconds)
+            if (recovered.count > 0) {
+                this.log?.warn(`Recovered ${recovered.count} stale processing task(s)`)
+            }
             const tasks = await DB.TaskQueue.getPending(now)
             if (tasks.length > 0) {
                 this.log?.info(`Found ${tasks.length} pending tasks`)
@@ -68,6 +73,8 @@ export class TaskManager extends BaseCompatibleModel {
                     } else if (task.type === 'aggregate_hourly') {
                         const payload = task.payload as unknown as AggregatePayload
                         await this.handleHourlyAggregation(payload)
+                    } else {
+                        throw new Error(`Unsupported task type: ${task.type}`)
                     }
                     await DB.TaskQueue.updateStatus(task.id, 'completed')
                 } catch (e) {
