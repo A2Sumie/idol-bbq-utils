@@ -5,11 +5,15 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import {
+    buildVideoFingerprintBandKeys,
     buildShortVideoDedupCandidate,
     checkShortVideoCrossPlatformDuplicate,
+    checkVideoFingerprintDuplicate,
     isPersistentMediaPath,
     markShortVideoCrossPlatformSeen,
+    markVideoFingerprintSeen,
     persistMediaFile,
+    type VideoFingerprintCandidate,
 } from './media-cache-service'
 
 const originalCheckExist = DB.MediaHash.checkExist
@@ -97,4 +101,51 @@ test('cross-platform short video dedup uses duration buckets for nijigram-like a
 
     const duplicate = await checkShortVideoCrossPlatformDuplicate(second!)
     expect(duplicate?.a_id).toBe(`${Platform.Instagram}:ig-short-1`)
+})
+
+test('video fingerprint dedup matches re-encoded short videos by frame bands', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+
+    const storagePlatform = 'cross-video-fingerprint:227-official'
+    const firstFrameHashes = [
+        'ffff0000ffff0000',
+        '0000ffff0000ffff',
+        'f0f0f0f00f0f0f0f',
+        'cccc3333cccc3333',
+        'aaaa5555aaaa5555',
+    ]
+    const first: VideoFingerprintCandidate = {
+        storagePlatform,
+        articleMarker: `${Platform.TikTok}:tt-short-1`,
+        signature: `exact:40:${firstFrameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(40, firstFrameHashes),
+        duration_seconds: 20.1,
+        group: '227-official',
+    }
+    await markVideoFingerprintSeen(first)
+
+    const reencodedFrameHashes = [
+        'ffff0000ffff1111',
+        '0000ffff0000eeee',
+        'f0f0f0f00f0f2222',
+        'cccc3333cccc4444',
+        'aaaa5555aaaa6666',
+    ]
+    const second: VideoFingerprintCandidate = {
+        storagePlatform,
+        articleMarker: `${Platform.YouTube}:yt-short-1`,
+        signature: `exact:40:${reencodedFrameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(40, reencodedFrameHashes),
+        duration_seconds: 20.2,
+        group: '227-official',
+    }
+
+    const duplicate = await checkVideoFingerprintDuplicate(second)
+    expect(duplicate?.a_id).toBe(`${Platform.TikTok}:tt-short-1`)
 })

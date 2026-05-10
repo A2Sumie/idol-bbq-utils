@@ -12,10 +12,14 @@ const MEDIA_STORE_VIDEO_ROOT = path.join(MEDIA_STORE_ROOT, 'videos')
 const MEDIA_STORE_IMAGE_ROOT = path.join(MEDIA_STORE_ROOT, 'images')
 const EXACT_CROSS_PLATFORM_VIDEO_PLATFORM = 'cross-platform-video'
 const EXACT_CROSS_PLATFORM_MEDIA_PREFIX = 'cross-platform-media'
+const VIDEO_FINGERPRINT_PLATFORM_PREFIX = 'cross-video-fingerprint'
 const SHORT_VIDEO_MAX_DURATION_SECONDS = 180
 const SHORT_VIDEO_DURATION_BUCKET_MS = 500
 const SHORT_VIDEO_DURATION_TOLERANCE_BUCKETS = 2
 const SHORT_VIDEO_TIME_BUCKET_SECONDS = 6 * 3600
+const VIDEO_FINGERPRINT_SAMPLE_RATIOS = [0.12, 0.3, 0.5, 0.7, 0.88]
+const VIDEO_FINGERPRINT_BAND_SIZE = 4
+const VIDEO_FINGERPRINT_MIN_BAND_MATCHES = 8
 
 type MediaStoreArticleLike = Pick<Article, 'a_id' | 'platform' | 'u_id' | 'username' | 'created_at' | 'url' | 'type'>
 
@@ -46,6 +50,15 @@ interface ShortVideoDedupCandidate {
     articleMarker: string
     signature: string
     signaturesToCheck: Array<string>
+    duration_seconds: number
+    group: string
+}
+
+interface VideoFingerprintCandidate {
+    storagePlatform: string
+    articleMarker: string
+    signature: string
+    bandKeys: Array<string>
     duration_seconds: number
     group: string
 }
@@ -146,6 +159,9 @@ function normalizeShortVideoGroup(article: Pick<Article, 'u_id' | 'username'>) {
     if (normalized.includes('nananijigram')) {
         return 'nijigram'
     }
+    if (normalized.includes('227smej') || normalized.includes('227official')) {
+        return '227-official'
+    }
     return null
 }
 
@@ -231,6 +247,132 @@ async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupC
 
 async function markShortVideoCrossPlatformSeen(candidate: ShortVideoDedupCandidate) {
     return await DB.MediaHash.save(candidate.storagePlatform, candidate.signature, candidate.articleMarker)
+}
+
+function sampleVideoFrameHash(filePath: string, durationSeconds: number, ratio: number) {
+    const seekSeconds = Math.max(0, Math.min(durationSeconds - 0.25, durationSeconds * ratio))
+    try {
+        const rawFrame = execFileSync(
+            'ffmpeg',
+            [
+                '-v',
+                'error',
+                '-ss',
+                seekSeconds.toFixed(3),
+                '-i',
+                filePath,
+                '-frames:v',
+                '1',
+                '-vf',
+                'scale=8:8:flags=area,format=gray',
+                '-f',
+                'rawvideo',
+                'pipe:1',
+            ],
+            { maxBuffer: 1024 * 1024 },
+        ) as Buffer
+
+        if (rawFrame.length < 64) {
+            return null
+        }
+
+        const pixels = Array.from(rawFrame.subarray(0, 64))
+        const average = pixels.reduce((sum, value) => sum + value, 0) / pixels.length
+        let bits = 0n
+        pixels.forEach((value, index) => {
+            if (value >= average) {
+                bits |= 1n << BigInt(63 - index)
+            }
+        })
+        return bits.toString(16).padStart(16, '0')
+    } catch {
+        return null
+    }
+}
+
+function buildVideoFingerprintBandKeys(durationBucket: number, frameHashes: Array<string>) {
+    const bandKeys: Array<string> = []
+    frameHashes.forEach((hash, frameIndex) => {
+        for (let offset = 0; offset < hash.length; offset += VIDEO_FINGERPRINT_BAND_SIZE) {
+            const bandIndex = offset / VIDEO_FINGERPRINT_BAND_SIZE
+            const band = hash.slice(offset, offset + VIDEO_FINGERPRINT_BAND_SIZE)
+            if (band.length === VIDEO_FINGERPRINT_BAND_SIZE) {
+                bandKeys.push(`band:${durationBucket}:f${frameIndex}:b${bandIndex}:${band}`)
+            }
+        }
+    })
+    return bandKeys
+}
+
+function buildVideoFingerprintCandidate(
+    article: Pick<Article, 'platform' | 'type' | 'a_id' | 'created_at' | 'u_id' | 'username'>,
+    mediaFile: Pick<StoredMediaMetadata, 'path' | 'media_type' | 'duration_seconds'>,
+): VideoFingerprintCandidate | null {
+    if (
+        mediaFile.media_type !== 'video'
+        || typeof mediaFile.duration_seconds !== 'number'
+        || mediaFile.duration_seconds <= 0
+        || mediaFile.duration_seconds > SHORT_VIDEO_MAX_DURATION_SECONDS
+        || !isSupportedShortVideoPlatform(article)
+    ) {
+        return null
+    }
+
+    const frameHashes = VIDEO_FINGERPRINT_SAMPLE_RATIOS
+        .map((ratio) => sampleVideoFrameHash(mediaFile.path, mediaFile.duration_seconds as number, ratio))
+        .filter((hash): hash is string => Boolean(hash))
+
+    if (frameHashes.length < 3) {
+        return null
+    }
+
+    const group = normalizeShortVideoGroup(article) || 'global'
+    const articleMarker = buildArticleMarker(article as Pick<Article, 'platform' | 'a_id'>)
+    const durationBucket = Math.round((mediaFile.duration_seconds * 1000) / SHORT_VIDEO_DURATION_BUCKET_MS)
+
+    return {
+        storagePlatform: `${VIDEO_FINGERPRINT_PLATFORM_PREFIX}:${group}`,
+        articleMarker,
+        signature: `exact:${durationBucket}:${frameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(durationBucket, frameHashes),
+        duration_seconds: mediaFile.duration_seconds,
+        group,
+    }
+}
+
+async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandidate) {
+    const exact = await DB.MediaHash.checkExist(candidate.storagePlatform, candidate.signature)
+    if (exact && exact.a_id !== candidate.articleMarker) {
+        return exact
+    }
+
+    const hitsByArticle = new Map<string, { count: number; existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>> }>()
+    for (const bandKey of candidate.bandKeys) {
+        const existing = await DB.MediaHash.checkExist(candidate.storagePlatform, bandKey)
+        if (!existing || existing.a_id === candidate.articleMarker) {
+            continue
+        }
+        const current = hitsByArticle.get(existing.a_id) || { count: 0, existing }
+        current.count += 1
+        hitsByArticle.set(existing.a_id, current)
+    }
+
+    const threshold = Math.min(
+        candidate.bandKeys.length,
+        Math.max(VIDEO_FINGERPRINT_MIN_BAND_MATCHES, Math.ceil(candidate.bandKeys.length * 0.5)),
+    )
+    for (const hit of hitsByArticle.values()) {
+        if (hit.count >= threshold) {
+            return hit.existing
+        }
+    }
+
+    return null
+}
+
+async function markVideoFingerprintSeen(candidate: VideoFingerprintCandidate) {
+    await DB.MediaHash.save(candidate.storagePlatform, candidate.signature, candidate.articleMarker)
+    await Promise.all(candidate.bandKeys.map((bandKey) => DB.MediaHash.save(candidate.storagePlatform, bandKey, candidate.articleMarker)))
 }
 
 async function checkExactCrossPlatformVideoDuplicate(hash: string, articleMarker: string) {
@@ -325,6 +467,9 @@ function isPersistentMediaPath(filePath: string) {
 export {
     buildArticleMarker,
     buildShortVideoDedupCandidate,
+    buildVideoFingerprintBandKeys,
+    buildVideoFingerprintCandidate,
+    checkVideoFingerprintDuplicate,
     checkExactCrossPlatformMediaDuplicate,
     checkExactCrossPlatformVideoDuplicate,
     checkShortVideoCrossPlatformDuplicate,
@@ -332,6 +477,7 @@ export {
     markExactCrossPlatformMediaSeen,
     markExactCrossPlatformVideoSeen,
     markShortVideoCrossPlatformSeen,
+    markVideoFingerprintSeen,
     persistMediaFile,
 }
-export type { ShortVideoDedupCandidate, StoredMediaMetadata }
+export type { ShortVideoDedupCandidate, StoredMediaMetadata, VideoFingerprintCandidate }

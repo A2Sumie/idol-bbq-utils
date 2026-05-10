@@ -106,15 +106,21 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         return 1000
     }
 
+    public getEffectiveConfig(
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ): ForwardTargetPlatformCommonConfig {
+        return {
+            ...this.config,
+            ...runtime_config,
+        }
+    }
+
     public async check_blocked(text: string, props: SendProps): Promise<boolean> {
         if (props?.forceSend) {
             return false
         }
         const { timestamp, runtime_config, article } = props || {}
-        const mergedConfig: ForwardTargetPlatformCommonConfig = {
-            ...this.config,
-            ...runtime_config,
-        }
+        const mergedConfig = this.getEffectiveConfig(runtime_config)
 
         const context: ForwarderContext = {
             text,
@@ -144,10 +150,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
 
     public async send(text: string, props?: SendProps): Promise<any> {
         const { runtime_config } = props || {}
-        const mergedConfig: ForwardTargetPlatformCommonConfig = {
-            ...this.config,
-            ...runtime_config,
-        }
+        const mergedConfig = this.getEffectiveConfig(runtime_config)
 
         const context: ForwarderContext = {
             text,

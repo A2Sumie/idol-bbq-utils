@@ -24,11 +24,14 @@ import type { MediaType } from '@idol-bbq-utils/spider/types'
 import {
     buildArticleMarker,
     buildShortVideoDedupCandidate,
+    buildVideoFingerprintCandidate,
     checkExactCrossPlatformMediaDuplicate,
     checkShortVideoCrossPlatformDuplicate,
+    checkVideoFingerprintDuplicate,
     isPersistentMediaPath,
     markExactCrossPlatformMediaSeen,
     markShortVideoCrossPlatformSeen,
+    markVideoFingerprintSeen,
     persistMediaFile,
 } from './media-cache-service'
 
@@ -342,6 +345,25 @@ export class RenderService {
                                 return undefined
                             }
                             await markExactCrossPlatformMediaSeen(resolvedMediaType, hash, articleMarker)
+
+                            if (resolvedMediaType === 'video') {
+                                const videoFingerprintCandidate = buildVideoFingerprintCandidate(
+                                    currentArticle as any,
+                                    persisted,
+                                )
+                                if (videoFingerprintCandidate) {
+                                    const fingerprintDuplicate = await checkVideoFingerprintDuplicate(videoFingerprintCandidate)
+                                    if (fingerprintDuplicate) {
+                                        duplicateMediaCount += 1
+                                        skipReason = `Cross-platform video fingerprint duplicate matched ${fingerprintDuplicate.a_id}`
+                                        this.log?.info(
+                                            `Skipping ${articleMarker} because video fingerprint (${videoFingerprintCandidate.group}, ${videoFingerprintCandidate.duration_seconds.toFixed(2)}s) matches ${fingerprintDuplicate.a_id}.`,
+                                        )
+                                        return undefined
+                                    }
+                                    await markVideoFingerprintSeen(videoFingerprintCandidate)
+                                }
+                            }
                         } catch (e) {
                             this.log?.error(`Error during duplicate check: ${e}`)
                         }

@@ -13,7 +13,7 @@ import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } fr
 import { getForwarder } from '@/middleware/forwarder'
 import crypto from 'crypto'
 import { RenderService } from '@/services/render-service'
-import { followsToText } from '@idol-bbq-utils/render'
+import { extractArticleHeadline, followsToText } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
 import {
@@ -24,6 +24,10 @@ import {
 
 type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
 type ForwarderTemplate = NonNullable<AppConfig['forwarders']>[number]
+type ArticleForwarderDispatch = {
+    article: ArticleWithId
+    to: Array<ForwardTargetInstanceWithRuntimeConfig>
+}
 
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
@@ -964,10 +968,7 @@ class ForwarderPools extends BaseCompatibleModel {
             forceSend?: boolean
         },
     ) {
-        const articles_forwarders = [] as Array<{
-            article: ArticleWithId
-            to: Array<ForwardTargetInstanceWithRuntimeConfig>
-        }>
+        let articles_forwarders = [] as Array<ArticleForwarderDispatch>
         for (const article of articles) {
             const to = [] as Array<ForwardTargetInstanceWithRuntimeConfig>
             for (const forwarder of forwarders) {
@@ -1001,6 +1002,11 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         log?.info(`[Trace] Ready to send ${articles_forwarders.length} articles`)
+        articles_forwarders = await this.applyDispatchDigests(log, articles_forwarders, options)
+        if (articles_forwarders.length === 0) {
+            log?.debug(`[Trace] No articles remain after digest handling`)
+            return
+        }
         for (const { article, to } of articles_forwarders) {
             const platform = article.platform
             const article_is_blocked = options?.forceSend
@@ -1157,6 +1163,115 @@ class ForwarderPools extends BaseCompatibleModel {
                 throw forceSendError
             }
         }
+    }
+
+    private async applyDispatchDigests(
+        log: Logger | undefined,
+        articlesForwarders: Array<ArticleForwarderDispatch>,
+        options?: { forceSend?: boolean },
+    ) {
+        if (options?.forceSend) {
+            return articlesForwarders
+        }
+
+        const byTarget = new Map<
+            string,
+            {
+                target: BaseForwarder
+                runtime_config?: ForwardTargetPlatformCommonConfig
+                articles: Array<ArticleWithId>
+            }
+        >()
+
+        for (const { article, to } of articlesForwarders) {
+            for (const { forwarder: target, runtime_config } of to) {
+                const blocked = await target.check_blocked('', {
+                    timestamp: article.created_at,
+                    runtime_config,
+                    article: cloneDeep(article),
+                })
+                if (blocked) {
+                    continue
+                }
+                const existing = byTarget.get(target.id) || {
+                    target,
+                    runtime_config,
+                    articles: [],
+                }
+                existing.articles.push(article)
+                byTarget.set(target.id, existing)
+            }
+        }
+
+        const digestedArticleIdsByTarget = new Map<string, Set<number>>()
+        for (const [targetId, group] of byTarget) {
+            const config = group.target.getEffectiveConfig(group.runtime_config)
+            const threshold = Math.floor(Number(config.digest_threshold || 0))
+            if (threshold < 2 || group.articles.length < threshold) {
+                continue
+            }
+
+            const claimedArticles: Array<ArticleWithId> = []
+            for (const article of group.articles) {
+                const claimed = await this.claimArticleChain(article, article.platform, targetId)
+                if (claimed) {
+                    claimedArticles.push(article)
+                }
+            }
+
+            if (claimedArticles.length < threshold) {
+                for (const article of claimedArticles) {
+                    await this.releaseArticleChain(article, article.platform, targetId)
+                }
+                continue
+            }
+
+            const digestText = this.buildDispatchDigestText(targetId, claimedArticles, config)
+            try {
+                await group.target.send(digestText, {
+                    timestamp: Math.floor(Date.now() / 1000),
+                    runtime_config: group.runtime_config,
+                })
+                digestedArticleIdsByTarget.set(targetId, new Set(claimedArticles.map((article) => article.id)))
+                log?.info(`Sent digest for ${claimedArticles.length} articles to ${targetId}`)
+            } catch (error) {
+                log?.error(`Failed to send digest to ${targetId}: ${error}`)
+                for (const article of claimedArticles) {
+                    await this.releaseArticleChain(article, article.platform, targetId)
+                }
+            }
+        }
+
+        return articlesForwarders
+            .map(({ article, to }) => ({
+                article,
+                to: to.filter(({ forwarder: target }) => !digestedArticleIdsByTarget.get(target.id)?.has(article.id)),
+            }))
+            .filter(({ to }) => to.length > 0)
+    }
+
+    private buildDispatchDigestText(
+        targetId: string,
+        articles: Array<ArticleWithId>,
+        config: ForwardTargetPlatformCommonConfig,
+    ) {
+        const sorted = orderBy(articles, ['created_at', 'id'], ['asc', 'asc'])
+        const maxItems = Math.max(3, Math.min(Math.floor(Number(config.digest_max_items || 8)), 20))
+        const shown = sorted.slice(0, maxItems)
+        const start = dayjs.unix(sorted[0]?.created_at || Math.floor(Date.now() / 1000)).format('HH:mm')
+        const end = dayjs.unix(sorted[sorted.length - 1]?.created_at || Math.floor(Date.now() / 1000)).format('HH:mm')
+        const lines = shown.map((article, index) => {
+            const time = dayjs.unix(article.created_at).format('HH:mm')
+            const replyMark = String(article.type || '').includes('reply') ? '↪ ' : ''
+            const headline = extractArticleHeadline(article as any, 96) || article.url || article.a_id
+            return `${index + 1}. [${time}] ${replyMark}${article.username || article.u_id || 'unknown'}: ${headline}\n${article.url || ''}`.trim()
+        })
+        const omitted = sorted.length - shown.length
+        if (omitted > 0) {
+            lines.push(`... 另有 ${omitted} 条更新已合并`)
+        }
+
+        return [`【更新摘要】${sorted.length} 条 / ${start}-${end} / ${targetId}`, ...lines].join('\n\n')
     }
 
     private async claimArticleChain(article: ArticleWithId, platform: Platform, targetId: string) {

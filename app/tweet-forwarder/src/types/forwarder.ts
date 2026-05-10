@@ -112,6 +112,15 @@ interface ForwardTargetPlatformCommonConfig {
      */
     separate_card_media?: boolean
     /**
+     * Send one concise digest instead of individual articles when a target receives at least this many articles
+     * in the same dispatch path. Useful for lower-noise groups.
+     */
+    digest_threshold?: number
+    /**
+     * Maximum article lines included in one digest message.
+     */
+    digest_max_items?: number
+    /**
      *
      * if 1d, the forwarder will only forward the article that created within 1 day
      * "7d", "1w", "30d", "2h"...

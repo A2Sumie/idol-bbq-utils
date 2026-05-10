@@ -5,6 +5,7 @@ import { TaskScheduler } from '@/utils/base'
 import { fileURLToPath } from 'url'
 import { Forwarder } from '@/middleware/forwarder/base'
 import DB from '@/db'
+import { Platform } from '@idol-bbq-utils/spider/types'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
@@ -685,6 +686,92 @@ test('sendArticles skips delivery when render service marks a cross-platform dup
     expect(target.sent).toHaveLength(0)
     expect(claimedArticleId).toBe(204)
     expect(cleanupCalled).toBe(true)
+})
+
+test('sendArticles sends a target-level digest for lower-noise targets', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            digest_threshold: 3,
+            digest_max_items: 3,
+        } as any,
+        'target-digest',
+    )
+
+    const claimed: Array<number> = []
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        claimed.push(article.id)
+        return true
+    }
+    ;(pools as any).renderService = {
+        process: async () => {
+            throw new Error('digest should bypass per-article render')
+        },
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-digest',
+            [0, 1, 2, 3].map((index) => ({
+                id: 300 + index,
+                a_id: `digest-${index}`,
+                platform: Platform.X,
+                username: `member-${index}`,
+                u_id: `member-${index}`,
+                content: `更新 ${index}`,
+                url: `https://x.com/member/status/${index}`,
+                type: index === 2 ? 'reply' : 'tweet',
+                created_at: Math.floor(Date.now() / 1000) + index,
+                ref: null,
+            })),
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('【更新摘要】4 条')
+    expect(target.sent[0]?.texts[0]).toContain('↪ member-2')
+    expect(target.sent[0]?.texts[0]).toContain('另有 1 条更新已合并')
+    expect(claimed).toEqual([300, 301, 302, 303])
 })
 
 test('sendArticles does not increment article error count when every target is intentionally skipped as old', async () => {

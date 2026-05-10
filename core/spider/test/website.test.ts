@@ -279,6 +279,7 @@ describe('buildWebsiteArticle', () => {
 
     test('uses current crawl time for same-day website entries that only expose a date', () => {
         const before = dayjs().unix()
+        const today = dayjs().format('YYYY.MM.DD')
         const article = buildWebsiteArticle(
             {
                 feed: 'live-report',
@@ -289,14 +290,14 @@ describe('buildWebsiteArticle', () => {
             {
                 detailUrl: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?cd=special',
                 title: 'Live Report Title',
-                dateText: '2026.03.20',
+                dateText: today,
                 summary: null,
                 member: null,
                 thumbnail: null,
             },
             {
                 title: 'Live Report Title',
-                dateText: '2026.03.20',
+                dateText: today,
                 bodyText: 'Live Report Body',
                 bodyHtml: '<p>Live Report Body</p>',
                 member: null,
