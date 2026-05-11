@@ -49,6 +49,7 @@ export interface RenderedMediaFile {
 
 export interface RenderResult {
     text: string
+    textCollapseMode?: 'article' | 'compact-article' | 'none'
     cardMediaFiles: Array<RenderedMediaFile>
     originalMediaFiles: Array<RenderedMediaFile>
     mediaFiles: Array<RenderedMediaFile>
@@ -113,6 +114,7 @@ export class RenderService {
         }
 
         let text = ''
+        let textCollapseMode: RenderResult['textCollapseMode'] = 'none'
 
         // Helper: Generate Rendered Image
         const generateRenderedImage = async () => {
@@ -166,6 +168,7 @@ export class RenderService {
                 }
             }
             text = this.formatPlatformFrom(article)
+            textCollapseMode = 'none'
         } else if (render_type === 'img-tag' || render_type === 'img-tag-dynamic') {
             // Case 2 & 3: img-tag family
             // Check Exemption Logic
@@ -182,9 +185,11 @@ export class RenderService {
                 )
                 // Fallback to standard text + media
                 text = this.renderText(article, config)
+                textCollapseMode = this.resolveArticleTextCollapseMode(render_type)
             } else {
                 // Standard Card Logic
                 text = this.formatPlatformFrom(article)
+                textCollapseMode = 'none'
                 await appendRenderedCardToMedia('start')
             }
         } else if (render_type?.startsWith('img')) {
@@ -198,6 +203,7 @@ export class RenderService {
                     `Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id} in img mode`,
                 )
                 text = this.renderText(article, config)
+                textCollapseMode = this.resolveArticleTextCollapseMode(render_type)
             } else {
                 let articleToImgSuccess = false
                 const originalMediaCount = maybe_media_files.length
@@ -209,22 +215,28 @@ export class RenderService {
                 const fullText = this.renderText(article, config)
                 // If converted to image, usually only want the metaline
                 text = articleToImgSuccess ? formatMetaline(article) : fullText
+                textCollapseMode = articleToImgSuccess ? 'none' : this.resolveArticleTextCollapseMode(render_type)
 
                 if (render_type === 'img') {
                     text = '' // No text for pure img mode
+                    textCollapseMode = 'none'
                 }
             }
         } else if (render_type === 'text-card' || render_type === 'text-compact-card') {
             text = this.renderText(article, config)
+            textCollapseMode = this.resolveArticleTextCollapseMode(render_type)
             if (text.length > CARD_TEXT_TITLE_THRESHOLD) {
                 text = extractArticleHeadline(article)
+                textCollapseMode = 'none'
             }
             await appendRenderedCardToMedia('end')
         } else if (render_type === 'text-compact') {
             text = this.renderText(article, config)
+            textCollapseMode = 'compact-article'
         } else {
             // Case 5: Standard Text
             text = this.renderText(article, config)
+            textCollapseMode = 'article'
         }
 
         if (!skipReason && deduplication) {
@@ -244,6 +256,7 @@ export class RenderService {
 
         return {
             text,
+            textCollapseMode,
             cardMediaFiles: card_media_files,
             originalMediaFiles: maybe_media_files.filter(
                 (item) => !card_media_files.some((card) => card.path === item.path),
@@ -291,7 +304,11 @@ export class RenderService {
     }
 
     private resolveCardFeatures(features?: Array<string>) {
-        return Array.from(new Set(['media-contain', 'website-inline-media', ...(features || [])]))
+        return Array.from(new Set(features || []))
+    }
+
+    private resolveArticleTextCollapseMode(renderType?: string): 'article' | 'compact-article' {
+        return renderType === 'text-compact' || renderType === 'text-compact-card' ? 'compact-article' : 'article'
     }
 
     private async handleMedia(

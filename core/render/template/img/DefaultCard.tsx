@@ -35,7 +35,15 @@ type InlineContentBlock =
       }
 
 function resolveCardFeatures(options?: RenderParserOptions): CardRenderFeatures {
-    return new Set([...DEFAULT_CARD_FEATURES, ...(options?.features || [])])
+    const features = new Set(DEFAULT_CARD_FEATURES)
+    for (const feature of options?.features || []) {
+        if (feature.startsWith('no-')) {
+            features.delete(feature.slice(3))
+        } else {
+            features.add(feature)
+        }
+    }
+    return features
 }
 
 function hasFeature(features: CardRenderFeatures, feature: string) {
@@ -138,7 +146,7 @@ function getWebsiteInlineBlocks(article: Article, features: CardRenderFeatures):
         return []
     }
     const rawHtml = (article.extra.data as any)?.raw_html
-    if (typeof rawHtml !== 'string' || !rawHtml.includes('<img')) {
+    if (typeof rawHtml !== 'string' || !/<img\b/i.test(rawHtml)) {
         return []
     }
 

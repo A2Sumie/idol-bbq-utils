@@ -199,6 +199,28 @@ test('resolveVideoUploadConfig keeps metadata template and collision placeholder
     expect(config?.collision_placeholder_part?.background_color).toBe('#d1e5fc')
 })
 
+test('resolveVideoUploadConfig falls back from invalid numeric control values', () => {
+    const config = resolveVideoUploadConfig({
+        enabled: true,
+        tid: 'wat' as any,
+        threads: 'wat' as any,
+        collision_placeholder_part: {
+            enabled: true,
+            duration_seconds: 'wat' as any,
+            width: 'wat' as any,
+            height: 'wat' as any,
+            fps: 'wat' as any,
+        },
+    })
+
+    expect(config?.tid).toBe(171)
+    expect(config?.threads).toBe(3)
+    expect(config?.collision_placeholder_part?.duration_seconds).toBe(2)
+    expect(config?.collision_placeholder_part?.width).toBe(1920)
+    expect(config?.collision_placeholder_part?.height).toBe(1080)
+    expect(config?.collision_placeholder_part?.fps).toBe(30)
+})
+
 test('prepareUploadVideoParts reuses persistent collision placeholder video when configured', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-parts-persistent-'))
     const uploadDir = path.join(tempRoot, 'upload')

@@ -1283,6 +1283,112 @@ test('sendArticles keeps referenced text when it is first seen in this dispatch'
     expect(claimed).toEqual([510])
 })
 
+test('sendArticles does not materialize collapsed reply text for card-only render results', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'img',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).renderService.process = async () => ({
+        text: '',
+        textCollapseMode: 'none',
+        cardMediaFiles: [],
+        originalMediaFiles: [],
+        mediaFiles: [],
+    })
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+        } as any,
+        'target-card-only-ref',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async (refId: number) => {
+        if (refId === 516) {
+            return { ref_id: 516 }
+        }
+        return null
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-card-only-ref',
+            [
+                {
+                    id: 515,
+                    a_id: 'reply-card-only',
+                    platform: Platform.X,
+                    username: 'member',
+                    u_id: 'member',
+                    content: 'カードだけで出したい返信',
+                    url: 'https://x.com/member/status/reply-card-only',
+                    type: 'reply',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: {
+                        id: 516,
+                        a_id: 'already-forwarded-card-ref',
+                        platform: Platform.X,
+                        username: 'member',
+                        u_id: 'member',
+                        content: 'カード専用モードでは突然テキスト化しない本文',
+                        url: 'https://x.com/member/status/already-forwarded-card-ref',
+                        type: 'tweet',
+                        created_at: Math.floor(Date.now() / 1000) - 60,
+                        ref: null,
+                        has_media: false,
+                        media: [],
+                        extra: null,
+                        u_avatar: null,
+                    },
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'img',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toBe('')
+})
+
 test('sendArticles does not fold old forwarded references outside the configured window', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

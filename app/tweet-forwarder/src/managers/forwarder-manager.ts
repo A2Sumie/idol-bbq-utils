@@ -12,7 +12,7 @@ import { type Media, type MediaTool, MediaToolEnum } from '@/types/media'
 import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } from '@/types/forwarder'
 import { getForwarder } from '@/middleware/forwarder'
 import crypto from 'crypto'
-import { RenderService } from '@/services/render-service'
+import { RenderService, type RenderResult } from '@/services/render-service'
 import { extractArticleHeadline, followsToText } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
@@ -1201,7 +1201,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
                         const text = await this.resolveTargetTextForArticle(
                             article,
-                            renderResult.text,
+                            renderResult,
                             cfg_forwarder,
                             target,
                             runtime_config,
@@ -1276,11 +1276,15 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private async resolveTargetTextForArticle(
         article: ArticleWithId,
-        fallbackText: string,
+        renderResult: Pick<RenderResult, 'text' | 'textCollapseMode'>,
         cfg_forwarder: Forwarder['cfg_forwarder'],
         target: BaseForwarder,
         runtime_config?: ForwardTargetPlatformCommonConfig,
     ) {
+        const fallbackText = renderResult.text
+        if (renderResult.textCollapseMode === 'none') {
+            return fallbackText
+        }
         if (!this.shouldCollapseForwardedRefText(article, cfg_forwarder, target, runtime_config)) {
             return fallbackText
         }
@@ -1299,7 +1303,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         return this.renderService.renderText(article, {
-            render_type: cfg_forwarder?.render_type,
+            render_type: renderResult.textCollapseMode === 'compact-article' ? 'text-compact' : 'text',
             collapsedArticleIds,
         })
     }

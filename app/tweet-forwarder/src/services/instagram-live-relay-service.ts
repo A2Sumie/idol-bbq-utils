@@ -12,6 +12,8 @@ const DEFAULT_LIVE_PLAYER_STREAM_URL = 'https://stream.n2nj.moe/relay.m3u8'
 const DEFAULT_SYNC_INTERVAL_SECONDS = 300
 const DEFAULT_POST_LIVE_GRACE_SECONDS = 6 * 60 * 60
 const STREAM_CAPTURE_TIMEOUT_MS = 15000
+const MANIFEST_FETCH_TIMEOUT_MS = 15000
+const LIVE_PLAYER_API_TIMEOUT_MS = 15000
 const INSTAGRAM_ORIGIN = 'https://www.instagram.com'
 const LIVE_WEB_INFO_PATH = '/api/v1/live/web_info/'
 const N2NJ_REQUEST_USER_AGENT = 'N2NJ-Stream-Bot/1.0'
@@ -125,6 +127,24 @@ function sleep(ms: number) {
 
 function normalizeBaseUrl(url?: string) {
     return String(url || DEFAULT_LIVE_PLAYER_URL).replace(/\/+$/, '')
+}
+
+function resolveNonNegativeSeconds(value: unknown, fallback: number) {
+    const numeric = Number(value ?? fallback)
+    return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = LIVE_PLAYER_API_TIMEOUT_MS) {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+        return await fetch(url, {
+            ...init,
+            signal: init.signal || controller.signal,
+        })
+    } finally {
+        clearTimeout(timeout)
+    }
 }
 
 function parseCookieString(cookieString?: string) {
@@ -513,20 +533,20 @@ class InstagramLiveRelayService {
                 || process.env.LIVE_PLAYER_WAF_BYPASS_HEADER,
             sync_interval_seconds: Math.max(
                 0,
-                Number(
+                resolveNonNegativeSeconds(
                     handleConfig?.sync_interval_seconds
-                    || liveRelay.sync_interval_seconds
-                    || process.env.LIVE_PLAYER_SYNC_INTERVAL_SECONDS
-                    || DEFAULT_SYNC_INTERVAL_SECONDS,
+                    ?? liveRelay.sync_interval_seconds
+                    ?? process.env.LIVE_PLAYER_SYNC_INTERVAL_SECONDS,
+                    DEFAULT_SYNC_INTERVAL_SECONDS,
                 ),
             ),
             post_live_grace_seconds: Math.max(
                 0,
-                Number(
+                resolveNonNegativeSeconds(
                     handleConfig?.post_live_grace_seconds
                     ?? liveRelay.post_live_grace_seconds
-                    ?? process.env.LIVE_PLAYER_POST_LIVE_GRACE_SECONDS
-                    ?? DEFAULT_POST_LIVE_GRACE_SECONDS,
+                    ?? process.env.LIVE_PLAYER_POST_LIVE_GRACE_SECONDS,
+                    DEFAULT_POST_LIVE_GRACE_SECONDS,
                 ),
             ),
             stop_offline: Boolean(handleConfig?.stop_offline ?? liveRelay.stop_offline),
@@ -762,9 +782,9 @@ class InstagramLiveRelayService {
     }
 
     private async fetchManifestText(source: string, headers: Record<string, string>) {
-        const response = await fetch(source, {
+        const response = await fetchWithTimeout(source, {
             headers,
-        })
+        }, MANIFEST_FETCH_TIMEOUT_MS)
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`)
         }
@@ -896,7 +916,7 @@ class InstagramLiveRelayService {
         applyN2njRequestIdentity(headers)
         applyWafBypassHeader(headers, relayConfig.waf_bypass_header)
 
-        const response = await fetch(`${relayConfig.live_player_url}/api/players`, {
+        const response = await fetchWithTimeout(`${relayConfig.live_player_url}/api/players`, {
             method: 'POST',
             headers,
             body: JSON.stringify({
@@ -926,7 +946,7 @@ class InstagramLiveRelayService {
         applyN2njRequestIdentity(headers)
         applyWafBypassHeader(headers, relayConfig.waf_bypass_header)
 
-        const response = await fetch(`${relayConfig.live_player_url}/api/auth/login`, {
+        const response = await fetchWithTimeout(`${relayConfig.live_player_url}/api/auth/login`, {
             method: 'POST',
             headers,
             body: JSON.stringify({
@@ -962,7 +982,7 @@ class InstagramLiveRelayService {
         applyN2njRequestIdentity(headers)
         applyWafBypassHeader(headers, relayConfig.waf_bypass_header)
 
-        const response = await fetch(
+        const response = await fetchWithTimeout(
             `${relayConfig.live_player_url}/api/players/${encodeURIComponent(relayConfig.player_id)}/relay`,
             {
                 method: 'POST',

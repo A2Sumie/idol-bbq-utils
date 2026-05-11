@@ -3,6 +3,7 @@ import {
     analyzeManifestText,
     buildPlayerUrl,
     filterRelayHeaders,
+    InstagramLiveRelayService,
     isPostLiveGraceActive,
     N2NJ_REQUEST_USER_AGENT,
     parseInstagramLiveWebInfo,
@@ -72,4 +73,24 @@ test('instagram live relay post-live grace window keeps recent captures only', (
     expect(isPostLiveGraceActive('2026-03-20T06:00:00.000Z', 3 * 60 * 60, now)).toBeTrue()
     expect(isPostLiveGraceActive('2026-03-19T23:00:00.000Z', 3 * 60 * 60, now)).toBeFalse()
     expect(N2NJ_REQUEST_USER_AGENT).toBe('N2NJ-Stream-Bot/1.0')
+})
+
+test('instagram live relay target config preserves zero sync interval and falls back on invalid seconds', () => {
+    const service = new InstagramLiveRelayService('/tmp/instagram-live-relay-test')
+
+    const zeroInterval = (service as any).resolveTargetConfig('shiina_satsuki227', {
+        enabled: true,
+        sync_interval_seconds: 0,
+        post_live_grace_seconds: 0,
+    })
+    expect(zeroInterval.sync_interval_seconds).toBe(0)
+    expect(zeroInterval.post_live_grace_seconds).toBe(0)
+
+    const invalidInterval = (service as any).resolveTargetConfig('shiina_satsuki227', {
+        enabled: true,
+        sync_interval_seconds: 'wat',
+        post_live_grace_seconds: 'wat',
+    })
+    expect(invalidInterval.sync_interval_seconds).toBe(300)
+    expect(invalidInterval.post_live_grace_seconds).toBe(6 * 60 * 60)
 })

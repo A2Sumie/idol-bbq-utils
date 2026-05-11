@@ -172,6 +172,15 @@ function uniqueStrings(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean)))
 }
 
+function resolveMinNumber(value: unknown, fallback: number, min: number) {
+    const numeric = Number(value ?? fallback)
+    return Number.isFinite(numeric) ? Math.max(min, numeric) : fallback
+}
+
+function resolveMinInteger(value: unknown, fallback: number, min: number) {
+    return Math.floor(resolveMinNumber(value, fallback, min))
+}
+
 function truncateText(value: string, maxChars: number) {
     const chars = Array.from(value)
     if (chars.length <= maxChars) {
@@ -410,10 +419,10 @@ function resolveCollisionPlaceholderPartConfig(
         video_path: resolveCollisionPlaceholderVideoPath(config.video_path),
         image_path: resolveCollisionPlaceholderImagePath(config.image_path),
         title: normalizeTextBlock(config.title) || DEFAULT_BILIUP_COLLISION_PART_TITLE,
-        duration_seconds: Math.max(1, Number(config.duration_seconds || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_DURATION_SECONDS)),
-        width: Math.max(320, Math.floor(Number(config.width || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_WIDTH))),
-        height: Math.max(240, Math.floor(Number(config.height || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_HEIGHT))),
-        fps: Math.max(1, Math.floor(Number(config.fps || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_FPS))),
+        duration_seconds: resolveMinNumber(config.duration_seconds, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_DURATION_SECONDS, 1),
+        width: resolveMinInteger(config.width, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_WIDTH, 320),
+        height: resolveMinInteger(config.height, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_HEIGHT, 240),
+        fps: resolveMinInteger(config.fps, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_FPS, 1),
         ffmpeg_path: config.ffmpeg_path || defaultFfmpegPath(),
         background_color: normalizeTextBlock(config.background_color) || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_BACKGROUND_COLOR,
     }
@@ -559,8 +568,8 @@ function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBil
         browser_cookie_sync: resolveBrowserCookieSyncConfig(config.browser_cookie_sync),
         submit_api: config.submit_api === 'web' ? config.submit_api : DEFAULT_BILIUP_SUBMIT_API,
         line: config.line || DEFAULT_BILIUP_LINE,
-        tid: Number(config.tid || DEFAULT_BILIUP_TID),
-        threads: Math.max(1, Number(config.threads || DEFAULT_BILIUP_THREADS)),
+        tid: resolveMinInteger(config.tid, DEFAULT_BILIUP_TID, 1),
+        threads: resolveMinInteger(config.threads, DEFAULT_BILIUP_THREADS, 1),
         copyright: config.copyright === 1 ? 1 : 2,
         tags: uniqueStrings((config.tags || []).map(normalizeTag)),
         exclude_uids: uniqueStrings([...(config.exclude_uids || []), ...DEFAULT_BILIUP_EXCLUDED_UIDS]),
