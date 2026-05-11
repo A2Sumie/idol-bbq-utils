@@ -236,6 +236,31 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function buildFallbackDetailPayload(listItem: WebsiteListItem, reason: string): WebsiteDetailPayload {
+    return {
+        title: listItem.title || '',
+        dateText: listItem.dateText || '',
+        bodyText: listItem.summary || '',
+        bodyHtml: '',
+        member: listItem.member || null,
+        media: [],
+        uAvatar: listItem.uAvatar || null,
+        extraData: {
+            detail_fallback: true,
+            detail_fallback_reason: reason,
+        },
+    }
+}
+
+async function waitForOptionalSelector(page: Page, selector: string, timeout: number) {
+    try {
+        await page.waitForSelector(selector, { timeout })
+        return true
+    } catch {
+        return false
+    }
+}
+
 async function configureWebsiteResourceBlocking(page: Page, blockResourceTypes: Array<string>) {
     const key = blockResourceTypes.slice().sort().join(',')
     const guardedPage = page as Page & {
@@ -1100,9 +1125,12 @@ async function extractTicketDetail(page: Page, url: string): Promise<WebsiteDeta
     }, url)
 }
 
-async function extractRadioDetail(page: Page, url: string): Promise<WebsiteDetailPayload> {
+async function extractRadioDetail(page: Page, url: string, listItem: WebsiteListItem): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.radio__title, #modal-radio, #modal-movie', { timeout: 15000 })
+    const hasDetail = await waitForOptionalSelector(page, '.radio__title, #modal-radio, #modal-movie', 15000)
+    if (!hasDetail) {
+        return buildFallbackDetailPayload(listItem, 'radio-detail-selector-timeout')
+    }
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const cleanMultiline = (value?: string | null) =>
@@ -1206,9 +1234,12 @@ async function extractRadioDetail(page: Page, url: string): Promise<WebsiteDetai
     }, url)
 }
 
-async function extractMovieDetail(page: Page, url: string): Promise<WebsiteDetailPayload> {
+async function extractMovieDetail(page: Page, url: string, listItem: WebsiteListItem): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.movie__title, .movie-player video', { timeout: 15000 })
+    const hasDetail = await waitForOptionalSelector(page, '.movie__title, .movie-player video', 15000)
+    if (!hasDetail) {
+        return buildFallbackDetailPayload(listItem, 'movie-detail-selector-timeout')
+    }
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const cleanMultiline = (value?: string | null) =>
@@ -1489,7 +1520,7 @@ function extractListPage(page: Page, feedConfig: FeedConfig, url: string): Promi
     }
 }
 
-function extractDetailPayload(page: Page, feedConfig: FeedConfig, url: string): Promise<WebsiteDetailPayload> {
+function extractDetailPayload(page: Page, feedConfig: FeedConfig, url: string, listItem: WebsiteListItem): Promise<WebsiteDetailPayload> {
     switch (feedConfig.feed) {
         case 'official-news':
         case 'fc-news':
@@ -1499,9 +1530,9 @@ function extractDetailPayload(page: Page, feedConfig: FeedConfig, url: string): 
         case 'ticket':
             return extractTicketDetail(page, url)
         case 'radio':
-            return extractRadioDetail(page, url)
+            return extractRadioDetail(page, url, listItem)
         case 'movie':
-            return extractMovieDetail(page, url)
+            return extractMovieDetail(page, url, listItem)
         case 'live-report':
             return extractLiveReportDetail(page, url)
         default:
@@ -1658,7 +1689,7 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             return extractPhotoDetailArticles(page, listItem.detailUrl, feedConfig, listItem)
         }
 
-        const detailPayload = await extractDetailPayload(page, feedConfig, listItem.detailUrl)
+        const detailPayload = await extractDetailPayload(page, feedConfig, listItem.detailUrl, listItem)
         return [buildWebsiteArticle(feedConfig, listItem.detailUrl, listItem, detailPayload)]
     }
 }
