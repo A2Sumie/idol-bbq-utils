@@ -181,6 +181,159 @@ test('pipeline configs are exported as canonical migration shape and normalized 
     })
 })
 
+test('pipeline-native quick config preserves review metadata and compiles from pipelines without legacy connections', () => {
+    const model = buildQuickConfigModel({
+        ...baseConfig,
+        connections: undefined,
+        pipelines: [
+            {
+                id: 'pipeline:custom-x',
+                name: 'Human reviewed X flow',
+                enabled: true,
+                source: {
+                    crawler_id: 'crawler-x',
+                },
+                processors: [
+                    {
+                        processor_id: 'processor-summary',
+                        role: 'extract',
+                    },
+                ],
+                delivery: [
+                    {
+                        formatter_id: 'formatter-card',
+                        target_ids: ['target-low-noise'],
+                    },
+                ],
+            },
+        ],
+    } as any)
+
+    expect(model.pipelines[0]).toMatchObject({
+        id: 'pipeline:custom-x',
+        name: 'Human reviewed X flow',
+        enabled: true,
+        compiled_processor_id: 'processor-summary',
+    })
+    expect(model.links.map((link) => link.kind)).toEqual([
+        'crawler-processor',
+        'processor-formatter',
+        'formatter-target',
+    ])
+})
+
+test('disabled pipelines are visible but not compiled into runtime connections', () => {
+    const model = buildQuickConfigModel({
+        ...baseConfig,
+        pipelines: [
+            {
+                id: 'pipeline:disabled-x',
+                enabled: false,
+                source: {
+                    crawler_id: 'crawler-x',
+                },
+                processors: [
+                    {
+                        processor_id: 'processor-summary',
+                    },
+                ],
+                delivery: [
+                    {
+                        formatter_id: 'formatter-card',
+                        target_ids: ['target-low-noise'],
+                    },
+                ],
+            },
+        ],
+    } as any)
+
+    expect(model.pipelines[0].enabled).toBe(false)
+    expect(model.pipelines[0].review.warnings).toContain('pipeline is disabled and will not be compiled into runtime connections')
+    expect(() =>
+        normalizePipelinesForRuntime({
+            ...baseConfig,
+            connections: undefined,
+            pipelines: model.pipelines.map((pipeline) => ({
+                id: pipeline.id,
+                enabled: pipeline.enabled,
+                source: {
+                    crawler_id: pipeline.source.crawler_id,
+                },
+                processors: pipeline.processors,
+                delivery: pipeline.delivery,
+            })),
+        } as any),
+    ).toThrow('at least one enabled pipeline')
+})
+
+test('multi-processor pipelines are diagnosed because runtime currently compiles only the first processor', () => {
+    const model = buildQuickConfigModel({
+        ...baseConfig,
+        processors: [
+            ...baseConfig.processors,
+            {
+                id: 'processor-second',
+                name: 'Second stage',
+                provider: ProcessorProvider.Mechanical,
+                api_key: '',
+            },
+        ],
+        connections: undefined,
+        pipelines: [
+            {
+                source: {
+                    crawler_id: 'crawler-x',
+                },
+                processors: [
+                    {
+                        processor_id: 'processor-summary',
+                    },
+                    {
+                        processor_id: 'processor-second',
+                    },
+                ],
+                delivery: [
+                    {
+                        formatter_id: 'formatter-card',
+                        target_ids: ['target-low-noise'],
+                    },
+                ],
+            },
+        ],
+    } as any)
+
+    expect(model.pipelines[0].compiled_processor_id).toBe('processor-summary')
+    expect(model.diagnostics.some((item) => item.code === 'pipeline_extra_processors_ignored')).toBe(true)
+})
+
+test('pipeline diagnostics validate nodes even when they are outside the compiled first-processor path', () => {
+    expect(() =>
+        compileConnectionsFromQuickPatch(baseConfig, {
+            pipelines: [
+                {
+                    source: {
+                        crawler_id: 'crawler-x',
+                    },
+                    processors: [
+                        {
+                            processor_id: 'processor-summary',
+                        },
+                        {
+                            processor_id: 'missing-second-stage',
+                        },
+                    ],
+                    delivery: [
+                        {
+                            formatter_id: 'formatter-card',
+                            target_ids: ['target-low-noise'],
+                        },
+                    ],
+                },
+            ],
+        }),
+    ).toThrow('missing processor: missing-second-stage')
+})
+
 test('quick config patch compiles routes back to existing connection maps', () => {
     const nextConfig = compileConnectionsFromQuickPatch(baseConfig, {
         routes: [

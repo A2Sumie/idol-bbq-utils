@@ -23,6 +23,8 @@ type QuickConfigRoute = {
 
 type QuickConfigPipelinePatch = {
     id?: string
+    name?: string
+    enabled?: boolean
     source: {
         crawler_id: string
     }
@@ -47,6 +49,17 @@ type QuickConfigPatch = {
 }
 
 const QUICK_CONFIG_SCHEMA = 'idol-bbq.quick-config.v1'
+
+type QuickConfigDiagnostic = { severity: 'warn' | 'error'; code: string; message: string; link?: QuickConfigLink; pipeline_id?: string }
+
+function emptyConnections() {
+    return {
+        'crawler-processor': {} as Record<string, string>,
+        'processor-formatter': {} as Record<string, Array<string>>,
+        'crawler-formatter': {} as Record<string, Array<string>>,
+        'formatter-target': {} as Record<string, Array<string>>,
+    }
+}
 
 function unique(values: Array<string | undefined | null>) {
     return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)))
@@ -97,7 +110,23 @@ function makeLink(kind: QuickLinkKind, from: string, to: string, order = 0): Qui
     }
 }
 
+function hasCompiledConnections(config: AppConfig) {
+    const connections = config.connections || {}
+    return ['crawler-processor', 'processor-formatter', 'crawler-formatter', 'formatter-target'].some(
+        (key) => Object.keys((connections as any)[key] || {}).length > 0,
+    )
+}
+
+function pipelineEnabled(pipeline: QuickConfigPipelinePatch) {
+    return pipeline.enabled !== false
+}
+
 function collectLinks(config: AppConfig) {
+    const pipelines = (config as any).pipelines
+    if (!hasCompiledConnections(config) && Array.isArray(pipelines) && pipelines.length > 0) {
+        return linksFromPipelines(pipelines)
+    }
+
     const links: Array<QuickConfigLink> = []
     const connections = config.connections || {}
     for (const [crawler, processor] of Object.entries(connections['crawler-processor'] || {})) {
@@ -128,7 +157,7 @@ function buildNodeSets(config: AppConfig) {
 
 function diagnoseQuickConfig(config: AppConfig, links = collectLinks(config)) {
     const nodeSets = buildNodeSets(config)
-    const diagnostics: Array<{ severity: 'warn' | 'error'; code: string; message: string; link?: QuickConfigLink }> = []
+    const diagnostics: Array<QuickConfigDiagnostic> = []
     const has = (type: QuickNodeType, id: string) => {
         if (type === 'crawler') return nodeSets.crawlers.has(id)
         if (type === 'processor') return nodeSets.processors.has(id)
@@ -157,12 +186,101 @@ function diagnoseQuickConfig(config: AppConfig, links = collectLinks(config)) {
     return diagnostics
 }
 
+function diagnosePipelines(config: AppConfig, pipelines: Array<QuickConfigPipelinePatch>) {
+    const nodeSets = buildNodeSets(config)
+    const diagnostics: Array<QuickConfigDiagnostic> = []
+
+    for (const [index, pipeline] of pipelines.entries()) {
+        const pipelineId = pipeline.id || pipeline.source?.crawler_id || `pipeline-${index}`
+        if (!pipelineEnabled(pipeline)) {
+            continue
+        }
+        const crawlerId = pipeline.source?.crawler_id
+        if (!crawlerId) {
+            diagnostics.push({
+                severity: 'error',
+                code: 'pipeline_missing_source',
+                message: `${pipelineId} is missing source.crawler_id`,
+                pipeline_id: pipelineId,
+            })
+        } else if (!nodeSets.crawlers.has(crawlerId)) {
+            diagnostics.push({
+                severity: 'error',
+                code: 'pipeline_unknown_crawler',
+                message: `${pipelineId} references missing crawler: ${crawlerId}`,
+                pipeline_id: pipelineId,
+            })
+        }
+
+        const processorIds = unique((pipeline.processors || []).map((processor) => processor.processor_id))
+        for (const processorId of processorIds) {
+            if (!nodeSets.processors.has(processorId)) {
+                diagnostics.push({
+                    severity: 'error',
+                    code: 'pipeline_unknown_processor',
+                    message: `${pipelineId} references missing processor: ${processorId}`,
+                    pipeline_id: pipelineId,
+                })
+            }
+        }
+        if (processorIds.length > 1) {
+            diagnostics.push({
+                severity: 'warn',
+                code: 'pipeline_extra_processors_ignored',
+                message: `${pipelineId} has ${processorIds.length} processors; current runtime compiles only the first processor (${processorIds[0]})`,
+                pipeline_id: pipelineId,
+            })
+        }
+
+        const formatterIds = unique([
+            ...(pipeline.formatters || []).map((formatter) => formatter.formatter_id),
+            ...(pipeline.delivery || []).map((delivery) => delivery.formatter_id),
+        ])
+        for (const formatterId of formatterIds) {
+            if (!nodeSets.formatters.has(formatterId)) {
+                diagnostics.push({
+                    severity: 'error',
+                    code: 'pipeline_unknown_formatter',
+                    message: `${pipelineId} references missing formatter: ${formatterId}`,
+                    pipeline_id: pipelineId,
+                })
+            }
+        }
+
+        const targetIds = unique((pipeline.delivery || []).flatMap((delivery) => delivery.target_ids || []))
+        for (const targetId of targetIds) {
+            if (!nodeSets.targets.has(targetId)) {
+                diagnostics.push({
+                    severity: 'error',
+                    code: 'pipeline_unknown_target',
+                    message: `${pipelineId} references missing target: ${targetId}`,
+                    pipeline_id: pipelineId,
+                })
+            }
+        }
+    }
+
+    return diagnostics
+}
+
 function buildQuickConfigModel(config: AppConfig) {
-    const connections = config.connections || {}
+    const configuredPipelines = Array.isArray((config as any).pipelines) ? ((config as any).pipelines as Array<QuickConfigPipelinePatch>) : []
+    let runtimeConfig = config
+    if (configuredPipelines.length > 0) {
+        try {
+            runtimeConfig = normalizePipelinesForRuntime(config)
+        } catch (error) {
+            if (!String(error instanceof Error ? error.message : error).includes('at least one enabled pipeline')) {
+                throw error
+            }
+            runtimeConfig = { ...config, connections: emptyConnections() }
+        }
+    }
+    const connections = runtimeConfig.connections || {}
     const formatterTargets = connections['formatter-target'] || {}
     const processorFormatters = connections['processor-formatter'] || {}
-    const links = collectLinks(config)
-    const routes = (config.crawlers || []).map((crawler, index) => {
+    const links = collectLinks(runtimeConfig)
+    const routes = (runtimeConfig.crawlers || []).map((crawler, index) => {
         const crawlerId = nodeId(crawler, `crawler-${index}`)
         const crawlerKeys = [crawlerId, crawler.name]
         const processorId = mapValue(connections['crawler-processor'], crawlerKeys) || crawler.cfg_crawler?.processor_id || null
@@ -186,10 +304,10 @@ function buildQuickConfigModel(config: AppConfig) {
         }
     })
 
-    const processorsById = new Map((config.processors || []).map((processor, index) => [nodeId(processor, `processor-${index}`), processor]))
-    const formattersById = new Map((config.formatters || []).map((formatter, index) => [nodeId(formatter, `formatter-${index}`), formatter]))
-    const targetsById = new Map((config.forward_targets || []).map((target, index) => [nodeId(target, `target-${index}`), target]))
-    const pipelines = routes.map((route) => {
+    const processorsById = new Map((runtimeConfig.processors || []).map((processor, index) => [nodeId(processor, `processor-${index}`), processor]))
+    const formattersById = new Map((runtimeConfig.formatters || []).map((formatter, index) => [nodeId(formatter, `formatter-${index}`), formatter]))
+    const targetsById = new Map((runtimeConfig.forward_targets || []).map((target, index) => [nodeId(target, `target-${index}`), target]))
+    const routePipelines = routes.map((route) => {
         const processors = route.processor_id
             ? [
                   {
@@ -233,6 +351,67 @@ function buildQuickConfigModel(config: AppConfig) {
             },
         }
     })
+    const pipelinesByCrawler = new Map(routePipelines.map((pipeline) => [pipeline.source.crawler_id, pipeline]))
+    const pipelines = configuredPipelines.length > 0
+        ? configuredPipelines.map((pipeline, index) => {
+              const crawlerId = pipeline.source?.crawler_id || ''
+              const compiled = pipelinesByCrawler.get(crawlerId)
+              const processors = (pipeline.processors || compiled?.processors || []).map((processor) => ({
+                  processor_id: processor.processor_id,
+                  role: processor.role || processorsById.get(processor.processor_id)?.cfg_processor?.action || 'process',
+                  model_id: processorsById.get(processor.processor_id)?.cfg_processor?.model_id || null,
+              }))
+              const formatterIds = unique([
+                  ...(pipeline.formatters || []).map((formatter) => formatter.formatter_id),
+                  ...(pipeline.delivery || []).map((delivery) => delivery.formatter_id),
+                  ...((compiled?.formatters || []).map((formatter) => formatter.formatter_id)),
+              ])
+              const deliveryByFormatter = new Map((pipeline.delivery || compiled?.delivery || []).map((delivery) => [delivery.formatter_id, delivery]))
+              const targetIds = unique(Array.from(deliveryByFormatter.values()).flatMap((delivery) => delivery.target_ids || []))
+              const warnings = [
+                  ...(pipelineEnabled(pipeline) ? [] : ['pipeline is disabled and will not be compiled into runtime connections']),
+                  ...(processors.length > 1 ? [`current runtime compiles only the first processor (${processors[0]?.processor_id || 'none'})`] : []),
+                  ...(formatterIds.length === 0 || targetIds.length === 0 ? ['pipeline has no formatter or no delivery target'] : []),
+              ]
+
+              return {
+                  id: pipeline.id || compiled?.id || `pipeline:${crawlerId || index}`,
+                  name: pipeline.name || compiled?.name || crawlerId || `Pipeline ${index + 1}`,
+                  enabled: pipelineEnabled(pipeline),
+                  source: {
+                      crawler_id: crawlerId,
+                      cron: compiled?.source.cron || null,
+                      task_type: compiled?.source.task_type || 'article',
+                  },
+                  processors,
+                  compiled_processor_id: processors[0]?.processor_id || null,
+                  formatters: formatterIds.map((formatterId) => ({
+                      formatter_id: formatterId,
+                      render_type: formattersById.get(formatterId)?.render_type || 'text',
+                  })),
+                  delivery: formatterIds.map((formatterId) => {
+                      const delivery = deliveryByFormatter.get(formatterId)
+                      const deliveryTargetIds = unique(delivery?.target_ids || [])
+                      return {
+                          formatter_id: formatterId,
+                          target_ids: deliveryTargetIds,
+                          targets: deliveryTargetIds.map((targetId) => {
+                              const target = targetsById.get(targetId)
+                              return {
+                                  target_id: targetId,
+                                  platform: target?.platform || 'unknown',
+                                  group_id: (target?.cfg_platform as any)?.group_id || null,
+                              }
+                          }),
+                      }
+                  }),
+                  review: {
+                      summary: `${pipeline.name || compiled?.name || crawlerId || 'pipeline'} -> ${processors.length} processor(s) -> ${formatterIds.length} formatter(s) -> ${targetIds.length} target(s)`,
+                      warnings,
+                  },
+              }
+          })
+        : routePipelines
 
     return {
         schema: QUICK_CONFIG_SCHEMA,
@@ -247,7 +426,7 @@ function buildQuickConfigModel(config: AppConfig) {
             ],
         },
         catalogs: {
-            crawlers: (config.crawlers || []).map((crawler, index) => ({
+            crawlers: (runtimeConfig.crawlers || []).map((crawler, index) => ({
                 id: nodeId(crawler, `crawler-${index}`),
                 name: nodeName(crawler, `crawler-${index}`),
                 group: crawler.group || '',
@@ -258,7 +437,7 @@ function buildQuickConfigModel(config: AppConfig) {
                 cron: crawler.cfg_crawler?.cron || config.cfg_crawler?.cron || null,
                 enabled: true,
             })),
-            processors: (config.processors || []).map((processor, index) => ({
+            processors: (runtimeConfig.processors || []).map((processor, index) => ({
                 id: nodeId(processor, `processor-${index}`),
                 name: nodeName(processor, `processor-${index}`),
                 group: processor.group || '',
@@ -266,7 +445,7 @@ function buildQuickConfigModel(config: AppConfig) {
                 action: processor.cfg_processor?.action || null,
                 model_id: processor.cfg_processor?.model_id || null,
             })),
-            formatters: (config.formatters || []).map((formatter, index) => ({
+            formatters: (runtimeConfig.formatters || []).map((formatter, index) => ({
                 id: nodeId(formatter, `formatter-${index}`),
                 name: nodeName(formatter, `formatter-${index}`),
                 group: formatter.group || '',
@@ -274,7 +453,7 @@ function buildQuickConfigModel(config: AppConfig) {
                 aggregation: formatter.aggregation === true,
                 deduplication: formatter.deduplication !== false,
             })),
-            targets: (config.forward_targets || []).map((target, index) => ({
+            targets: (runtimeConfig.forward_targets || []).map((target, index) => ({
                 id: nodeId(target, `target-${index}`),
                 name: nodeName(target, `target-${index}`),
                 group: target.group || '',
@@ -290,7 +469,7 @@ function buildQuickConfigModel(config: AppConfig) {
         pipelines,
         routes,
         links,
-        diagnostics: diagnoseQuickConfig(config, links),
+        diagnostics: [...diagnoseQuickConfig(runtimeConfig, links), ...diagnosePipelines(runtimeConfig, configuredPipelines)],
     }
 }
 
@@ -344,6 +523,9 @@ function linksFromRoutes(routes: Array<QuickConfigRoute>) {
 function linksFromPipelines(pipelines: Array<QuickConfigPipelinePatch>) {
     const links: Array<QuickConfigLink> = []
     for (const pipeline of pipelines) {
+        if (!pipelineEnabled(pipeline)) {
+            continue
+        }
         const crawlerId = pipeline.source?.crawler_id
         if (!crawlerId) {
             continue
@@ -373,20 +555,17 @@ function linksFromPipelines(pipelines: Array<QuickConfigPipelinePatch>) {
 function compileConnectionsFromQuickPatch(config: AppConfig, patch: QuickConfigPatch) {
     const links = [...(patch.links || []), ...linksFromRoutes(patch.routes || []), ...linksFromPipelines(patch.pipelines || [])]
     if (links.length === 0) {
-        throw new Error('quick config update requires links or routes')
+        throw new Error('quick config update requires links, routes, or at least one enabled pipeline')
     }
 
-    const diagnostics = diagnoseQuickConfig(config, links)
+    const diagnostics = [...diagnoseQuickConfig(config, links), ...diagnosePipelines(config, patch.pipelines || [])]
     if (patch.strict !== false && diagnostics.some((item) => item.severity === 'error')) {
         throw new Error(diagnostics.map((item) => item.message).join('; '))
     }
 
     const nextConnections = {
         ...(config.connections || {}),
-        'crawler-processor': {} as Record<string, string>,
-        'processor-formatter': {} as Record<string, Array<string>>,
-        'crawler-formatter': {} as Record<string, Array<string>>,
-        'formatter-target': {} as Record<string, Array<string>>,
+        ...emptyConnections(),
     }
 
     const orderedLinks = links.slice().sort((a, b) => (a.order || 0) - (b.order || 0))
