@@ -28,6 +28,14 @@ interface Formatter {
      * Enable media deduplication (skip if media already sent)
      */
     deduplication?: boolean
+    /**
+     * Feature flags layered onto this formatter's text behavior.
+     */
+    render_features?: Array<string>
+    /**
+     * Feature flags layered onto this formatter's rendered card template.
+     */
+    card_features?: Array<string>
 }
 
 /**

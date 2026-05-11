@@ -452,6 +452,8 @@ function buildQuickConfigModel(config: AppConfig) {
                 render_type: formatter.render_type,
                 aggregation: formatter.aggregation === true,
                 deduplication: formatter.deduplication !== false,
+                render_features: (formatter as any).render_features || [],
+                card_features: (formatter as any).card_features || [],
             })),
             targets: (runtimeConfig.forward_targets || []).map((target, index) => ({
                 id: nodeId(target, `target-${index}`),

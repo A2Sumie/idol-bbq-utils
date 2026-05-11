@@ -58,6 +58,10 @@ function uniquePreserveOrder(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean)))
 }
 
+function mergeFeatureFlags(...values: Array<Array<string> | undefined>) {
+    return uniquePreserveOrder(values.flatMap((value) => value || []))
+}
+
 function extractHashtagsFromText(text?: string | null) {
     if (!text) {
         return []
@@ -960,6 +964,8 @@ class ForwarderPools extends BaseCompatibleModel {
                         render_type: formatterConfig.render_type,
                         aggregation: formatterConfig.aggregation,
                         deduplication: formatterConfig.deduplication,
+                        render_features: mergeFeatureFlags(cfg_forwarder?.render_features, formatterConfig.render_features),
+                        card_features: mergeFeatureFlags(cfg_forwarder?.card_features, formatterConfig.card_features),
                     },
                     targets: validTargets,
                     source: 'graph',
