@@ -236,6 +236,14 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function resolveFeedResourceBlocking(feed: FeedKind, blockResourceTypes: Array<string>) {
+    if (feed === 'radio' || feed === 'movie' || feed === 'photo') {
+        return blockResourceTypes.filter((type) => type === 'font')
+    }
+
+    return blockResourceTypes
+}
+
 function buildFallbackDetailPayload(listItem: WebsiteListItem, reason: string): WebsiteDetailPayload {
     return {
         title: listItem.title || '',
@@ -1633,7 +1641,11 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
         }
 
         const crawlOptions = resolveWebsiteCrawlOptions(config)
-        await configureWebsiteResourceBlocking(page, crawlOptions.blockResourceTypes)
+        const effectiveCrawlOptions = {
+            ...crawlOptions,
+            blockResourceTypes: resolveFeedResourceBlocking(feedConfig.feed, crawlOptions.blockResourceTypes),
+        }
+        await configureWebsiteResourceBlocking(page, effectiveCrawlOptions.blockResourceTypes)
 
         if (isDetailUrl(feedConfig.feed, url)) {
             const articles = await this.crawlSingleDetail(page, feedConfig, {
@@ -1644,7 +1656,7 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             return articles as TaskTypeResult<T, Platform.Website>
         }
 
-        const articles = await this.crawlFeed(page, feedConfig, url, crawlOptions)
+        const articles = await this.crawlFeed(page, feedConfig, url, effectiveCrawlOptions)
         return articles as TaskTypeResult<T, Platform.Website>
     }
 
