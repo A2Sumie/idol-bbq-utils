@@ -3,6 +3,30 @@ import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import { APIManager } from './api-manager'
 
+test('APIManager adds CIC CORS headers to control responses', () => {
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+            }) as any,
+        getDeps: () => ({}),
+    })
+
+    const corsHeaders = (manager as any).resolveCorsHeaders(
+        new Request('http://localhost/api/runtime/status', {
+            headers: {
+                Origin: 'https://cic.n2nj.moe',
+            },
+        }),
+    )
+    const response = (manager as any).withCorsHeaders(new Response('ok'), corsHeaders)
+
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe('https://cic.n2nj.moe')
+    expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization')
+})
+
 test('APIManager resend infers website crawler platform from websites config', async () => {
     const originalGetSingleArticle = DB.Article.getSingleArticle
     const originalTaskAdd = DB.TaskQueue.add

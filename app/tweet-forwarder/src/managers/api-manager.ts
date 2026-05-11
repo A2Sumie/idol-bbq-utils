@@ -29,6 +29,7 @@ import { pRetry } from '@idol-bbq-utils/utils'
 interface ApiConfig {
     port?: number
     secret?: string
+    cors_origin?: string | Array<string>
 }
 
 export interface ApiRuntimeDeps {
@@ -77,6 +78,7 @@ function jsonResponse(payload: unknown, status = 200) {
 }
 
 const MAX_BUN_IDLE_TIMEOUT_SECONDS = 255
+const DEFAULT_CIC_ORIGIN = 'https://cic.n2nj.moe'
 
 function resolvePlatform(value?: string | null): Platform | null {
     if (!value) {
@@ -280,72 +282,129 @@ export class APIManager extends BaseCompatibleModel {
             port,
             idleTimeout: MAX_BUN_IDLE_TIMEOUT_SECONDS,
             fetch: async (req, server) => {
-                const url = new URL(req.url)
-                if (url.pathname === '/api/archives' || url.pathname.startsWith('/api/archives/')) {
-                    server.timeout(req, MAX_BUN_IDLE_TIMEOUT_SECONDS)
+                const corsHeaders = this.resolveCorsHeaders(req)
+                if (req.method === 'OPTIONS') {
+                    return new Response(null, { status: 204, headers: corsHeaders })
                 }
 
-                const authHeader = req.headers.get('Authorization')
-                if (!authHeader || authHeader !== `Bearer ${secret}`) {
-                    return new Response('Unauthorized', { status: 401 })
+                try {
+                    return this.withCorsHeaders(await this.dispatchApiRequest(req, server, secret), corsHeaders)
+                } catch (error) {
+                    const url = new URL(req.url)
+                    this.log?.error(`API request failed for ${req.method} ${url.pathname}:`, error)
+                    return this.withCorsHeaders(
+                        new Response(error instanceof Error ? error.message : String(error), { status: 500 }),
+                        corsHeaders,
+                    )
                 }
-
-                if (req.method === 'POST' && url.pathname === '/api/cookies') return this.handleCookieUpdate(req)
-                if (req.method === 'POST' && url.pathname === '/api/cookies/sync') return this.handleCookieSync(req)
-                if (req.method === 'DELETE' && url.pathname === '/api/cookies') return this.handleCookieDelete(req)
-                if (req.method === 'POST' && url.pathname === '/api/cookies/delete') return this.handleCookieDelete(req)
-                if (req.method === 'GET' && url.pathname === '/api/cookies') return this.handleCookieList()
-                if (req.method === 'GET' && url.pathname.startsWith('/api/cookies/')) {
-                    const finder = url.pathname.split('/api/cookies/')[1]
-                    return this.handleCookieView(finder)
-                }
-
-                if (req.method === 'GET' && url.pathname === '/api/config') return this.handleConfigGet()
-                if (req.method === 'GET' && url.pathname === '/api/config/crawlers') return this.handleConfigList()
-                if (req.method === 'POST' && url.pathname === '/api/config/update') return this.handleConfigUpdate(req)
-                if (req.method === 'POST' && url.pathname === '/api/runtime/reload') return this.handleRuntimeReload()
-                if (req.method === 'POST' && url.pathname === '/api/server/restart') return this.handleServerRestart()
-
-                if (req.method === 'GET' && url.pathname === '/api/runtime/status') return this.handleRuntimeStatus()
-                if (req.method === 'GET' && url.pathname === '/api/runtime/logs') return this.handleRuntimeLogs(url)
-                if (req.method === 'GET' && url.pathname === '/api/articles') return this.handleArticleList(url)
-                if (req.method === 'GET' && url.pathname.startsWith('/api/articles/')) return this.handleArticleView(url)
-                if (req.method === 'GET' && url.pathname === '/api/tasks') return this.handleTasks(url)
-                if (req.method === 'GET' && url.pathname === '/api/processor-runs') return this.handleProcessorRuns(url)
-
-                if (req.method === 'GET' && url.pathname === '/api/archives') return this.handleArchiveList(url)
-                if (req.method === 'GET' && url.pathname.endsWith('/download') && url.pathname.startsWith('/api/archives/')) {
-                    const archiveId = url.pathname.slice('/api/archives/'.length, -'/download'.length)
-                    return this.handleArchiveDownload(archiveId)
-                }
-                if (req.method === 'GET' && url.pathname.endsWith('/waveform') && url.pathname.startsWith('/api/archives/')) {
-                    const archiveId = url.pathname.slice('/api/archives/'.length, -'/waveform'.length)
-                    return this.handleArchiveWaveform(archiveId)
-                }
-                if (req.method === 'GET' && url.pathname.endsWith('/frames') && url.pathname.startsWith('/api/archives/')) {
-                    const archiveId = url.pathname.slice('/api/archives/'.length, -'/frames'.length)
-                    return this.handleArchiveFrames(archiveId, url)
-                }
-                if (req.method === 'POST' && url.pathname.endsWith('/upload') && url.pathname.startsWith('/api/archives/')) {
-                    const archiveId = url.pathname.slice('/api/archives/'.length, -'/upload'.length)
-                    return this.handleArchiveUpload(archiveId, req)
-                }
-                if (req.method === 'GET' && url.pathname.startsWith('/api/archives/')) {
-                    const archiveId = url.pathname.slice('/api/archives/'.length)
-                    return this.handleArchiveDetail(archiveId)
-                }
-
-                if (req.method === 'POST' && url.pathname === '/api/actions/crawlers/run') return this.handleCrawlerRun(req)
-                if (req.method === 'POST' && url.pathname === '/api/actions/articles/simulate') return this.handleArticleSimulate(req)
-                if (req.method === 'POST' && url.pathname === '/api/actions/articles/reprocess') return this.handleArticleReprocess(req)
-                if (req.method === 'POST' && url.pathname === '/api/actions/articles/resend') return this.handleArticleResend(req)
-                if (req.method === 'POST' && url.pathname === '/api/actions/processors/run') return this.handleProcessorRun(req)
-
-                return new Response(`Not Found: ${req.method} ${url.pathname}`, { status: 404 })
             },
         })
 
         this.log?.info(`APIManager listening on port ${port}`)
+    }
+
+    private async dispatchApiRequest(req: Request, server: any, secret: string): Promise<Response> {
+        const url = new URL(req.url)
+        if (url.pathname === '/api/archives' || url.pathname.startsWith('/api/archives/')) {
+            server.timeout(req, MAX_BUN_IDLE_TIMEOUT_SECONDS)
+        }
+
+        const authHeader = req.headers.get('Authorization')
+        if (!authHeader || authHeader !== `Bearer ${secret}`) {
+            return new Response('Unauthorized', { status: 401 })
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/cookies') return this.handleCookieUpdate(req)
+        if (req.method === 'POST' && url.pathname === '/api/cookies/sync') return this.handleCookieSync(req)
+        if (req.method === 'DELETE' && url.pathname === '/api/cookies') return this.handleCookieDelete(req)
+        if (req.method === 'POST' && url.pathname === '/api/cookies/delete') return this.handleCookieDelete(req)
+        if (req.method === 'GET' && url.pathname === '/api/cookies') return this.handleCookieList()
+        if (req.method === 'GET' && url.pathname.startsWith('/api/cookies/')) {
+            const finder = url.pathname.split('/api/cookies/')[1]
+            return this.handleCookieView(finder)
+        }
+
+        if (req.method === 'GET' && url.pathname === '/api/config') return this.handleConfigGet()
+        if (req.method === 'GET' && url.pathname === '/api/config/crawlers') return this.handleConfigList()
+        if (req.method === 'POST' && url.pathname === '/api/config/update') return this.handleConfigUpdate(req)
+        if (req.method === 'POST' && url.pathname === '/api/runtime/reload') return this.handleRuntimeReload()
+        if (req.method === 'POST' && url.pathname === '/api/server/restart') return this.handleServerRestart()
+
+        if (req.method === 'GET' && url.pathname === '/api/runtime/status') return this.handleRuntimeStatus()
+        if (req.method === 'GET' && url.pathname === '/api/runtime/logs') return this.handleRuntimeLogs(url)
+        if (req.method === 'GET' && url.pathname === '/api/articles') return this.handleArticleList(url)
+        if (req.method === 'GET' && url.pathname.startsWith('/api/articles/')) return this.handleArticleView(url)
+        if (req.method === 'GET' && url.pathname === '/api/tasks') return this.handleTasks(url)
+        if (req.method === 'GET' && url.pathname === '/api/processor-runs') return this.handleProcessorRuns(url)
+
+        if (req.method === 'GET' && url.pathname === '/api/archives') return this.handleArchiveList(url)
+        if (req.method === 'GET' && url.pathname.endsWith('/download') && url.pathname.startsWith('/api/archives/')) {
+            const archiveId = url.pathname.slice('/api/archives/'.length, -'/download'.length)
+            return this.handleArchiveDownload(archiveId)
+        }
+        if (req.method === 'GET' && url.pathname.endsWith('/waveform') && url.pathname.startsWith('/api/archives/')) {
+            const archiveId = url.pathname.slice('/api/archives/'.length, -'/waveform'.length)
+            return this.handleArchiveWaveform(archiveId)
+        }
+        if (req.method === 'GET' && url.pathname.endsWith('/frames') && url.pathname.startsWith('/api/archives/')) {
+            const archiveId = url.pathname.slice('/api/archives/'.length, -'/frames'.length)
+            return this.handleArchiveFrames(archiveId, url)
+        }
+        if (req.method === 'POST' && url.pathname.endsWith('/upload') && url.pathname.startsWith('/api/archives/')) {
+            const archiveId = url.pathname.slice('/api/archives/'.length, -'/upload'.length)
+            return this.handleArchiveUpload(archiveId, req)
+        }
+        if (req.method === 'GET' && url.pathname.startsWith('/api/archives/')) {
+            const archiveId = url.pathname.slice('/api/archives/'.length)
+            return this.handleArchiveDetail(archiveId)
+        }
+
+        if (req.method === 'POST' && url.pathname === '/api/actions/crawlers/run') return this.handleCrawlerRun(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/articles/simulate') return this.handleArticleSimulate(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/articles/reprocess') return this.handleArticleReprocess(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/articles/resend') return this.handleArticleResend(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/processors/run') return this.handleProcessorRun(req)
+
+        return new Response(`Not Found: ${req.method} ${url.pathname}`, { status: 404 })
+    }
+
+    private resolveCorsHeaders(req: Request) {
+        const requestOrigin = req.headers.get('Origin') || ''
+        const configured = this.config.api?.cors_origin || process.env.API_CORS_ORIGIN || DEFAULT_CIC_ORIGIN
+        const allowedOrigins = (Array.isArray(configured) ? configured : String(configured).split(','))
+            .map((origin) => origin.trim())
+            .filter(Boolean)
+        const allowOrigin = allowedOrigins.includes('*')
+            ? '*'
+            : allowedOrigins.includes(requestOrigin)
+                ? requestOrigin
+                : !requestOrigin
+                    ? allowedOrigins[0] || DEFAULT_CIC_ORIGIN
+                    : ''
+        const headers = new Headers({
+            'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
+            'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+            'Access-Control-Max-Age': '600',
+            Vary: 'Origin',
+        })
+        if (allowOrigin) {
+            headers.set('Access-Control-Allow-Origin', allowOrigin)
+        }
+        return headers
+    }
+
+    private withCorsHeaders(response: Response, corsHeaders: Headers) {
+        const headers = new Headers(response.headers)
+        for (const [key, value] of corsHeaders.entries()) {
+            if (!headers.has(key)) {
+                headers.set(key, value)
+            }
+        }
+        return new Response(response.body, {
+            status: response.status,
+            statusText: response.statusText,
+            headers,
+        })
     }
 
     async drop() {

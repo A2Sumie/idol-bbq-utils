@@ -26,6 +26,7 @@ interface AppConfig {
     api?: {
         port?: number
         secret?: string
+        cors_origin?: string | Array<string>
     }
 }
 
