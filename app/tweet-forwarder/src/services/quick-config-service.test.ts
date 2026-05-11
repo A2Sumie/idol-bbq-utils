@@ -16,6 +16,16 @@ const baseConfig = {
             paths: ['/list/test'],
             cfg_crawler: {
                 cron: '*/5 * * * *',
+                browser_mode: 'headed-xvfb',
+                device_profile: 'mobile_ios_safari_portrait',
+                session_profile: 'website-main',
+                max_list_pages: 1,
+                max_detail_count: 6,
+                detail_interval_time: {
+                    min: 800,
+                    max: 1800,
+                },
+                block_resource_types: ['image', 'font', 'media', 'stylesheet'],
             },
         },
     ],
@@ -90,6 +100,22 @@ test('quick config model exposes reviewable routes and links', () => {
         processor_id: 'processor-summary',
         formatter_ids: ['formatter-card'],
         target_ids: ['target-low-noise'],
+    })
+    expect(model.catalogs.crawlers[0]).toMatchObject({
+        browser_mode: 'headed-xvfb',
+        device_profile: 'mobile_ios_safari_portrait',
+        session_profile: 'website-main',
+        crawl_budget: {
+            max_list_pages: 1,
+            max_detail_count: 6,
+            block_resource_types: ['image', 'font', 'media', 'stylesheet'],
+        },
+        low_signature: {
+            persistent_session: true,
+            cookie_file: false,
+            browser_profile: 'mobile_ios_safari_portrait',
+            resource_blocking: true,
+        },
     })
     expect(model.links.map((link) => link.kind)).toEqual([
         'crawler-processor',

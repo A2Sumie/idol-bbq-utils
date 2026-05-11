@@ -435,6 +435,22 @@ function buildQuickConfigModel(config: AppConfig) {
                 websites: crawler.websites || [],
                 paths: crawler.paths || [],
                 cron: crawler.cfg_crawler?.cron || config.cfg_crawler?.cron || null,
+                browser_mode: crawler.cfg_crawler?.browser_mode || config.cfg_crawler?.browser_mode || null,
+                device_profile: crawler.cfg_crawler?.device_profile || config.cfg_crawler?.device_profile || null,
+                session_profile: crawler.cfg_crawler?.session_profile || config.cfg_crawler?.session_profile || null,
+                interval_time: crawler.cfg_crawler?.interval_time || config.cfg_crawler?.interval_time || null,
+                crawl_budget: {
+                    max_list_pages: (crawler.cfg_crawler as any)?.max_list_pages ?? null,
+                    max_detail_count: (crawler.cfg_crawler as any)?.max_detail_count ?? null,
+                    detail_interval_time: (crawler.cfg_crawler as any)?.detail_interval_time ?? null,
+                    block_resource_types: (crawler.cfg_crawler as any)?.block_resource_types || [],
+                },
+                low_signature: {
+                    persistent_session: Boolean(crawler.cfg_crawler?.session_profile || config.cfg_crawler?.session_profile),
+                    cookie_file: Boolean(crawler.cfg_crawler?.cookie_file || config.cfg_crawler?.cookie_file),
+                    browser_profile: crawler.cfg_crawler?.device_profile || config.cfg_crawler?.device_profile || null,
+                    resource_blocking: ((crawler.cfg_crawler as any)?.block_resource_types || []).length > 0,
+                },
                 enabled: true,
             })),
             processors: (runtimeConfig.processors || []).map((processor, index) => ({
