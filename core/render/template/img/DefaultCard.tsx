@@ -9,6 +9,7 @@ import _, { reduce } from 'lodash'
 import type { JSX } from 'react/jsx-runtime'
 import SVG, { Website227FC, Website227Official } from '@/img/assets/svg'
 import { KOZUE } from '@/img/assets/img'
+import type { RenderParserOptions } from '@/registry'
 
 const CARD_WIDTH = 600
 const CONTENT_WIDTH = CARD_WIDTH - 16 * 2 - 64 - 12
@@ -19,6 +20,27 @@ type WebsiteBrandKey = 'official' | 'fc'
 const OFFICIAL_227_WEBSITE_FEEDS = new Set(['official-news', 'official-blog', 'live-report'])
 const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'photo'])
 const DEFAULT_PLATFORM_BADGE_WIDTH = 32
+const DEFAULT_CARD_FEATURES = new Set(['media-contain', 'website-inline-media'])
+
+type CardRenderFeatures = Set<string>
+type InlineContentBlock =
+    | {
+          type: 'text'
+          text: string
+      }
+    | {
+          type: 'image'
+          url: string
+          alt?: string
+      }
+
+function resolveCardFeatures(options?: RenderParserOptions): CardRenderFeatures {
+    return new Set([...DEFAULT_CARD_FEATURES, ...(options?.features || [])])
+}
+
+function hasFeature(features: CardRenderFeatures, feature: string) {
+    return features.has(feature)
+}
 
 const WEBSITE_BRAND_CONFIG = {
     official: {
@@ -63,6 +85,89 @@ function getImageWidth(level: number) {
         return (CONTENT_WIDTH - 4) / 2
     }
     return (CONTENT_WIDTH - 4 - 16 * 2 * level) / 2
+}
+
+function decodeHtmlEntities(text: string) {
+    return text
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+}
+
+function htmlToPlainText(html: string) {
+    return decodeHtmlEntities(
+        html
+            .replace(/<script[\s\S]*?<\/script>/gi, '')
+            .replace(/<style[\s\S]*?<\/style>/gi, '')
+            .replace(/<(br|\/p|\/div|\/li|\/h[1-6])\b[^>]*>/gi, '\n')
+            .replace(/<[^>]+>/g, '')
+            .replace(/\u00a0/g, ' '),
+    )
+        .split('\n')
+        .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+        .filter(Boolean)
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
+function absoluteUrl(value: string, baseUrl?: string | null) {
+    try {
+        return new URL(value, baseUrl || undefined).href
+    } catch {
+        return value
+    }
+}
+
+function getWebsiteTitle(article: Article) {
+    const title = (article.extra?.data as any)?.title
+    if (typeof title === 'string' && title.trim()) {
+        return `【${title.trim()}】`
+    }
+    return article.content?.match(/^【.+?】/)?.[0] || ''
+}
+
+function getWebsiteInlineBlocks(article: Article, features: CardRenderFeatures): Array<InlineContentBlock> {
+    if (!hasFeature(features, 'website-inline-media')) {
+        return []
+    }
+    if (article.platform !== Platform.Website || article.extra?.extra_type !== 'website_meta') {
+        return []
+    }
+    const rawHtml = (article.extra.data as any)?.raw_html
+    if (typeof rawHtml !== 'string' || !rawHtml.includes('<img')) {
+        return []
+    }
+
+    const blocks: Array<InlineContentBlock> = []
+    const imageRegex = /<img\b[^>]*\bsrc=(["']?)([^"'\s>]+)\1[^>]*>/gi
+    let cursor = 0
+    let match: RegExpExecArray | null
+    while ((match = imageRegex.exec(rawHtml))) {
+        const text = htmlToPlainText(rawHtml.slice(cursor, match.index))
+        if (text) {
+            blocks.push({ type: 'text', text })
+        }
+        const src = match[2]
+        if (src) {
+            const alt = match[0].match(/\balt=(["']?)(.*?)\1(?:\s|>|$)/i)?.[2]
+            blocks.push({
+                type: 'image',
+                url: absoluteUrl(src, article.url),
+                alt: alt ? decodeHtmlEntities(alt).trim() : undefined,
+            })
+        }
+        cursor = match.index + match[0].length
+    }
+    const tailText = htmlToPlainText(rawHtml.slice(cursor))
+    if (tailText) {
+        blocks.push({ type: 'text', text: tailText })
+    }
+
+    return blocks.some((block) => block.type === 'image') ? blocks : []
 }
 
 export function resolve227WebsiteBrandKey(article: Pick<Article, 'platform' | 'extra'>): WebsiteBrandKey | null {
@@ -228,9 +333,43 @@ function Divider({ text, dash }: { text?: string; dash?: boolean }) {
     )
 }
 
-function MediaGroup({ media: _media, level }: { media: Exclude<Article['media'], null>; level: number }) {
+function ImageTile({ url, alt, width, contain }: { url: string; alt?: string; width: number; contain: boolean }) {
+    return (
+        <div tw="flex overflow-hidden" style={{ flexBasis: `${width}px` }}>
+            <div
+                tw="flex relative w-full bg-[#f7f9fc]"
+                style={{
+                    paddingTop: '56.25%',
+                }}
+            >
+                <img
+                    src={url}
+                    tw="left-0 right-0 top-0 bottom-0 absolute"
+                    style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: contain ? 'contain' : 'cover',
+                    }}
+                    alt={alt}
+                />
+            </div>
+        </div>
+    )
+}
+
+function MediaGroup({
+    media: _media,
+    level,
+    features,
+}: {
+    media: Exclude<Article['media'], null>
+    level: number
+    features: CardRenderFeatures
+}) {
     const media = _media.filter((m) => m.type === 'photo' || m.type === 'video_thumbnail')
-    const last_media = media.length % 2 === 1 ? media.pop() : null
+    const pairedMedia = media.slice(0, media.length % 2 === 1 ? -1 : media.length)
+    const lastMedia = media.length % 2 === 1 ? media[media.length - 1] : null
+    const contain = hasFeature(features, 'media-contain')
     return (
         <div
             tw="flex rounded-lg overflow-hidden shadow-sm flex-wrap"
@@ -238,42 +377,62 @@ function MediaGroup({ media: _media, level }: { media: Exclude<Article['media'],
                 gap: '4px',
             }}
         >
-            {media.map((m, i) => (
-                <div key={i} tw="flex overflow-hidden" style={{ flexBasis: `${getImageWidth(level)}px` }}>
-                    <div
-                        tw="flex relative w-full"
-                        style={{
-                            paddingTop: '56.25%',
-                        }}
-                    >
-                        <img
-                            src={m.url}
-                            tw="left-0 right-0 top-0 bottom-0 absolute"
-                            style={{
-                                objectFit: 'cover',
-                            }}
-                        />
-                    </div>
-                </div>
+            {pairedMedia.map((m, i) => (
+                <ImageTile key={i} url={m.url} alt={m.alt} width={getImageWidth(level)} contain={contain} />
             ))}
 
-            {last_media && (
-                <div tw="flex">
-                    <div
-                        tw="flex relative w-full"
+            {lastMedia && (
+                <ImageTile url={lastMedia.url} alt={lastMedia.alt} width={getContentWidth(level)} contain={contain} />
+            )}
+        </div>
+    )
+}
+
+function InlineWebsiteContent({
+    article,
+    blocks,
+    level,
+    features,
+}: {
+    article: Article
+    blocks: Array<InlineContentBlock>
+    level: number
+    features: CardRenderFeatures
+}) {
+    const title = getWebsiteTitle(article)
+    return (
+        <div tw="flex flex-col" style={{ rowGap: '4px' }}>
+            {title && (
+                <pre
+                    tw="w-full text-[#202733] my-0 text-base leading-snug"
+                    style={{
+                        whiteSpace: 'pre-wrap',
+                        fontWeight: 600,
+                    }}
+                >
+                    {title}
+                </pre>
+            )}
+            {blocks.map((block, index) =>
+                block.type === 'text' ? (
+                    <pre
+                        key={index}
+                        tw="w-full text-[#202733] my-0 text-base leading-snug"
                         style={{
-                            paddingTop: '56.25%',
+                            whiteSpace: 'pre-wrap',
+                            fontWeight: 500,
                         }}
                     >
-                        <img
-                            src={last_media.url}
-                            tw="left-0 right-0 top-0 bottom-0 absolute"
-                            style={{
-                                objectFit: 'cover',
-                            }}
-                        />
-                    </div>
-                </div>
+                        {block.text}
+                    </pre>
+                ) : (
+                    <MediaGroup
+                        key={index}
+                        media={[{ type: 'photo', url: block.url, alt: block.alt }]}
+                        level={level}
+                        features={features}
+                    />
+                ),
             )}
         </div>
     )
@@ -341,7 +500,36 @@ function estimateImagesHeight(media: Exclude<Article['media'], null>, level: num
     )
 }
 
-function ArticleContent({ article, level = 0 }: { article: Article; level: number }) {
+function estimateInlineWebsiteHeight(article: Article, level: number, features: CardRenderFeatures) {
+    const blocks = getWebsiteInlineBlocks(article, features)
+    if (blocks.length === 0) {
+        return null
+    }
+    const title = getWebsiteTitle(article)
+    const textHeight = blocks.reduce(
+        (sum, block) => {
+            if (block.type === 'image') {
+                return sum + getContentWidth(level) * (9 / 16)
+            }
+            return sum + estimateTextLinesHeight(block.text, BASE_FONT_SIZE, getContentWidth(level))
+        },
+        title ? estimateTextLinesHeight(title, BASE_FONT_SIZE, getContentWidth(level)) : 0,
+    )
+    return textHeight + Math.max(0, blocks.length - 1) * 4
+}
+
+function ArticleContent({
+    article,
+    level = 0,
+    features,
+}: {
+    article: Article
+    level: number
+    features: CardRenderFeatures
+}) {
+    const inlineWebsiteBlocks = getWebsiteInlineBlocks(article, features)
+    const useInlineWebsiteBlocks = inlineWebsiteBlocks.length > 0
+    const shouldRenderMedia = Boolean(article.media && article.media.length > 0 && !useInlineWebsiteBlocks)
     function Content() {
         return (
             <div
@@ -381,7 +569,7 @@ function ArticleContent({ article, level = 0 }: { article: Article; level: numbe
                 {article.translation && (
                     <Divider text={article.translated_by ? `由${article.translated_by}提供翻译` : ''} />
                 )}
-                {article.content && (
+                {article.content && !useInlineWebsiteBlocks && (
                     <pre
                         tw="w-full text-[#202733] my-0 text-base leading-snug"
                         style={{
@@ -392,10 +580,20 @@ function ArticleContent({ article, level = 0 }: { article: Article; level: numbe
                         {parseRawContent(article)}
                     </pre>
                 )}
-                {((article.media && article.media.length > 0) || article.extra) && <Divider dash />}
-                {article.media && article.media.length > 0 && <MediaGroup media={article.media} level={level} />}
+                {useInlineWebsiteBlocks && (
+                    <InlineWebsiteContent
+                        article={article}
+                        blocks={inlineWebsiteBlocks}
+                        level={level}
+                        features={features}
+                    />
+                )}
+                {shouldRenderMedia && <Divider dash />}
+                {shouldRenderMedia && article.media && (
+                    <MediaGroup media={article.media} level={level} features={features} />
+                )}
                 {article.ref && typeof article.ref === 'object' && (
-                    <ArticleContent article={article.ref} level={level + 1} />
+                    <ArticleContent article={article.ref} level={level + 1} features={features} />
                 )}
             </div>
         )
@@ -448,7 +646,15 @@ function articleHasVisualMedia(article: Article) {
     )
 }
 
-function BaseCard({ article, paddingHeight }: { article: Article; paddingHeight: number }) {
+function BaseCard({
+    article,
+    paddingHeight,
+    features,
+}: {
+    article: Article
+    paddingHeight: number
+    features: CardRenderFeatures
+}) {
     const flattedArticle = flatArticle(article)
     const badge = getPlatformBadge(article)
     const hasVisualMedia = articleHasVisualMedia(article)
@@ -478,7 +684,7 @@ function BaseCard({ article, paddingHeight }: { article: Article; paddingHeight:
                 />
             ))}
             {flattedArticle.map((item, index) => (
-                <ArticleContent key={index} article={item} level={0} />
+                <ArticleContent key={index} article={item} level={0} features={features} />
             ))}
             {/* {paddingHeight > 0 && (
                 <div tw="flex justify-center items-center opacity-20">
@@ -489,8 +695,9 @@ function BaseCard({ article, paddingHeight }: { article: Article; paddingHeight:
     )
 }
 
-function estimatedArticleHeight(article: Article, level: number = 0): number {
+function estimatedArticleHeight(article: Article, level: number = 0, features: CardRenderFeatures): number {
     const basePadding = 16 * 2
+    const inlineWebsiteHeight = estimateInlineWebsiteHeight(article, level, features)
     const articleHeightArray = [
         estimateTextLinesHeight(
             `${article.username} @${article.u_id} · ${dayjs.unix(article.created_at).format('YY年MM月DD日 HH:mmZ')} ${platformArticleMapToActionText[article.platform][article.type]}`,
@@ -499,11 +706,12 @@ function estimatedArticleHeight(article: Article, level: number = 0): number {
         ), // metaline
         estimateTextLinesHeight(parseTranslationContent(article) ?? '', BASE_FONT_SIZE, getContentWidth(level)), // translation
         article.translation ? 12 : 0, // translation divider
-        estimateTextLinesHeight(parseRawContent(article) ?? '', BASE_FONT_SIZE, getContentWidth(level)), // content
+        inlineWebsiteHeight ??
+            estimateTextLinesHeight(parseRawContent(article) ?? '', BASE_FONT_SIZE, getContentWidth(level)), // content
         article.has_media ? 12 : 0, // media or extra divider
-        estimateImagesHeight(article.media ?? [], level), // media
+        inlineWebsiteHeight === null ? estimateImagesHeight(article.media ?? [], level) : 0, // media
         article.ref && typeof article.ref === 'object'
-            ? estimatedArticleHeight(article.ref, level + 1) + basePadding * (level + 1)
+            ? estimatedArticleHeight(article.ref, level + 1, features) + basePadding * (level + 1)
             : 0, // ref
     ]
     return _(articleHeightArray)
@@ -513,12 +721,16 @@ function estimatedArticleHeight(article: Article, level: number = 0): number {
         .reduce((a, b) => a + b, 0)
 }
 
-function articleParser(article: Article): {
+function articleParser(
+    article: Article,
+    options?: RenderParserOptions,
+): {
     component: JSX.Element
     height: number
 } {
+    const features = resolveCardFeatures(options)
     const hasVisualMedia = articleHasVisualMedia(article)
-    let flattedArticleHeightArray = flatArticle(article).map((item) => estimatedArticleHeight(item, 0))
+    let flattedArticleHeightArray = flatArticle(article).map((item) => estimatedArticleHeight(item, 0, features))
     let estimatedHeight = [
         16, // padding top
         _(flattedArticleHeightArray)
@@ -537,7 +749,7 @@ function articleParser(article: Article): {
         paddingHeight = CARD_WIDTH * minimumCardRatio - estimatedHeight
     }
     return {
-        component: <BaseCard article={article} paddingHeight={paddingHeight} />,
+        component: <BaseCard article={article} paddingHeight={paddingHeight} features={features} />,
         height: estimatedHeight + paddingHeight,
     }
 }

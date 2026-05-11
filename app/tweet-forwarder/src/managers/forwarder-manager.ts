@@ -46,6 +46,8 @@ const DEFAULT_TAG_DIGEST_THRESHOLD = 3
 const DEFAULT_TAG_DIGEST_MIN_AUTHORS = 2
 const DEFAULT_TAG_DIGEST_DETECTION_WINDOW_SECONDS = 5 * 60
 const DEFAULT_TAG_DIGEST_WINDOW_SECONDS = 20 * 60
+const DEFAULT_COLLAPSE_FORWARDED_REF_WINDOW_SECONDS = 18 * 3600
+const HIGH_REALTIME_GROUP_IDS = new Set(['742435777'])
 const HASHTAG_REGEX = /[#＃][\p{L}\p{N}_ー一-龯ぁ-んァ-ヶ]+/gu
 
 function sortUnique(values: Array<string>) {
@@ -1131,6 +1133,8 @@ class ForwarderPools extends BaseCompatibleModel {
             const renderResult = await this.renderService.process(article, {
                 taskId,
                 render_type: cfg_forwarder?.render_type,
+                render_features: cfg_forwarder?.render_features,
+                card_features: cfg_forwarder?.card_features,
                 mediaConfig: cfg_forwarder?.media,
                 deduplication: options?.forceSend ? false : cfg_forwarder?.deduplication,
             })
@@ -1195,6 +1199,14 @@ class ForwarderPools extends BaseCompatibleModel {
                             }
                         }
 
+                        const text = await this.resolveTargetTextForArticle(
+                            article,
+                            renderResult.text,
+                            cfg_forwarder,
+                            target,
+                            runtime_config,
+                        )
+
                         let claimed = true
                         if (!options?.forceSend) {
                             claimed = await this.claimArticleChain(article, platform, target.id)
@@ -1205,7 +1217,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             }
                         }
 
-                        await target.send(renderResult.text, {
+                        await target.send(text, {
                             media: renderResult.mediaFiles,
                             cardMedia: renderResult.cardMediaFiles,
                             contentMedia: renderResult.originalMediaFiles,
@@ -1260,6 +1272,84 @@ class ForwarderPools extends BaseCompatibleModel {
                 throw forceSendError
             }
         }
+    }
+
+    private async resolveTargetTextForArticle(
+        article: ArticleWithId,
+        fallbackText: string,
+        cfg_forwarder: Forwarder['cfg_forwarder'],
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ) {
+        if (!this.shouldCollapseForwardedRefText(article, cfg_forwarder, target, runtime_config)) {
+            return fallbackText
+        }
+
+        const config = target.getEffectiveConfig(runtime_config)
+        const collapsedArticleIds = await this.collectForwardedReferenceIds(
+            article,
+            target.id,
+            this.resolvePositiveSeconds(
+                config.collapse_forwarded_ref_window_seconds,
+                DEFAULT_COLLAPSE_FORWARDED_REF_WINDOW_SECONDS,
+            ),
+        )
+        if (collapsedArticleIds.size === 0) {
+            return fallbackText
+        }
+
+        return this.renderService.renderText(article, {
+            render_type: cfg_forwarder?.render_type,
+            collapsedArticleIds,
+        })
+    }
+
+    private shouldCollapseForwardedRefText(
+        article: ArticleWithId,
+        cfg_forwarder: Forwarder['cfg_forwarder'],
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ) {
+        if (!article.ref || typeof article.ref !== 'object') {
+            return false
+        }
+
+        const config = target.getEffectiveConfig(runtime_config)
+        if (config.collapse_forwarded_ref_text === false) {
+            return false
+        }
+        if (config.collapse_forwarded_ref_text === true) {
+            return true
+        }
+        if (HIGH_REALTIME_GROUP_IDS.has(String((config as any).group_id || ''))) {
+            return false
+        }
+        if (cfg_forwarder?.render_features?.includes('no-collapse-forwarded-ref-text')) {
+            return false
+        }
+        return true
+    }
+
+    private async collectForwardedReferenceIds(article: ArticleWithId, targetId: string, windowSeconds: number) {
+        const ids = new Set<string | number>()
+        const now = Math.floor(Date.now() / 1000)
+        let currentArticle = article.ref as ArticleWithId | null
+        while (currentArticle && typeof currentArticle === 'object') {
+            if (!currentArticle.created_at || now - currentArticle.created_at > windowSeconds) {
+                currentArticle = currentArticle.ref as ArticleWithId | null
+                continue
+            }
+            const primary = await DB.ForwardBy.checkExist(currentArticle.id, article.platform, targetId, 'article')
+            const secondary =
+                currentArticle.platform !== article.platform
+                    ? await DB.ForwardBy.checkExist(currentArticle.id, currentArticle.platform, targetId, 'article')
+                    : null
+            if (primary || secondary) {
+                ids.add(currentArticle.id)
+            }
+            currentArticle = currentArticle.ref as ArticleWithId | null
+        }
+        return ids
     }
 
     private async applyDispatchDigests(

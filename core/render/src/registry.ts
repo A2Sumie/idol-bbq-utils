@@ -2,7 +2,13 @@ import type { Article } from '@/types'
 import type { JSX } from 'react/jsx-runtime'
 import { articleParser as DefaultCardParser } from '@/template/img/DefaultCard'
 
-type RenderParser = (article: Article) => {
+type RenderParserOptions = {
+    features?: Array<string>
+}
+type RenderParser = (
+    article: Article,
+    options?: RenderParserOptions,
+) => {
     component: JSX.Element
     height: number
 }
@@ -39,4 +45,4 @@ class TemplateRegistry {
     }
 }
 
-export { TemplateRegistry, type RenderParser }
+export { TemplateRegistry, type RenderParser, type RenderParserOptions }

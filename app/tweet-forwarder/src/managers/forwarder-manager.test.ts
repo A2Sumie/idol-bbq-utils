@@ -1067,6 +1067,323 @@ test('sendArticles requires multiple authors before entering hashtag storm diges
     ])
 })
 
+test('sendArticles folds already-forwarded referenced text except for the high realtime group', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+
+    const lowNoiseTarget = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+        } as any,
+        'target-low-noise',
+    )
+    const highRealtimeTarget = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '742435777',
+        } as any,
+        'target-high-realtime',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async (refId: number) => {
+        if (refId === 501) {
+            return { ref_id: 501 }
+        }
+        return null
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-fold-ref',
+            [
+                {
+                    id: 500,
+                    a_id: 'reply-post',
+                    platform: Platform.X,
+                    username: 'member',
+                    u_id: 'member',
+                    content: 'これは返信',
+                    url: 'https://x.com/member/status/reply-post',
+                    type: 'reply',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: {
+                        id: 501,
+                        a_id: 'already-forwarded',
+                        platform: Platform.X,
+                        username: 'member',
+                        u_id: 'member',
+                        content: 'これは前に流した本文',
+                        url: 'https://x.com/member/status/already-forwarded',
+                        type: 'tweet',
+                        created_at: Math.floor(Date.now() / 1000) - 60,
+                        ref: null,
+                        has_media: false,
+                        media: [],
+                        extra: null,
+                        u_avatar: null,
+                    },
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [
+                {
+                    forwarder: lowNoiseTarget,
+                    runtime_config: undefined,
+                },
+                {
+                    forwarder: highRealtimeTarget,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(lowNoiseTarget.sent).toHaveLength(1)
+    expect(lowNoiseTarget.sent[0]?.texts[0]).toContain('（引用已发过，正文略）')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).not.toContain('这是前に流した本文')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).not.toContain('これは前に流した本文')
+
+    expect(highRealtimeTarget.sent).toHaveLength(1)
+    expect(highRealtimeTarget.sent[0]?.texts[0]).toContain('これは前に流した本文')
+    expect(highRealtimeTarget.sent[0]?.texts[0]).not.toContain('（引用已发过，正文略）')
+})
+
+test('sendArticles keeps referenced text when it is first seen in this dispatch', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const claimed: Array<number> = []
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        claimed.push(article.id)
+        return true
+    }
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+        } as any,
+        'target-first-seen-ref',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-keep-new-ref',
+            [
+                {
+                    id: 510,
+                    a_id: 'reply-new-ref',
+                    platform: Platform.X,
+                    username: 'member',
+                    u_id: 'member',
+                    content: 'これは返信',
+                    url: 'https://x.com/member/status/reply-new-ref',
+                    type: 'reply',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: {
+                        id: 511,
+                        a_id: 'new-ref',
+                        platform: Platform.X,
+                        username: 'member',
+                        u_id: 'member',
+                        content: 'これはまだ流していない本文',
+                        url: 'https://x.com/member/status/new-ref',
+                        type: 'tweet',
+                        created_at: Math.floor(Date.now() / 1000) - 60,
+                        ref: null,
+                        has_media: false,
+                        media: [],
+                        extra: null,
+                        u_avatar: null,
+                    },
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('これはまだ流していない本文')
+    expect(target.sent[0]?.texts[0]).not.toContain('（引用已发过，正文略）')
+    expect(claimed).toEqual([510])
+})
+
+test('sendArticles does not fold old forwarded references outside the configured window', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+            collapse_forwarded_ref_window_seconds: 18 * 3600,
+        } as any,
+        'target-old-ref',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async (refId: number) => {
+        if (refId === 521) {
+            return { ref_id: 521 }
+        }
+        return null
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-old-ref',
+            [
+                {
+                    id: 520,
+                    a_id: 'reply-old-ref',
+                    platform: Platform.X,
+                    username: 'member',
+                    u_id: 'member',
+                    content: 'これは返信',
+                    url: 'https://x.com/member/status/reply-old-ref',
+                    type: 'reply',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: {
+                        id: 521,
+                        a_id: 'old-ref',
+                        platform: Platform.X,
+                        username: 'member',
+                        u_id: 'member',
+                        content: '18時間より前の本文',
+                        url: 'https://x.com/member/status/old-ref',
+                        type: 'tweet',
+                        created_at: Math.floor(Date.now() / 1000) - 19 * 3600,
+                        ref: null,
+                        has_media: false,
+                        media: [],
+                        extra: null,
+                        u_avatar: null,
+                    },
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('18時間より前の本文')
+    expect(target.sent[0]?.texts[0]).not.toContain('（引用已发过，正文略）')
+})
+
 test('sendArticles does not increment article error count when every target is intentionally skipped as old', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

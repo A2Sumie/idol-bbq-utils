@@ -142,6 +142,15 @@ interface ForwardTargetPlatformCommonConfig {
      */
     tag_digest_max_items?: number
     /**
+     * Collapse the text body of referenced/replied-to articles that were already forwarded to this target.
+     * Defaults to enabled except for explicitly high-realtime targets.
+     */
+    collapse_forwarded_ref_text?: boolean
+    /**
+     * Only collapse previously forwarded referenced articles newer than this many seconds. Defaults to 18 hours.
+     */
+    collapse_forwarded_ref_window_seconds?: number
+    /**
      *
      * if 1d, the forwarder will only forward the article that created within 1 day
      * "7d", "1w", "30d", "2h"...
@@ -210,6 +219,11 @@ interface ForwarderConfig extends CommonCfgConfig {
         | 'img-tag'
         | 'img-tag-dynamic'
         | 'img-with-meta'
+    /**
+     * Feature flags layered on top of render_type so templates can be tuned without adding one-off render modes.
+     */
+    render_features?: Array<'collapse-forwarded-ref-text' | string>
+    card_features?: Array<'media-contain' | 'website-inline-media' | string>
     keywords?: Array<string>
     aggregation?: boolean
     deduplication?: boolean

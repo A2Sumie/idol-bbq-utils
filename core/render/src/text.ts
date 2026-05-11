@@ -8,6 +8,10 @@ type Follows = GenericFollows & {
     created_at: number
 }
 
+type ArticleTextOptions = {
+    collapsedArticleIds?: Set<string | number>
+}
+
 const TAB = ' '.repeat(4)
 function formatTime(unix_timestamp: number) {
     return dayjs.unix(unix_timestamp).format('YYYY-MM-DD HH:mmZ')
@@ -69,7 +73,12 @@ function truncateCompactText(text: string, maxLength: number) {
     }
 
     const slice = normalized.slice(0, maxLength)
-    const softCut = Math.max(slice.lastIndexOf('\n'), slice.lastIndexOf('。'), slice.lastIndexOf('！'), slice.lastIndexOf('？'))
+    const softCut = Math.max(
+        slice.lastIndexOf('\n'),
+        slice.lastIndexOf('。'),
+        slice.lastIndexOf('！'),
+        slice.lastIndexOf('？'),
+    )
     const cutIndex = softCut > Math.floor(maxLength * 0.6) ? softCut + 1 : maxLength
     return `${slice.slice(0, cutIndex).trimEnd()}……`
 }
@@ -86,9 +95,7 @@ function extractTextHeadline(text: string, maxLength: number = 80) {
     }
 
     const headline =
-        lines.find((line) => !/^[-~～—─＿=]+$/.test(line) && !/^(photo|图片)\d+\s+alt:/i.test(line)) ||
-        lines[0] ||
-        ''
+        lines.find((line) => !/^[-~～—─＿=]+$/.test(line) && !/^(photo|图片)\d+\s+alt:/i.test(line)) || lines[0] || ''
 
     return truncateCompactText(headline.replace(/\s+/g, ' '), maxLength)
 }
@@ -135,10 +142,28 @@ function parseCompactRawContent(article: Article) {
 /**
  * 原文 -> 媒体文件alt -> extra
  */
-function articleToText(article: Article) {
+function getArticleStableId(article: Article) {
+    return (article as any).id ?? `${article.platform}:${article.a_id}`
+}
+
+function shouldCollapseArticle(article: Article, options?: ArticleTextOptions) {
+    return options?.collapsedArticleIds?.has(getArticleStableId(article)) === true
+}
+
+function formatCollapsedReference(article: Article, compact = false) {
+    const metaline = compact ? formatCompactMetaline(article) : formatMetaline(article)
+    return [metaline, '（引用已发过，正文略）', article.url].filter(Boolean).join('\n\n')
+}
+
+function articleToText(article: Article, options?: ArticleTextOptions) {
     let currentArticle: Article | null = article
     let format_article = ''
+    let isRoot = true
     while (currentArticle) {
+        if (!isRoot && shouldCollapseArticle(currentArticle, options)) {
+            format_article += formatCollapsedReference(currentArticle)
+            break
+        }
         const metaline = formatMetaline(currentArticle)
         format_article += `${metaline}`
         if (currentArticle.content) {
@@ -158,6 +183,7 @@ function articleToText(article: Article) {
         // get ready for next run
         if (currentArticle.ref && typeof currentArticle.ref === 'object') {
             currentArticle = currentArticle.ref
+            isRoot = false
         } else {
             currentArticle = null
         }
@@ -165,10 +191,15 @@ function articleToText(article: Article) {
     return format_article
 }
 
-function compactArticleToText(article: Article) {
+function compactArticleToText(article: Article, options?: ArticleTextOptions) {
     let currentArticle: Article | null = article
     let format_article = ''
+    let isRoot = true
     while (currentArticle) {
+        if (!isRoot && shouldCollapseArticle(currentArticle, options)) {
+            format_article += formatCollapsedReference(currentArticle, true)
+            break
+        }
         const metaline = formatCompactMetaline(currentArticle)
         format_article += `${metaline}`
         if (currentArticle.content) {
@@ -186,6 +217,7 @@ function compactArticleToText(article: Article) {
         }
         if (currentArticle.ref && typeof currentArticle.ref === 'object') {
             currentArticle = currentArticle.ref
+            isRoot = false
         } else {
             currentArticle = null
         }
@@ -246,6 +278,7 @@ function formatCompactMetaline(article: Article) {
 export {
     articleToText,
     compactArticleToText,
+    type ArticleTextOptions,
     extractArticleHeadline,
     extractTextHeadline,
     followsToText,

@@ -7,8 +7,13 @@ import satori, { type Font } from 'satori'
 import tailwindConfig from '@/template/img/DefaultTailwindConfig'
 import { Resvg } from '@resvg/resvg-js'
 import fs from 'fs'
+import { Buffer } from 'buffer'
 
 const jaSymbols = ['～', '┈', '─', '╮', '╯', '╰', '╭', '━', '┏', '┓', '┗', '┛', '＼', '＞', '＜', '゜']
+const TRANSPARENT_SVG_DATA_URL = `data:image/svg+xml;base64,${Buffer.from(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
+    'utf8',
+).toString('base64')}`
 
 function withCache(fn: Function) {
     const cache = new Map()
@@ -22,6 +27,29 @@ function withCache(fn: Function) {
 }
 
 const detector = new FontDetector()
+const SYSTEM_FALLBACK_FONTS: Array<FontConfig & { paths: Array<string> }> = [
+    {
+        name: 'Noto Sans CJK JP',
+        font_file_name: '',
+        style: 'normal',
+        weight: 400,
+        paths: [
+            '/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf',
+            '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',
+            '/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf',
+        ],
+    },
+    {
+        name: 'Noto Sans CJK JP',
+        font_file_name: '',
+        style: 'normal',
+        weight: 700,
+        paths: [
+            '/usr/share/fonts/opentype/noto/NotoSansCJKjp-Bold.otf',
+            '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',
+        ],
+    },
+]
 
 // Our own encoding of multiple fonts and their code, so we can fetch them in one request. The structure is:
 // [1 byte = X, length of language code][X bytes of language code string][4 bytes = Y, length of font][Y bytes of font data]
@@ -78,26 +106,26 @@ async function loadGoogleFont(fonts: string[], text: string) {
     async function getFontResponseBuffer(weight: number) {
         const encodedFontBuffers: ArrayBuffer[] = []
         let fontBufferByteLength = 0
-            ; (
-                await Promise.all(
-                    _fonts.map((font) => {
-                        if (!textByFont[font]) return
-                        return fetchFont(textByFont[font], font, weight)
-                    }),
-                )
+        ;(
+            await Promise.all(
+                _fonts.map((font) => {
+                    if (!textByFont[font]) return
+                    return fetchFont(textByFont[font], font, weight)
+                }),
             )
-                .filter(Boolean)
-                .forEach((fontData, i) => {
-                    if (fontData) {
-                        // TODO: We should be able to directly get the language code here :)
-                        const langCode = Object.entries(languageFontMap).find(([, v]) => v.includes(_fonts[i] || ''))?.[0]
-                        if (langCode) {
-                            const buffer = encodeFontInfoAsArrayBuffer(langCode, fontData)
-                            encodedFontBuffers.push(buffer)
-                            fontBufferByteLength += buffer.byteLength
-                        }
+        )
+            .filter(Boolean)
+            .forEach((fontData, i) => {
+                if (fontData) {
+                    // TODO: We should be able to directly get the language code here :)
+                    const langCode = Object.entries(languageFontMap).find(([, v]) => v.includes(_fonts[i] || ''))?.[0]
+                    if (langCode) {
+                        const buffer = encodeFontInfoAsArrayBuffer(langCode, fontData)
+                        encodedFontBuffers.push(buffer)
+                        fontBufferByteLength += buffer.byteLength
                     }
-                })
+                }
+            })
         const responseBuffer = new ArrayBuffer(fontBufferByteLength)
         const responseBufferView = new Uint8Array(responseBuffer)
         let offset = 0
@@ -114,7 +142,13 @@ async function loadGoogleFont(fonts: string[], text: string) {
 const loadDynamicAsset = withCache(async (emojiType: keyof typeof apis, _code: string, text: string) => {
     if (_code === 'emoji') {
         // It's an emoji, load the image.
-        return `data:image/svg+xml;base64,` + btoa(await loadEmoji(emojiType, getIconCode(text)))
+        try {
+            const svg = await loadEmoji(emojiType, getIconCode(text))
+            return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`
+        } catch (error) {
+            console.error('Failed to load emoji asset for', text, '. Error:', error)
+            return TRANSPARENT_SVG_DATA_URL
+        }
     }
 
     const codes = _code.split('|')
@@ -186,16 +220,15 @@ class ImgConverter {
         const fonts: FontConfig[] = JSON.parse(fs.readFileSync(`${fontsDir}/fonts.json`, 'utf-8'))
         this.fonts = fonts
     }
-    public async articleToImg(article: Article, templateName?: string) {
-        const parser = TemplateRegistry.getInstance().getOrDefault(templateName)
-        const { height, component: Card } = parser(article)
-        const fontsOptions: Font[] = this.fonts
+
+    private loadBundledFonts(): Font[] {
+        return this.fonts
             .map((font) => {
                 try {
                     const data = fs.readFileSync(`${process.env.FONTS_DIR || './assets/fonts'}/${font.font_file_name}`)
                     return {
                         name: font.name,
-                        data: data,
+                        data,
                         weight: font.weight,
                         style: font.style,
                     }
@@ -204,6 +237,35 @@ class ImgConverter {
                 }
             })
             .filter(Boolean) as Font[]
+    }
+
+    private loadSystemFallbackFonts(): Font[] {
+        return SYSTEM_FALLBACK_FONTS.map((font) => {
+            const path = font.paths.find((candidate) => fs.existsSync(candidate))
+            if (!path) {
+                return undefined
+            }
+            try {
+                return {
+                    name: font.name,
+                    data: fs.readFileSync(path),
+                    weight: font.weight,
+                    style: font.style,
+                }
+            } catch {
+                return undefined
+            }
+        }).filter(Boolean) as Font[]
+    }
+
+    public async articleToImg(
+        article: Article,
+        template?: string | { templateName?: string; features?: Array<string> },
+    ) {
+        const templateName = typeof template === 'string' ? template : template?.templateName
+        const parser = TemplateRegistry.getInstance().getOrDefault(templateName)
+        const { height, component: Card } = parser(article, typeof template === 'string' ? undefined : template)
+        const fontsOptions: Font[] = [...this.loadBundledFonts(), ...this.loadSystemFallbackFonts()]
         const svg = await satori(Card, {
             width: CARD_WIDTH,
             height: height,
@@ -212,7 +274,7 @@ class ImgConverter {
                 const result = loadDynamicAsset('twemoji', code, text)
                 // loadDynamicAsset returns Promise, need to handle await or ensure satori supports promises (it usually does for loadAdditionalAsset)
                 // Checking usage in original code: return loadDynamicAsset(...)
-                return result as Promise<string | import("satori").Font[]>
+                return result as Promise<string | import('satori').Font[]>
             },
             tailwindConfig,
         })

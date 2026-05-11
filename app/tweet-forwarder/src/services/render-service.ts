@@ -16,6 +16,7 @@ import {
     extractArticleHeadline,
     formatMetaline,
     ImgConverter,
+    type ArticleTextOptions,
 } from '@idol-bbq-utils/render'
 import { existsSync, unlinkSync } from 'fs'
 import { cloneDeep } from 'lodash'
@@ -90,6 +91,9 @@ export class RenderService {
         config: {
             taskId: string
             render_type?: string
+            render_features?: Array<string>
+            card_features?: Array<string>
+            collapsedArticleIds?: Set<string | number>
             mediaConfig?: Media
             deduplication?: boolean
         },
@@ -114,7 +118,9 @@ export class RenderService {
         const generateRenderedImage = async () => {
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
-                const imgBuffer = await this.ArticleConverter.articleToImg(cloneDeep(article))
+                const imgBuffer = await this.ArticleConverter.articleToImg(cloneDeep(article), {
+                    features: this.resolveCardFeatures(config.card_features),
+                })
                 const path = writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
                 this.log?.debug(`Generated rendered image at ${path}`)
                 return path
@@ -175,7 +181,7 @@ export class RenderService {
                     `Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id}`,
                 )
                 // Fallback to standard text + media
-                text = articleToText(article)
+                text = this.renderText(article, config)
             } else {
                 // Standard Card Logic
                 text = this.formatPlatformFrom(article)
@@ -191,7 +197,7 @@ export class RenderService {
                 this.log?.info(
                     `Exemption triggered: Forcing text mode for Video/Platform ${article.platform} ${article.a_id} in img mode`,
                 )
-                text = articleToText(article)
+                text = this.renderText(article, config)
             } else {
                 let articleToImgSuccess = false
                 const originalMediaCount = maybe_media_files.length
@@ -200,7 +206,7 @@ export class RenderService {
                     articleToImgSuccess = true
                 }
 
-                const fullText = articleToText(article)
+                const fullText = this.renderText(article, config)
                 // If converted to image, usually only want the metaline
                 text = articleToImgSuccess ? formatMetaline(article) : fullText
 
@@ -209,16 +215,16 @@ export class RenderService {
                 }
             }
         } else if (render_type === 'text-card' || render_type === 'text-compact-card') {
-            text = render_type === 'text-card' ? articleToText(article) : compactArticleToText(article)
+            text = this.renderText(article, config)
             if (text.length > CARD_TEXT_TITLE_THRESHOLD) {
                 text = extractArticleHeadline(article)
             }
             await appendRenderedCardToMedia('end')
         } else if (render_type === 'text-compact') {
-            text = compactArticleToText(article)
+            text = this.renderText(article, config)
         } else {
             // Case 5: Standard Text
-            text = articleToText(article)
+            text = this.renderText(article, config)
         }
 
         if (!skipReason && deduplication) {
@@ -267,6 +273,25 @@ export class RenderService {
 
     private formatPlatformFrom(article: Article): string {
         return formatPlatformTag(article, this.log)
+    }
+
+    renderText(
+        article: Article,
+        config: {
+            render_type?: string
+            collapsedArticleIds?: Set<string | number>
+        } = {},
+    ) {
+        const textOptions: ArticleTextOptions = {
+            collapsedArticleIds: config.collapsedArticleIds,
+        }
+        return config.render_type === 'text-compact' || config.render_type === 'text-compact-card'
+            ? compactArticleToText(article, textOptions)
+            : articleToText(article, textOptions)
+    }
+
+    private resolveCardFeatures(features?: Array<string>) {
+        return Array.from(new Set(['media-contain', 'website-inline-media', ...(features || [])]))
     }
 
     private async handleMedia(
@@ -352,7 +377,8 @@ export class RenderService {
                                     persisted,
                                 )
                                 if (videoFingerprintCandidate) {
-                                    const fingerprintDuplicate = await checkVideoFingerprintDuplicate(videoFingerprintCandidate)
+                                    const fingerprintDuplicate =
+                                        await checkVideoFingerprintDuplicate(videoFingerprintCandidate)
                                     if (fingerprintDuplicate) {
                                         duplicateMediaCount += 1
                                         skipReason = `Cross-platform video fingerprint duplicate matched ${fingerprintDuplicate.a_id}`
@@ -479,9 +505,7 @@ export class RenderService {
 
                 if (new_files.length > 0) {
                     // Filter defined
-                    const validFiles = new_files.filter(
-                        (i): i is RenderedMediaFile => i !== undefined,
-                    )
+                    const validFiles = new_files.filter((i): i is RenderedMediaFile => i !== undefined)
                     this.log?.debug(`Downloaded media files: ${validFiles.map((f) => f.path).join(', ')}`)
                     maybe_media_files = maybe_media_files.concat(validFiles)
                 }

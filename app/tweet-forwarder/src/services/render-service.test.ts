@@ -181,6 +181,39 @@ describe('RenderService text-card', () => {
 
         service.cleanup(result.mediaFiles)
     })
+
+    test('renders a card when text starts with emoji', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 13,
+                a_id: 'emoji-leading-card',
+                u_id: 'sally_amaki',
+                username: '天城サリー',
+                created_at: 1710000000,
+                content: '💙お知らせです\n\nナナニジのライブがあります',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/sally/status/emoji',
+                type: 'tweet',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            } as any,
+            {
+                taskId: 'test-emoji-leading-card',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(result.text).toContain('💙お知らせです')
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
 })
 
 describe('RenderService media deduplication', () => {
