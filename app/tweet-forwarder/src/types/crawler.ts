@@ -92,6 +92,25 @@ interface CrawlerConfig extends CommonCfgConfig {
      * Unified crawler: cap the number of users to hydrate per run.
      */
     hydrate_limit?: number
+    /**
+     * Website crawler: cap list pagination per feed. Useful for high-frequency shallow scans.
+     */
+    max_list_pages?: number
+    /**
+     * Website crawler: cap detail pages fetched per feed.
+     */
+    max_detail_count?: number
+    /**
+     * Website crawler: random pause between detail pages.
+     */
+    detail_interval_time?: {
+        max: number
+        min: number
+    }
+    /**
+     * Website crawler: Puppeteer resource types to abort, e.g. image/font/media/stylesheet.
+     */
+    block_resource_types?: Array<string>
 }
 
 interface Crawler {

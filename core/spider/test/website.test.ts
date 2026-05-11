@@ -4,6 +4,7 @@ import {
     buildPhotoAlbumArticle,
     buildWebsiteArticle,
     NanabunnonijyuuniWebsiteSpider,
+    resolveWebsiteCrawlOptions,
     splitPhotoAlbumPayloadByDate,
     type FeedConfig,
 } from '../src/spiders/website'
@@ -40,6 +41,50 @@ describe('NanabunnonijyuuniWebsiteSpider.resolveFeed', () => {
                 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ima=2342&ct=photoga',
             )?.u_id,
         ).toBe('22/7:photo')
+    })
+})
+
+describe('resolveWebsiteCrawlOptions', () => {
+    test('caps website crawl budget for high-frequency shallow scans', () => {
+        expect(
+            resolveWebsiteCrawlOptions({
+                max_list_pages: 1,
+                max_detail_count: 6,
+                detail_interval_time: {
+                    min: 900,
+                    max: 2200,
+                },
+                block_resource_types: ['image', 'font', 'media', 'script', 'unknown-kind'],
+            }),
+        ).toEqual({
+            maxListPages: 1,
+            maxDetailCount: 6,
+            detailIntervalTime: {
+                min: 900,
+                max: 2200,
+            },
+            blockResourceTypes: ['image', 'font', 'media', 'script'],
+        })
+    })
+
+    test('keeps invalid crawl budget values within safe defaults', () => {
+        expect(
+            resolveWebsiteCrawlOptions({
+                max_list_pages: 99,
+                max_detail_count: 0,
+                detail_interval_time: {
+                    min: -1,
+                    max: 100000,
+                },
+            }),
+        ).toMatchObject({
+            maxListPages: 3,
+            maxDetailCount: 1,
+            detailIntervalTime: {
+                min: 0,
+                max: 60000,
+            },
+        })
     })
 })
 

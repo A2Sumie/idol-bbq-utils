@@ -824,7 +824,16 @@ class SpiderPools extends BaseCompatibleModel {
         requestHeaders?: Record<string, string>,
     ): Promise<Array<number>> {
         const { cfg_crawler } = ctx.task.data as Crawler
-        const { engine, sub_task_type, hydrate_users, hydrate_limit } = cfg_crawler || {}
+        const {
+            engine,
+            sub_task_type,
+            hydrate_users,
+            hydrate_limit,
+            max_list_pages,
+            max_detail_count,
+            detail_interval_time,
+            block_resource_types,
+        } = cfg_crawler || {}
         const articles = await pRetry(
             () =>
                 spider.crawl(url.href, page, ctx.taskId, {
@@ -835,6 +844,10 @@ class SpiderPools extends BaseCompatibleModel {
                     hydrate_limit,
                     cookieString,
                     requestHeaders,
+                    max_list_pages,
+                    max_detail_count,
+                    detail_interval_time,
+                    block_resource_types,
                 }),
             {
                 retries: RETRY_LIMIT,

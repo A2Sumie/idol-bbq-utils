@@ -98,6 +98,13 @@ abstract class BaseSpider {
             crawl_engine?: CrawlEngine
             cookieString?: string
             requestHeaders?: Record<string, string>
+            max_list_pages?: number
+            max_detail_count?: number
+            detail_interval_time?: {
+                min?: number
+                max?: number
+            }
+            block_resource_types?: Array<string>
         },
     ): Promise<TaskTypeResult<T, Platform>> {
         this.log = this.log?.child({ trace_id })
@@ -119,6 +126,13 @@ abstract class BaseSpider {
             hydrate_limit?: number
             cookieString?: string
             requestHeaders?: Record<string, string>
+            max_list_pages?: number
+            max_detail_count?: number
+            detail_interval_time?: {
+                min?: number
+                max?: number
+            }
+            block_resource_types?: Array<string>
         },
     ): Promise<TaskTypeResult<T, Platform>>
 

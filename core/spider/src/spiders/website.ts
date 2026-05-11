@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import { Page } from 'puppeteer-core'
+import { Page, type HTTPRequest } from 'puppeteer-core'
 import { Platform } from '@/types'
 import type { CrawlEngine, GenericArticle, GenericMediaInfo, TaskType, TaskTypeResult } from '@/types'
 import { BaseSpider } from './base'
@@ -53,6 +53,26 @@ interface WebsiteListPageResult {
 interface WebsiteBuildOptions {
     articleId?: string
     detailUrl?: string
+}
+
+interface WebsiteCrawlOptions {
+    max_list_pages?: number
+    max_detail_count?: number
+    detail_interval_time?: {
+        min?: number
+        max?: number
+    }
+    block_resource_types?: Array<string>
+}
+
+interface ResolvedWebsiteCrawlOptions {
+    maxListPages: number
+    maxDetailCount: number
+    detailIntervalTime: {
+        min: number
+        max: number
+    }
+    blockResourceTypes: Array<string>
 }
 
 export interface WebsitePhotoEntry {
@@ -134,6 +154,25 @@ const FEED_CONFIGS: Record<FeedKind, FeedConfig> = {
 const MOBILE_227_HOST = 'nanabunnonijyuuni-mobile.com'
 const MAX_LIST_PAGES = 3
 const MAX_DETAIL_COUNT = 20
+const DEFAULT_DETAIL_INTERVAL_TIME = {
+    min: 0,
+    max: 0,
+}
+const WEBSITE_RESOURCE_TYPES = new Set([
+    'document',
+    'stylesheet',
+    'image',
+    'media',
+    'font',
+    'script',
+    'texttrack',
+    'xhr',
+    'fetch',
+    'eventsource',
+    'websocket',
+    'manifest',
+    'other',
+])
 
 function cleanText(value?: string | null): string {
     return (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
@@ -158,6 +197,80 @@ function cleanMultilineText(value?: string | null): string {
     }, [])
 
     return collapsed.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function clampInteger(value: unknown, fallback: number, min: number, max: number) {
+    const numeric = Number(value)
+    if (!Number.isFinite(numeric)) {
+        return fallback
+    }
+    return Math.max(min, Math.min(max, Math.floor(numeric)))
+}
+
+function resolveWebsiteCrawlOptions(options: WebsiteCrawlOptions = {}): ResolvedWebsiteCrawlOptions {
+    const minDelay = clampInteger(options.detail_interval_time?.min, DEFAULT_DETAIL_INTERVAL_TIME.min, 0, 60000)
+    const maxDelay = clampInteger(options.detail_interval_time?.max, Math.max(minDelay, DEFAULT_DETAIL_INTERVAL_TIME.max), minDelay, 60000)
+    const blockResourceTypes = Array.from(
+        new Set((options.block_resource_types || []).map((value) => String(value || '').trim()).filter((value) => WEBSITE_RESOURCE_TYPES.has(value))),
+    )
+
+    return {
+        maxListPages: clampInteger(options.max_list_pages, MAX_LIST_PAGES, 1, MAX_LIST_PAGES),
+        maxDetailCount: clampInteger(options.max_detail_count, MAX_DETAIL_COUNT, 1, MAX_DETAIL_COUNT),
+        detailIntervalTime: {
+            min: minDelay,
+            max: maxDelay,
+        },
+        blockResourceTypes,
+    }
+}
+
+function randomInterval(range: ResolvedWebsiteCrawlOptions['detailIntervalTime']) {
+    if (range.max <= range.min) {
+        return range.min
+    }
+    return Math.floor(Math.random() * (range.max - range.min + 1)) + range.min
+}
+
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function configureWebsiteResourceBlocking(page: Page, blockResourceTypes: Array<string>) {
+    const key = blockResourceTypes.slice().sort().join(',')
+    const guardedPage = page as Page & {
+        __websiteResourceGuard?: {
+            key: string
+            handler: (request: HTTPRequest) => void
+        }
+    }
+
+    if (guardedPage.__websiteResourceGuard?.key === key) {
+        return
+    }
+
+    if (guardedPage.__websiteResourceGuard) {
+        page.off('request', guardedPage.__websiteResourceGuard.handler)
+        guardedPage.__websiteResourceGuard = undefined
+    }
+
+    if (blockResourceTypes.length === 0) {
+        await page.setRequestInterception(false).catch(() => null)
+        return
+    }
+
+    const blocked = new Set(blockResourceTypes)
+    const handler = (request: HTTPRequest) => {
+        const action = blocked.has(request.resourceType()) ? request.abort() : request.continue()
+        action.catch(() => null)
+    }
+
+    await page.setRequestInterception(true)
+    page.on('request', handler)
+    guardedPage.__websiteResourceGuard = {
+        key,
+        handler,
+    }
 }
 
 function hasExplicitTime(dateText?: string | null): boolean {
@@ -1467,6 +1580,13 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             crawl_engine: CrawlEngine
             sub_task_type?: Array<string>
             cookieString?: string
+            max_list_pages?: number
+            max_detail_count?: number
+            detail_interval_time?: {
+                min?: number
+                max?: number
+            }
+            block_resource_types?: Array<string>
         },
     ): Promise<TaskTypeResult<T, Platform.Website>> {
         if (config.task_type !== 'article') {
@@ -1481,6 +1601,9 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             throw new Error(`Unsupported website url: ${url}`)
         }
 
+        const crawlOptions = resolveWebsiteCrawlOptions(config)
+        await configureWebsiteResourceBlocking(page, crawlOptions.blockResourceTypes)
+
         if (isDetailUrl(feedConfig.feed, url)) {
             const articles = await this.crawlSingleDetail(page, feedConfig, {
                 detailUrl: url,
@@ -1490,16 +1613,16 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             return articles as TaskTypeResult<T, Platform.Website>
         }
 
-        const articles = await this.crawlFeed(page, feedConfig, url)
+        const articles = await this.crawlFeed(page, feedConfig, url, crawlOptions)
         return articles as TaskTypeResult<T, Platform.Website>
     }
 
-    private async crawlFeed(page: Page, feedConfig: FeedConfig, url: string) {
+    private async crawlFeed(page: Page, feedConfig: FeedConfig, url: string, options: ResolvedWebsiteCrawlOptions) {
         const discovered = new Map<string, WebsiteListItem>()
         let currentUrl: string | null = url
         let pageCount = 0
 
-        while (currentUrl && pageCount < MAX_LIST_PAGES) {
+        while (currentUrl && pageCount < options.maxListPages) {
             const result = await extractListPage(page, feedConfig, currentUrl)
             result.items.forEach((item) => {
                 const detailKey = getDetailKey(feedConfig, item.detailUrl)
@@ -1511,10 +1634,19 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             pageCount += 1
         }
 
-        const listItems = Array.from(discovered.values()).slice(0, MAX_DETAIL_COUNT)
+        const listItems = Array.from(discovered.values()).slice(0, options.maxDetailCount)
         const articles: Array<GenericArticle<Platform.Website>> = []
+        this.log?.info(
+            `Website crawl budget feed=${feedConfig.feed} pages=${pageCount}/${options.maxListPages} details=${listItems.length}/${options.maxDetailCount} blocked=${options.blockResourceTypes.join(',') || 'none'}`,
+        )
 
-        for (const item of listItems) {
+        for (const [index, item] of listItems.entries()) {
+            if (index > 0) {
+                const waitTime = randomInterval(options.detailIntervalTime)
+                if (waitTime > 0) {
+                    await sleep(waitTime)
+                }
+            }
             articles.push(...(await this.crawlSingleDetail(page, feedConfig, item)))
         }
 
@@ -1531,4 +1663,4 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
     }
 }
 
-export { NanabunnonijyuuniWebsiteSpider }
+export { NanabunnonijyuuniWebsiteSpider, resolveWebsiteCrawlOptions }
