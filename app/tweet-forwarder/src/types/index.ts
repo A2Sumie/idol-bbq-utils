@@ -18,6 +18,25 @@ interface AppConfig {
     cfg_crawler?: CrawlerConfig
     processors?: Array<Processor>
     formatters?: Array<Formatter>
+    pipelines?: Array<{
+        id?: string
+        name?: string
+        enabled?: boolean
+        source: {
+            crawler_id: string
+        }
+        processors?: Array<{
+            processor_id: string
+            role?: string
+        }>
+        formatters?: Array<{
+            formatter_id: string
+        }>
+        delivery?: Array<{
+            formatter_id: string
+            target_ids: Array<string>
+        }>
+    }>
     forward_targets?: Array<ForwardTarget>
     cfg_forward_target?: ForwardTargetPlatformCommonConfig
     forwarders?: Array<Forwarder<TaskType>>

@@ -1,0 +1,433 @@
+import type { AppConfig } from '@/types'
+import { platformNameMap } from '@idol-bbq-utils/spider/const'
+
+type QuickNodeType = 'crawler' | 'processor' | 'formatter' | 'target'
+type QuickLinkKind = 'crawler-processor' | 'processor-formatter' | 'crawler-formatter' | 'formatter-target'
+
+type QuickConfigLink = {
+    id?: string
+    kind: QuickLinkKind
+    from_type?: QuickNodeType
+    from: string
+    to_type?: QuickNodeType
+    to: string
+    order?: number
+}
+
+type QuickConfigRoute = {
+    crawler_id: string
+    processor_id?: string | null
+    formatter_ids?: Array<string>
+    formatter_targets?: Record<string, Array<string>>
+}
+
+type QuickConfigPipelinePatch = {
+    id?: string
+    source: {
+        crawler_id: string
+    }
+    processors?: Array<{
+        processor_id: string
+        role?: string
+    }>
+    formatters?: Array<{
+        formatter_id: string
+    }>
+    delivery?: Array<{
+        formatter_id: string
+        target_ids: Array<string>
+    }>
+}
+
+type QuickConfigPatch = {
+    links?: Array<QuickConfigLink>
+    routes?: Array<QuickConfigRoute>
+    pipelines?: Array<QuickConfigPipelinePatch>
+    strict?: boolean
+}
+
+const QUICK_CONFIG_SCHEMA = 'idol-bbq.quick-config.v1'
+
+function unique(values: Array<string | undefined | null>) {
+    return Array.from(new Set(values.map((value) => String(value || '').trim()).filter(Boolean)))
+}
+
+function nodeId(value: { id?: string; name?: string } | undefined, fallback: string) {
+    return String(value?.id || value?.name || fallback).trim()
+}
+
+function nodeName(value: { id?: string; name?: string } | undefined, fallback: string) {
+    return String(value?.name || value?.id || fallback).trim()
+}
+
+function mapValues(map: Record<string, Array<string>> | undefined, keys: Array<string | undefined>) {
+    if (!map) {
+        return []
+    }
+    for (const key of keys) {
+        if (key && Object.prototype.hasOwnProperty.call(map, key)) {
+            return unique(map[key] || [])
+        }
+    }
+    return []
+}
+
+function mapValue(map: Record<string, string> | undefined, keys: Array<string | undefined>) {
+    if (!map) {
+        return undefined
+    }
+    for (const key of keys) {
+        if (key && Object.prototype.hasOwnProperty.call(map, key)) {
+            return map[key]
+        }
+    }
+    return undefined
+}
+
+function makeLink(kind: QuickLinkKind, from: string, to: string, order = 0): QuickConfigLink {
+    const [fromType, toType] = kind.split('-') as [QuickNodeType, QuickNodeType]
+    return {
+        id: `${kind}:${from}->${to}`,
+        kind,
+        from_type: fromType,
+        from,
+        to_type: toType,
+        to,
+        order,
+    }
+}
+
+function collectLinks(config: AppConfig) {
+    const links: Array<QuickConfigLink> = []
+    const connections = config.connections || {}
+    for (const [crawler, processor] of Object.entries(connections['crawler-processor'] || {})) {
+        if (processor) {
+            links.push(makeLink('crawler-processor', crawler, processor))
+        }
+    }
+    for (const [processor, formatterIds] of Object.entries(connections['processor-formatter'] || {})) {
+        unique(formatterIds).forEach((formatter, order) => links.push(makeLink('processor-formatter', processor, formatter, order)))
+    }
+    for (const [crawler, formatterIds] of Object.entries(connections['crawler-formatter'] || {})) {
+        unique(formatterIds).forEach((formatter, order) => links.push(makeLink('crawler-formatter', crawler, formatter, order)))
+    }
+    for (const [formatter, targetIds] of Object.entries(connections['formatter-target'] || {})) {
+        unique(targetIds).forEach((target, order) => links.push(makeLink('formatter-target', formatter, target, order)))
+    }
+    return links
+}
+
+function buildNodeSets(config: AppConfig) {
+    return {
+        crawlers: new Set((config.crawlers || []).map((crawler, index) => nodeId(crawler, `crawler-${index}`))),
+        processors: new Set((config.processors || []).map((processor, index) => nodeId(processor, `processor-${index}`))),
+        formatters: new Set((config.formatters || []).map((formatter, index) => nodeId(formatter, `formatter-${index}`))),
+        targets: new Set((config.forward_targets || []).map((target, index) => nodeId(target, `target-${index}`))),
+    }
+}
+
+function diagnoseQuickConfig(config: AppConfig, links = collectLinks(config)) {
+    const nodeSets = buildNodeSets(config)
+    const diagnostics: Array<{ severity: 'warn' | 'error'; code: string; message: string; link?: QuickConfigLink }> = []
+    const has = (type: QuickNodeType, id: string) => {
+        if (type === 'crawler') return nodeSets.crawlers.has(id)
+        if (type === 'processor') return nodeSets.processors.has(id)
+        if (type === 'formatter') return nodeSets.formatters.has(id)
+        return nodeSets.targets.has(id)
+    }
+    for (const link of links) {
+        const [fromType, toType] = link.kind.split('-') as [QuickNodeType, QuickNodeType]
+        if (!has(fromType, link.from)) {
+            diagnostics.push({
+                severity: 'error',
+                code: 'unknown_from_node',
+                message: `${link.kind} references missing ${fromType}: ${link.from}`,
+                link,
+            })
+        }
+        if (!has(toType, link.to)) {
+            diagnostics.push({
+                severity: 'error',
+                code: 'unknown_to_node',
+                message: `${link.kind} references missing ${toType}: ${link.to}`,
+                link,
+            })
+        }
+    }
+    return diagnostics
+}
+
+function buildQuickConfigModel(config: AppConfig) {
+    const connections = config.connections || {}
+    const formatterTargets = connections['formatter-target'] || {}
+    const processorFormatters = connections['processor-formatter'] || {}
+    const links = collectLinks(config)
+    const routes = (config.crawlers || []).map((crawler, index) => {
+        const crawlerId = nodeId(crawler, `crawler-${index}`)
+        const crawlerKeys = [crawlerId, crawler.name]
+        const processorId = mapValue(connections['crawler-processor'], crawlerKeys) || crawler.cfg_crawler?.processor_id || null
+        const directFormatters = mapValues(connections['crawler-formatter'], crawlerKeys)
+        const processorDrivenFormatters = processorId ? mapValues(processorFormatters, [processorId]) : []
+        const formatterIds = unique([...directFormatters, ...processorDrivenFormatters])
+        const routeFormatterTargets = Object.fromEntries(
+            formatterIds.map((formatterId) => [formatterId, unique(formatterTargets[formatterId] || [])]),
+        )
+        return {
+            id: crawlerId,
+            crawler_id: crawlerId,
+            crawler_name: crawler.name || crawlerId,
+            group: crawler.group || '',
+            task_type: crawler.task_type || 'article',
+            cron: crawler.cfg_crawler?.cron || config.cfg_crawler?.cron || null,
+            processor_id: processorId,
+            formatter_ids: formatterIds,
+            target_ids: unique(Object.values(routeFormatterTargets).flat()),
+            formatter_targets: routeFormatterTargets,
+        }
+    })
+
+    const processorsById = new Map((config.processors || []).map((processor, index) => [nodeId(processor, `processor-${index}`), processor]))
+    const formattersById = new Map((config.formatters || []).map((formatter, index) => [nodeId(formatter, `formatter-${index}`), formatter]))
+    const targetsById = new Map((config.forward_targets || []).map((target, index) => [nodeId(target, `target-${index}`), target]))
+    const pipelines = routes.map((route) => {
+        const processors = route.processor_id
+            ? [
+                  {
+                      processor_id: route.processor_id,
+                      role: processorsById.get(route.processor_id)?.cfg_processor?.action || 'process',
+                      model_id: processorsById.get(route.processor_id)?.cfg_processor?.model_id || null,
+                  },
+              ]
+            : []
+        return {
+            id: `pipeline:${route.crawler_id}`,
+            name: route.crawler_name,
+            enabled: true,
+            source: {
+                crawler_id: route.crawler_id,
+                cron: route.cron,
+                task_type: route.task_type,
+            },
+            processors,
+            formatters: route.formatter_ids.map((formatterId) => ({
+                formatter_id: formatterId,
+                render_type: formattersById.get(formatterId)?.render_type || 'text',
+            })),
+            delivery: route.formatter_ids.map((formatterId) => ({
+                formatter_id: formatterId,
+                target_ids: route.formatter_targets[formatterId] || [],
+                targets: (route.formatter_targets[formatterId] || []).map((targetId) => {
+                    const target = targetsById.get(targetId)
+                    return {
+                        target_id: targetId,
+                        platform: target?.platform || 'unknown',
+                        group_id: (target?.cfg_platform as any)?.group_id || null,
+                    }
+                }),
+            })),
+            review: {
+                summary: `${route.crawler_name} -> ${processors.length} processor(s) -> ${route.formatter_ids.length} formatter(s) -> ${route.target_ids.length} target(s)`,
+                warnings: route.formatter_ids.length === 0 || route.target_ids.length === 0
+                    ? ['pipeline has no formatter or no delivery target']
+                    : [],
+            },
+        }
+    })
+
+    return {
+        schema: QUICK_CONFIG_SCHEMA,
+        generated_at: new Date().toISOString(),
+        model: {
+            primary: 'pipelines',
+            compatibility: 'compiled-to-existing-connections',
+            notes: [
+                'Use pipelines for CIC and LLM-assisted edits.',
+                'routes and links are compatibility views over the existing runtime config.',
+                'Runtime behavior is unchanged until the compiled config is saved and hot reloaded.',
+            ],
+        },
+        catalogs: {
+            crawlers: (config.crawlers || []).map((crawler, index) => ({
+                id: nodeId(crawler, `crawler-${index}`),
+                name: nodeName(crawler, `crawler-${index}`),
+                group: crawler.group || '',
+                task_type: crawler.task_type || 'article',
+                origin: crawler.origin || null,
+                websites: crawler.websites || [],
+                paths: crawler.paths || [],
+                cron: crawler.cfg_crawler?.cron || config.cfg_crawler?.cron || null,
+                enabled: true,
+            })),
+            processors: (config.processors || []).map((processor, index) => ({
+                id: nodeId(processor, `processor-${index}`),
+                name: nodeName(processor, `processor-${index}`),
+                group: processor.group || '',
+                provider: processor.provider,
+                action: processor.cfg_processor?.action || null,
+                model_id: processor.cfg_processor?.model_id || null,
+            })),
+            formatters: (config.formatters || []).map((formatter, index) => ({
+                id: nodeId(formatter, `formatter-${index}`),
+                name: nodeName(formatter, `formatter-${index}`),
+                group: formatter.group || '',
+                render_type: formatter.render_type,
+                aggregation: formatter.aggregation === true,
+                deduplication: formatter.deduplication !== false,
+            })),
+            targets: (config.forward_targets || []).map((target, index) => ({
+                id: nodeId(target, `target-${index}`),
+                name: nodeName(target, `target-${index}`),
+                group: target.group || '',
+                platform: target.platform,
+                platform_label: platformNameMap[target.platform as any] || String(target.platform),
+                group_id: (target.cfg_platform as any)?.group_id || null,
+                noise_profile: (target.cfg_platform as any)?.group_id === '742435777' ? 'high-realtime' : 'normal',
+                digest_threshold: (target.cfg_platform as any)?.digest_threshold ?? null,
+                tag_digest_threshold: (target.cfg_platform as any)?.tag_digest_threshold ?? null,
+                collapse_forwarded_ref_text: (target.cfg_platform as any)?.collapse_forwarded_ref_text ?? null,
+            })),
+        },
+        pipelines,
+        routes,
+        links,
+        diagnostics: diagnoseQuickConfig(config, links),
+    }
+}
+
+function exportPipelineConfigs(config: AppConfig): Array<QuickConfigPipelinePatch & { id: string; name: string; enabled: boolean }> {
+    return buildQuickConfigModel(config).pipelines.map((pipeline) => ({
+        id: pipeline.id,
+        name: pipeline.name,
+        enabled: pipeline.enabled,
+        source: {
+            crawler_id: pipeline.source.crawler_id,
+        },
+        processors: pipeline.processors.map((processor) => ({
+            processor_id: processor.processor_id,
+            role: processor.role,
+        })),
+        formatters: pipeline.formatters.map((formatter) => ({
+            formatter_id: formatter.formatter_id,
+        })),
+        delivery: pipeline.delivery.map((delivery) => ({
+            formatter_id: delivery.formatter_id,
+            target_ids: delivery.target_ids,
+        })),
+    }))
+}
+
+function pushMapArray(map: Record<string, Array<string>>, key: string, value: string) {
+    if (!map[key]) {
+        map[key] = []
+    }
+    if (!map[key].includes(value)) {
+        map[key].push(value)
+    }
+}
+
+function linksFromRoutes(routes: Array<QuickConfigRoute>) {
+    const links: Array<QuickConfigLink> = []
+    for (const route of routes) {
+        if (route.processor_id) {
+            links.push(makeLink('crawler-processor', route.crawler_id, route.processor_id))
+        }
+        for (const [order, formatterId] of (route.formatter_ids || []).entries()) {
+            links.push(makeLink('crawler-formatter', route.crawler_id, formatterId, order))
+        }
+        for (const [formatterId, targetIds] of Object.entries(route.formatter_targets || {})) {
+            unique(targetIds).forEach((targetId, order) => links.push(makeLink('formatter-target', formatterId, targetId, order)))
+        }
+    }
+    return links
+}
+
+function linksFromPipelines(pipelines: Array<QuickConfigPipelinePatch>) {
+    const links: Array<QuickConfigLink> = []
+    for (const pipeline of pipelines) {
+        const crawlerId = pipeline.source?.crawler_id
+        if (!crawlerId) {
+            continue
+        }
+        const processorIds = unique((pipeline.processors || []).map((processor) => processor.processor_id))
+        const primaryProcessorId = processorIds[0]
+        if (primaryProcessorId) {
+            links.push(makeLink('crawler-processor', crawlerId, primaryProcessorId))
+        }
+
+        const formatterIds = unique([
+            ...(pipeline.formatters || []).map((formatter) => formatter.formatter_id),
+            ...(pipeline.delivery || []).map((entry) => entry.formatter_id),
+        ])
+        formatterIds.forEach((formatterId, order) => {
+            links.push(makeLink(primaryProcessorId ? 'processor-formatter' : 'crawler-formatter', primaryProcessorId || crawlerId, formatterId, order))
+        })
+        for (const delivery of pipeline.delivery || []) {
+            unique(delivery.target_ids || []).forEach((targetId, order) => {
+                links.push(makeLink('formatter-target', delivery.formatter_id, targetId, order))
+            })
+        }
+    }
+    return links
+}
+
+function compileConnectionsFromQuickPatch(config: AppConfig, patch: QuickConfigPatch) {
+    const links = [...(patch.links || []), ...linksFromRoutes(patch.routes || []), ...linksFromPipelines(patch.pipelines || [])]
+    if (links.length === 0) {
+        throw new Error('quick config update requires links or routes')
+    }
+
+    const diagnostics = diagnoseQuickConfig(config, links)
+    if (patch.strict !== false && diagnostics.some((item) => item.severity === 'error')) {
+        throw new Error(diagnostics.map((item) => item.message).join('; '))
+    }
+
+    const nextConnections = {
+        ...(config.connections || {}),
+        'crawler-processor': {} as Record<string, string>,
+        'processor-formatter': {} as Record<string, Array<string>>,
+        'crawler-formatter': {} as Record<string, Array<string>>,
+        'formatter-target': {} as Record<string, Array<string>>,
+    }
+
+    const orderedLinks = links.slice().sort((a, b) => (a.order || 0) - (b.order || 0))
+    for (const link of orderedLinks) {
+        if (link.kind === 'crawler-processor') {
+            nextConnections['crawler-processor'][link.from] = link.to
+        } else if (link.kind === 'processor-formatter') {
+            pushMapArray(nextConnections['processor-formatter'], link.from, link.to)
+        } else if (link.kind === 'crawler-formatter') {
+            pushMapArray(nextConnections['crawler-formatter'], link.from, link.to)
+        } else if (link.kind === 'formatter-target') {
+            pushMapArray(nextConnections['formatter-target'], link.from, link.to)
+        }
+    }
+
+    return {
+        ...config,
+        connections: nextConnections,
+    }
+}
+
+function normalizePipelinesForRuntime(config: AppConfig) {
+    const pipelines = (config as any).pipelines
+    if (!Array.isArray(pipelines) || pipelines.length === 0) {
+        return config
+    }
+    return compileConnectionsFromQuickPatch(config, {
+        pipelines,
+        strict: true,
+    })
+}
+
+export {
+    QUICK_CONFIG_SCHEMA,
+    buildQuickConfigModel,
+    compileConnectionsFromQuickPatch,
+    diagnoseQuickConfig,
+    exportPipelineConfigs,
+    normalizePipelinesForRuntime,
+    type QuickConfigLink,
+    type QuickConfigPatch,
+    type QuickConfigPipelinePatch,
+    type QuickConfigRoute,
+}

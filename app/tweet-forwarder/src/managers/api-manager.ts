@@ -23,6 +23,13 @@ import {
     listArchives,
     uploadArchiveToBilibili,
 } from '@/services/archive-admin-service'
+import {
+    buildQuickConfigModel,
+    compileConnectionsFromQuickPatch,
+    exportPipelineConfigs,
+    normalizePipelinesForRuntime,
+    type QuickConfigPatch,
+} from '@/services/quick-config-service'
 import { getCookiesRoot } from '@/utils/directories'
 import { pRetry } from '@idol-bbq-utils/utils'
 
@@ -325,6 +332,9 @@ export class APIManager extends BaseCompatibleModel {
         }
 
         if (req.method === 'GET' && url.pathname === '/api/config') return this.handleConfigGet()
+        if (req.method === 'GET' && url.pathname === '/api/config/quick') return this.handleQuickConfigGet()
+        if (req.method === 'POST' && url.pathname === '/api/config/quick/update') return this.handleQuickConfigUpdate(req)
+        if (req.method === 'POST' && url.pathname === '/api/config/quick/migrate') return this.handleQuickConfigMigrate()
         if (req.method === 'GET' && url.pathname === '/api/config/crawlers') return this.handleConfigList()
         if (req.method === 'POST' && url.pathname === '/api/config/update') return this.handleConfigUpdate(req)
         if (req.method === 'POST' && url.pathname === '/api/runtime/reload') return this.handleRuntimeReload()
@@ -623,36 +633,90 @@ export class APIManager extends BaseCompatibleModel {
                 return new Response('Invalid config format', { status: 400 })
             }
 
-            const configPath = path.join(process.cwd(), 'config.yaml')
-            const previousConfigText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null
-            if (fs.existsSync(configPath)) {
-                fs.copyFileSync(configPath, `${configPath}.bak`)
-            }
-
-            fs.writeFileSync(configPath, YAML.stringify(body), 'utf8')
-            let runtime: ApiRuntimeReloadResult | null = null
-            try {
-                runtime = this.runtime.reloadRuntime ? await this.runtime.reloadRuntime(body) : null
-            } catch (reloadError) {
-                if (previousConfigText !== null) {
-                    fs.writeFileSync(configPath, previousConfigText, 'utf8')
-                } else if (fs.existsSync(configPath)) {
-                    fs.unlinkSync(configPath)
-                }
-                throw reloadError
-            }
-
-            return jsonResponse({
-                success: true,
-                message: runtime ? 'Configuration saved and hot reloaded.' : 'Configuration saved.',
-                runtime,
-            })
+            return this.saveConfigAndReload(body)
         } catch (error) {
             this.log?.error('Config update error:', error)
             return new Response(`Failed to update config: ${error instanceof Error ? error.message : String(error)}`, {
                 status: 500,
             })
         }
+    }
+
+    private async handleQuickConfigGet(): Promise<Response> {
+        return jsonResponse(buildQuickConfigModel(this.config))
+    }
+
+    private async handleQuickConfigUpdate(req: Request): Promise<Response> {
+        try {
+            const patch = (await req.json()) as QuickConfigPatch
+            const compiledConfig = compileConnectionsFromQuickPatch(this.config, patch)
+            const pipelines = patch.pipelines || exportPipelineConfigs(compiledConfig)
+            const { connections: _connections, ...configWithoutConnections } = compiledConfig
+            const nextConfig = {
+                ...configWithoutConnections,
+                pipelines,
+            }
+            const saveResult = await this.saveConfigAndReload(nextConfig, 'Pipeline configuration saved and hot reloaded.')
+            const payload = (await saveResult.json()) as Record<string, unknown>
+            return jsonResponse({
+                ...payload,
+                quick_config: buildQuickConfigModel(normalizePipelinesForRuntime(nextConfig)),
+            })
+        } catch (error) {
+            this.log?.error('Quick config update error:', error)
+            return new Response(`Failed to update quick config: ${error instanceof Error ? error.message : String(error)}`, {
+                status: 400,
+            })
+        }
+    }
+
+    private async handleQuickConfigMigrate(): Promise<Response> {
+        try {
+            const { connections: _connections, ...configWithoutConnections } = this.config
+            const nextConfig = {
+                ...configWithoutConnections,
+                pipelines: exportPipelineConfigs(this.config),
+            }
+            const saveResult = await this.saveConfigAndReload(nextConfig, 'Configuration migrated to pipelines and hot reloaded.')
+            const payload = (await saveResult.json()) as Record<string, unknown>
+            return jsonResponse({
+                ...payload,
+                quick_config: buildQuickConfigModel(normalizePipelinesForRuntime(nextConfig)),
+            })
+        } catch (error) {
+            this.log?.error('Quick config migration error:', error)
+            return new Response(`Failed to migrate quick config: ${error instanceof Error ? error.message : String(error)}`, {
+                status: 500,
+            })
+        }
+    }
+
+    private async saveConfigAndReload(config: AppConfig, message = 'Configuration saved and hot reloaded.'): Promise<Response> {
+        const configPath = path.join(process.cwd(), 'config.yaml')
+        const previousConfigText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null
+        if (fs.existsSync(configPath)) {
+            fs.copyFileSync(configPath, `${configPath}.bak`)
+        }
+
+        fs.writeFileSync(configPath, YAML.stringify(config), 'utf8')
+        const runtimeConfig = normalizePipelinesForRuntime(config)
+        let runtime: ApiRuntimeReloadResult | null = null
+        try {
+            runtime = this.runtime.reloadRuntime ? await this.runtime.reloadRuntime(runtimeConfig) : null
+        } catch (reloadError) {
+            if (previousConfigText !== null) {
+                fs.writeFileSync(configPath, previousConfigText, 'utf8')
+            } else if (fs.existsSync(configPath)) {
+                fs.unlinkSync(configPath)
+            }
+            throw reloadError
+        }
+
+        return jsonResponse({
+            success: true,
+            message: runtime ? message : 'Configuration saved.',
+            runtime,
+        })
     }
 
     private resolveCrawlerByFinder(finder: string) {

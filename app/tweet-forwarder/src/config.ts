@@ -4,6 +4,7 @@ import path from 'path'
 import YAML from 'yaml'
 import { createLogger, Logger, winston, format } from '@idol-bbq-utils/log'
 import { getCacheRoot, ensureDirectoryExists } from './utils/directories'
+import { normalizePipelinesForRuntime } from './services/quick-config-service'
 
 const CACHE_DIR_ROOT = getCacheRoot()
 const RETRY_LIMIT = 2
@@ -44,7 +45,7 @@ function configParser(config_path: string) {
     try {
         const yaml = fs.readFileSync(config_path, 'utf8')
         const yaml_cfg = YAML.parse(yaml) as AppConfig
-        return yaml_cfg
+        return normalizePipelinesForRuntime(yaml_cfg)
     } catch (e) {
         log.error(`Error parsing config file: ${e}`)
         return
