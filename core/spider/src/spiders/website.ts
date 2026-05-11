@@ -777,7 +777,10 @@ async function extractBlogList(page: Page, url: string) {
 
 async function extractRadioList(page: Page, url: string): Promise<WebsiteListPageResult> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.section-radio .radio', { timeout: 15000 })
+    const hasList = await waitForOptionalSelector(page, '.section-radio .radio', 15000)
+    if (!hasList) {
+        return { items: [], nextUrl: null }
+    }
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const absolute = (value?: string | null) => {
@@ -819,7 +822,10 @@ async function extractRadioList(page: Page, url: string): Promise<WebsiteListPag
 
 async function extractMovieList(page: Page, url: string): Promise<WebsiteListPageResult> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.section-movie .movie, .archive-list .archive-item', { timeout: 15000 })
+    const hasList = await waitForOptionalSelector(page, '.section-movie .movie, .archive-list .archive-item', 15000)
+    if (!hasList) {
+        return { items: [], nextUrl: null }
+    }
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const absolute = (value?: string | null) => {
@@ -875,7 +881,10 @@ async function extractMovieList(page: Page, url: string): Promise<WebsiteListPag
 
 async function extractPhotoList(page: Page, url: string): Promise<WebsiteListPageResult> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.section-photo .headline, .archive-list .archive-item', { timeout: 15000 })
+    const hasList = await waitForOptionalSelector(page, '.section-photo .headline, .archive-list .archive-item', 15000)
+    if (!hasList) {
+        return { items: [], nextUrl: null }
+    }
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const absolute = (value?: string | null) => {
