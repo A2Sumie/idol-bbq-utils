@@ -150,18 +150,53 @@ function shouldCollapseArticle(article: Article, options?: ArticleTextOptions) {
     return options?.collapsedArticleIds?.has(getArticleStableId(article)) === true
 }
 
-function formatCollapsedReference(article: Article, compact = false) {
-    const metaline = compact ? formatCompactMetaline(article) : formatMetaline(article)
-    return [metaline, '（引用已发过，正文略）', article.url].filter(Boolean).join('\n\n')
+function formatCollapsedReferenceId(article: Article) {
+    const id = String(article.u_id || article.username || article.a_id || '').trim()
+    if (!id) {
+        return 'ref'
+    }
+    if (id.startsWith('@') || id.includes(':')) {
+        return id
+    }
+    return `@${id}`
+}
+
+function formatCollapsedReferenceTime(article: Article, rootArticle: Article) {
+    if (!article.created_at) {
+        return ''
+    }
+    const createdAt = dayjs.unix(article.created_at)
+    const rootCreatedAt = rootArticle.created_at ? dayjs.unix(rootArticle.created_at) : null
+    return rootCreatedAt && createdAt.isSame(rootCreatedAt, 'day')
+        ? createdAt.format('HH:mm')
+        : createdAt.format('MM-DD HH:mm')
+}
+
+function formatCollapsedReferenceToken(article: Article, rootArticle: Article) {
+    return [formatCollapsedReferenceId(article), formatCollapsedReferenceTime(article, rootArticle)]
+        .filter(Boolean)
+        .join(' ')
+}
+
+function formatCollapsedReferenceChain(article: Article, rootArticle: Article, options?: ArticleTextOptions) {
+    const tokens: Array<string> = []
+    let currentArticle: Article | null = article
+    while (currentArticle && shouldCollapseArticle(currentArticle, options)) {
+        tokens.push(formatCollapsedReferenceToken(currentArticle, rootArticle))
+        currentArticle = currentArticle.ref && typeof currentArticle.ref === 'object' ? currentArticle.ref : null
+    }
+
+    return `${tokens.join('、')}（略）`
 }
 
 function articleToText(article: Article, options?: ArticleTextOptions) {
     let currentArticle: Article | null = article
+    const rootArticle = article
     let format_article = ''
     let isRoot = true
     while (currentArticle) {
         if (!isRoot && shouldCollapseArticle(currentArticle, options)) {
-            format_article += formatCollapsedReference(currentArticle)
+            format_article += formatCollapsedReferenceChain(currentArticle, rootArticle, options)
             break
         }
         const metaline = formatMetaline(currentArticle)
@@ -193,11 +228,12 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
 
 function compactArticleToText(article: Article, options?: ArticleTextOptions) {
     let currentArticle: Article | null = article
+    const rootArticle = article
     let format_article = ''
     let isRoot = true
     while (currentArticle) {
         if (!isRoot && shouldCollapseArticle(currentArticle, options)) {
-            format_article += formatCollapsedReference(currentArticle, true)
+            format_article += formatCollapsedReferenceChain(currentArticle, rootArticle, options)
             break
         }
         const metaline = formatCompactMetaline(currentArticle)

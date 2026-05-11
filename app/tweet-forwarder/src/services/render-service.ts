@@ -9,6 +9,7 @@ import {
     tryGetCookie,
     ytDlpDownloadMediaFile,
     writeImgToFile,
+    extToMime,
 } from '@/middleware/media'
 import {
     articleToText,
@@ -18,7 +19,8 @@ import {
     ImgConverter,
     type ArticleTextOptions,
 } from '@idol-bbq-utils/render'
-import { existsSync, unlinkSync } from 'fs'
+import { existsSync, readFileSync, unlinkSync } from 'fs'
+import path from 'path'
 import { cloneDeep } from 'lodash'
 import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spider/const'
 import type { MediaType } from '@idol-bbq-utils/spider/types'
@@ -45,6 +47,7 @@ export interface RenderedMediaFile {
     size_bytes?: number
     duration_seconds?: number
     persistent?: boolean
+    sourceUrl?: string
 }
 
 export interface RenderResult {
@@ -120,7 +123,7 @@ export class RenderService {
         const generateRenderedImage = async () => {
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
-                const imgBuffer = await this.ArticleConverter.articleToImg(cloneDeep(article), {
+                const imgBuffer = await this.ArticleConverter.articleToImg(this.hydrateArticleMediaForCard(article, maybe_media_files), {
                     features: this.resolveCardFeatures(config.card_features),
                 })
                 const path = writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
@@ -311,6 +314,97 @@ export class RenderService {
         return renderType === 'text-compact' || renderType === 'text-compact-card' ? 'compact-article' : 'article'
     }
 
+    private hydrateArticleMediaForCard(article: Article, mediaFiles: Array<RenderedMediaFile>) {
+        const cloned = cloneDeep(article)
+        const hydrate = (currentArticle: Article | null) => {
+            if (!currentArticle) {
+                return
+            }
+
+            const candidateFiles = mediaFiles.filter((file) => {
+                if (file.media_type !== 'photo' && file.media_type !== 'video_thumbnail') {
+                    return false
+                }
+                return !file.sourceArticleId || file.sourceArticleId === currentArticle.a_id
+            })
+            const bySourceUrl = new Map(
+                candidateFiles
+                    .map((file) => [file.sourceUrl, file] as const)
+                    .filter(([sourceUrl]) => Boolean(sourceUrl)),
+            )
+            let fallbackIndex = 0
+            currentArticle.media = (currentArticle.media || []).map((mediaItem) => {
+                if (mediaItem.type !== 'photo' && mediaItem.type !== 'video_thumbnail') {
+                    return mediaItem
+                }
+
+                const file = bySourceUrl.get(mediaItem.url) || candidateFiles[fallbackIndex++]
+                const dataUrl = file ? this.mediaFileToDataUrl(file.path) : null
+                return dataUrl
+                    ? {
+                          ...mediaItem,
+                          url: dataUrl,
+                      }
+                    : mediaItem
+            })
+            this.hydrateInlineHtmlMedia(currentArticle, bySourceUrl)
+
+            if (currentArticle.ref && typeof currentArticle.ref === 'object') {
+                hydrate(currentArticle.ref as Article)
+            }
+        }
+
+        hydrate(cloned)
+        return cloned
+    }
+
+    private hydrateInlineHtmlMedia(article: Article, mediaBySourceUrl: Map<string | undefined, RenderedMediaFile>) {
+        const rawHtml = (article.extra?.data as any)?.raw_html
+        if (typeof rawHtml !== 'string' || !/<img\b/i.test(rawHtml)) {
+            return
+        }
+
+        const nextHtml = rawHtml.replace(
+            /(<img\b[^>]*\bsrc=)(["']?)([^"'\s>]+)(\2)/gi,
+            (match, prefix: string, quote: string, src: string) => {
+                const file =
+                    mediaBySourceUrl.get(src) || mediaBySourceUrl.get(this.resolveCardMediaSourceUrl(src, article.url))
+                const dataUrl = file ? this.mediaFileToDataUrl(file.path) : null
+                if (!dataUrl) {
+                    return match
+                }
+                const srcQuote = quote || '"'
+                return `${prefix}${srcQuote}${dataUrl}${srcQuote}`
+            },
+        )
+
+        if (nextHtml !== rawHtml && article.extra?.data) {
+            article.extra.data = {
+                ...(article.extra.data as any),
+                raw_html: nextHtml,
+            }
+        }
+    }
+
+    private resolveCardMediaSourceUrl(src: string, baseUrl?: string | null) {
+        try {
+            return new URL(src, baseUrl || undefined).href
+        } catch {
+            return src
+        }
+    }
+
+    private mediaFileToDataUrl(filePath: string) {
+        try {
+            const ext = path.extname(filePath).slice(1).toLowerCase()
+            const mime = extToMime[ext as keyof typeof extToMime] || 'image/png'
+            return `data:${mime};base64,${readFileSync(filePath).toString('base64')}`
+        } catch (e) {
+            this.log?.warn(`Failed to inline media for rendered card ${filePath}: ${e}`)
+            return null
+        }
+    }
+
     private async handleMedia(
         taskId: string,
         article: Article,
@@ -416,6 +510,7 @@ export class RenderService {
                         media_type: resolvedMediaType,
                         sourceArticleId: currentArticle?.a_id || undefined,
                         sourceUserId: currentArticle?.u_id || undefined,
+                        sourceUrl,
                         content_hash: persisted.hash,
                         size_bytes: persisted.size_bytes,
                         duration_seconds: persisted.duration_seconds,

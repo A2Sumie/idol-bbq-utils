@@ -1112,7 +1112,7 @@ test('sendArticles folds already-forwarded referenced text except for the high r
 
     const originalCheckExist = DB.ForwardBy.checkExist
     ;(DB.ForwardBy as any).checkExist = async (refId: number) => {
-        if (refId === 501) {
+        if (refId === 501 || refId === 502) {
             return { ref_id: 501 }
         }
         return null
@@ -1143,7 +1143,22 @@ test('sendArticles folds already-forwarded referenced text except for the high r
                         url: 'https://x.com/member/status/already-forwarded',
                         type: 'tweet',
                         created_at: Math.floor(Date.now() / 1000) - 60,
-                        ref: null,
+                        ref: {
+                            id: 502,
+                            a_id: 'already-forwarded-parent',
+                            platform: Platform.X,
+                            username: 'member-b',
+                            u_id: 'member_b',
+                            content: 'これはさらに前に流した本文',
+                            url: 'https://x.com/member_b/status/already-forwarded-parent',
+                            type: 'tweet',
+                            created_at: Math.floor(Date.now() / 1000) - 120,
+                            ref: null,
+                            has_media: false,
+                            media: [],
+                            extra: null,
+                            u_avatar: null,
+                        },
                         has_media: false,
                         media: [],
                         extra: null,
@@ -1174,13 +1189,19 @@ test('sendArticles folds already-forwarded referenced text except for the high r
     }
 
     expect(lowNoiseTarget.sent).toHaveLength(1)
-    expect(lowNoiseTarget.sent[0]?.texts[0]).toContain('（引用已发过，正文略）')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).toContain('@member')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).toContain('@member_b')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).toContain('、')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).toContain('（略）')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).not.toContain('（引用已发过，正文略）')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).not.toContain('https://x.com/member/status/already-forwarded')
     expect(lowNoiseTarget.sent[0]?.texts[0]).not.toContain('这是前に流した本文')
     expect(lowNoiseTarget.sent[0]?.texts[0]).not.toContain('これは前に流した本文')
+    expect(lowNoiseTarget.sent[0]?.texts[0]).not.toContain('これはさらに前に流した本文')
 
     expect(highRealtimeTarget.sent).toHaveLength(1)
     expect(highRealtimeTarget.sent[0]?.texts[0]).toContain('これは前に流した本文')
-    expect(highRealtimeTarget.sent[0]?.texts[0]).not.toContain('（引用已发过，正文略）')
+    expect(highRealtimeTarget.sent[0]?.texts[0]).not.toContain('（略）')
 })
 
 test('sendArticles keeps referenced text when it is first seen in this dispatch', async () => {
@@ -1279,7 +1300,7 @@ test('sendArticles keeps referenced text when it is first seen in this dispatch'
 
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toContain('これはまだ流していない本文')
-    expect(target.sent[0]?.texts[0]).not.toContain('（引用已发过，正文略）')
+    expect(target.sent[0]?.texts[0]).not.toContain('（略）')
     expect(claimed).toEqual([510])
 })
 
@@ -1487,7 +1508,7 @@ test('sendArticles does not fold old forwarded references outside the configured
 
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toContain('18時間より前の本文')
-    expect(target.sent[0]?.texts[0]).not.toContain('（引用已发过，正文略）')
+    expect(target.sent[0]?.texts[0]).not.toContain('（略）')
 })
 
 test('sendArticles does not increment article error count when every target is intentionally skipped as old', async () => {

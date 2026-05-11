@@ -4,6 +4,9 @@ import { formatPlatformTag, RenderService } from './render-service'
 import { fileURLToPath } from 'url'
 import DB from '@/db'
 import { MediaToolEnum } from '@/types/media'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import os from 'os'
+import path from 'path'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
@@ -103,6 +106,109 @@ describe('RenderService text-compact', () => {
 })
 
 describe('RenderService text-card', () => {
+    test('inlines downloaded media before rendering the card', () => {
+        const service = new RenderService()
+        const tempDir = mkdtempSync(path.join(os.tmpdir(), 'render-card-media-'))
+        const mediaPath = path.join(tempDir, 'source.png')
+        const sourceUrl = 'https://pbs.twimg.com/media/card-source.jpg'
+        writeFileSync(mediaPath, Buffer.from(SAMPLE_PNG_DATA_URL.split(',')[1] || '', 'base64'))
+
+        try {
+            const article = {
+                id: 10,
+                a_id: 'x-card-inline-media',
+                u_id: 'mao_asaoka227',
+                username: '麻丘真央',
+                created_at: 1710000000,
+                content: 'おはよう',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/mao_asaoka227/status/card',
+                type: 'tweet',
+                ref: null,
+                has_media: true,
+                media: [
+                    {
+                        type: 'photo',
+                        url: sourceUrl,
+                    },
+                ],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            } as any
+
+            const hydrated = (service as any).hydrateArticleMediaForCard(article, [
+                {
+                    path: mediaPath,
+                    media_type: 'photo',
+                    sourceArticleId: 'x-card-inline-media',
+                    sourceUrl,
+                },
+            ])
+
+            expect(String(hydrated.media[0]?.url).startsWith('data:image/png;base64,')).toBe(true)
+            expect(article.media[0]?.url).toBe(sourceUrl)
+        } finally {
+            rmSync(tempDir, { recursive: true, force: true })
+        }
+    })
+
+    test('inlines downloaded media inside website raw html blocks', () => {
+        const service = new RenderService()
+        const tempDir = mkdtempSync(path.join(os.tmpdir(), 'render-card-html-media-'))
+        const mediaPath = path.join(tempDir, 'inline.png')
+        writeFileSync(mediaPath, Buffer.from(SAMPLE_PNG_DATA_URL.split(',')[1] || '', 'base64'))
+
+        try {
+            const article = {
+                id: 14,
+                a_id: 'fc-blog-inline-media',
+                u_id: 'fc-blog',
+                username: 'FC Blog',
+                created_at: 1710000000,
+                content: 'ブログ本文',
+                translation: null,
+                translated_by: null,
+                url: 'https://nananiji-fc.com/s/n129/diary/detail/1',
+                type: 'article',
+                ref: null,
+                has_media: true,
+                media: [],
+                extra: {
+                    extra_type: 'website_meta',
+                    data: {
+                        site: '22/7',
+                        feed: 'fc-blog',
+                        raw_html: '<p>一段目</p><img src="/images/blog-photo.jpg" alt="photo"><p>二段目</p>',
+                    },
+                    media: [
+                        {
+                            type: 'photo',
+                            url: 'https://nananiji-fc.com/images/blog-photo.jpg',
+                        },
+                    ],
+                },
+                u_avatar: null,
+                platform: Platform.Website,
+            } as any
+
+            const hydrated = (service as any).hydrateArticleMediaForCard(article, [
+                {
+                    path: mediaPath,
+                    media_type: 'photo',
+                    sourceArticleId: 'fc-blog-inline-media',
+                    sourceUrl: 'https://nananiji-fc.com/images/blog-photo.jpg',
+                },
+            ])
+
+            expect(String(hydrated.extra.data.raw_html).includes('src="data:image/png;base64,')).toBe(true)
+            expect(article.extra.data.raw_html).toContain('src="/images/blog-photo.jpg"')
+        } finally {
+            rmSync(tempDir, { recursive: true, force: true })
+        }
+    })
+
     test('appends a rendered card after the original media', async () => {
         const service = new RenderService()
         const result = await service.process(
