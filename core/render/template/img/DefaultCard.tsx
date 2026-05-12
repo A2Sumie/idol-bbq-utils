@@ -1,8 +1,15 @@
-import { formatArticleUserId, formatTime, parseRawContent, parseTranslationContent } from '@/text'
+import {
+    formatArticleActionLabel,
+    formatArticleSourceActionLabel,
+    formatArticleTimeToken,
+    formatArticleUserId,
+    formatTime,
+    parseRawContent,
+    parseTranslationContent,
+} from '@/text'
 import type { Article } from '@/types'
 import { X } from '@idol-bbq-utils/spider'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import { platformArticleMapToActionText } from '@idol-bbq-utils/spider/const'
 import clsx from 'clsx'
 import _, { reduce } from 'lodash'
 import type { JSX } from 'react/jsx-runtime'
@@ -461,10 +468,10 @@ function Metaline({ article }: { article: Article }) {
                 {article.username}
             </span>
             <span tw="font-normal text-[#46556a]" lang="ja-JP" style={{ fontWeight: 400 }}>
-                {[userId, formatTime(article.created_at)].filter(Boolean).join(' · ')}
+                {userId}
             </span>
             <span tw="text-xs text-[#46556a]" lang="ja-JP" style={{ fontWeight: 700 }}>
-                {platformArticleMapToActionText[article.platform][article.type]}
+                {`${formatArticleTimeToken(article.created_at)} ${formatArticleSourceActionLabel(article)}`}
             </span>
         </div>
     )
@@ -908,7 +915,7 @@ function estimatedArticleHeight(article: Article, level: number = 0, features: C
     const inlineWebsiteHeight = estimateInlineWebsiteHeight(article, level, features)
     const articleHeightArray = [
         estimateTextLinesHeight(
-            `${article.username} ${formatArticleUserId(article)} · ${formatTime(article.created_at)} ${platformArticleMapToActionText[article.platform][article.type]}`,
+            `${article.username} ${formatArticleUserId(article)} ${formatTime(article.created_at)} ${formatArticleActionLabel(article)}`,
             BASE_FONT_SIZE,
             getContentWidth(level) - (level === 0 ? 0 : 32), // maybe subtract the avatar width
         ), // metaline

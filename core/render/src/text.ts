@@ -11,8 +11,36 @@ type ArticleTextOptions = {
     collapsedArticleIds?: Set<string | number>
 }
 
-const META_SEP = ' · '
 const RENDER_TIMEZONE_OFFSET_MINUTES = 9 * 60
+const SHORT_PLATFORM_LABELS: Partial<Record<Platform, string>> = {
+    [Platform.Instagram]: 'IG',
+    [Platform.TikTok]: 'TT',
+    [Platform.YouTube]: 'YT',
+    [Platform.Website]: 'Web',
+}
+const SHORT_ACTION_LABELS: Partial<Record<Platform, Record<string, string>>> = {
+    [Platform.X]: {
+        tweet: '发推',
+        retweet: '转推',
+        reply: '回复',
+        conversation: '回复',
+        quoted: '引用',
+    },
+    [Platform.Instagram]: {
+        post: '发帖',
+        story: '故事',
+    },
+    [Platform.TikTok]: {
+        post: '视频',
+    },
+    [Platform.YouTube]: {
+        video: '视频',
+        shorts: '短视频',
+    },
+    [Platform.Website]: {
+        article: '更新',
+    },
+}
 const SUPERSCRIPT_DIGITS: Record<string, string> = {
     '-': '⁻',
     '0': '⁰',
@@ -71,6 +99,15 @@ function formatDateKey(unixTimestamp: number) {
     return `${time.getUTCFullYear()}-${pad2(time.getUTCMonth() + 1)}-${pad2(time.getUTCDate())}`
 }
 
+function formatDisplayDate(unix_timestamp: number) {
+    const time = getRenderDate(unix_timestamp)
+    return `${pad2(time.getUTCFullYear() % 100)}${pad2(time.getUTCMonth() + 1)}${pad2(time.getUTCDate())}`
+}
+
+function formatArticleTimeToken(unix_timestamp: number) {
+    return `${formatClock(unix_timestamp)}(${formatDisplayDate(unix_timestamp)})`
+}
+
 function formatArticleUserId(article: Pick<Article, 'u_id' | 'username' | 'a_id'>) {
     const id = String(article.u_id || article.username || article.a_id || '').trim()
     if (!id) {
@@ -80,6 +117,22 @@ function formatArticleUserId(article: Pick<Article, 'u_id' | 'username' | 'a_id'
         return id
     }
     return `@${id}`
+}
+
+function formatArticlePlatformLabel(article: Pick<Article, 'platform'>) {
+    return SHORT_PLATFORM_LABELS[article.platform] || platformNameMap[article.platform]
+}
+
+function formatArticleActionLabel(article: Pick<Article, 'platform' | 'type'>) {
+    return (
+        SHORT_ACTION_LABELS[article.platform]?.[article.type] ||
+        platformArticleMapToActionText[article.platform]?.[article.type] ||
+        article.type
+    )
+}
+
+function formatArticleSourceActionLabel(article: Pick<Article, 'platform' | 'type'>) {
+    return `${formatArticlePlatformLabel(article)}${formatArticleActionLabel(article)}`
 }
 
 function parseTranslationContent(article: Article) {
@@ -361,16 +414,14 @@ function followsToText(data: Array<[Platform, Array<[Follows, Follows | null]>]>
 }
 
 function formatMetaline(article: Article) {
-    const action = platformArticleMapToActionText[article.platform][article.type]
     return [
         article.username,
         formatArticleUserId(article),
-        platformNameMap[article.platform],
-        formatTime(article.created_at),
-        `${action}：`,
+        formatArticleTimeToken(article.created_at),
+        formatArticleSourceActionLabel(article),
     ]
         .filter(Boolean)
-        .join(META_SEP)
+        .join(' ')
 }
 
 function formatCompactMetaline(article: Article) {
@@ -384,6 +435,10 @@ export {
     extractArticleHeadline,
     extractTextHeadline,
     followsToText,
+    formatArticleActionLabel,
+    formatArticlePlatformLabel,
+    formatArticleSourceActionLabel,
+    formatArticleTimeToken,
     formatArticleUserId,
     formatCompactMetaline,
     formatMetaline,

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import { formatTime } from '@idol-bbq-utils/render'
+import { formatArticleTimeToken, formatTime } from '@idol-bbq-utils/render'
 import { formatPlatformTag, RenderService } from './render-service'
 import { fileURLToPath } from 'url'
 import DB from '@/db'
@@ -118,9 +118,42 @@ describe('formatPlatformTag', () => {
 })
 
 describe('RenderService text-compact', () => {
+    test('shortens X quote metadata without losing the quote signal', async () => {
+        const service = new RenderService()
+        const expectedTime = formatArticleTimeToken(1710000000)
+        const result = await service.process(
+            {
+                id: 3,
+                a_id: 'quote123',
+                u_id: 'mao_asaoka227',
+                username: '麻丘真央',
+                created_at: 1710000000,
+                content: '引用コメント',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/mao_asaoka227/status/quote123',
+                type: 'quoted',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            },
+            {
+                taskId: 'test-x-quote-compact',
+                render_type: 'text-compact',
+            },
+        )
+
+        expect(result.text.split('\n')[0]).toBe(`麻丘真央 @mao_asaoka227 ${expectedTime} X引用`)
+        expect(result.text).not.toContain('发布推文')
+        expect(result.text).not.toContain('引用推文')
+    })
+
     test('keeps compact metadata on one line with @uid and short timestamp', async () => {
         const service = new RenderService()
-        const expectedTime = formatTime(1710000000)
+        const expectedTime = formatArticleTimeToken(1710000000)
         const result = await service.process(
             {
                 id: 1,
@@ -146,13 +179,15 @@ describe('RenderService text-compact', () => {
             },
         )
 
-        expect(expectedTime.endsWith('⁹')).toBeTrue()
-        expect(result.text.split('\n')[0]).toBe(`河瀬詩 · @kawase_uta · Instagram · ${expectedTime} · 发布帖子：`)
-        expect(result.text).toContain('Instagram')
+        expect(expectedTime).toContain('⁹(')
+        expect(formatTime(1710000000).startsWith('240310 ')).toBeTrue()
+        expect(result.text.split('\n')[0]).toBe(`河瀬詩 @kawase_uta ${expectedTime} IG发帖`)
+        expect(result.text).toContain('IG')
         expect(result.text).toContain('河瀬詩')
         expect(result.text).toContain('@kawase_uta')
         expect(result.text).toContain('hello world')
         expect(result.text).not.toContain('    ')
+        expect(result.text).not.toContain('发布帖子')
     })
 
     test('truncates overly long YouTube descriptions in compact mode', async () => {
