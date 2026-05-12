@@ -10,6 +10,7 @@ import type { JSX } from 'react/jsx-runtime'
 import SVG, { Website227FC, Website227Official } from '@/img/assets/svg'
 import { KOZUE } from '@/img/assets/img'
 import type { RenderParserOptions } from '@/registry'
+import { Buffer } from 'buffer'
 
 const CARD_WIDTH = 600
 const CONTENT_WIDTH = CARD_WIDTH - 16 * 2 - 64 - 12
@@ -21,6 +22,7 @@ const OFFICIAL_227_WEBSITE_FEEDS = new Set(['official-news', 'official-blog', 'l
 const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'photo'])
 const DEFAULT_PLATFORM_BADGE_WIDTH = 32
 const DEFAULT_CARD_FEATURES = new Set(['media-contain', 'website-inline-media'])
+const MEDIA_GAP = 4
 
 type CardRenderFeatures = Set<string>
 type InlineContentBlock =
@@ -33,6 +35,13 @@ type InlineContentBlock =
           url: string
           alt?: string
       }
+type VisualMedia = Exclude<Article['media'], null>[number]
+type MediaLayoutTile = {
+    media: VisualMedia
+    width: number
+    height: number
+}
+type MediaLayoutRow = Array<MediaLayoutTile>
 
 function resolveCardFeatures(options?: RenderParserOptions): CardRenderFeatures {
     const features = new Set(DEFAULT_CARD_FEATURES)
@@ -90,9 +99,134 @@ function getContentWidth(level: number) {
 
 function getImageWidth(level: number) {
     if (level === 0) {
-        return (CONTENT_WIDTH - 4) / 2
+        return (CONTENT_WIDTH - MEDIA_GAP) / 2
     }
-    return (CONTENT_WIDTH - 4 - 16 * 2 * level) / 2
+    return (CONTENT_WIDTH - MEDIA_GAP - 16 * 2 * level) / 2
+}
+
+function clamp(value: number, min: number, max: number) {
+    return Math.max(min, Math.min(max, value))
+}
+
+function parsePngDimensions(buffer: Buffer) {
+    if (buffer.length < 24 || buffer.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
+        return null
+    }
+    return {
+        width: buffer.readUInt32BE(16),
+        height: buffer.readUInt32BE(20),
+    }
+}
+
+function parseJpegDimensions(buffer: Buffer) {
+    if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+        return null
+    }
+
+    let offset = 2
+    while (offset < buffer.length - 9) {
+        if (buffer[offset] !== 0xff) {
+            offset += 1
+            continue
+        }
+        const marker = buffer[offset + 1]
+        offset += 2
+        if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+            continue
+        }
+        const length = buffer.readUInt16BE(offset)
+        if (length < 2 || offset + length > buffer.length) {
+            return null
+        }
+        if (
+            (marker >= 0xc0 && marker <= 0xc3) ||
+            (marker >= 0xc5 && marker <= 0xc7) ||
+            (marker >= 0xc9 && marker <= 0xcb) ||
+            (marker >= 0xcd && marker <= 0xcf)
+        ) {
+            return {
+                height: buffer.readUInt16BE(offset + 3),
+                width: buffer.readUInt16BE(offset + 5),
+            }
+        }
+        offset += length
+    }
+    return null
+}
+
+function getDataUrlDimensions(url: string) {
+    const match = url.match(/^data:image\/(?:png|jpe?g);base64,(.+)$/i)
+    if (!match?.[1]) {
+        return null
+    }
+    try {
+        const buffer = Buffer.from(match[1], 'base64')
+        return parsePngDimensions(buffer) || parseJpegDimensions(buffer)
+    } catch {
+        return null
+    }
+}
+
+function getMediaAspect(media: VisualMedia) {
+    const width = Number((media as any).width || (media as any).image_width || 0)
+    const height = Number((media as any).height || (media as any).image_height || 0)
+    if (width > 0 && height > 0) {
+        return width / height
+    }
+    const dataUrlDimensions = getDataUrlDimensions(media.url)
+    if (dataUrlDimensions && dataUrlDimensions.width > 0 && dataUrlDimensions.height > 0) {
+        return dataUrlDimensions.width / dataUrlDimensions.height
+    }
+    return 16 / 9
+}
+
+function getSingleTileWidth(contentWidth: number, aspect: number) {
+    if (aspect < 1) {
+        return Math.min(contentWidth, Math.max(300, contentWidth * 0.72))
+    }
+    return contentWidth
+}
+
+function getTileHeight(width: number, aspect: number, singleColumn: boolean) {
+    const rawHeight = width / clamp(aspect, 0.45, 2.4)
+    return clamp(rawHeight, 112, singleColumn ? 520 : 360)
+}
+
+function shouldPairMedia(left: VisualMedia, right: VisualMedia) {
+    const leftAspect = getMediaAspect(left)
+    const rightAspect = getMediaAspect(right)
+    const sameOrientation = (leftAspect < 1 && rightAspect < 1) || (leftAspect >= 1 && rightAspect >= 1)
+    const closeEnough = Math.abs(Math.log(leftAspect / rightAspect)) < 0.45
+    return sameOrientation || closeEnough
+}
+
+function layoutMediaRows(media: Exclude<Article['media'], null>, level: number): Array<MediaLayoutRow> {
+    const visualMedia = media.filter((m) => m.type === 'photo' || m.type === 'video_thumbnail')
+    const rows: Array<MediaLayoutRow> = []
+    let index = 0
+    while (index < visualMedia.length) {
+        const current = visualMedia[index]
+        const next = visualMedia[index + 1]
+        if (current && next && shouldPairMedia(current, next)) {
+            const width = getImageWidth(level)
+            const averageAspect = (getMediaAspect(current) + getMediaAspect(next)) / 2
+            const height = getTileHeight(width, averageAspect, false)
+            rows.push([
+                { media: current, width, height },
+                { media: next, width, height },
+            ])
+            index += 2
+            continue
+        }
+
+        if (current) {
+            const aspect = getMediaAspect(current)
+            const width = getSingleTileWidth(getContentWidth(level), aspect)
+            rows.push([{ media: current, width, height: getTileHeight(width, aspect, true) }])
+        }
+        index += 1
+    }
+    return rows
 }
 
 function decodeHtmlEntities(text: string) {
@@ -341,26 +475,37 @@ function Divider({ text, dash }: { text?: string; dash?: boolean }) {
     )
 }
 
-function ImageTile({ url, alt, width, contain }: { url: string; alt?: string; width: number; contain: boolean }) {
+function ImageTile({
+    url,
+    alt,
+    width,
+    height,
+    contain,
+}: {
+    url: string
+    alt?: string
+    width: number
+    height: number
+    contain: boolean
+}) {
     return (
-        <div tw="flex overflow-hidden" style={{ flexBasis: `${width}px` }}>
-            <div
-                tw="flex relative w-full bg-[#f7f9fc]"
+        <div
+            tw="flex overflow-hidden bg-[#f7f9fc]"
+            style={{
+                width,
+                height,
+                flexBasis: `${width}px`,
+            }}
+        >
+            <img
+                src={url}
                 style={{
-                    paddingTop: '56.25%',
+                    width,
+                    height,
+                    objectFit: contain ? 'contain' : 'cover',
                 }}
-            >
-                <img
-                    src={url}
-                    tw="left-0 right-0 top-0 bottom-0 absolute"
-                    style={{
-                        width: '100%',
-                        height: '100%',
-                        objectFit: contain ? 'contain' : 'cover',
-                    }}
-                    alt={alt}
-                />
-            </div>
+                alt={alt}
+            />
         </div>
     )
 }
@@ -375,23 +520,36 @@ function MediaGroup({
     features: CardRenderFeatures
 }) {
     const media = _media.filter((m) => m.type === 'photo' || m.type === 'video_thumbnail')
-    const pairedMedia = media.slice(0, media.length % 2 === 1 ? -1 : media.length)
-    const lastMedia = media.length % 2 === 1 ? media[media.length - 1] : null
+    const rows = layoutMediaRows(media, level)
     const contain = hasFeature(features, 'media-contain')
     return (
         <div
-            tw="flex rounded-lg overflow-hidden shadow-sm flex-wrap"
+            tw="flex flex-col rounded-lg overflow-hidden shadow-sm"
             style={{
-                gap: '4px',
+                rowGap: `${MEDIA_GAP}px`,
             }}
         >
-            {pairedMedia.map((m, i) => (
-                <ImageTile key={i} url={m.url} alt={m.alt} width={getImageWidth(level)} contain={contain} />
+            {rows.map((row, rowIndex) => (
+                <div
+                    key={rowIndex}
+                    tw="flex"
+                    style={{
+                        columnGap: `${MEDIA_GAP}px`,
+                        justifyContent: row.length === 1 ? 'center' : 'flex-start',
+                    }}
+                >
+                    {row.map((tile, tileIndex) => (
+                        <ImageTile
+                            key={tileIndex}
+                            url={tile.media.url}
+                            alt={tile.media.alt}
+                            width={tile.width}
+                            height={tile.height}
+                            contain={contain}
+                        />
+                    ))}
+                </div>
             ))}
-
-            {lastMedia && (
-                <ImageTile url={lastMedia.url} alt={lastMedia.alt} width={getContentWidth(level)} contain={contain} />
-            )}
         </div>
     )
 }
@@ -501,10 +659,10 @@ function estimateImagesHeight(media: Exclude<Article['media'], null>, level: num
     if (!media || media.length === 0) {
         return 0
     }
-    const imageCount = media.filter((m) => m.type === 'photo' || m.type === 'video_thumbnail').length
+    const rows = layoutMediaRows(media, level)
     return (
-        ((imageCount % 2) * getContentWidth(level) + Math.floor(imageCount / 2) * getImageWidth(level)) * (9 / 16) +
-        (Math.ceil(imageCount / 2) - 1) * 4
+        rows.reduce((sum, row) => sum + Math.max(...row.map((tile) => tile.height)), 0) +
+        Math.max(0, rows.length - 1) * MEDIA_GAP
     )
 }
 
@@ -517,7 +675,7 @@ function estimateInlineWebsiteHeight(article: Article, level: number, features: 
     const textHeight = blocks.reduce(
         (sum, block) => {
             if (block.type === 'image') {
-                return sum + getContentWidth(level) * (9 / 16)
+                return sum + estimateImagesHeight([{ type: 'photo', url: block.url, alt: block.alt }], level)
             }
             return sum + estimateTextLinesHeight(block.text, BASE_FONT_SIZE, getContentWidth(level))
         },

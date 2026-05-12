@@ -48,6 +48,8 @@ export interface RenderedMediaFile {
     duration_seconds?: number
     persistent?: boolean
     sourceUrl?: string
+    width?: number
+    height?: number
 }
 
 export interface RenderResult {
@@ -340,10 +342,12 @@ export class RenderService {
 
                 const file = bySourceUrl.get(mediaItem.url) || candidateFiles[fallbackIndex++]
                 const dataUrl = file ? this.mediaFileToDataUrl(file.path) : null
+                const dimensions = file ? this.mediaFileDimensions(file.path) : null
                 return dataUrl
                     ? {
                           ...mediaItem,
                           url: dataUrl,
+                          ...dimensions,
                       }
                     : mediaItem
             })
@@ -403,6 +407,61 @@ export class RenderService {
             this.log?.warn(`Failed to inline media for rendered card ${filePath}: ${e}`)
             return null
         }
+    }
+
+    private mediaFileDimensions(filePath: string): { width: number; height: number } | null {
+        try {
+            const buffer = readFileSync(filePath)
+            return this.parsePngDimensions(buffer) || this.parseJpegDimensions(buffer)
+        } catch {
+            return null
+        }
+    }
+
+    private parsePngDimensions(buffer: Buffer): { width: number; height: number } | null {
+        if (buffer.length < 24 || buffer.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
+            return null
+        }
+        return {
+            width: buffer.readUInt32BE(16),
+            height: buffer.readUInt32BE(20),
+        }
+    }
+
+    private parseJpegDimensions(buffer: Buffer): { width: number; height: number } | null {
+        if (buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+            return null
+        }
+
+        let offset = 2
+        while (offset < buffer.length - 9) {
+            if (buffer[offset] !== 0xff) {
+                offset += 1
+                continue
+            }
+            const marker = buffer[offset + 1]
+            offset += 2
+            if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+                continue
+            }
+            const length = buffer.readUInt16BE(offset)
+            if (length < 2 || offset + length > buffer.length) {
+                return null
+            }
+            if (
+                (marker >= 0xc0 && marker <= 0xc3) ||
+                (marker >= 0xc5 && marker <= 0xc7) ||
+                (marker >= 0xc9 && marker <= 0xcb) ||
+                (marker >= 0xcd && marker <= 0xcf)
+            ) {
+                return {
+                    height: buffer.readUInt16BE(offset + 3),
+                    width: buffer.readUInt16BE(offset + 5),
+                }
+            }
+            offset += length
+        }
+        return null
     }
 
     private async handleMedia(
@@ -505,12 +564,17 @@ export class RenderService {
                             this.log?.error(`Error during duplicate check: ${e}`)
                         }
                     }
+                    const dimensions =
+                        resolvedMediaType === 'photo' || resolvedMediaType === 'video_thumbnail'
+                            ? this.mediaFileDimensions(persisted.path)
+                            : null
                     return {
                         path: persisted.path,
                         media_type: resolvedMediaType,
                         sourceArticleId: currentArticle?.a_id || undefined,
                         sourceUserId: currentArticle?.u_id || undefined,
                         sourceUrl,
+                        ...dimensions,
                         content_hash: persisted.hash,
                         size_bytes: persisted.size_bytes,
                         duration_seconds: persisted.duration_seconds,

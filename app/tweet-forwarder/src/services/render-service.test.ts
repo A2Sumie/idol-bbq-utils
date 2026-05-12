@@ -4,15 +4,86 @@ import { formatPlatformTag, RenderService } from './render-service'
 import { fileURLToPath } from 'url'
 import DB from '@/db'
 import { MediaToolEnum } from '@/types/media'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import os from 'os'
 import path from 'path'
+import { inflateSync } from 'zlib'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
 const SAMPLE_PNG_DATA_URL =
     'data:image/png;base64,' +
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s1OtS8AAAAASUVORK5CYII='
+
+const SAMPLE_PROGRESSIVE_JPEG_DATA_URL =
+    'data:image/jpeg;base64,' +
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wgARCAB4AFADAREAAhEBAxEB/8QAFgABAQEAAAAAAAAAAAAAAAAAAAMH/8QAGAEBAQEBAQAAAAAAAAAAAAAAAAQFBgj/2gAMAwEAAhADEAAAAc44z1IAAAAJ3xAAAACehEAAAAJXwgAAACd8QAAAAnfEAAAAJaEIAAAAnfEAAAAJ3xAAAACehCAAAAJ3xAAAACV8QAAAAnfCAAAAJ6EQAAAAnfEAAAAP/8QAFxABAQEBAAAAAAAAAAAAAAAAEQAwQP/aAAgBAQABBQJmZmZmZmZmZmZmZmZmZmZmZmZmZ5WZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmc2ZmZmZmZmZmZmZmZmZmZv//EABYRAQEBAAAAAAAAAAAAAAAAAAATEv/aAAgBAwEBPwHbbbbbbbbbaiiiiiiiiiiiiiiiiiiiiiiiiiiiiijbbbbbbbbbbbbbbbbbbbaiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiijbbbbbbbbbbbbbbbbbbbaiiiiiiiiiiiiiiiiiiiiiiiiiiiiij//EABURAQEAAAAAAAAAAAAAAAAAAAAT/9oACAECAQE/AZpppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppv/8QAFBABAAAAAAAAAAAAAAAAAAAAcP/aAAgBAQAGPwIW/8QAFxABAQEBAAAAAAAAAAAAAAAAEQBQQP/aAAgBAQABPyHIAAAAAABmZmZmZmZmZmZnTAAAAAAAAGZmZmZnvAAAAA//2gAMAwEAAgADAAAAEEkkkkkkkkkgAAAALbbbbUkkkkkkkkkrbbbbdtttttttttiSSSSSSSSSdttttv8A/wD/AP7bbbbQAAAAP//EABcRAQEBAQAAAAAAAAAAAAAAAHEAUED/2gAIAQMBAT8Q0v8AwAAAAP8A3Oc5znOc8kAAAAAAHOc5znOc5znOc5znPvAAAAA//8QAFBEBAAAAAAAAAAAAAAAAAAAAcP/aAAgBAgEBPxAW/wD/AP8A/wD/AP8A/wD/AP8A/wD/AP8A/wD8AP8A/wD/AP8A/8QAGRABAQEAAwAAAAAAAAAAAAAAAHERMEBQ/9oACAEBAAE/EMMMMMMMMMMeSAAAAB/8pSlKUpSlSlKUpSlK6oAABSlKUpSlKUpSlKUpSkpSlKUpSlSlKUpSlKUpSlKUpSuMAP/Z'
+
+function decodePngPixels(buffer: Buffer) {
+    const signature = buffer.subarray(0, 8).toString('hex')
+    expect(signature).toBe('89504e470d0a1a0a')
+
+    let offset = 8
+    let width = 0
+    let height = 0
+    let colorType = 0
+    const idatChunks: Array<Buffer> = []
+
+    while (offset < buffer.length) {
+        const length = buffer.readUInt32BE(offset)
+        const type = buffer.subarray(offset + 4, offset + 8).toString('ascii')
+        const data = buffer.subarray(offset + 8, offset + 8 + length)
+        if (type === 'IHDR') {
+            width = data.readUInt32BE(0)
+            height = data.readUInt32BE(4)
+            expect(data[8]).toBe(8)
+            colorType = data[9] || 0
+        } else if (type === 'IDAT') {
+            idatChunks.push(data)
+        } else if (type === 'IEND') {
+            break
+        }
+        offset += length + 12
+    }
+
+    const bytesPerPixel = colorType === 6 ? 4 : colorType === 2 ? 3 : 0
+    expect(bytesPerPixel).toBeGreaterThan(0)
+    const inflated = inflateSync(Buffer.concat(idatChunks))
+    const stride = width * bytesPerPixel
+    const rows: Array<Buffer> = []
+    let sourceOffset = 0
+
+    for (let y = 0; y < height; y += 1) {
+        const filter = inflated[sourceOffset]
+        sourceOffset += 1
+        const row = Buffer.from(inflated.subarray(sourceOffset, sourceOffset + stride))
+        const prev = rows[y - 1]
+        sourceOffset += stride
+        for (let x = 0; x < stride; x += 1) {
+            const left = x >= bytesPerPixel ? row[x - bytesPerPixel] || 0 : 0
+            const up = prev?.[x] || 0
+            const upLeft = x >= bytesPerPixel ? prev?.[x - bytesPerPixel] || 0 : 0
+            const paeth = (() => {
+                const p = left + up - upLeft
+                const pa = Math.abs(p - left)
+                const pb = Math.abs(p - up)
+                const pc = Math.abs(p - upLeft)
+                return pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft
+            })()
+            const add = filter === 1 ? left : filter === 2 ? up : filter === 3 ? Math.floor((left + up) / 2) : filter === 4 ? paeth : 0
+            row[x] = (row[x] + add) & 0xff
+        }
+        rows.push(row)
+    }
+
+    return rows.flatMap((row) => {
+        const pixels: Array<[number, number, number, number]> = []
+        for (let x = 0; x < row.length; x += bytesPerPixel) {
+            pixels.push([row[x] || 0, row[x + 1] || 0, row[x + 2] || 0, bytesPerPixel === 4 ? row[x + 3] || 0 : 255])
+        }
+        return pixels
+    })
+}
 
 describe('formatPlatformTag', () => {
     test('includes platform and display name for image-tag style labels', () => {
@@ -148,6 +219,8 @@ describe('RenderService text-card', () => {
             ])
 
             expect(String(hydrated.media[0]?.url).startsWith('data:image/png;base64,')).toBe(true)
+            expect(hydrated.media[0]?.width).toBe(1)
+            expect(hydrated.media[0]?.height).toBe(1)
             expect(article.media[0]?.url).toBe(sourceUrl)
         } finally {
             rmSync(tempDir, { recursive: true, force: true })
@@ -207,6 +280,46 @@ describe('RenderService text-card', () => {
         } finally {
             rmSync(tempDir, { recursive: true, force: true })
         }
+    })
+
+    test('renders progressive jpeg media inside the card instead of a gray tile', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 15,
+                a_id: 'progressive-jpeg-card',
+                u_id: 'nao_aikawa227',
+                username: '22/7 相川奈央',
+                created_at: 1710000000,
+                content: 'おはよ〜🍓',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/nao_aikawa227/status/progressive',
+                type: 'tweet',
+                ref: null,
+                has_media: true,
+                media: [
+                    {
+                        type: 'photo',
+                        url: SAMPLE_PROGRESSIVE_JPEG_DATA_URL,
+                    },
+                ],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            } as any,
+            {
+                taskId: 'test-progressive-jpeg-card',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(result.cardMediaFiles).toHaveLength(1)
+        const pixels = decodePngPixels(readFileSync(result.cardMediaFiles[0]!.path))
+        const saturatedPixels = pixels.filter(([r, g, b, a]) => a > 0 && Math.max(r, g, b) - Math.min(r, g, b) > 60)
+        expect(saturatedPixels.length).toBeGreaterThan(10000)
+
+        service.cleanup(result.mediaFiles)
     })
 
     test('appends a rendered card after the original media', async () => {
