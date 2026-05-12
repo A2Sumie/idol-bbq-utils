@@ -23,6 +23,19 @@ const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'ph
 const DEFAULT_PLATFORM_BADGE_WIDTH = 32
 const DEFAULT_CARD_FEATURES = new Set(['media-contain', 'website-inline-media'])
 const MEDIA_GAP = 4
+const CARD_FONT_FAMILY = [
+    'Noto Sans',
+    'Noto Sans Lao',
+    'Noto Sans Symbols 2',
+    'Noto Sans Symbols',
+    'Noto Sans Math',
+    'Unifont',
+    'Noto Sans Yi',
+    'Noto Sans Canadian Aboriginal',
+    'Noto Sans Gujarati',
+    'Noto Sans Georgian',
+    'Noto Sans Oriya',
+].join(', ')
 
 type CardRenderFeatures = Set<string>
 type InlineContentBlock =
@@ -181,6 +194,9 @@ function getMediaAspect(media: VisualMedia) {
 }
 
 function getSingleTileWidth(contentWidth: number, aspect: number) {
+    if (aspect < 0.55) {
+        return clamp(520 * aspect, 120, contentWidth * 0.5)
+    }
     if (aspect < 1) {
         return Math.min(contentWidth, Math.max(300, contentWidth * 0.72))
     }
@@ -188,13 +204,17 @@ function getSingleTileWidth(contentWidth: number, aspect: number) {
 }
 
 function getTileHeight(width: number, aspect: number, singleColumn: boolean) {
-    const rawHeight = width / clamp(aspect, 0.45, 2.4)
+    const normalizedAspect = singleColumn ? clamp(aspect, 0.18, 4.8) : clamp(aspect, 0.45, 2.8)
+    const rawHeight = width / normalizedAspect
     return clamp(rawHeight, 112, singleColumn ? 520 : 360)
 }
 
 function shouldPairMedia(left: VisualMedia, right: VisualMedia) {
     const leftAspect = getMediaAspect(left)
     const rightAspect = getMediaAspect(right)
+    if (leftAspect < 0.55 && rightAspect < 0.55) {
+        return false
+    }
     const sameOrientation = (leftAspect < 1 && rightAspect < 1) || (leftAspect >= 1 && rightAspect >= 1)
     const closeEnough = Math.abs(Math.log(leftAspect / rightAspect)) < 0.45
     return sameOrientation || closeEnough
@@ -514,42 +534,56 @@ function MediaGroup({
     media: _media,
     level,
     features,
+    marker,
 }: {
     media: Exclude<Article['media'], null>
     level: number
     features: CardRenderFeatures
+    marker?: string
 }) {
     const media = _media.filter((m) => m.type === 'photo' || m.type === 'video_thumbnail')
     const rows = layoutMediaRows(media, level)
     const contain = hasFeature(features, 'media-contain')
     return (
-        <div
-            tw="flex flex-col rounded-lg overflow-hidden shadow-sm"
-            style={{
-                rowGap: `${MEDIA_GAP}px`,
-            }}
-        >
-            {rows.map((row, rowIndex) => (
+        <div tw="flex flex-col" style={{ rowGap: '3px' }}>
+            {marker && (
                 <div
-                    key={rowIndex}
-                    tw="flex"
+                    tw="flex self-start rounded-sm px-1.5 py-0.5 text-[10px] leading-none text-[#64748b] bg-[#f1f5f9]"
                     style={{
-                        columnGap: `${MEDIA_GAP}px`,
-                        justifyContent: row.length === 1 ? 'center' : 'flex-start',
+                        fontWeight: 600,
                     }}
                 >
-                    {row.map((tile, tileIndex) => (
-                        <ImageTile
-                            key={tileIndex}
-                            url={tile.media.url}
-                            alt={tile.media.alt}
-                            width={tile.width}
-                            height={tile.height}
-                            contain={contain}
-                        />
-                    ))}
+                    {marker}
                 </div>
-            ))}
+            )}
+            <div
+                tw="flex flex-col rounded-lg overflow-hidden shadow-sm"
+                style={{
+                    rowGap: `${MEDIA_GAP}px`,
+                }}
+            >
+                {rows.map((row, rowIndex) => (
+                    <div
+                        key={rowIndex}
+                        tw="flex"
+                        style={{
+                            columnGap: `${MEDIA_GAP}px`,
+                            justifyContent: row.length === 1 ? 'center' : 'flex-start',
+                        }}
+                    >
+                        {row.map((tile, tileIndex) => (
+                            <ImageTile
+                                key={tileIndex}
+                                url={tile.media.url}
+                                alt={tile.media.alt}
+                                width={tile.width}
+                                height={tile.height}
+                                contain={contain}
+                            />
+                        ))}
+                    </div>
+                    ))}
+            </div>
         </div>
     )
 }
@@ -756,7 +790,12 @@ function ArticleContent({
                 )}
                 {shouldRenderMedia && <Divider dash />}
                 {shouldRenderMedia && article.media && (
-                    <MediaGroup media={article.media} level={level} features={features} />
+                    <MediaGroup
+                        media={article.media}
+                        level={level}
+                        features={features}
+                        marker={level > 0 ? `引用层 ${level} 图集` : undefined}
+                    />
                 )}
                 {article.ref && typeof article.ref === 'object' && (
                     <ArticleContent article={article.ref} level={level + 1} features={features} />
@@ -831,6 +870,7 @@ function BaseCard({
                 'pb-3': !hasVisualMedia,
             })}
             style={{
+                fontFamily: CARD_FONT_FAMILY,
                 rowGap: '6px',
             }}
         >
@@ -920,5 +960,5 @@ function articleParser(
     }
 }
 
-export { estimateImagesHeight, estimateTextLinesHeight, BaseCard, articleParser }
+export { estimateImagesHeight, estimateTextLinesHeight, layoutMediaRows, BaseCard, articleParser }
 export { BASE_FONT_SIZE, CARD_WIDTH, CONTENT_WIDTH }

@@ -27,6 +27,25 @@ function withCache(fn: Function) {
 }
 
 const detector = new FontDetector()
+const SATORI_LANG_CODES = new Set([
+    'ja-JP',
+    'ko-KR',
+    'zh-CN',
+    'zh-TW',
+    'zh-HK',
+    'th-TH',
+    'bn-IN',
+    'ar-AR',
+    'ta-IN',
+    'ml-IN',
+    'he-IL',
+    'te-IN',
+    'devanagari',
+    'kannada',
+    'emoji',
+    'symbol',
+    'math',
+])
 const SYSTEM_FALLBACK_FONTS: Array<FontConfig & { paths: Array<string> }> = [
     {
         name: 'Noto Sans CJK JP',
@@ -199,7 +218,7 @@ const loadDynamicAsset = withCache(async (emojiType: keyof typeof apis, _code: s
                     data: fontData,
                     weight: weight,
                     style: 'normal',
-                    lang: languageCode === 'unknown' ? undefined : languageCode,
+                    lang: SATORI_LANG_CODES.has(languageCode) ? languageCode : undefined,
                 })
             }
         }

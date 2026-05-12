@@ -12,6 +12,48 @@
         "weight": 700
     },
     {
+        "name": "Noto Sans Lao",
+        "font_file_name": "NotoSansLao-Regular.ttf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Noto Sans Lao",
+        "font_file_name": "NotoSansLao-Bold.ttf",
+        "style": "normal",
+        "weight": 700
+    },
+    {
+        "name": "Noto Sans Yi",
+        "font_file_name": "NotoSansYi-Regular.ttf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Noto Sans Symbols",
+        "font_file_name": "NotoSansSymbols-Regular.ttf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Noto Sans Symbols",
+        "font_file_name": "NotoSansSymbols-Bold.ttf",
+        "style": "normal",
+        "weight": 700
+    },
+    {
+        "name": "Noto Sans Symbols 2",
+        "font_file_name": "NotoSansSymbols2-Regular.ttf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Unifont",
+        "font_file_name": "Unifont-Regular.otf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
         "name": "Noto Sans Math",
         "font_file_name": "NotoSansMath-Regular.ttf",
         "style": "normal",

@@ -433,6 +433,38 @@ describe('RenderService text-card', () => {
 
         service.cleanup(result.mediaFiles)
     })
+
+    test('renders decorative fallback glyphs in text cards', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 16,
+                a_id: 'decorative-fallback-card',
+                u_id: 'decorative_test',
+                username: '໒꒱· ﾟ',
+                created_at: 1710000000,
+                content: '໒꒱· ﾟ ⌁ ⟡ ✦ ♡ ᜊ ᓚᘏᗢ',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/decorative/status/fallback',
+                type: 'tweet',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            } as any,
+            {
+                taskId: 'test-decorative-fallback-card',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
 })
 
 describe('RenderService media deduplication', () => {

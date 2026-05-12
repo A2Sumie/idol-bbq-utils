@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import { resolve227WebsiteBrandKey } from '../template/img/DefaultCard'
+import { layoutMediaRows, resolve227WebsiteBrandKey } from '../template/img/DefaultCard'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
     return {
@@ -45,4 +45,20 @@ test('resolve227WebsiteBrandKey ignores non-22/7 website data and non-website pl
             extra: null,
         } as Parameters<typeof resolve227WebsiteBrandKey>[0]),
     ).toBeNull()
+})
+
+test('layoutMediaRows handles three and four image sets without pairing incompatible ratios', () => {
+    const wide = { type: 'photo' as const, url: 'wide', width: 1600, height: 900 }
+    const portrait = { type: 'photo' as const, url: 'portrait', width: 900, height: 1200 }
+    const ultraWide = { type: 'photo' as const, url: 'ultra-wide', width: 1800, height: 500 }
+    const ultraTall = { type: 'photo' as const, url: 'ultra-tall', width: 300, height: 1400 }
+
+    expect(layoutMediaRows([wide, portrait, portrait], 0).map((row) => row.length)).toEqual([1, 2])
+    expect(layoutMediaRows([portrait, portrait, portrait, portrait], 0).map((row) => row.length)).toEqual([2, 2])
+    expect(layoutMediaRows([wide, portrait, ultraWide, ultraTall], 0).map((row) => row.length)).toEqual([
+        1,
+        1,
+        1,
+        1,
+    ])
 })
