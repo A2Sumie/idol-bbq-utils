@@ -40,6 +40,33 @@ interface InstagramProfileStatus {
 
 const INSTAGRAM_PROFILE_ID_PATTERN = /^[A-Za-z0-9._]+$/i
 const RESERVED_INSTAGRAM_PATHS = new Set(['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct'])
+const INSTAGRAM_AUTO_MEDIA_SUMMARY_PATTERNS = [
+    /^(?:\d+\.\s*)?(?:may be (?:an?\s+|the\s+)?(?:image|photo|picture|video|reel|story|selfie|screenshot|meme|poster|text|closeup|one or more people)\b|(?:this\s+)?image may contain\b|no (?:photo|video) description available\b)/i,
+    /^(?:\d+\.\s*)?(?:photo|video|image|reel|story) (?:by|shared by) .{1,160}? on .{3,80}\.\s*(?:may be\b|(?:this\s+)?image may contain\b|no (?:photo|video) description available\b)/i,
+]
+
+function sanitizeInstagramGeneratedText(text: unknown): string | null {
+    if (typeof text !== 'string') {
+        return null
+    }
+
+    const normalized = text.replace(/\s+/g, ' ').trim()
+    if (!normalized) {
+        return null
+    }
+
+    return INSTAGRAM_AUTO_MEDIA_SUMMARY_PATTERNS.some((pattern) => pattern.test(normalized)) ? null : normalized
+}
+
+function extractStoryAccessibilityText(caption: unknown): string | null {
+    const normalized = sanitizeInstagramGeneratedText(caption)
+    if (!normalized) {
+        return null
+    }
+
+    const numberedText = normalized.match(/^\d+\.\s*(?<text>.*)$/)?.groups?.text
+    return sanitizeInstagramGeneratedText(numberedText || normalized)
+}
 
 class InstagramSpider extends BaseSpider {
     // extends from XBaseSpider regex
@@ -199,7 +226,7 @@ namespace InsApiJsonParser {
             u_id: handle,
             username: fallbackUsername(node?.user?.full_name, node?.owner?.full_name, handle),
             created_at: node?.taken_at,
-            content: node?.caption?.text,
+            content: sanitizeInstagramGeneratedText(node?.caption?.text),
             url: `https://www.instagram.com/p/${node?.code}/`,
             type: ArticleTypeEnum.POST,
             ref: null,
@@ -232,7 +259,6 @@ namespace InsApiJsonParser {
     //         u_avatar: null,
     //     }
     // }
-    const STORY_ACCESSIBILITY_CAPTION_REGEX = /(?<=.*?\d+\.\s).*/
     function storyParser(item: any): GenericArticle<Platform.Instagram> {
         return {
             platform: Platform.Instagram,
@@ -240,7 +266,7 @@ namespace InsApiJsonParser {
             u_id: '',
             username: '',
             created_at: item?.taken_at,
-            content: item?.accessibility_caption?.match(STORY_ACCESSIBILITY_CAPTION_REGEX)?.[0] || null,
+            content: extractStoryAccessibilityText(item?.accessibility_caption),
             url: '',
             type: ArticleTypeEnum.STORY,
             ref: null,

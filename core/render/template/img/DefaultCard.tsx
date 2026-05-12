@@ -23,18 +23,20 @@ const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'ph
 const DEFAULT_PLATFORM_BADGE_WIDTH = 32
 const DEFAULT_CARD_FEATURES = new Set(['media-contain', 'website-inline-media'])
 const MEDIA_GAP = 4
-const CARD_FONT_FAMILY = [
+export const CARD_FONT_FAMILY = [
+    'Noto Sans CJK JP',
+    'Noto Sans JP',
     'Noto Sans',
     'Noto Sans Lao',
     'Noto Sans Symbols 2',
     'Noto Sans Symbols',
     'Noto Sans Math',
-    'Unifont',
     'Noto Sans Yi',
     'Noto Sans Canadian Aboriginal',
     'Noto Sans Gujarati',
     'Noto Sans Georgian',
     'Noto Sans Oriya',
+    'Unifont',
 ].join(', ')
 
 type CardRenderFeatures = Set<string>

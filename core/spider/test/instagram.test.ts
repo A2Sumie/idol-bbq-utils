@@ -98,6 +98,100 @@ test('Instagram API JSON Parser', async () => {
     })
 })
 
+test('Instagram parser drops generated media summaries while preserving real captions', () => {
+    const posts = InsApiJsonParser.postsParser({
+        data: {
+            user: {
+                edge_owner_to_timeline_media: {
+                    edges: [
+                        {
+                            node: {
+                                code: 'AUTOALT',
+                                taken_at: 1773845200,
+                                caption: {
+                                    text: 'May be an image of 1 person, strawberry and text',
+                                },
+                                user: {
+                                    username: 'ig_user',
+                                    full_name: 'IG User',
+                                    hd_profile_pic_url_info: {
+                                        url: 'https://example.com/avatar.jpg',
+                                    },
+                                },
+                                image_versions2: {
+                                    candidates: [{ width: 720, url: 'https://example.com/photo.jpg' }],
+                                },
+                            },
+                        },
+                        {
+                            node: {
+                                code: 'REALCAP',
+                                taken_at: 1773845201,
+                                caption: {
+                                    text: 'May be we can still use this phrase as a real caption',
+                                },
+                                user: {
+                                    username: 'ig_user',
+                                    full_name: 'IG User',
+                                    hd_profile_pic_url_info: {
+                                        url: 'https://example.com/avatar.jpg',
+                                    },
+                                },
+                                image_versions2: {
+                                    candidates: [{ width: 720, url: 'https://example.com/photo2.jpg' }],
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    })
+
+    expect(posts[0]?.content).toBeNull()
+    expect(posts[1]?.content).toBe('May be we can still use this phrase as a real caption')
+})
+
+test('Instagram stories drop accessibility summaries', async () => {
+    const page = {
+        goto: async () => undefined,
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+        $$: async () => [
+            {
+                evaluate: async () =>
+                    JSON.stringify({
+                        xdt_api__v1__feed__reels_media: true,
+                        reels_media: [
+                            {
+                                user: {
+                                    username: 'nananijigram22_7',
+                                },
+                                items: [
+                                    {
+                                        id: '36963634381048168_1',
+                                        taken_at: 1773845200,
+                                        accessibility_caption: '1. May be a photo of one or more people',
+                                        image_versions2: {
+                                            candidates: [{ width: 720, url: 'https://example.com/story.jpg' }],
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    }),
+            },
+        ],
+        $: async () => null,
+    } as any
+
+    const stories = await InsApiJsonParser.grabStories(page, 'https://www.instagram.com/stories/nananijigram22_7/')
+
+    expect(stories).toHaveLength(1)
+    expect(stories[0]?.content).toBeNull()
+})
+
 test('Instagram profile status parser detects live broadcasts', () => {
     const profile_json = {
         data: {

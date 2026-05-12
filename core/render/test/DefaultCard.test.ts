@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import { layoutMediaRows, resolve227WebsiteBrandKey } from '../template/img/DefaultCard'
+import { CARD_FONT_FAMILY, layoutMediaRows, resolve227WebsiteBrandKey } from '../template/img/DefaultCard'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
     return {
@@ -61,4 +61,12 @@ test('layoutMediaRows handles three and four image sets without pairing incompat
         1,
         1,
     ])
+})
+
+test('card font family keeps CJK before broad fallback fonts', () => {
+    const families = CARD_FONT_FAMILY.split(',').map((font) => font.trim())
+
+    expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Noto Sans'))
+    expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Unifont'))
+    expect(families.indexOf('Noto Sans JP')).toBeLessThan(families.indexOf('Unifont'))
 })
