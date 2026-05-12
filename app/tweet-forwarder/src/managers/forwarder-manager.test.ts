@@ -5,6 +5,7 @@ import {
     ForwarderTaskScheduler,
     buildAutoBoundForwarderTaskData,
     resolveBatchTargetIds,
+    resolveSummaryCardConfig,
 } from './forwarder-manager'
 import { TaskScheduler } from '@/utils/base'
 import { fileURLToPath } from 'url'
@@ -54,6 +55,32 @@ test('resolveBatchTargetIds skips targets with bypass_batch enabled', () => {
     )
 
     expect(targetIds).toEqual(['group-1', 'group-3'])
+})
+
+test('resolveSummaryCardConfig defaults to an eight-item summary card threshold', () => {
+    expect(resolveSummaryCardConfig({ summary_card: true } as any)).toEqual({
+        intervalSeconds: 1800,
+        threshold: 8,
+        maxItems: 14,
+        includeOriginalMedia: false,
+    })
+    expect(
+        resolveSummaryCardConfig({
+            summary_card: {
+                enabled: true,
+                interval_seconds: 900,
+                threshold: 3,
+                max_items: 6,
+                include_original_media: true,
+            },
+        } as any),
+    ).toEqual({
+        intervalSeconds: 900,
+        threshold: 3,
+        maxItems: 6,
+        includeOriginalMedia: true,
+    })
+    expect(resolveSummaryCardConfig({ summary_card: { enabled: false } } as any)).toBeNull()
 })
 
 test('buildAutoBoundForwarderTaskData keeps crawler identity and merges media config from matching template', () => {
@@ -1585,4 +1612,112 @@ test('sendArticles does not increment article error count when every target is i
 
     expect(target.sent).toHaveLength(0)
     expect((pools as any).errorCounter.get('5:website-old-skip')).toBeUndefined()
+})
+
+test('sendArticles queues summary-card targets and flushes at the configured threshold', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 2,
+                interval_seconds: 1800,
+                include_original_media: false,
+            },
+        } as any,
+        'target-summary-card',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                }
+            }
+            return {
+                text: article.content,
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [{ media_type: 'photo', path: `/tmp/original-${article.id}.jpg` }],
+                mediaFiles: [{ media_type: 'photo', path: `/tmp/original-${article.id}.jpg` }],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => false
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-threshold',
+            [1, 2].map((id) => ({
+                id,
+                a_id: `summary-${id}`,
+                platform: Platform.X,
+                username: `member${id}`,
+                u_id: `member${id}`,
+                content: `summary content ${id}`,
+                url: `https://x.com/member/status/${id}`,
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: `https://example.com/${id}.jpg` }],
+                extra: null,
+                u_avatar: null,
+            })),
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text-card',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(2)
+    expect(target.sent[0]?.props?.forceSend).toBeTrue()
+    expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
+    expect(target.sent[0]?.texts[0]).toContain('更新摘要')
+    expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })

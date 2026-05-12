@@ -41,12 +41,35 @@ type TagDigestGroup = {
     tag: string
     articles: Array<ArticleWithId>
 }
+type ResolvedSummaryCardConfig = {
+    intervalSeconds: number
+    threshold: number
+    maxItems: number
+    includeOriginalMedia: boolean
+}
+type SummaryCardQueueItem = {
+    article: ArticleWithId
+    queuedAt: number
+    originalMediaFiles: Array<RenderResult['originalMediaFiles'][number]>
+    digestTags: Array<string>
+}
+type SummaryCardQueue = {
+    target: BaseForwarder
+    runtime_config?: ForwardTargetPlatformCommonConfig
+    config: ResolvedSummaryCardConfig
+    items: Map<number, SummaryCardQueueItem>
+    firstQueuedAt: number
+    lastQueuedAt: number
+}
 
 const DEFAULT_TAG_DIGEST_THRESHOLD = 3
 const DEFAULT_TAG_DIGEST_MIN_AUTHORS = 2
 const DEFAULT_TAG_DIGEST_DETECTION_WINDOW_SECONDS = 5 * 60
 const DEFAULT_TAG_DIGEST_WINDOW_SECONDS = 20 * 60
 const DEFAULT_COLLAPSE_FORWARDED_REF_WINDOW_SECONDS = 18 * 3600
+const DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS = 30 * 60
+const DEFAULT_SUMMARY_CARD_THRESHOLD = 8
+const DEFAULT_SUMMARY_CARD_MAX_ITEMS = 14
 const HIGH_REALTIME_GROUP_IDS = new Set(['742435777'])
 const HASHTAG_REGEX = /[#＃][\p{L}\p{N}_ー一-龯ぁ-んァ-ヶ]+/gu
 
@@ -91,6 +114,32 @@ function truncateDigestText(text: string, maxLength: number) {
         return text
     }
     return `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`
+}
+
+function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): ResolvedSummaryCardConfig | null {
+    const raw = config.summary_card
+    const enabled = raw === true || (typeof raw === 'object' && raw?.enabled !== false)
+    if (!enabled) {
+        return null
+    }
+
+    const objectConfig = typeof raw === 'object' && raw ? raw : {}
+    const intervalSeconds = Math.max(
+        60,
+        Math.floor(Number(objectConfig.interval_seconds || DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS)),
+    )
+    const threshold = Math.max(2, Math.floor(Number(objectConfig.threshold || DEFAULT_SUMMARY_CARD_THRESHOLD)))
+    const maxItems = Math.max(
+        3,
+        Math.min(Math.floor(Number(objectConfig.max_items || DEFAULT_SUMMARY_CARD_MAX_ITEMS)), 30),
+    )
+
+    return {
+        intervalSeconds,
+        threshold,
+        maxItems,
+        includeOriginalMedia: objectConfig.include_original_media === true,
+    }
 }
 
 function extractArticleHashtags(article: ArticleWithId) {
@@ -538,6 +587,8 @@ class ForwarderPools extends BaseCompatibleModel {
      */
     private errorCounter = new Map<string, number>()
     private tagDigestStates = new Map<string, TagDigestState>()
+    private summaryCardQueues = new Map<string, SummaryCardQueue>()
+    private summaryCardFlushTimer?: ReturnType<typeof setInterval>
     private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
 
     // private workers:
@@ -566,6 +617,12 @@ class ForwarderPools extends BaseCompatibleModel {
     async init() {
         this.log?.info('Forwarder Pools initializing...')
         this.emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
+        this.summaryCardFlushTimer = setInterval(() => {
+            this.flushDueSummaryCardQueues().catch((error) => {
+                this.log?.error(`Failed to flush due summary card queues: ${error}`)
+            })
+        }, 30 * 1000)
+        this.summaryCardFlushTimer.unref?.()
         // create targets
         const { cfg_forward_target } = this.props
         await Promise.all(
@@ -706,6 +763,11 @@ class ForwarderPools extends BaseCompatibleModel {
     async drop(...args: any[]): Promise<void> {
         this.log?.info('Dropping Pools...')
         this.emitter.off(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
+        if (this.summaryCardFlushTimer) {
+            clearInterval(this.summaryCardFlushTimer)
+            this.summaryCardFlushTimer = undefined
+        }
+        await this.flushAllSummaryCardQueues()
         for (const forwarder of this.forward_to.values()) {
             await forwarder.drop().catch((error) => {
                 this.log?.warn(`Failed to drop forwarder ${forwarder.id}: ${error}`)
@@ -714,6 +776,7 @@ class ForwarderPools extends BaseCompatibleModel {
         this.forward_to.clear()
         this.subscribers.clear()
         this.errorCounter.clear()
+        this.summaryCardQueues.clear()
         this.log?.info('Pools dropped')
     }
 
@@ -964,7 +1027,10 @@ class ForwarderPools extends BaseCompatibleModel {
                         render_type: formatterConfig.render_type,
                         aggregation: formatterConfig.aggregation,
                         deduplication: formatterConfig.deduplication,
-                        render_features: mergeFeatureFlags(cfg_forwarder?.render_features, formatterConfig.render_features),
+                        render_features: mergeFeatureFlags(
+                            cfg_forwarder?.render_features,
+                            formatterConfig.render_features,
+                        ),
                         card_features: mergeFeatureFlags(cfg_forwarder?.card_features, formatterConfig.card_features),
                     },
                     targets: validTargets,
@@ -1203,6 +1269,18 @@ class ForwarderPools extends BaseCompatibleModel {
                                     return
                                 }
                             }
+
+                            const queuedForSummary = await this.maybeQueueSummaryCardArticle(
+                                log,
+                                article,
+                                renderResult,
+                                target,
+                                runtime_config,
+                            )
+                            if (queuedForSummary) {
+                                hadNonErrorOutcome = true
+                                return
+                            }
                         }
 
                         const text = await this.resolveTargetTextForArticle(
@@ -1314,6 +1392,337 @@ class ForwarderPools extends BaseCompatibleModel {
         })
     }
 
+    private async maybeQueueSummaryCardArticle(
+        log: Logger | undefined,
+        article: ArticleWithId,
+        renderResult: RenderResult,
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ) {
+        const effectiveConfig = target.getEffectiveConfig(runtime_config)
+        const summaryConfig = resolveSummaryCardConfig(effectiveConfig)
+        if (!summaryConfig) {
+            return false
+        }
+
+        const blocked = await target.check_blocked('', {
+            timestamp: article.created_at,
+            runtime_config,
+            article: cloneDeep(article),
+        })
+        if (blocked) {
+            await this.claimArticleChain(article, article.platform, target.id)
+            log?.debug(`Summary-card target ${target.id} blocked ${article.a_id}; claimed without queueing.`)
+            return true
+        }
+
+        const now = Math.floor(Date.now() / 1000)
+        const queueKey = this.getSummaryCardQueueKey(target.id, runtime_config, summaryConfig)
+        const queue = this.summaryCardQueues.get(queueKey) || {
+            target,
+            runtime_config,
+            config: summaryConfig,
+            items: new Map<number, SummaryCardQueueItem>(),
+            firstQueuedAt: now,
+            lastQueuedAt: now,
+        }
+
+        queue.target = target
+        queue.runtime_config = runtime_config
+        queue.config = summaryConfig
+        queue.lastQueuedAt = now
+        queue.items.set(article.id, {
+            article: cloneDeep(article),
+            queuedAt: now,
+            originalMediaFiles: summaryConfig.includeOriginalMedia ? [...renderResult.originalMediaFiles] : [],
+            digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
+        })
+        this.summaryCardQueues.set(queueKey, queue)
+        log?.debug(
+            `Queued summary-card item ${article.a_id} for ${target.id}: ${queue.items.size}/${summaryConfig.threshold}`,
+        )
+
+        if (queue.items.size >= summaryConfig.threshold) {
+            await this.flushSummaryCardQueue(queueKey, 'threshold')
+        }
+        return true
+    }
+
+    private getSummaryCardQueueKey(
+        targetId: string,
+        runtime_config: ForwardTargetPlatformCommonConfig | undefined,
+        config: ResolvedSummaryCardConfig,
+    ) {
+        const hash = crypto
+            .createHash('md5')
+            .update(JSON.stringify({ runtime_config: runtime_config || {}, config }))
+            .digest('hex')
+        return `${targetId}:${hash}`
+    }
+
+    private async flushDueSummaryCardQueues() {
+        const now = Math.floor(Date.now() / 1000)
+        for (const [queueKey, queue] of Array.from(this.summaryCardQueues.entries())) {
+            if (queue.items.size > 0 && now - queue.firstQueuedAt >= queue.config.intervalSeconds) {
+                await this.flushSummaryCardQueue(queueKey, 'interval')
+            }
+        }
+    }
+
+    private async flushAllSummaryCardQueues() {
+        for (const queueKey of Array.from(this.summaryCardQueues.keys())) {
+            await this.flushSummaryCardQueue(queueKey, 'shutdown')
+        }
+    }
+
+    private async flushSummaryCardQueue(queueKey: string, reason: 'threshold' | 'interval' | 'shutdown') {
+        const queue = this.summaryCardQueues.get(queueKey)
+        if (!queue || queue.items.size === 0) {
+            this.summaryCardQueues.delete(queueKey)
+            return
+        }
+        this.summaryCardQueues.delete(queueKey)
+
+        const claimedItems: SummaryCardQueueItem[] = []
+        for (const item of orderBy(
+            Array.from(queue.items.values()),
+            ['article.created_at', 'article.id'],
+            ['asc', 'asc'],
+        )) {
+            const claimed = await this.claimArticleChain(item.article, item.article.platform, queue.target.id)
+            if (claimed) {
+                claimedItems.push(item)
+            }
+        }
+
+        if (claimedItems.length === 0) {
+            return
+        }
+
+        const groups = this.buildSummaryCardGroups(claimedItems)
+        for (const group of groups) {
+            const ok = await this.sendSummaryCardGroup(queue, group, reason)
+            if (!ok) {
+                for (const item of group.items) {
+                    await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)
+                }
+            }
+        }
+    }
+
+    private buildSummaryCardGroups(items: SummaryCardQueueItem[]) {
+        const stormItems = items.filter((item) => item.digestTags.length > 0)
+        const groups: Array<{ kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] }> = []
+
+        if (stormItems.length > 0) {
+            groups.push({
+                kind: 'storm',
+                label: uniquePreserveOrder(stormItems.flatMap((item) => item.digestTags)).join(' '),
+                items: stormItems,
+            })
+        }
+
+        const threadGroups = new Map<string, SummaryCardQueueItem[]>()
+        for (const item of items.filter((candidate) => candidate.digestTags.length === 0)) {
+            const key = this.getArticleThreadKey(item.article)
+            const existing = threadGroups.get(key) || []
+            existing.push(item)
+            threadGroups.set(key, existing)
+        }
+
+        for (const [key, groupItems] of threadGroups) {
+            groups.push({
+                kind: 'thread',
+                label: key,
+                items: groupItems,
+            })
+        }
+
+        return groups
+    }
+
+    private async sendSummaryCardGroup(
+        queue: SummaryCardQueue,
+        group: { kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] },
+        reason: 'threshold' | 'interval' | 'shutdown',
+    ) {
+        const sorted = orderBy(group.items, ['article.created_at', 'article.id'], ['asc', 'asc'])
+        const content = this.buildSummaryCardContent(group.kind, sorted, queue.config)
+        const title =
+            group.kind === 'storm'
+                ? `话题风暴摘要 ${group.label}`.trim()
+                : `更新摘要 ${this.formatSummaryCardRange(sorted.map((item) => item.article))}`
+        const now = Math.floor(Date.now() / 1000)
+        const summaryArticle = this.buildSyntheticSummaryArticle(title, content, sorted[0]?.article, now)
+        const cardResult = await this.renderService.process(summaryArticle, {
+            taskId: `summary-card-${queue.target.id}-${now}`,
+            render_type: 'text-card',
+            deduplication: false,
+        })
+        const originalMediaFiles = queue.config.includeOriginalMedia
+            ? sorted.flatMap((item) => item.originalMediaFiles)
+            : []
+        const mediaFiles = [...cardResult.cardMediaFiles, ...originalMediaFiles]
+
+        try {
+            await queue.target.send(title, {
+                media: mediaFiles,
+                cardMedia: cardResult.cardMediaFiles,
+                contentMedia: originalMediaFiles,
+                timestamp: now,
+                runtime_config: queue.runtime_config,
+                article: summaryArticle,
+                forceSend: true,
+            })
+            this.log?.info(
+                `Sent ${group.kind} summary card (${reason}) with ${sorted.length} articles to ${queue.target.id}`,
+            )
+            return true
+        } catch (error) {
+            this.log?.error(`Failed to send ${group.kind} summary card to ${queue.target.id}: ${error}`)
+            return false
+        } finally {
+            this.renderService.cleanup(cardResult.mediaFiles)
+        }
+    }
+
+    private buildSyntheticSummaryArticle(
+        title: string,
+        content: string,
+        sourceArticle: ArticleWithId | undefined,
+        now: number,
+    ): ArticleWithId {
+        return {
+            id: -now,
+            platform: sourceArticle?.platform || Platform.X,
+            a_id: `summary-card-${now}`,
+            u_id: 'summary',
+            username: '七虹信标摘要',
+            created_at: now,
+            content: `${title}\n\n${content}`,
+            url: sourceArticle?.url || '',
+            type: 'summary' as any,
+            ref: null,
+            has_media: false,
+            media: null,
+            extra: null,
+            u_avatar: sourceArticle?.u_avatar || null,
+        }
+    }
+
+    private buildSummaryCardContent(
+        kind: 'storm' | 'thread',
+        items: SummaryCardQueueItem[],
+        config: ResolvedSummaryCardConfig,
+    ) {
+        const shown = items.slice(0, config.maxItems)
+        const omitted = items.length - shown.length
+
+        if (kind === 'storm') {
+            const tags = uniquePreserveOrder(items.flatMap((item) => item.digestTags))
+            const lines = shown.map((item, index) => {
+                const article = item.article
+                const time = dayjs.unix(article.created_at).format('HH:mm')
+                const author = article.username || article.u_id || 'unknown'
+                const headline = extractArticleNonTagText(article, 120)
+                return `${index + 1}. [${time}] ${author}: ${headline}`
+            })
+            if (omitted > 0) {
+                lines.push(`另有 ${omitted} 条更新已合并`)
+            }
+            return [
+                `标签: ${tags.join(' ')}`,
+                `范围: ${this.formatSummaryCardRange(items.map((item) => item.article))}`,
+                ...lines,
+            ].join('\n')
+        }
+
+        const root = this.getArticleThreadRoot(items[0]?.article)
+        const rootLine = root
+            ? `串: ${root.username || root.u_id || 'unknown'} / ${extractArticleHeadline(root as any, 100)}`
+            : undefined
+        const lines = shown.map((item, index) => {
+            const article = item.article
+            const time = dayjs.unix(article.created_at).format('HH:mm')
+            const replyMark = article.ref && typeof article.ref === 'object' ? '↪ ' : ''
+            const author = article.username || article.u_id || 'unknown'
+            const headline = extractArticleHeadline(article as any, 120) || article.url || article.a_id
+            return `${index + 1}. [${time}] ${replyMark}${author}: ${headline}`
+        })
+        if (omitted > 0) {
+            lines.push(`另有 ${omitted} 条更新已合并`)
+        }
+        return [rootLine, ...lines].filter(Boolean).join('\n')
+    }
+
+    private formatSummaryCardRange(articles: ArticleWithId[]) {
+        const sorted = orderBy(articles, ['created_at', 'id'], ['asc', 'asc'])
+        const start = dayjs.unix(sorted[0]?.created_at || Math.floor(Date.now() / 1000)).format('HH:mm')
+        const end = dayjs.unix(sorted[sorted.length - 1]?.created_at || Math.floor(Date.now() / 1000)).format('HH:mm')
+        return `${sorted.length}条 / ${start}-${end}`
+    }
+
+    private getArticleThreadRoot(article?: ArticleWithId | Article | null): ArticleWithId | Article | null {
+        let current: ArticleWithId | Article | null | undefined = article
+        let root: ArticleWithId | Article | null = current || null
+        while (current?.ref && typeof current.ref === 'object') {
+            root = current.ref as ArticleWithId | Article
+            current = current.ref as ArticleWithId | Article
+        }
+        return root
+    }
+
+    private getArticleThreadKey(article: ArticleWithId) {
+        const root = this.getArticleThreadRoot(article) || article
+        return `${root.platform}:${root.a_id || root.id}`
+    }
+
+    private resolveActiveTagDigestsForArticle(
+        targetId: string,
+        article: ArticleWithId,
+        config: ForwardTargetPlatformCommonConfig,
+    ) {
+        if (!this.isTagDigestEnabled(config)) {
+            return []
+        }
+
+        const now = Math.floor(Date.now() / 1000)
+        const detectionWindow = this.resolvePositiveSeconds(
+            config.tag_digest_detection_window_seconds,
+            DEFAULT_TAG_DIGEST_DETECTION_WINDOW_SECONDS,
+        )
+        const digestWindow = this.resolvePositiveSeconds(
+            config.tag_digest_window_seconds,
+            DEFAULT_TAG_DIGEST_WINDOW_SECONDS,
+        )
+        const threshold = Math.max(2, Math.floor(Number(config.tag_digest_threshold || DEFAULT_TAG_DIGEST_THRESHOLD)))
+        const minAuthors = Math.max(
+            1,
+            Math.floor(Number(config.tag_digest_min_authors || DEFAULT_TAG_DIGEST_MIN_AUTHORS)),
+        )
+        const tags = extractArticleHashtags(article)
+
+        for (const tag of tags) {
+            const stateKey = this.getTagDigestStateKey(targetId, tag)
+            const state = this.tagDigestStates.get(stateKey) || { events: [], digestUntil: 0, displayTag: tag }
+            state.events = state.events.filter((event) => event.timestamp >= now - detectionWindow)
+            state.events.push({
+                timestamp: now,
+                authorKey: getArticleAuthorKey(article),
+            })
+            const distinctAuthorCount = new Set(state.events.map((event) => event.authorKey)).size
+            if (state.events.length >= threshold && distinctAuthorCount >= Math.min(minAuthors, threshold)) {
+                state.digestUntil = Math.max(state.digestUntil, now + digestWindow)
+            }
+            this.tagDigestStates.set(stateKey, state)
+        }
+
+        return tags.filter((tag) => {
+            const state = this.tagDigestStates.get(this.getTagDigestStateKey(targetId, tag))
+            return Boolean(state && state.digestUntil >= now)
+        })
+    }
+
     private shouldCollapseForwardedRefText(
         article: ArticleWithId,
         cfg_forwarder: Forwarder['cfg_forwarder'],
@@ -1382,6 +1791,9 @@ class ForwarderPools extends BaseCompatibleModel {
 
         for (const { article, to } of articlesForwarders) {
             for (const { forwarder: target, runtime_config } of to) {
+                if (resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))) {
+                    continue
+                }
                 const blocked = await target.check_blocked('', {
                     timestamp: article.created_at,
                     runtime_config,
@@ -1800,4 +2212,9 @@ class ForwarderPools extends BaseCompatibleModel {
 }
 
 export { ForwarderTaskScheduler, ForwarderPools }
-export { buildAutoBoundForwarderTaskData, resolveBatchTargetIds, resolveMatchingForwarderTemplate }
+export {
+    buildAutoBoundForwarderTaskData,
+    resolveBatchTargetIds,
+    resolveMatchingForwarderTemplate,
+    resolveSummaryCardConfig,
+}

@@ -142,6 +142,19 @@ interface ForwardTargetPlatformCommonConfig {
      */
     tag_digest_max_items?: number
     /**
+     * Accumulate eligible articles for this target and send a rendered summary card on interval or threshold.
+     * When include_original_media is false, only the summary card image is sent.
+     */
+    summary_card?:
+        | boolean
+        | {
+              enabled?: boolean
+              interval_seconds?: number
+              threshold?: number
+              max_items?: number
+              include_original_media?: boolean
+          }
+    /**
      * Collapse the text body of referenced/replied-to articles that were already forwarded to this target.
      * Defaults to enabled except for explicitly high-realtime targets.
      */
