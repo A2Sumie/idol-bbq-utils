@@ -1614,7 +1614,7 @@ test('sendArticles does not increment article error count when every target is i
     expect((pools as any).errorCounter.get('5:website-old-skip')).toBeUndefined()
 })
 
-test('sendArticles queues summary-card targets and flushes at the configured threshold', async () => {
+test('sendArticles sends idle-first summary-card items and flushes later items at threshold', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -1685,7 +1685,7 @@ test('sendArticles queues summary-card targets and flushes at the configured thr
         await (pools as any).sendArticles(
             undefined,
             'summary-threshold',
-            [1, 2].map((id) => ({
+            [1, 2, 3].map((id) => ({
                 id,
                 a_id: `summary-${id}`,
                 platform: Platform.X,
@@ -1715,9 +1715,10 @@ test('sendArticles queues summary-card targets and flushes at the configured thr
         ;(DB.ForwardBy as any).checkExist = originalCheckExist
     }
 
-    expect(target.sent).toHaveLength(2)
+    expect(target.sent).toHaveLength(3)
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
     expect(target.sent[0]?.texts[0]).toContain('更新摘要')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
+    expect(target.sent[2]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })

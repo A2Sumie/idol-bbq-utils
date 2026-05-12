@@ -588,6 +588,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private errorCounter = new Map<string, number>()
     private tagDigestStates = new Map<string, TagDigestState>()
     private summaryCardQueues = new Map<string, SummaryCardQueue>()
+    private summaryCardLastObservedAt = new Map<string, number>()
     private summaryCardFlushTimer?: ReturnType<typeof setInterval>
     private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
 
@@ -1418,12 +1419,31 @@ class ForwarderPools extends BaseCompatibleModel {
 
         const now = Math.floor(Date.now() / 1000)
         const queueKey = this.getSummaryCardQueueKey(target.id, runtime_config, summaryConfig)
-        const queue = this.summaryCardQueues.get(queueKey) || {
+        const lastObservedAt = this.summaryCardLastObservedAt.get(queueKey)
+        const existingQueue = this.summaryCardQueues.get(queueKey)
+        const item: SummaryCardQueueItem = {
+            article: cloneDeep(article),
+            queuedAt: now,
+            originalMediaFiles: summaryConfig.includeOriginalMedia ? [...renderResult.originalMediaFiles] : [],
+            digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
+        }
+
+        if (!existingQueue && (!lastObservedAt || now - lastObservedAt >= summaryConfig.intervalSeconds)) {
+            const sent = await this.sendImmediateSummaryCardItem(target, runtime_config, summaryConfig, item)
+            this.summaryCardLastObservedAt.set(queueKey, now)
+            if (!sent) {
+                await this.releaseArticleChain(item.article, item.article.platform, target.id)
+            }
+            log?.debug(`Sent idle-first summary-card item ${article.a_id} for ${target.id}.`)
+            return true
+        }
+
+        const queue = existingQueue || {
             target,
             runtime_config,
             config: summaryConfig,
             items: new Map<number, SummaryCardQueueItem>(),
-            firstQueuedAt: now,
+            firstQueuedAt: lastObservedAt || now,
             lastQueuedAt: now,
         }
 
@@ -1431,12 +1451,8 @@ class ForwarderPools extends BaseCompatibleModel {
         queue.runtime_config = runtime_config
         queue.config = summaryConfig
         queue.lastQueuedAt = now
-        queue.items.set(article.id, {
-            article: cloneDeep(article),
-            queuedAt: now,
-            originalMediaFiles: summaryConfig.includeOriginalMedia ? [...renderResult.originalMediaFiles] : [],
-            digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
-        })
+        queue.items.set(article.id, item)
+        this.summaryCardLastObservedAt.set(queueKey, now)
         this.summaryCardQueues.set(queueKey, queue)
         log?.debug(
             `Queued summary-card item ${article.a_id} for ${target.id}: ${queue.items.size}/${summaryConfig.threshold}`,
@@ -1460,6 +1476,31 @@ class ForwarderPools extends BaseCompatibleModel {
         return `${targetId}:${hash}`
     }
 
+    private async sendImmediateSummaryCardItem(
+        target: BaseForwarder,
+        runtime_config: ForwardTargetPlatformCommonConfig | undefined,
+        config: ResolvedSummaryCardConfig,
+        item: SummaryCardQueueItem,
+    ) {
+        const claimed = await this.claimArticleChain(item.article, item.article.platform, target.id)
+        if (!claimed) {
+            return true
+        }
+
+        return this.sendSummaryCardGroup(
+            {
+                target,
+                runtime_config,
+                config,
+                items: new Map([[item.article.id, item]]),
+                firstQueuedAt: item.queuedAt,
+                lastQueuedAt: item.queuedAt,
+            },
+            { kind: 'thread', label: this.getArticleThreadKey(item.article), items: [item] },
+            'idle-first',
+        )
+    }
+
     private async flushDueSummaryCardQueues() {
         const now = Math.floor(Date.now() / 1000)
         for (const [queueKey, queue] of Array.from(this.summaryCardQueues.entries())) {
@@ -1475,13 +1516,17 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private async flushSummaryCardQueue(queueKey: string, reason: 'threshold' | 'interval' | 'shutdown') {
+    private async flushSummaryCardQueue(
+        queueKey: string,
+        reason: 'threshold' | 'interval' | 'shutdown' | 'idle-first',
+    ) {
         const queue = this.summaryCardQueues.get(queueKey)
         if (!queue || queue.items.size === 0) {
             this.summaryCardQueues.delete(queueKey)
             return
         }
         this.summaryCardQueues.delete(queueKey)
+        this.summaryCardLastObservedAt.set(queueKey, Math.floor(Date.now() / 1000))
 
         const claimedItems: SummaryCardQueueItem[] = []
         for (const item of orderBy(
@@ -1544,7 +1589,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private async sendSummaryCardGroup(
         queue: SummaryCardQueue,
         group: { kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] },
-        reason: 'threshold' | 'interval' | 'shutdown',
+        reason: 'threshold' | 'interval' | 'shutdown' | 'idle-first',
     ) {
         const sorted = orderBy(group.items, ['article.created_at', 'article.id'], ['asc', 'asc'])
         const content = this.buildSummaryCardContent(group.kind, sorted, queue.config)
