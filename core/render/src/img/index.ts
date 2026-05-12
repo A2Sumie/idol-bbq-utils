@@ -68,7 +68,30 @@ const SYSTEM_FALLBACK_FONTS: Array<FontConfig & { paths: Array<string> }> = [
             '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',
         ],
     },
+    {
+        name: 'Noto Sans JP',
+        font_file_name: '',
+        style: 'normal',
+        weight: 400,
+        paths: [
+            '/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf',
+            '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',
+            '/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf',
+        ],
+    },
+    {
+        name: 'Noto Sans JP',
+        font_file_name: '',
+        style: 'normal',
+        weight: 700,
+        paths: [
+            '/usr/share/fonts/opentype/noto/NotoSansCJKjp-Bold.otf',
+            '/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf',
+        ],
+    },
 ]
+const BASE_FONT_EXCLUDED_NAMES = new Set(['Unifont'])
+const UNIFONT_FALLBACK_CODES = new Set(['unknown', 'symbol', 'math'])
 
 // Our own encoding of multiple fonts and their code, so we can fetch them in one request. The structure is:
 // [1 byte = X, length of language code][X bytes of language code string][4 bytes = Y, length of font][Y bytes of font data]
@@ -158,6 +181,26 @@ async function loadGoogleFont(fonts: string[], text: string) {
 }
 
 // ref: https://github.com/vercel/satori/blob/78182f836b67fff48f9b6e77b7251382c2779559/playground/pages/index.tsx#L97
+function loadBundledFallbackFont(name: string): Font | null {
+    const fontsDir = process.env.FONTS_DIR || './assets/fonts'
+    const fonts: FontConfig[] = JSON.parse(fs.readFileSync(`${fontsDir}/fonts.json`, 'utf-8'))
+    const font = fonts.find((candidate) => candidate.name === name && candidate.weight === 400)
+    if (!font) {
+        return null
+    }
+
+    try {
+        return {
+            name: font.name,
+            data: fs.readFileSync(`${fontsDir}/${font.font_file_name}`),
+            weight: font.weight,
+            style: font.style,
+        }
+    } catch {
+        return null
+    }
+}
+
 const loadDynamicAsset = withCache(async (emojiType: keyof typeof apis, _code: string, text: string) => {
     if (_code === 'emoji') {
         // It's an emoji, load the image.
@@ -230,6 +273,13 @@ const loadDynamicAsset = withCache(async (emojiType: keyof typeof apis, _code: s
     } catch (e) {
         console.error('Failed to load dynamic font for', text, '. Error:', e)
     }
+
+    if (codes.some((code) => UNIFONT_FALLBACK_CODES.has(code))) {
+        const unifont = loadBundledFallbackFont('Unifont')
+        return unifont ? [unifont] : []
+    }
+
+    return []
 })
 
 class ImgConverter {
@@ -242,6 +292,7 @@ class ImgConverter {
 
     private loadBundledFonts(): Font[] {
         return this.fonts
+            .filter((font) => !BASE_FONT_EXCLUDED_NAMES.has(font.name))
             .map((font) => {
                 try {
                     const data = fs.readFileSync(`${process.env.FONTS_DIR || './assets/fonts'}/${font.font_file_name}`)

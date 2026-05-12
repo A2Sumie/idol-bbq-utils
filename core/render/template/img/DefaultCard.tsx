@@ -1,10 +1,9 @@
-import { parseRawContent, parseTranslationContent } from '@/text'
+import { formatArticleUserId, formatTime, parseRawContent, parseTranslationContent } from '@/text'
 import type { Article } from '@/types'
 import { X } from '@idol-bbq-utils/spider'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { platformArticleMapToActionText } from '@idol-bbq-utils/spider/const'
 import clsx from 'clsx'
-import dayjs from 'dayjs'
 import _, { reduce } from 'lodash'
 import type { JSX } from 'react/jsx-runtime'
 import SVG, { Website227FC, Website227Official } from '@/img/assets/svg'
@@ -36,7 +35,6 @@ export const CARD_FONT_FAMILY = [
     'Noto Sans Gujarati',
     'Noto Sans Georgian',
     'Noto Sans Oriya',
-    'Unifont',
 ].join(', ')
 
 type CardRenderFeatures = Set<string>
@@ -451,6 +449,7 @@ function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
 }
 
 function Metaline({ article }: { article: Article }) {
+    const userId = formatArticleUserId(article)
     return (
         <div
             tw="flex flex-wrap text-base leading-tight items-baseline"
@@ -458,13 +457,13 @@ function Metaline({ article }: { article: Article }) {
                 columnGap: '8px',
             }}
         >
-            <span tw="font-bold" lang="zh-CN" style={{ fontWeight: 700 }}>
+            <span tw="font-bold" lang="ja-JP" style={{ fontWeight: 700 }}>
                 {article.username}
             </span>
-            <span tw="font-normal text-[#46556a]" lang="zh-CN" style={{ fontWeight: 500 }}>
-                @{article.u_id} · {dayjs.unix(article.created_at).format('YY年MM月DD日 HH:mmZ')}
+            <span tw="font-normal text-[#46556a]" lang="ja-JP" style={{ fontWeight: 400 }}>
+                {[userId, formatTime(article.created_at)].filter(Boolean).join(' · ')}
             </span>
-            <span tw="text-xs text-[#46556a]" lang="zh-CN" style={{ fontWeight: 600 }}>
+            <span tw="text-xs text-[#46556a]" lang="ja-JP" style={{ fontWeight: 700 }}>
                 {platformArticleMapToActionText[article.platform][article.type]}
             </span>
         </div>
@@ -481,7 +480,7 @@ function Divider({ text, dash }: { text?: string; dash?: boolean }) {
                 }}
             />
             {text && (
-                <span tw="mx-2 text-idol-tertiary" lang="zh-CN">
+                <span tw="mx-2 text-idol-tertiary" lang="ja-JP">
                     {text}
                 </span>
             )}
@@ -552,7 +551,7 @@ function MediaGroup({
                 <div
                     tw="flex self-start rounded-sm px-1.5 py-0.5 text-[10px] leading-none text-[#64748b] bg-[#f1f5f9]"
                     style={{
-                        fontWeight: 600,
+                        fontWeight: 700,
                     }}
                 >
                     {marker}
@@ -584,7 +583,7 @@ function MediaGroup({
                             />
                         ))}
                     </div>
-                    ))}
+                ))}
             </div>
         </div>
     )
@@ -609,7 +608,7 @@ function InlineWebsiteContent({
                     tw="w-full text-[#202733] my-0 text-base leading-snug"
                     style={{
                         whiteSpace: 'pre-wrap',
-                        fontWeight: 600,
+                        fontWeight: 700,
                     }}
                 >
                     {title}
@@ -622,7 +621,7 @@ function InlineWebsiteContent({
                         tw="w-full text-[#202733] my-0 text-base leading-snug"
                         style={{
                             whiteSpace: 'pre-wrap',
-                            fontWeight: 500,
+                            fontWeight: 400,
                         }}
                     >
                         {block.text}
@@ -762,7 +761,7 @@ function ArticleContent({
                         tw="w-full my-0 text-base leading-snug text-[#1f2937]"
                         style={{
                             whiteSpace: 'pre-wrap',
-                            fontWeight: 500,
+                            fontWeight: 400,
                         }}
                     >
                         {parseTranslationContent(article)}
@@ -776,7 +775,7 @@ function ArticleContent({
                         tw="w-full text-[#202733] my-0 text-base leading-snug"
                         style={{
                             whiteSpace: 'pre-wrap',
-                            fontWeight: 500,
+                            fontWeight: 400,
                         }}
                     >
                         {parseRawContent(article)}
@@ -871,6 +870,7 @@ function BaseCard({
                 'pb-5': hasVisualMedia,
                 'pb-3': !hasVisualMedia,
             })}
+            lang="ja-JP"
             style={{
                 fontFamily: CARD_FONT_FAMILY,
                 rowGap: '6px',
@@ -908,7 +908,7 @@ function estimatedArticleHeight(article: Article, level: number = 0, features: C
     const inlineWebsiteHeight = estimateInlineWebsiteHeight(article, level, features)
     const articleHeightArray = [
         estimateTextLinesHeight(
-            `${article.username} @${article.u_id} · ${dayjs.unix(article.created_at).format('YY年MM月DD日 HH:mmZ')} ${platformArticleMapToActionText[article.platform][article.type]}`,
+            `${article.username} ${formatArticleUserId(article)} · ${formatTime(article.created_at)} ${platformArticleMapToActionText[article.platform][article.type]}`,
             BASE_FONT_SIZE,
             getContentWidth(level) - (level === 0 ? 0 : 32), // maybe subtract the avatar width
         ), // metaline

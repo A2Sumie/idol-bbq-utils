@@ -1,6 +1,5 @@
 import { platformArticleMapToActionText, platformNameMap } from '@idol-bbq-utils/spider/const'
 import type { Article } from '@/types'
-import dayjs from 'dayjs'
 import { type GenericFollows, Platform } from '@idol-bbq-utils/spider/types'
 import { orderBy } from 'lodash'
 
@@ -12,9 +11,75 @@ type ArticleTextOptions = {
     collapsedArticleIds?: Set<string | number>
 }
 
-const TAB = ' '.repeat(4)
+const META_SEP = ' · '
+const RENDER_TIMEZONE_OFFSET_MINUTES = 9 * 60
+const SUPERSCRIPT_DIGITS: Record<string, string> = {
+    '-': '⁻',
+    '0': '⁰',
+    '1': '¹',
+    '2': '²',
+    '3': '³',
+    '4': '⁴',
+    '5': '⁵',
+    '6': '⁶',
+    '7': '⁷',
+    '8': '⁸',
+    '9': '⁹',
+}
+
+function toSuperscript(value: string) {
+    return value
+        .split('')
+        .map((char) => SUPERSCRIPT_DIGITS[char] || char)
+        .join('')
+}
+
+function formatTimezoneSuffix(offsetMinutes: number = RENDER_TIMEZONE_OFFSET_MINUTES) {
+    if (offsetMinutes === 0) {
+        return SUPERSCRIPT_DIGITS['0']
+    }
+
+    const absoluteMinutes = Math.abs(offsetMinutes)
+    const hours = Math.floor(absoluteMinutes / 60)
+    const minutes = absoluteMinutes % 60
+    const zone = minutes === 0 ? `${hours}` : `${hours}${String(minutes).padStart(2, '0')}`
+    return `${offsetMinutes < 0 ? SUPERSCRIPT_DIGITS['-'] : ''}${toSuperscript(zone)}`
+}
+
+function getRenderDate(unixTimestamp: number) {
+    return new Date((unixTimestamp + RENDER_TIMEZONE_OFFSET_MINUTES * 60) * 1000)
+}
+
+function pad2(value: number) {
+    return String(value).padStart(2, '0')
+}
+
 function formatTime(unix_timestamp: number) {
-    return dayjs.unix(unix_timestamp).format('YYYY-MM-DD HH:mmZ')
+    const time = getRenderDate(unix_timestamp)
+    const date = `${pad2(time.getUTCFullYear() % 100)}${pad2(time.getUTCMonth() + 1)}${pad2(time.getUTCDate())}`
+    const clock = `${pad2(time.getUTCHours())}${pad2(time.getUTCMinutes())}`
+    return `${date} ${clock}${formatTimezoneSuffix()}`
+}
+
+function formatClock(unix_timestamp: number) {
+    const time = getRenderDate(unix_timestamp)
+    return `${pad2(time.getUTCHours())}${pad2(time.getUTCMinutes())}${formatTimezoneSuffix()}`
+}
+
+function formatDateKey(unixTimestamp: number) {
+    const time = getRenderDate(unixTimestamp)
+    return `${time.getUTCFullYear()}-${pad2(time.getUTCMonth() + 1)}-${pad2(time.getUTCDate())}`
+}
+
+function formatArticleUserId(article: Pick<Article, 'u_id' | 'username' | 'a_id'>) {
+    const id = String(article.u_id || article.username || article.a_id || '').trim()
+    if (!id) {
+        return ''
+    }
+    if (id.startsWith('@') || id.includes(':')) {
+        return id
+    }
+    return `@${id}`
 }
 
 function parseTranslationContent(article: Article) {
@@ -165,11 +230,9 @@ function formatCollapsedReferenceTime(article: Article, rootArticle: Article) {
     if (!article.created_at) {
         return ''
     }
-    const createdAt = dayjs.unix(article.created_at)
-    const rootCreatedAt = rootArticle.created_at ? dayjs.unix(rootArticle.created_at) : null
-    return rootCreatedAt && createdAt.isSame(rootCreatedAt, 'day')
-        ? createdAt.format('HH:mm')
-        : createdAt.format('MM-DD HH:mm')
+    const sameRenderDate =
+        rootArticle.created_at && formatDateKey(article.created_at) === formatDateKey(rootArticle.created_at)
+    return sameRenderDate ? formatClock(article.created_at) : formatTime(article.created_at)
 }
 
 function formatCollapsedReferenceToken(article: Article, rootArticle: Article) {
@@ -201,8 +264,8 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
         }
         const metaline = formatMetaline(currentArticle)
         format_article += `${metaline}`
-        if (currentArticle.content) {
-            format_article += '\n\n'
+        if (currentArticle.content || currentArticle.translated_by) {
+            format_article += '\n'
         }
         if (currentArticle.translated_by) {
             let translation = parseTranslationContent(currentArticle)
@@ -238,8 +301,8 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
         }
         const metaline = formatCompactMetaline(currentArticle)
         format_article += `${metaline}`
-        if (currentArticle.content) {
-            format_article += '\n\n'
+        if (currentArticle.content || currentArticle.translated_by) {
+            format_article += '\n'
         }
         if (currentArticle.translated_by) {
             const translation = parseTranslationContent(currentArticle)
@@ -280,7 +343,7 @@ function followsToText(data: Array<[Platform, Array<[Follows, Follows | null]>]>
             `${platformNameMap[platform]}:\n${pre?.created_at ? `${formatTime(pre.created_at)}\n⬇️\n` : ''}${formatTime(cur.created_at)}\n\n` +
             follows
                 .map(([cur, pre]) => {
-                    let text = `${cur.username}\n${' '.repeat(4)}`
+                    let text = `${cur.username}\n`
                     if (pre?.followers) {
                         text += `${pre.followers.toString().padStart(2)}  --->  `
                     }
@@ -288,7 +351,7 @@ function followsToText(data: Array<[Platform, Array<[Follows, Follows | null]>]>
                         text += `${cur.followers.toString().padEnd(2)}`
                     }
                     const offset = (cur.followers || 0) - (pre?.followers || 0)
-                    text += `${TAB}${offset >= 0 ? '+' : ''}${offset.toString()}`
+                    text += ` ${offset >= 0 ? '+' : ''}${offset.toString()}`
                     return text
                 })
                 .join('\n')
@@ -298,17 +361,20 @@ function followsToText(data: Array<[Platform, Array<[Follows, Follows | null]>]>
 }
 
 function formatMetaline(article: Article) {
-    let metaline =
-        [article.username, article.u_id, `来自${platformNameMap[article.platform]}`].filter(Boolean).join(TAB) + '\n'
     const action = platformArticleMapToActionText[article.platform][article.type]
-    metaline += [formatTime(article.created_at), `${action}：`].join(TAB)
-    return metaline
+    return [
+        article.username,
+        formatArticleUserId(article),
+        platformNameMap[article.platform],
+        formatTime(article.created_at),
+        `${action}：`,
+    ]
+        .filter(Boolean)
+        .join(META_SEP)
 }
 
 function formatCompactMetaline(article: Article) {
-    const header = [article.username, `来自${platformNameMap[article.platform]}`].filter(Boolean).join(TAB)
-    const action = platformArticleMapToActionText[article.platform][article.type]
-    return `${header}\n${[formatTime(article.created_at), `${action}：`].join(TAB)}`
+    return formatMetaline(article)
 }
 
 export {
@@ -318,8 +384,10 @@ export {
     extractArticleHeadline,
     extractTextHeadline,
     followsToText,
+    formatArticleUserId,
     formatCompactMetaline,
     formatMetaline,
+    formatTime,
     parseRawContent,
     parseTranslationContent,
 }

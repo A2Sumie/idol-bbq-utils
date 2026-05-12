@@ -55,18 +55,13 @@ test('layoutMediaRows handles three and four image sets without pairing incompat
 
     expect(layoutMediaRows([wide, portrait, portrait], 0).map((row) => row.length)).toEqual([1, 2])
     expect(layoutMediaRows([portrait, portrait, portrait, portrait], 0).map((row) => row.length)).toEqual([2, 2])
-    expect(layoutMediaRows([wide, portrait, ultraWide, ultraTall], 0).map((row) => row.length)).toEqual([
-        1,
-        1,
-        1,
-        1,
-    ])
+    expect(layoutMediaRows([wide, portrait, ultraWide, ultraTall], 0).map((row) => row.length)).toEqual([1, 1, 1, 1])
 })
 
 test('card font family keeps CJK before broad fallback fonts', () => {
     const families = CARD_FONT_FAMILY.split(',').map((font) => font.trim())
 
     expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Noto Sans'))
-    expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Unifont'))
-    expect(families.indexOf('Noto Sans JP')).toBeLessThan(families.indexOf('Unifont'))
+    expect(families).toContain('Noto Sans JP')
+    expect(families).not.toContain('Unifont')
 })

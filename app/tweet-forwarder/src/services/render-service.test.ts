@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
+import { formatTime } from '@idol-bbq-utils/render'
 import { formatPlatformTag, RenderService } from './render-service'
 import { fileURLToPath } from 'url'
 import DB from '@/db'
@@ -70,7 +71,16 @@ function decodePngPixels(buffer: Buffer) {
                 const pc = Math.abs(p - upLeft)
                 return pa <= pb && pa <= pc ? left : pb <= pc ? up : upLeft
             })()
-            const add = filter === 1 ? left : filter === 2 ? up : filter === 3 ? Math.floor((left + up) / 2) : filter === 4 ? paeth : 0
+            const add =
+                filter === 1
+                    ? left
+                    : filter === 2
+                      ? up
+                      : filter === 3
+                        ? Math.floor((left + up) / 2)
+                        : filter === 4
+                          ? paeth
+                          : 0
             row[x] = (row[x] + add) & 0xff
         }
         rows.push(row)
@@ -108,8 +118,9 @@ describe('formatPlatformTag', () => {
 })
 
 describe('RenderService text-compact', () => {
-    test('keeps display name and source label but omits u_id', async () => {
+    test('keeps compact metadata on one line with @uid and short timestamp', async () => {
         const service = new RenderService()
+        const expectedTime = formatTime(1710000000)
         const result = await service.process(
             {
                 id: 1,
@@ -135,11 +146,13 @@ describe('RenderService text-compact', () => {
             },
         )
 
-        expect(result.text.split('\n')[0]).toBe('河瀬詩    来自Instagram')
+        expect(expectedTime.endsWith('⁹')).toBeTrue()
+        expect(result.text.split('\n')[0]).toBe(`河瀬詩 · @kawase_uta · Instagram · ${expectedTime} · 发布帖子：`)
         expect(result.text).toContain('Instagram')
         expect(result.text).toContain('河瀬詩')
+        expect(result.text).toContain('@kawase_uta')
         expect(result.text).toContain('hello world')
-        expect(result.text).not.toContain('kawase_uta')
+        expect(result.text).not.toContain('    ')
     })
 
     test('truncates overly long YouTube descriptions in compact mode', async () => {
