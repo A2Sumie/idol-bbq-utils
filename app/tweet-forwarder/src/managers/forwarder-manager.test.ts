@@ -1614,7 +1614,7 @@ test('sendArticles does not increment article error count when every target is i
     expect((pools as any).errorCounter.get('5:website-old-skip')).toBeUndefined()
 })
 
-test('sendArticles sends idle-first summary-card items and flushes later items at threshold', async () => {
+test('sendArticles rate-limits summary-card sends to one card per interval', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -1733,11 +1733,16 @@ test('sendArticles sends idle-first summary-card items and flushes later items a
                 render_type: 'text-card',
             } as any,
         )
+
+        const queueKey = Array.from((pools as any).summaryCardLastSentAt.keys())[0]
+        expect(queueKey).toBeTruthy()
+        ;(pools as any).summaryCardLastSentAt.set(queueKey, Math.floor(Date.now() / 1000) - 1800)
+        await (pools as any).flushDueSummaryCardQueues()
     } finally {
         ;(DB.ForwardBy as any).checkExist = originalCheckExist
     }
 
-    expect(target.sent).toHaveLength(3)
+    expect(target.sent).toHaveLength(2)
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
     expect(target.sent[0]?.texts[0]).toContain('消息合并')
@@ -1750,8 +1755,8 @@ test('sendArticles sends idle-first summary-card items and flushes later items a
             alt: 'summary-1',
         },
     ])
-    expect(packedArticles[1]?.content).toContain('【消息合并】1 条')
+    expect(packedArticles[1]?.content).toContain('【消息合并】2 条')
     expect(packedArticles[1]?.content).toContain('summary content 2')
+    expect(packedArticles[1]?.content).toContain('summary content 3')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
-    expect(target.sent[2]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })

@@ -590,7 +590,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private errorCounter = new Map<string, number>()
     private tagDigestStates = new Map<string, TagDigestState>()
     private summaryCardQueues = new Map<string, SummaryCardQueue>()
-    private summaryCardLastObservedAt = new Map<string, number>()
+    private summaryCardLastSentAt = new Map<string, number>()
     private summaryCardFlushTimer?: ReturnType<typeof setInterval>
     private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
 
@@ -780,6 +780,7 @@ class ForwarderPools extends BaseCompatibleModel {
         this.subscribers.clear()
         this.errorCounter.clear()
         this.summaryCardQueues.clear()
+        this.summaryCardLastSentAt.clear()
         this.log?.info('Pools dropped')
     }
 
@@ -1421,7 +1422,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
         const now = Math.floor(Date.now() / 1000)
         const queueKey = this.getSummaryCardQueueKey(target.id, runtime_config, summaryConfig)
-        const lastObservedAt = this.summaryCardLastObservedAt.get(queueKey)
+        const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
         const existingQueue = this.summaryCardQueues.get(queueKey)
         const item: SummaryCardQueueItem = {
             article: cloneDeep(article),
@@ -1431,9 +1432,8 @@ class ForwarderPools extends BaseCompatibleModel {
             digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
         }
 
-        if (!existingQueue && (!lastObservedAt || now - lastObservedAt >= summaryConfig.intervalSeconds)) {
+        if (!existingQueue && this.canSendSummaryCardNow(queueKey, summaryConfig, now)) {
             const sent = await this.sendImmediateSummaryCardItem(target, runtime_config, summaryConfig, item)
-            this.summaryCardLastObservedAt.set(queueKey, now)
             if (!sent) {
                 await this.releaseArticleChain(item.article, item.article.platform, target.id)
             }
@@ -1446,7 +1446,7 @@ class ForwarderPools extends BaseCompatibleModel {
             runtime_config,
             config: summaryConfig,
             items: new Map<number, SummaryCardQueueItem>(),
-            firstQueuedAt: lastObservedAt || now,
+            firstQueuedAt: lastSentAt || now,
             lastQueuedAt: now,
         }
 
@@ -1455,16 +1455,20 @@ class ForwarderPools extends BaseCompatibleModel {
         queue.config = summaryConfig
         queue.lastQueuedAt = now
         queue.items.set(article.id, item)
-        this.summaryCardLastObservedAt.set(queueKey, now)
         this.summaryCardQueues.set(queueKey, queue)
         log?.debug(
             `Queued summary-card item ${article.a_id} for ${target.id}: ${queue.items.size}/${summaryConfig.threshold}`,
         )
 
-        if (queue.items.size >= summaryConfig.threshold) {
+        if (queue.items.size >= summaryConfig.threshold && this.canSendSummaryCardNow(queueKey, summaryConfig, now)) {
             await this.flushSummaryCardQueue(queueKey, 'threshold')
         }
         return true
+    }
+
+    private canSendSummaryCardNow(queueKey: string, config: ResolvedSummaryCardConfig, now: number) {
+        const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
+        return !lastSentAt || now - lastSentAt >= config.intervalSeconds
     }
 
     private getSummaryCardQueueKey(
@@ -1490,7 +1494,7 @@ class ForwarderPools extends BaseCompatibleModel {
             return true
         }
 
-        return this.sendSummaryCardGroup(
+        return this.sendSummaryCardBatch(
             {
                 target,
                 runtime_config,
@@ -1499,7 +1503,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 firstQueuedAt: item.queuedAt,
                 lastQueuedAt: item.queuedAt,
             },
-            { kind: 'thread', label: this.getArticleThreadKey(item.article), items: [item] },
+            [{ kind: 'thread', label: this.getArticleThreadKey(item.article), items: [item] }],
             'idle-first',
         )
     }
@@ -1507,7 +1511,9 @@ class ForwarderPools extends BaseCompatibleModel {
     private async flushDueSummaryCardQueues() {
         const now = Math.floor(Date.now() / 1000)
         for (const [queueKey, queue] of Array.from(this.summaryCardQueues.entries())) {
-            if (queue.items.size > 0 && now - queue.firstQueuedAt >= queue.config.intervalSeconds) {
+            const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
+            const anchor = lastSentAt || queue.firstQueuedAt
+            if (queue.items.size > 0 && now - anchor >= queue.config.intervalSeconds) {
                 await this.flushSummaryCardQueue(queueKey, 'interval')
             }
         }
@@ -1529,8 +1535,6 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
         this.summaryCardQueues.delete(queueKey)
-        this.summaryCardLastObservedAt.set(queueKey, Math.floor(Date.now() / 1000))
-
         const claimedItems: SummaryCardQueueItem[] = []
         for (const item of orderBy(
             Array.from(queue.items.values()),
@@ -1547,13 +1551,10 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
 
-        const groups = this.buildSummaryCardGroups(claimedItems)
-        for (const group of groups) {
-            const ok = await this.sendSummaryCardGroup(queue, group, reason)
-            if (!ok) {
-                for (const item of group.items) {
-                    await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)
-                }
+        const ok = await this.sendSummaryCardBatch(queue, this.buildSummaryCardGroups(claimedItems), reason)
+        if (!ok) {
+            for (const item of claimedItems) {
+                await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)
             }
         }
     }
@@ -1589,27 +1590,36 @@ class ForwarderPools extends BaseCompatibleModel {
         return groups
     }
 
-    private async sendSummaryCardGroup(
+    private async sendSummaryCardBatch(
         queue: SummaryCardQueue,
-        group: { kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] },
+        groups: Array<{ kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] }>,
         reason: 'threshold' | 'interval' | 'shutdown' | 'idle-first',
     ) {
-        const sorted = orderBy(group.items, ['article.created_at', 'article.id'], ['asc', 'asc'])
-        const content = this.buildSummaryCardContent(group.kind, sorted, queue.config)
+        const allItems = orderBy(
+            groups.flatMap((group) => group.items),
+            ['article.created_at', 'article.id'],
+            ['asc', 'asc'],
+        )
+        if (allItems.length === 0) {
+            return true
+        }
+        const content = this.buildSummaryCardBatchContent(groups, queue.config)
+        const hasStorm = groups.some((group) => group.kind === 'storm')
+        const totalArticles = allItems.length
         const title =
-            group.kind === 'storm'
-                ? `话题消息合并 ${group.label}`.trim()
-                : `消息合并 ${this.formatSummaryCardRange(sorted.map((item) => item.article))}`
+            hasStorm && groups.length === 1
+                ? `话题消息合并 ${groups[0]?.label || ''}`.trim()
+                : `消息合并 ${this.formatSummaryCardRange(allItems.map((item) => item.article))}`
         const now = Math.floor(Date.now() / 1000)
-        const embeddedMedia = this.buildSummaryCardEmbeddedMedia(sorted)
-        const summaryArticle = this.buildSyntheticSummaryArticle(title, content, sorted[0]?.article, now, embeddedMedia)
+        const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems)
+        const summaryArticle = this.buildSyntheticSummaryArticle(title, content, allItems[0]?.article, now, embeddedMedia)
         const cardResult = await this.renderService.process(summaryArticle, {
             taskId: `summary-card-${queue.target.id}-${now}`,
             render_type: 'text-card',
             deduplication: false,
         })
         const originalMediaFiles = queue.config.includeOriginalMedia
-            ? sorted.flatMap((item) => item.originalMediaFiles)
+            ? allItems.flatMap((item) => item.originalMediaFiles)
             : []
         const mediaFiles = [...cardResult.cardMediaFiles, ...originalMediaFiles]
 
@@ -1623,16 +1633,45 @@ class ForwarderPools extends BaseCompatibleModel {
                 article: summaryArticle,
                 forceSend: true,
             })
+            this.summaryCardLastSentAt.set(
+                this.getSummaryCardQueueKey(queue.target.id, queue.runtime_config, queue.config),
+                now,
+            )
             this.log?.info(
-                `Sent ${group.kind} message pack card (${reason}) with ${sorted.length} articles to ${queue.target.id}`,
+                `Sent message pack card (${reason}) with ${totalArticles} articles in ${groups.length} section(s) to ${queue.target.id}`,
             )
             return true
         } catch (error) {
-            this.log?.error(`Failed to send ${group.kind} message pack card to ${queue.target.id}: ${error}`)
+            this.log?.error(`Failed to send message pack card to ${queue.target.id}: ${error}`)
             return false
         } finally {
             this.renderService.cleanup(cardResult.mediaFiles)
         }
+    }
+
+    private buildSummaryCardBatchContent(
+        groups: Array<{ kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] }>,
+        config: ResolvedSummaryCardConfig,
+    ) {
+        const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
+        const allItems = sortedGroups.flatMap((group) => group.items)
+        if (sortedGroups.length === 1) {
+            const group = sortedGroups[0]
+            return this.buildSummaryCardContent(group.kind, group.items, config)
+        }
+
+        const sections = sortedGroups.map((group, index) => {
+            const sectionTitle =
+                group.kind === 'storm'
+                    ? `【${index + 1}. 话题串】${group.label}`
+                    : `【${index + 1}. 消息串】${this.formatSummaryCardRange(group.items.map((item) => item.article))}`
+            return [sectionTitle, this.buildSummaryCardContent(group.kind, group.items, config)].join('\n')
+        })
+
+        return [
+            `【消息合并】${allItems.length} 条 / ${this.formatSummaryCardRange(allItems.map((item) => item.article))}`,
+            ...sections,
+        ].join('\n\n')
     }
 
     private buildSyntheticSummaryArticle(
