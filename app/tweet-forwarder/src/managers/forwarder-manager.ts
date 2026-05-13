@@ -50,6 +50,7 @@ type ResolvedSummaryCardConfig = {
 type SummaryCardQueueItem = {
     article: ArticleWithId
     queuedAt: number
+    cardSourceMediaFiles: Array<RenderResult['originalMediaFiles'][number]>
     originalMediaFiles: Array<RenderResult['originalMediaFiles'][number]>
     digestTags: Array<string>
 }
@@ -70,6 +71,7 @@ const DEFAULT_COLLAPSE_FORWARDED_REF_WINDOW_SECONDS = 18 * 3600
 const DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS = 30 * 60
 const DEFAULT_SUMMARY_CARD_THRESHOLD = 8
 const DEFAULT_SUMMARY_CARD_MAX_ITEMS = 14
+const DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA = 12
 const HIGH_REALTIME_GROUP_IDS = new Set(['742435777'])
 const HASHTAG_REGEX = /[#＃][\p{L}\p{N}_ー一-龯ぁ-んァ-ヶ]+/gu
 
@@ -1424,6 +1426,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const item: SummaryCardQueueItem = {
             article: cloneDeep(article),
             queuedAt: now,
+            cardSourceMediaFiles: [...renderResult.originalMediaFiles],
             originalMediaFiles: summaryConfig.includeOriginalMedia ? [...renderResult.originalMediaFiles] : [],
             digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
         }
@@ -1598,7 +1601,8 @@ class ForwarderPools extends BaseCompatibleModel {
                 ? `话题消息合并 ${group.label}`.trim()
                 : `消息合并 ${this.formatSummaryCardRange(sorted.map((item) => item.article))}`
         const now = Math.floor(Date.now() / 1000)
-        const summaryArticle = this.buildSyntheticSummaryArticle(title, content, sorted[0]?.article, now)
+        const embeddedMedia = this.buildSummaryCardEmbeddedMedia(sorted)
+        const summaryArticle = this.buildSyntheticSummaryArticle(title, content, sorted[0]?.article, now, embeddedMedia)
         const cardResult = await this.renderService.process(summaryArticle, {
             taskId: `summary-card-${queue.target.id}-${now}`,
             render_type: 'text-card',
@@ -1636,6 +1640,7 @@ class ForwarderPools extends BaseCompatibleModel {
         content: string,
         sourceArticle: ArticleWithId | undefined,
         now: number,
+        media: NonNullable<Article['media']>,
     ): ArticleWithId {
         return {
             id: -now,
@@ -1648,11 +1653,58 @@ class ForwarderPools extends BaseCompatibleModel {
             url: sourceArticle?.url || '',
             type: 'message_pack' as any,
             ref: null,
-            has_media: false,
-            media: null,
+            has_media: media.length > 0,
+            media,
             extra: null,
             u_avatar: sourceArticle?.u_avatar || null,
         }
+    }
+
+    private buildSummaryCardEmbeddedMedia(items: SummaryCardQueueItem[]): NonNullable<Article['media']> {
+        const fromRenderedFiles = this.renderService.buildCardMediaFromRenderedFiles(
+            items.flatMap((item) => item.cardSourceMediaFiles),
+            DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA,
+        )
+        if (fromRenderedFiles.length > 0) {
+            return fromRenderedFiles
+        }
+
+        return this.collectSummaryArticleMedia(
+            items.map((item) => item.article),
+            DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA,
+        )
+    }
+
+    private collectSummaryArticleMedia(articles: ArticleWithId[], maxItems: number): NonNullable<Article['media']> {
+        const result: NonNullable<Article['media']> = []
+        const seen = new Set<string>()
+        const visit = (article?: ArticleWithId | Article | null) => {
+            if (!article || result.length >= maxItems) {
+                return
+            }
+            for (const media of article.media || []) {
+                if (result.length >= maxItems) {
+                    break
+                }
+                if (media.type !== 'photo' && media.type !== 'video_thumbnail') {
+                    continue
+                }
+                const key = media.url || JSON.stringify(media)
+                if (seen.has(key)) {
+                    continue
+                }
+                seen.add(key)
+                result.push(cloneDeep(media))
+            }
+            if (article.ref && typeof article.ref === 'object') {
+                visit(article.ref as ArticleWithId | Article)
+            }
+        }
+
+        for (const article of articles) {
+            visit(article)
+        }
+        return result
     }
 
     private buildSummaryCardContent(

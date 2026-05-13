@@ -312,6 +312,45 @@ export class RenderService {
             : articleToText(article, textOptions)
     }
 
+    buildCardMediaFromRenderedFiles(files: Array<RenderedMediaFile>, maxItems = 12): NonNullable<Article['media']> {
+        const result: NonNullable<Article['media']> = []
+        const seen = new Set<string>()
+
+        for (const file of files) {
+            if (result.length >= maxItems) {
+                break
+            }
+            if (file.media_type !== 'photo' && file.media_type !== 'video_thumbnail') {
+                continue
+            }
+
+            const key = file.content_hash || file.sourceUrl || file.path
+            if (seen.has(key)) {
+                continue
+            }
+            seen.add(key)
+
+            const dataUrl = this.mediaFileToDataUrl(file.path)
+            const url = dataUrl || file.sourceUrl
+            if (!url) {
+                continue
+            }
+            const dimensions =
+                file.width && file.height
+                    ? { width: file.width, height: file.height }
+                    : this.mediaFileDimensions(file.path)
+
+            result.push({
+                type: file.media_type,
+                url,
+                alt: file.sourceArticleId ? `media from ${file.sourceArticleId}` : undefined,
+                ...(dimensions || {}),
+            })
+        }
+
+        return result
+    }
+
     private resolveCardFeatures(features?: Array<string>) {
         return Array.from(new Set(features || []))
     }

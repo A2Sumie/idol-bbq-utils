@@ -289,6 +289,34 @@ describe('RenderService text-compact', () => {
 })
 
 describe('RenderService text-card', () => {
+    test('turns downloaded media files into embeddable card media', () => {
+        const service = new RenderService()
+        const tempDir = mkdtempSync(path.join(os.tmpdir(), 'render-card-embed-media-'))
+        const mediaPath = path.join(tempDir, 'source.png')
+        writeFileSync(mediaPath, Buffer.from(SAMPLE_PNG_DATA_URL.split(',')[1] || '', 'base64'))
+
+        try {
+            const media = service.buildCardMediaFromRenderedFiles([
+                {
+                    path: mediaPath,
+                    media_type: 'photo',
+                    sourceArticleId: 'source-article',
+                    sourceUrl: 'https://example.com/source.png',
+                    content_hash: 'hash-source',
+                },
+            ])
+
+            expect(media).toHaveLength(1)
+            expect(media[0]?.type).toBe('photo')
+            expect(media[0]?.url).toStartWith('data:image/png;base64,')
+            expect((media[0] as any)?.width).toBe(1)
+            expect((media[0] as any)?.height).toBe(1)
+            expect(media[0]?.alt).toContain('source-article')
+        } finally {
+            rmSync(tempDir, { recursive: true, force: true })
+        }
+    })
+
     test('inlines downloaded media before rendering the card', () => {
         const service = new RenderService()
         const tempDir = mkdtempSync(path.join(os.tmpdir(), 'render-card-media-'))

@@ -1672,11 +1672,31 @@ test('sendArticles sends idle-first summary-card items and flushes later items a
                 text: article.content,
                 textCollapseMode: 'article',
                 cardMediaFiles: [],
-                originalMediaFiles: [{ media_type: 'photo', path: `/tmp/original-${article.id}.jpg` }],
-                mediaFiles: [{ media_type: 'photo', path: `/tmp/original-${article.id}.jpg` }],
+                originalMediaFiles: [
+                    {
+                        media_type: 'photo',
+                        path: `/tmp/original-${article.id}.jpg`,
+                        sourceArticleId: article.a_id,
+                        sourceUrl: `https://example.com/${article.id}.jpg`,
+                    },
+                ],
+                mediaFiles: [
+                    {
+                        media_type: 'photo',
+                        path: `/tmp/original-${article.id}.jpg`,
+                        sourceArticleId: article.a_id,
+                        sourceUrl: `https://example.com/${article.id}.jpg`,
+                    },
+                ],
             }
         },
         renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: (files: Array<any>) =>
+            files.map((file) => ({
+                type: 'photo',
+                url: `data:image/png;base64,${Buffer.from(file.sourceArticleId || file.path).toString('base64')}`,
+                alt: file.sourceArticleId,
+            })),
         cleanup: () => undefined,
     }
 
@@ -1723,6 +1743,13 @@ test('sendArticles sends idle-first summary-card items and flushes later items a
     expect(target.sent[0]?.texts[0]).toContain('消息合并')
     expect(packedArticles[0]?.content).toContain('【消息合并】1 条')
     expect(packedArticles[0]?.content).toContain('summary content 1')
+    expect(packedArticles[0]?.media).toEqual([
+        {
+            type: 'photo',
+            url: `data:image/png;base64,${Buffer.from('summary-1').toString('base64')}`,
+            alt: 'summary-1',
+        },
+    ])
     expect(packedArticles[1]?.content).toContain('【消息合并】1 条')
     expect(packedArticles[1]?.content).toContain('summary content 2')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
