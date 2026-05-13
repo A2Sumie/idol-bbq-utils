@@ -202,6 +202,41 @@ describe('RenderService text-compact', () => {
         expect(result.text).not.toContain('发布帖子')
     })
 
+    test('merges header and attribution when the article has no text body', async () => {
+        const service = new RenderService()
+        const expectedTime = formatArticleTimeToken(1710000000)
+        const expectedClock = expectedTime.split('(')[0]
+        const expectedAttributionTime = expectedTime.replace('(', '（').replace(')', '）')
+        const result = await service.process(
+            {
+                id: 6,
+                a_id: 'ig-story-empty',
+                u_id: 'nao_aikawa227',
+                username: 'nao_aikawa227',
+                created_at: 1710000000,
+                content: null,
+                translation: null,
+                translated_by: null,
+                url: 'https://www.instagram.com/stories/nao_aikawa227/1/',
+                type: 'story',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.Instagram,
+            },
+            {
+                taskId: 'test-empty-story-compact',
+                render_type: 'text-compact',
+            },
+        )
+
+        expect(result.text).toBe(
+            `@nao_aikawa227 ${expectedClock} IG故事 / nao_aikawa227 ${expectedAttributionTime} IG 故事`,
+        )
+    })
+
     test('keeps reference separator compact while surrounding article body with blank lines', async () => {
         const service = new RenderService()
         const quoteClock = formatArticleTimeToken(1710000600).split('(')[0]

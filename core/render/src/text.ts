@@ -401,10 +401,10 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
         format_article += raw_article
         if (raw_article || currentArticle.translated_by) {
             format_article += '\n\n'
+            format_article += formatArticleAttributionLine(currentArticle)
         } else {
-            format_article += '\n'
+            format_article += ` / ${formatArticleAttributionLine(currentArticle)}`
         }
-        format_article += formatArticleAttributionLine(currentArticle)
         if (currentArticle.ref) {
             format_article += `\n${'-'.repeat(12)}\n`
         }
@@ -442,10 +442,10 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
         format_article += raw_article
         if (raw_article || currentArticle.translated_by) {
             format_article += '\n\n'
+            format_article += formatArticleAttributionLine(currentArticle)
         } else {
-            format_article += '\n'
+            format_article += ` / ${formatArticleAttributionLine(currentArticle)}`
         }
-        format_article += formatArticleAttributionLine(currentArticle)
         if (currentArticle.ref) {
             format_article += `\n${'-'.repeat(12)}\n`
         }
