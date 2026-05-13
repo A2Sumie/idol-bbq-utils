@@ -62,6 +62,11 @@ type SummaryCardQueue = {
     firstQueuedAt: number
     lastQueuedAt: number
 }
+type SummaryCardGroup = {
+    kind: 'storm' | 'thread'
+    label: string
+    items: SummaryCardQueueItem[]
+}
 
 const DEFAULT_TAG_DIGEST_THRESHOLD = 3
 const DEFAULT_TAG_DIGEST_MIN_AUTHORS = 2
@@ -1557,9 +1562,9 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private buildSummaryCardGroups(items: SummaryCardQueueItem[]) {
+    private buildSummaryCardGroups(items: SummaryCardQueueItem[]): SummaryCardGroup[] {
         const stormItems = items.filter((item) => item.digestTags.length > 0)
-        const groups: Array<{ kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] }> = []
+        const groups: SummaryCardGroup[] = []
 
         if (stormItems.length > 0) {
             groups.push({
@@ -1590,7 +1595,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private async sendSummaryCardBatch(
         queue: SummaryCardQueue,
-        groups: Array<{ kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] }>,
+        groups: SummaryCardGroup[],
         reason: 'threshold' | 'interval' | 'shutdown' | 'idle-first',
     ) {
         const allItems = orderBy(
@@ -1610,7 +1615,14 @@ class ForwarderPools extends BaseCompatibleModel {
                 : `消息合并 ${this.formatSummaryCardRange(allItems.map((item) => item.article))}`
         const now = Math.floor(Date.now() / 1000)
         const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems)
-        const summaryArticle = this.buildSyntheticSummaryArticle(title, content, allItems[0]?.article, now, embeddedMedia)
+        const summaryArticle = this.buildSyntheticSummaryArticle(
+            title,
+            content,
+            allItems[0]?.article,
+            now,
+            embeddedMedia,
+            this.buildSummaryCardRenderMeta(groups, queue.config),
+        )
         const cardResult = await this.renderService.process(summaryArticle, {
             taskId: `summary-card-${queue.target.id}-${now}`,
             render_type: 'text-card',
@@ -1648,7 +1660,7 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private buildSummaryCardBatchContent(
-        groups: Array<{ kind: 'storm' | 'thread'; label: string; items: SummaryCardQueueItem[] }>,
+        groups: SummaryCardGroup[],
         config: ResolvedSummaryCardConfig,
     ) {
         const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
@@ -1678,6 +1690,7 @@ class ForwarderPools extends BaseCompatibleModel {
         sourceArticle: ArticleWithId | undefined,
         now: number,
         media: NonNullable<Article['media']>,
+        renderMeta?: Record<string, unknown>,
     ): ArticleWithId {
         return {
             id: -now,
@@ -1692,8 +1705,93 @@ class ForwarderPools extends BaseCompatibleModel {
             ref: null,
             has_media: media.length > 0,
             media,
-            extra: null,
+            extra: renderMeta
+                ? ({
+                      extra_type: 'message_pack_meta',
+                      data: renderMeta,
+                  } as any)
+                : null,
             u_avatar: sourceArticle?.u_avatar || null,
+        }
+    }
+
+    private buildSummaryCardRenderMeta(groups: SummaryCardGroup[], config: ResolvedSummaryCardConfig) {
+        const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
+        const allItems = sortedGroups.flatMap((group) => group.items)
+        return {
+            total: allItems.length,
+            range: this.formatSummaryCardRange(allItems.map((item) => item.article)),
+            groups: sortedGroups.map((group, index) => {
+                const shown = group.items.slice(0, config.maxItems)
+                const tags = group.kind === 'storm' ? uniquePreserveOrder(group.items.flatMap((item) => item.digestTags)) : []
+                const title =
+                    group.kind === 'storm'
+                        ? `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}话题串 ${group.label}`.trim()
+                        : `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}消息串 ${this.formatSummaryCardRange(
+                              group.items.map((item) => item.article),
+                          )}`.trim()
+                const avatars = this.collectSummaryCardGroupAvatars(group.items)
+                return {
+                    kind: group.kind,
+                    label: group.label,
+                    title,
+                    range: this.formatSummaryCardRange(group.items.map((item) => item.article)),
+                    omitted: Math.max(0, group.items.length - shown.length),
+                    avatars,
+                    items: shown.map((item, itemIndex) => {
+                        const message = this.renderService.renderText(item.article, { render_type: 'text-compact' }).trim()
+                        const nonStormTags =
+                            group.kind === 'storm'
+                                ? extractArticleHashtags(item.article).filter(
+                                      (tag) =>
+                                          !tags.some(
+                                              (stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag),
+                                          ),
+                                  )
+                                : []
+                        return {
+                            index: itemIndex + 1,
+                            text:
+                                nonStormTags.length > 0
+                                    ? `${message}\n其他标签: ${uniquePreserveOrder(nonStormTags).join(' ')}`
+                                    : message,
+                            avatar: this.buildSummaryCardAvatar(item.article),
+                        }
+                    }),
+                }
+            }),
+        }
+    }
+
+    private collectSummaryCardGroupAvatars(items: SummaryCardQueueItem[]) {
+        const seen = new Set<string>()
+        const avatars: Array<Record<string, string>> = []
+        const visit = (article?: ArticleWithId | Article | null) => {
+            if (!article || avatars.length >= 5) {
+                return
+            }
+            const avatar = this.buildSummaryCardAvatar(article)
+            const key = avatar.url || avatar.id || avatar.name
+            if (key && !seen.has(key)) {
+                seen.add(key)
+                avatars.push(avatar)
+            }
+            if (article.ref && typeof article.ref === 'object') {
+                visit(article.ref as ArticleWithId | Article)
+            }
+        }
+
+        for (const item of items) {
+            visit(item.article)
+        }
+        return avatars
+    }
+
+    private buildSummaryCardAvatar(article: ArticleWithId | Article) {
+        return {
+            url: article.u_avatar || '',
+            name: article.username || '',
+            id: article.u_id || article.a_id || '',
         }
     }
 

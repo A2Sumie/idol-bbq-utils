@@ -42,10 +42,20 @@ class BiliForwarder extends Forwarder {
     }
 
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
-        if (await this.tryVideoUpload(texts, props)) {
+        const normalizedTexts = this.normalizeTextsForBilibili(texts)
+        if (await this.tryVideoUpload(normalizedTexts, props)) {
             return [{ ok: true, mode: 'biliup' }]
         }
-        return this.sendDynamicContent(texts, props)
+        return this.sendDynamicContent(normalizedTexts, props)
+    }
+
+    private normalizeTextsForBilibili(texts: string[]) {
+        return texts.map((text) =>
+            text.replace(
+                /^((?:@\S+\s+)?\d{4}[\u00b9\u00b2\u00b3\u2070-\u2079\u207b]*\s+X发推)\n{2,}/mu,
+                '$1:\n',
+            ),
+        )
     }
 
     private async tryVideoUpload(texts: string[], props?: SendProps) {

@@ -41,9 +41,11 @@ export function sanitizeCardText(value: string | null | undefined) {
     return (value || '').replace(/\u2764\uFE0E+/g, '\u2764\uFE0F').replace(CARD_TEXT_IGNORABLE_PATTERN, '')
 }
 export const CARD_UI_FONT_FAMILY = [
-    'Noto Sans',
+    'Noto Sans CJK JP',
+    'Noto Sans JP',
     'Noto Sans CJK SC',
     'Noto Sans SC',
+    'Noto Sans',
     'Noto Sans Symbols 2',
     'Noto Sans Symbols',
 ].join(', ')
@@ -66,6 +68,27 @@ type MediaLayoutTile = {
     height: number
 }
 type MediaLayoutRow = Array<MediaLayoutTile>
+type MessagePackAvatar = {
+    url?: string
+    name?: string
+    id?: string
+}
+type MessagePackItem = {
+    index?: number
+    text?: string
+    avatar?: MessagePackAvatar
+}
+type MessagePackGroup = {
+    title?: string
+    omitted?: number
+    avatars?: Array<MessagePackAvatar>
+    items?: Array<MessagePackItem>
+}
+type MessagePackMeta = {
+    total?: number
+    range?: string
+    groups?: Array<MessagePackGroup>
+}
 
 function resolveCardFeatures(options?: RenderParserOptions): CardRenderFeatures {
     const features = new Set(DEFAULT_CARD_FEATURES)
@@ -413,6 +436,32 @@ function getPlatformBadge(article: Article) {
 }
 
 function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
+    if (isMessagePackArticle(article)) {
+        return (
+            <div
+                tw="rounded-full flex-none overflow-hidden flex items-center justify-center"
+                style={{
+                    width: size,
+                    height: size,
+                    background: 'linear-gradient(135deg, #eff8ff 0%, #d8efff 52%, #eaf7ff 100%)',
+                    border: '1px solid #a7d8f6',
+                    boxShadow: '0 2px 8px rgba(14, 116, 144, 0.10)',
+                }}
+            >
+                <span
+                    tw="font-bold leading-none"
+                    style={{
+                        color: '#0284c7',
+                        fontFamily: CARD_UI_FONT_FAMILY,
+                        fontSize: size * 0.48,
+                    }}
+                >
+                    N
+                </span>
+            </div>
+        )
+    }
+
     const websiteBrandKey = resolve227WebsiteBrandKey(article)
     if (!websiteBrandKey && article.u_avatar) {
         return (
@@ -455,6 +504,166 @@ function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
             >
                 {brand.avatarText}
             </span>
+        </div>
+    )
+}
+
+function isMessagePackArticle(article: Article) {
+    return article.type === 'message_pack' || article.extra?.extra_type === 'message_pack_meta'
+}
+
+function getMessagePackMeta(article: Article): MessagePackMeta | null {
+    if (!isMessagePackArticle(article)) {
+        return null
+    }
+    const data = (article.extra?.data || null) as MessagePackMeta | null
+    if (!data || !Array.isArray(data.groups)) {
+        return null
+    }
+    return data
+}
+
+function avatarFallbackText(avatar: MessagePackAvatar) {
+    const value = String(avatar.name || avatar.id || 'N').trim()
+    return Array.from(value)[0] || 'N'
+}
+
+function MiniAvatar({ avatar, size = 26 }: { avatar: MessagePackAvatar; size?: number }) {
+    if (avatar.url) {
+        return (
+            <img
+                tw="rounded-full flex-none"
+                src={avatar.url}
+                alt={avatar.name || avatar.id || ''}
+                style={{
+                    width: size,
+                    height: size,
+                    objectFit: 'cover',
+                    border: '1px solid #ffffff',
+                    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.14)',
+                }}
+            />
+        )
+    }
+
+    return (
+        <div
+            tw="rounded-full flex-none flex items-center justify-center"
+            style={{
+                width: size,
+                height: size,
+                background: '#e2e8f0',
+                border: '1px solid #ffffff',
+                boxShadow: '0 1px 3px rgba(15, 23, 42, 0.10)',
+            }}
+        >
+            <span
+                tw="font-bold leading-none text-[#64748b]"
+                style={{ fontFamily: CARD_UI_FONT_FAMILY, fontSize: size * 0.44 }}
+            >
+                {sanitizeCardText(avatarFallbackText(avatar))}
+            </span>
+        </div>
+    )
+}
+
+function AvatarStack({ avatars }: { avatars: Array<MessagePackAvatar> }) {
+    const shown = avatars.filter(Boolean).slice(0, 5)
+    if (shown.length === 0) {
+        return (
+            <div tw="flex flex-col items-center flex-none">
+                <MiniAvatar avatar={{ name: 'N' }} size={26} />
+            </div>
+        )
+    }
+
+    return (
+        <div tw="flex flex-col items-center flex-none" style={{ rowGap: '2px' }}>
+            {shown.map((avatar, index) => (
+                <MiniAvatar key={`${avatar.url || avatar.id || avatar.name || 'avatar'}-${index}`} avatar={avatar} />
+            ))}
+        </div>
+    )
+}
+
+function MessagePackContent({ article }: { article: Article }) {
+    const meta = getMessagePackMeta(article)
+    if (!meta) {
+        return null
+    }
+
+    return (
+        <div tw="flex flex-col" style={{ rowGap: '8px' }}>
+            {meta.groups?.map((group, groupIndex) => (
+                <div key={groupIndex} tw="flex flex-col w-full" style={{ rowGap: '8px' }}>
+                    <div
+                        tw="flex flex-row w-full"
+                        style={{
+                            columnGap: '8px',
+                            alignItems: 'flex-start',
+                        }}
+                    >
+                        <AvatarStack
+                            avatars={
+                                group.avatars?.length
+                                    ? group.avatars
+                                    : ((group.items || [])
+                                          .map((item) => item.avatar)
+                                          .filter(Boolean) as Array<MessagePackAvatar>)
+                            }
+                        />
+                        <div tw="flex flex-col flex-1 min-w-0" style={{ rowGap: '5px' }}>
+                            {group.title && (
+                                <div
+                                    tw="text-xs leading-snug text-[#2563eb]"
+                                    style={{
+                                        fontFamily: CARD_UI_FONT_FAMILY,
+                                        fontWeight: 700,
+                                        overflowWrap: 'anywhere',
+                                        wordBreak: 'break-word',
+                                    }}
+                                >
+                                    {sanitizeCardText(group.title)}
+                                </div>
+                            )}
+                            {(group.items || []).map((item, itemIndex) => (
+                                <pre
+                                    key={itemIndex}
+                                    tw="w-full text-[#202733] my-0 text-sm leading-snug"
+                                    style={{
+                                        whiteSpace: 'pre-wrap',
+                                        fontWeight: 400,
+                                        overflowWrap: 'anywhere',
+                                        wordBreak: 'break-word',
+                                    }}
+                                >
+                                    {sanitizeCardText(
+                                        `${item.index ? `【${item.index}】\n` : ''}${String(item.text || '').trim()}`,
+                                    )}
+                                </pre>
+                            ))}
+                            {Number(group.omitted || 0) > 0 && (
+                                <div
+                                    tw="text-xs leading-snug text-[#64748b]"
+                                    style={{ fontFamily: CARD_UI_FONT_FAMILY }}
+                                >
+                                    {`另有 ${group.omitted} 条更新已合并`}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                    {groupIndex < (meta.groups?.length || 0) - 1 && (
+                        <div tw="flex w-full justify-center">
+                            <div
+                                style={{
+                                    width: '68%',
+                                    borderTop: '1px dashed #cbd5e1',
+                                }}
+                            />
+                        </div>
+                    )}
+                </div>
+            ))}
         </div>
     )
 }
@@ -751,6 +960,25 @@ function estimateInlineWebsiteHeight(article: Article, level: number, features: 
     return textHeight + Math.max(0, blocks.length - 1) * 4
 }
 
+function estimateMessagePackHeight(article: Article, level: number) {
+    const meta = getMessagePackMeta(article)
+    if (!meta?.groups?.length) {
+        return null
+    }
+
+    const contentWidth = getContentWidth(level) - 34
+    return meta.groups.reduce((sum, group) => {
+        const titleHeight = group.title ? estimateTextLinesHeight(group.title, 12, contentWidth) : 0
+        const itemsHeight = (group.items || []).reduce((itemSum, item) => {
+            const text = `${item.index ? `【${item.index}】\n` : ''}${String(item.text || '').trim()}`
+            return itemSum + estimateTextLinesHeight(sanitizeCardText(text), 14, contentWidth) + 5
+        }, 0)
+        const omittedHeight = Number(group.omitted || 0) > 0 ? 18 : 0
+        const avatarHeight = Math.max(26, Math.min(5, Math.max(1, group.avatars?.length || 0)) * 28)
+        return sum + Math.max(avatarHeight, titleHeight + itemsHeight + omittedHeight) + 8
+    }, 0)
+}
+
 function ArticleContent({
     article,
     level = 0,
@@ -762,6 +990,8 @@ function ArticleContent({
 }) {
     const inlineWebsiteBlocks = getWebsiteInlineBlocks(article, features)
     const useInlineWebsiteBlocks = inlineWebsiteBlocks.length > 0
+    const messagePackMeta = getMessagePackMeta(article)
+    const useMessagePackBlocks = Boolean(messagePackMeta)
     const shouldRenderMedia = Boolean(article.media && article.media.length > 0 && !useInlineWebsiteBlocks)
     function Content() {
         return (
@@ -804,7 +1034,7 @@ function ArticleContent({
                 {article.translation && (
                     <Divider text={article.translated_by ? `由${article.translated_by}提供翻译` : ''} />
                 )}
-                {article.content && !useInlineWebsiteBlocks && (
+                {article.content && !useInlineWebsiteBlocks && !useMessagePackBlocks && (
                     <pre
                         tw="w-full text-[#202733] my-0 text-base leading-snug"
                         style={{
@@ -817,6 +1047,7 @@ function ArticleContent({
                         {sanitizeCardText(parseRawContent(article))}
                     </pre>
                 )}
+                {useMessagePackBlocks && <MessagePackContent article={article} />}
                 {useInlineWebsiteBlocks && (
                     <InlineWebsiteContent
                         article={article}
@@ -943,6 +1174,7 @@ function BaseCard({
 function estimatedArticleHeight(article: Article, level: number = 0, features: CardRenderFeatures): number {
     const basePadding = 16 * 2
     const inlineWebsiteHeight = estimateInlineWebsiteHeight(article, level, features)
+    const messagePackHeight = estimateMessagePackHeight(article, level)
     const articleHeightArray = [
         estimateTextLinesHeight(
             sanitizeCardText(formatArticleHeaderLine(article)),
@@ -955,7 +1187,8 @@ function estimatedArticleHeight(article: Article, level: number = 0, features: C
             getContentWidth(level),
         ), // translation
         article.translation ? 12 : 0, // translation divider
-        inlineWebsiteHeight ??
+        messagePackHeight ??
+            inlineWebsiteHeight ??
             estimateTextLinesHeight(sanitizeCardText(parseRawContent(article)), BASE_FONT_SIZE, getContentWidth(level)), // content
         article.has_media ? 12 : 0, // media or extra divider
         inlineWebsiteHeight === null ? estimateImagesHeight(article.media ?? [], level) : 0, // media

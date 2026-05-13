@@ -1721,7 +1721,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
                 has_media: true,
                 media: [{ type: 'photo', url: `https://example.com/${id}.jpg` }],
                 extra: null,
-                u_avatar: null,
+                u_avatar: `https://example.com/avatar-${id}.jpg`,
             })),
             [
                 {
@@ -1748,6 +1748,12 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent[0]?.texts[0]).toContain('消息合并')
     expect(packedArticles[0]?.content).toContain('【消息合并】1 条')
     expect(packedArticles[0]?.content).toContain('summary content 1')
+    expect(packedArticles[0]?.extra?.extra_type).toBe('message_pack_meta')
+    expect(packedArticles[0]?.extra?.data?.groups?.[0]?.avatars?.[0]).toEqual({
+        url: 'https://example.com/avatar-1.jpg',
+        name: 'member1',
+        id: 'member1',
+    })
     expect(packedArticles[0]?.media).toEqual([
         {
             type: 'photo',
@@ -1758,5 +1764,9 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(packedArticles[1]?.content).toContain('【消息合并】2 条')
     expect(packedArticles[1]?.content).toContain('summary content 2')
     expect(packedArticles[1]?.content).toContain('summary content 3')
+    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('summary content 2')
+    expect(packedArticles[1]?.extra?.data?.groups).toHaveLength(2)
+    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.avatars?.[0]?.url).toBe('https://example.com/avatar-2.jpg')
+    expect(packedArticles[1]?.extra?.data?.groups?.[1]?.avatars?.[0]?.url).toBe('https://example.com/avatar-3.jpg')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })
