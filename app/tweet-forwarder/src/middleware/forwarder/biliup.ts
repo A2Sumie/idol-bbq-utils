@@ -216,6 +216,36 @@ function collectTextBlocks(article: Pick<Article, 'content'>, texts: string[]) {
     return blocks
 }
 
+function normalizeComparableText(value: string | null | undefined) {
+    return String(value || '')
+        .replace(/[【】「」『』"'“”‘’\[\]()（）]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLocaleLowerCase()
+}
+
+function stripDuplicateLeadingSummary(block: string, summary: string) {
+    const normalizedSummary = normalizeComparableText(summary)
+    if (!block || !normalizedSummary) {
+        return block
+    }
+
+    const lines = block.split('\n')
+    while (lines[0] !== undefined && !lines[0]!.trim()) {
+        lines.shift()
+    }
+    const first = lines[0]?.trim() || ''
+    if (!first || normalizeComparableText(first) !== normalizedSummary) {
+        return block
+    }
+
+    lines.shift()
+    while (lines[0] !== undefined && !lines[0]!.trim()) {
+        lines.shift()
+    }
+    return lines.join('\n').trim()
+}
+
 function resolveDisplayName(article: Pick<Article, 'username' | 'u_id'>) {
     return String(article.username || article.u_id || '').trim() || 'Unknown'
 }
@@ -296,7 +326,8 @@ function buildTemplateContext(
     const dateTime = formatDateTimeParts(article.created_at, timeZone)
     const displayName = resolveDisplayName(article)
     const summary = primaryLine || dateTime.datetime
-    const body = blocks[0] || ''
+    const bodyWithoutRepeatedSummary = stripDuplicateLeadingSummary(blocks[0] || '', summary)
+    const body = bodyWithoutRepeatedSummary || blocks[0] || ''
 
     return {
         article_id: article.a_id,

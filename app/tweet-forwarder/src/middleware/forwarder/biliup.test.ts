@@ -90,6 +90,31 @@ test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
     expect(candidate).toBeNull()
 })
 
+test('buildBiliupUploadCandidate keeps website blog title out of upload description body', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.Website,
+            type: 'article',
+            u_id: '22/7:blog',
+            username: '22/7 Blog',
+            a_id: 'blog-video-1',
+            content: '【春のかおり】\n\nブログ本文',
+            created_at: 1710900000,
+            url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/1',
+        } as any,
+        ['【春のかおり】\n\nブログ本文'],
+        [{ media_type: 'video', path: '/tmp/blog.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate?.title).toContain('春のかおり')
+    expect(candidate?.description).toContain('ブログ本文')
+    expect(candidate?.description).not.toContain('【春のかおり】')
+    expect(`${candidate?.title}\n${candidate?.description}`.match(/春のかおり/g)).toHaveLength(1)
+})
+
 test('buildCookieDocument creates a biliup-compatible cookie scaffold', () => {
     const document = buildCookieDocument('sess-token', 'csrf-token')
 

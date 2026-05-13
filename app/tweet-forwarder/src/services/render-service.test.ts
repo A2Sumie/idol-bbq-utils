@@ -286,6 +286,45 @@ describe('RenderService text-compact', () => {
         expect(result.text).toContain('[描述过长，已截断，完整内容请打开链接查看]')
         expect(result.text.length).toBeLessThan(520)
     })
+
+    test('does not repeat website blog title from duplicate extra content', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 22,
+                a_id: 'fc-blog-title-dedupe',
+                u_id: '22/7:blog',
+                username: '22/7 Blog',
+                created_at: 1710000000,
+                content: '【春のかおり】\n\nブログ本文',
+                translation: null,
+                translated_by: null,
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/1',
+                type: 'article',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: {
+                    content: '春のかおり',
+                    data: {
+                        site: '22/7',
+                        feed: 'fc-blog',
+                        title: '春のかおり',
+                    },
+                    extra_type: 'website_meta',
+                },
+                u_avatar: null,
+                platform: Platform.Website,
+            } as any,
+            {
+                taskId: 'test-website-title-dedupe',
+                render_type: 'text-compact',
+            },
+        )
+
+        expect(result.text.match(/春のかおり/g)).toHaveLength(1)
+        expect(result.text).not.toContain('~~~')
+    })
 })
 
 describe('RenderService text-card', () => {

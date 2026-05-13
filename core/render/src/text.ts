@@ -206,11 +206,54 @@ function parseRawContent(article: Article) {
     if (article.extra) {
         const extra = article.extra
         // card parser
-        if (extra.content) {
+        if (extra.content && !isDuplicateExtraContent(content, extra.content)) {
             content = `${content}\n~~~\n${extra.content}`
         }
     }
     return content
+}
+
+function normalizeComparableText(text: string | null | undefined) {
+    return String(text || '')
+        .replace(/\r\n/g, '\n')
+        .replace(/[【】「」『』"'“”‘’\[\]()（）]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLocaleLowerCase()
+}
+
+function extractLeadingTitleCandidates(content: string) {
+    const lines = content
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean)
+    const candidates = new Set<string>()
+    const first = lines[0] || ''
+    const bracketed = first.match(/^【(.+?)】$/)?.[1]
+    if (bracketed) {
+        candidates.add(bracketed)
+    }
+    if (first) {
+        candidates.add(first)
+    }
+    return Array.from(candidates)
+}
+
+function isDuplicateExtraContent(content: string, extraContent: string) {
+    const normalizedExtra = normalizeComparableText(extraContent)
+    if (!normalizedExtra) {
+        return true
+    }
+
+    if (extractLeadingTitleCandidates(content).some((candidate) => normalizeComparableText(candidate) === normalizedExtra)) {
+        return true
+    }
+
+    return content
+        .split(/\n{2,}/)
+        .map(normalizeComparableText)
+        .some((block) => block === normalizedExtra)
 }
 
 function truncateCompactText(text: string, maxLength: number) {
