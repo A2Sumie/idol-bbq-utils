@@ -8,6 +8,7 @@ import {
     resolve227WebsiteBrandKey,
 } from '../template/img/DefaultCard'
 import { languageFontMap } from '../src/img/utils/font'
+import { getIconCode } from '../src/img/utils/twemoji'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
     return {
@@ -102,4 +103,9 @@ test('card UI metadata font prefers modern sans before simplified CJK fallback',
 
 test('dynamic fallback font list covers decorative lisu-shaped glyphs', () => {
     expect(languageFontMap.unknown).toContain('Noto+Sans+Lisu')
+})
+
+test('emoji icon code ignores text and emoji variation selectors', () => {
+    expect(getIconCode('❤︎')).toBe('2764')
+    expect(getIconCode('❤️')).toBe('2764')
 })
