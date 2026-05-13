@@ -63,6 +63,7 @@ export interface RenderResult {
 }
 
 const CARD_TEXT_TITLE_THRESHOLD = 1000
+const LONG_TEXT_CARD_TYPES = new Set(['message_pack', 'summary'])
 
 function formatPlatformTag(
     article: Pick<Article, 'platform' | 'username' | 'a_id'>,
@@ -125,9 +126,12 @@ export class RenderService {
         const generateRenderedImage = async () => {
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
-                const imgBuffer = await this.ArticleConverter.articleToImg(this.hydrateArticleMediaForCard(article, maybe_media_files), {
-                    features: this.resolveCardFeatures(config.card_features),
-                })
+                const imgBuffer = await this.ArticleConverter.articleToImg(
+                    this.hydrateArticleMediaForCard(article, maybe_media_files),
+                    {
+                        features: this.resolveCardFeatures(config.card_features),
+                    },
+                )
                 const path = writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
                 this.log?.debug(`Generated rendered image at ${path}`)
                 return path
@@ -230,7 +234,7 @@ export class RenderService {
         } else if (render_type === 'text-card' || render_type === 'text-compact-card') {
             text = this.renderText(article, config)
             textCollapseMode = this.resolveArticleTextCollapseMode(render_type)
-            if (text.length > CARD_TEXT_TITLE_THRESHOLD) {
+            if (!LONG_TEXT_CARD_TYPES.has(String(article.type || '')) && text.length > CARD_TEXT_TITLE_THRESHOLD) {
                 text = extractArticleHeadline(article)
                 textCollapseMode = 'none'
             }

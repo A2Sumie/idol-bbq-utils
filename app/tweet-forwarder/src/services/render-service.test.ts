@@ -513,6 +513,45 @@ describe('RenderService text-card', () => {
         service.cleanup(result.mediaFiles)
     })
 
+    test('keeps long message-pack text instead of collapsing it to a headline', async () => {
+        const service = new RenderService()
+        const body = Array.from(
+            { length: 18 },
+            (_, index) => `【${index + 1}】\n打包正文 ${index + 1} ${'内容'.repeat(24)}`,
+        ).join('\n\n')
+        const result = await service.process(
+            {
+                id: -16,
+                a_id: 'summary-card-long-pack',
+                u_id: 'message_pack',
+                username: '消息合并',
+                created_at: 1710000000,
+                content: `消息合并 18条\n\n${body}`,
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/member/status/source',
+                type: 'message_pack',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            } as any,
+            {
+                taskId: 'test-message-pack-long-card',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(result.text.length).toBeGreaterThan(1000)
+        expect(result.text).toContain('打包正文 18')
+        expect(result.text).not.toBe('消息合并 18条')
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
+
     test('renders a card when text starts with emoji', async () => {
         const service = new RenderService()
         const result = await service.process(

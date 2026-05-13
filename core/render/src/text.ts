@@ -41,6 +41,10 @@ const SHORT_ACTION_LABELS: Partial<Record<Platform, Record<string, string>>> = {
         article: '更新',
     },
 }
+const SYNTHETIC_ACTION_LABELS: Record<string, string> = {
+    message_pack: '合并',
+    summary: '合并',
+}
 const SUPERSCRIPT_DIGITS: Record<string, string> = {
     '-': '⁻',
     '0': '⁰',
@@ -131,6 +135,7 @@ function formatArticleActionLabel(article: Pick<Article, 'platform' | 'type'>) {
     return (
         SHORT_ACTION_LABELS[article.platform]?.[article.type] ||
         platformArticleMapToActionText[article.platform]?.[article.type] ||
+        SYNTHETIC_ACTION_LABELS[article.type] ||
         article.type
     )
 }

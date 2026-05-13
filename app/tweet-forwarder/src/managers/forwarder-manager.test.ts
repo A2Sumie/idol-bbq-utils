@@ -796,7 +796,7 @@ test('sendArticles sends a target-level digest for lower-noise targets', async (
     }
 
     expect(target.sent).toHaveLength(1)
-    expect(target.sent[0]?.texts[0]).toContain('【更新摘要】4 条')
+    expect(target.sent[0]?.texts[0]).toContain('【更新合并】4 条')
     expect(target.sent[0]?.texts[0]).toContain('↪ member-2')
     expect(target.sent[0]?.texts[0]).toContain('另有 1 条更新已合并')
     expect(claimed).toEqual([300, 301, 302, 303])
@@ -914,13 +914,13 @@ test('sendArticles keeps high-frequency hashtags digestized and extracts non-tag
     }
 
     expect(target.sent).toHaveLength(2)
-    expect(target.sent[0]?.texts[0]).toContain('【话题更新摘要】#ナナニジ / 3 条')
+    expect(target.sent[0]?.texts[0]).toContain('【话题更新合并】#ナナニジ / 3 条')
     expect(target.sent[0]?.texts[0]).not.toContain('/ target-tag-digest')
     expect(target.sent[0]?.texts[0]).toContain('正文: ライブ最高 0')
     expect(target.sent[0]?.texts[0]).not.toContain('正文: ライブ最高 0 #')
     expect(target.sent[0]?.texts[0]).toContain('其他标签: #LIVE')
     expect(target.sent[0]?.texts[0]).not.toContain('标签: #ナナニジ #LIVE')
-    expect(target.sent[1]?.texts[0]).toContain('【话题更新摘要】#ナナニジ / 1 条')
+    expect(target.sent[1]?.texts[0]).toContain('【话题更新合并】#ナナニジ / 1 条')
     expect(target.sent[1]?.texts[0]).toContain('正文: 追加のお知らせ')
     expect(claimed).toEqual([400, 401, 402, 410])
 })
@@ -1655,9 +1655,11 @@ test('sendArticles sends idle-first summary-card items and flushes later items a
 
     ;(pools as any).claimArticleChain = async () => true
     ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
     ;(pools as any).renderService = {
         process: async (article: any) => {
             if (article.id < 0) {
+                packedArticles.push(article)
                 return {
                     text: article.content,
                     textCollapseMode: 'article',
@@ -1718,7 +1720,11 @@ test('sendArticles sends idle-first summary-card items and flushes later items a
     expect(target.sent).toHaveLength(3)
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
-    expect(target.sent[0]?.texts[0]).toContain('更新摘要')
+    expect(target.sent[0]?.texts[0]).toContain('消息合并')
+    expect(packedArticles[0]?.content).toContain('【消息合并】1 条')
+    expect(packedArticles[0]?.content).toContain('summary content 1')
+    expect(packedArticles[1]?.content).toContain('【消息合并】1 条')
+    expect(packedArticles[1]?.content).toContain('summary content 2')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
     expect(target.sent[2]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })

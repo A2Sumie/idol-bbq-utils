@@ -1,11 +1,4 @@
-import {
-    formatArticleAttributionLine,
-    formatArticleAttributionTimeToken,
-    formatArticleHeaderLine,
-    formatArticleSourceActionAttribution,
-    parseRawContent,
-    parseTranslationContent,
-} from '@/text'
+import { formatArticleAttributionLine, formatArticleHeaderLine, parseRawContent, parseTranslationContent } from '@/text'
 import type { Article } from '@/types'
 import { X } from '@idol-bbq-utils/spider'
 import { Platform } from '@idol-bbq-utils/spider/types'
@@ -490,25 +483,16 @@ function Metaline({ article }: { article: Article }) {
 function AttributionLine({ article }: { article: Article }) {
     return (
         <div
-            tw="flex flex-wrap text-xs leading-snug text-[#64748b]"
+            tw="flex text-xs leading-snug text-[#64748b]"
             style={{
-                columnGap: '5px',
                 fontWeight: 700,
                 maxWidth: '100%',
                 overflowWrap: 'anywhere',
                 wordBreak: 'break-word',
             }}
         >
-            {article.username && <span lang="ja-JP">{sanitizeCardText(article.username)}</span>}
             <span lang="zh-CN" style={{ fontFamily: CARD_UI_FONT_FAMILY }}>
-                {sanitizeCardText(
-                    [
-                        formatArticleAttributionTimeToken(article.created_at),
-                        formatArticleSourceActionAttribution(article),
-                    ]
-                        .filter(Boolean)
-                        .join(' '),
-                )}
+                {sanitizeCardText(formatArticleAttributionLine(article))}
             </span>
         </div>
     )

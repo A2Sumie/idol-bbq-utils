@@ -1595,8 +1595,8 @@ class ForwarderPools extends BaseCompatibleModel {
         const content = this.buildSummaryCardContent(group.kind, sorted, queue.config)
         const title =
             group.kind === 'storm'
-                ? `话题风暴摘要 ${group.label}`.trim()
-                : `更新摘要 ${this.formatSummaryCardRange(sorted.map((item) => item.article))}`
+                ? `话题消息合并 ${group.label}`.trim()
+                : `消息合并 ${this.formatSummaryCardRange(sorted.map((item) => item.article))}`
         const now = Math.floor(Date.now() / 1000)
         const summaryArticle = this.buildSyntheticSummaryArticle(title, content, sorted[0]?.article, now)
         const cardResult = await this.renderService.process(summaryArticle, {
@@ -1620,11 +1620,11 @@ class ForwarderPools extends BaseCompatibleModel {
                 forceSend: true,
             })
             this.log?.info(
-                `Sent ${group.kind} summary card (${reason}) with ${sorted.length} articles to ${queue.target.id}`,
+                `Sent ${group.kind} message pack card (${reason}) with ${sorted.length} articles to ${queue.target.id}`,
             )
             return true
         } catch (error) {
-            this.log?.error(`Failed to send ${group.kind} summary card to ${queue.target.id}: ${error}`)
+            this.log?.error(`Failed to send ${group.kind} message pack card to ${queue.target.id}: ${error}`)
             return false
         } finally {
             this.renderService.cleanup(cardResult.mediaFiles)
@@ -1641,12 +1641,12 @@ class ForwarderPools extends BaseCompatibleModel {
             id: -now,
             platform: sourceArticle?.platform || Platform.X,
             a_id: `summary-card-${now}`,
-            u_id: 'summary',
-            username: '七虹信标摘要',
+            u_id: 'message_pack',
+            username: '消息合并',
             created_at: now,
             content: `${title}\n\n${content}`,
             url: sourceArticle?.url || '',
-            type: 'summary' as any,
+            type: 'message_pack' as any,
             ref: null,
             has_media: false,
             media: null,
@@ -1666,20 +1666,22 @@ class ForwarderPools extends BaseCompatibleModel {
         if (kind === 'storm') {
             const tags = uniquePreserveOrder(items.flatMap((item) => item.digestTags))
             const lines = shown.map((item, index) => {
-                const article = item.article
-                const time = dayjs.unix(article.created_at).format('HH:mm')
-                const author = article.username || article.u_id || 'unknown'
-                const headline = extractArticleNonTagText(article, 120)
-                return `${index + 1}. [${time}] ${author}: ${headline}`
+                const message = this.renderService.renderText(item.article, { render_type: 'text-compact' }).trim()
+                const nonStormTags = extractArticleHashtags(item.article).filter(
+                    (tag) => !tags.some((stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag)),
+                )
+                const tagLine =
+                    nonStormTags.length > 0 ? `其他标签: ${uniquePreserveOrder(nonStormTags).join(' ')}` : ''
+                return [`【${index + 1}】`, message, tagLine].filter(Boolean).join('\n')
             })
             if (omitted > 0) {
                 lines.push(`另有 ${omitted} 条更新已合并`)
             }
             return [
-                `标签: ${tags.join(' ')}`,
+                `【话题消息合并】${tags.join(' ')} / ${items.length} 条`,
                 `范围: ${this.formatSummaryCardRange(items.map((item) => item.article))}`,
                 ...lines,
-            ].join('\n')
+            ].join('\n\n')
         }
 
         const root = this.getArticleThreadRoot(items[0]?.article)
@@ -1687,17 +1689,19 @@ class ForwarderPools extends BaseCompatibleModel {
             ? `串: ${root.username || root.u_id || 'unknown'} / ${extractArticleHeadline(root as any, 100)}`
             : undefined
         const lines = shown.map((item, index) => {
-            const article = item.article
-            const time = dayjs.unix(article.created_at).format('HH:mm')
-            const replyMark = article.ref && typeof article.ref === 'object' ? '↪ ' : ''
-            const author = article.username || article.u_id || 'unknown'
-            const headline = extractArticleHeadline(article as any, 120) || article.url || article.a_id
-            return `${index + 1}. [${time}] ${replyMark}${author}: ${headline}`
+            const message = this.renderService.renderText(item.article, { render_type: 'text-compact' }).trim()
+            return [`【${index + 1}】`, message].filter(Boolean).join('\n')
         })
         if (omitted > 0) {
             lines.push(`另有 ${omitted} 条更新已合并`)
         }
-        return [rootLine, ...lines].filter(Boolean).join('\n')
+        return [
+            `【消息合并】${items.length} 条 / ${this.formatSummaryCardRange(items.map((item) => item.article))}`,
+            rootLine,
+            ...lines,
+        ]
+            .filter(Boolean)
+            .join('\n\n')
     }
 
     private formatSummaryCardRange(articles: ArticleWithId[]) {
@@ -2068,8 +2072,8 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const title = options?.tag
-            ? `【话题更新摘要】${options.tag} / ${sorted.length} 条 / ${start}-${end}`
-            : `【更新摘要】${sorted.length} 条 / ${start}-${end}`
+            ? `【话题更新合并】${options.tag} / ${sorted.length} 条 / ${start}-${end}`
+            : `【更新合并】${sorted.length} 条 / ${start}-${end}`
         return [title, ...lines].join('\n\n')
     }
 
