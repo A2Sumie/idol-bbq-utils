@@ -6,6 +6,7 @@ import {
     estimateTextLinesHeight,
     layoutMediaRows,
     resolve227WebsiteBrandKey,
+    sanitizeCardText,
 } from '../template/img/DefaultCard'
 import { languageFontMap } from '../src/img/utils/font'
 import { getIconCode } from '../src/img/utils/twemoji'
@@ -108,4 +109,9 @@ test('dynamic fallback font list covers decorative lisu-shaped glyphs', () => {
 test('emoji icon code ignores text and emoji variation selectors', () => {
     expect(getIconCode('❤︎')).toBe('2764')
     expect(getIconCode('❤️')).toBe('2764')
+})
+
+test('sanitizeCardText removes stray selectors from rino-style decorative text', () => {
+    expect(sanitizeCardText('おはりのち︎︎︎︎❤︎')).toBe('おはりのち❤️')
+    expect(sanitizeCardText('今日も素敵🪄︎︎◝✩ ‌‌ ‌')).toBe('今日も素敵🪄◝✩  ')
 })

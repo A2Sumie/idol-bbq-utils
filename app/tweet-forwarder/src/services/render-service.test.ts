@@ -577,6 +577,38 @@ describe('RenderService text-card', () => {
 
         service.cleanup(result.mediaFiles)
     })
+
+    test('renders rino_mochizuki decorative selector-heavy text cards', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 17,
+                a_id: 'rino-selector-heavy-card',
+                u_id: 'rino_mochizuki',
+                username: '♡望月りの♡【22/7】໒꒱· ﾟ',
+                created_at: 1778632285,
+                content: 'おはりのち︎︎︎︎❤︎\n\nレトロな喫茶店って良いよね☕*°\n୨୧ #エスターバニー ちゃんと🐇⸒⸒ ',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/rino_mochizuki/status/2054358821003550783',
+                type: 'tweet',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            } as any,
+            {
+                taskId: 'test-rino-selector-heavy-card',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
 })
 
 describe('RenderService media deduplication', () => {

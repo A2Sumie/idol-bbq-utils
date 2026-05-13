@@ -28,6 +28,7 @@ const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'ph
 const DEFAULT_PLATFORM_BADGE_WIDTH = 32
 const DEFAULT_CARD_FEATURES = new Set(['media-contain', 'website-inline-media'])
 const MEDIA_GAP = 4
+const CARD_TEXT_IGNORABLE_PATTERN = /[\uFE0E\u200B\u200C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
 export const CARD_FONT_FAMILY = [
     'Noto Sans CJK JP',
     'Noto Sans JP',
@@ -42,6 +43,10 @@ export const CARD_FONT_FAMILY = [
     'Noto Sans Georgian',
     'Noto Sans Oriya',
 ].join(', ')
+
+export function sanitizeCardText(value: string | null | undefined) {
+    return (value || '').replace(/\u2764\uFE0E+/g, '\u2764\uFE0F').replace(CARD_TEXT_IGNORABLE_PATTERN, '')
+}
 export const CARD_UI_FONT_FAMILY = [
     'Noto Sans',
     'Noto Sans CJK SC',
@@ -476,7 +481,7 @@ function Metaline({ article }: { article: Article }) {
                 lang="zh-CN"
                 style={{ fontFamily: CARD_UI_FONT_FAMILY, fontWeight: 700 }}
             >
-                {formatArticleHeaderLine(article)}
+                {sanitizeCardText(formatArticleHeaderLine(article))}
             </span>
         </div>
     )
@@ -494,11 +499,16 @@ function AttributionLine({ article }: { article: Article }) {
                 wordBreak: 'break-word',
             }}
         >
-            {article.username && <span lang="ja-JP">{article.username}</span>}
+            {article.username && <span lang="ja-JP">{sanitizeCardText(article.username)}</span>}
             <span lang="zh-CN" style={{ fontFamily: CARD_UI_FONT_FAMILY }}>
-                {[formatArticleAttributionTimeToken(article.created_at), formatArticleSourceActionAttribution(article)]
-                    .filter(Boolean)
-                    .join(' ')}
+                {sanitizeCardText(
+                    [
+                        formatArticleAttributionTimeToken(article.created_at),
+                        formatArticleSourceActionAttribution(article),
+                    ]
+                        .filter(Boolean)
+                        .join(' '),
+                )}
             </span>
         </div>
     )
@@ -515,7 +525,7 @@ function Divider({ text, dash }: { text?: string; dash?: boolean }) {
             />
             {text && (
                 <span tw="mx-2 text-idol-tertiary" lang="zh-CN" style={{ fontFamily: CARD_UI_FONT_FAMILY }}>
-                    {text}
+                    {sanitizeCardText(text)}
                 </span>
             )}
             {text && (
@@ -647,7 +657,7 @@ function InlineWebsiteContent({
                         wordBreak: 'break-word',
                     }}
                 >
-                    {title}
+                    {sanitizeCardText(title)}
                 </pre>
             )}
             {blocks.map((block, index) =>
@@ -662,7 +672,7 @@ function InlineWebsiteContent({
                             wordBreak: 'break-word',
                         }}
                     >
-                        {block.text}
+                        {sanitizeCardText(block.text)}
                     </pre>
                 ) : (
                     <MediaGroup
@@ -750,7 +760,7 @@ function estimateInlineWebsiteHeight(article: Article, level: number, features: 
             if (block.type === 'image') {
                 return sum + estimateImagesHeight([{ type: 'photo', url: block.url, alt: block.alt }], level)
             }
-            return sum + estimateTextLinesHeight(block.text, BASE_FONT_SIZE, getContentWidth(level))
+            return sum + estimateTextLinesHeight(sanitizeCardText(block.text), BASE_FONT_SIZE, getContentWidth(level))
         },
         title ? estimateTextLinesHeight(title, BASE_FONT_SIZE, getContentWidth(level)) : 0,
     )
@@ -804,7 +814,7 @@ function ArticleContent({
                             wordBreak: 'break-word',
                         }}
                     >
-                        {parseTranslationContent(article)}
+                        {sanitizeCardText(parseTranslationContent(article))}
                     </pre>
                 )}
                 {article.translation && (
@@ -820,7 +830,7 @@ function ArticleContent({
                             wordBreak: 'break-word',
                         }}
                     >
-                        {parseRawContent(article)}
+                        {sanitizeCardText(parseRawContent(article))}
                     </pre>
                 )}
                 {useInlineWebsiteBlocks && (
@@ -951,17 +961,21 @@ function estimatedArticleHeight(article: Article, level: number = 0, features: C
     const inlineWebsiteHeight = estimateInlineWebsiteHeight(article, level, features)
     const articleHeightArray = [
         estimateTextLinesHeight(
-            formatArticleHeaderLine(article),
+            sanitizeCardText(formatArticleHeaderLine(article)),
             BASE_FONT_SIZE,
             getContentWidth(level) - (level === 0 ? 0 : 32), // maybe subtract the avatar width
         ), // metaline
-        estimateTextLinesHeight(parseTranslationContent(article) ?? '', BASE_FONT_SIZE, getContentWidth(level)), // translation
+        estimateTextLinesHeight(
+            sanitizeCardText(parseTranslationContent(article)),
+            BASE_FONT_SIZE,
+            getContentWidth(level),
+        ), // translation
         article.translation ? 12 : 0, // translation divider
         inlineWebsiteHeight ??
-            estimateTextLinesHeight(parseRawContent(article) ?? '', BASE_FONT_SIZE, getContentWidth(level)), // content
+            estimateTextLinesHeight(sanitizeCardText(parseRawContent(article)), BASE_FONT_SIZE, getContentWidth(level)), // content
         article.has_media ? 12 : 0, // media or extra divider
         inlineWebsiteHeight === null ? estimateImagesHeight(article.media ?? [], level) : 0, // media
-        estimateTextLinesHeight(formatArticleAttributionLine(article), 12, getContentWidth(level)),
+        estimateTextLinesHeight(sanitizeCardText(formatArticleAttributionLine(article)), 12, getContentWidth(level)),
         article.ref && typeof article.ref === 'object'
             ? estimatedArticleHeight(article.ref, level + 1, features) + basePadding * (level + 1)
             : 0, // ref
