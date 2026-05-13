@@ -46,6 +46,7 @@ RUN wget https://github.com/mikf/gallery-dl/releases/download/${GALLERY_DL_VERSI
 WORKDIR /app
 COPY app/tweet-forwarder/update-media-tools.sh /app/tools/update-media-tools.sh
 COPY app/tweet-forwarder/scripts/biliup-upload.py /app/tools/biliup-upload.py
+COPY tools/probes /app/tools/probes
 RUN chmod +x /app/tools/update-media-tools.sh \
     && chmod +x /app/tools/biliup-upload.py \
     && /app/tools/update-media-tools.sh
