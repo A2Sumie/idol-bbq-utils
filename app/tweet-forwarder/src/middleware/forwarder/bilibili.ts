@@ -52,7 +52,7 @@ class BiliForwarder extends Forwarder {
     private normalizeTextsForBilibili(texts: string[]) {
         return texts.map((text) =>
             text.replace(
-                /^((?:@\S+\s+)?\d{4}[\u00b9\u00b2\u00b3\u2070-\u2079\u207b]*\s+X发推)\n{2,}/mu,
+                /^((?:@\S+\s+)?\d{4}[\u00b9\u00b2\u00b3\u2070-\u2079\u207b]*\s+X(?:发推|引用|回复|转推))\n{2,}/mu,
                 '$1:\n',
             ),
         )

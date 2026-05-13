@@ -378,7 +378,7 @@ test('BiliForwarder falls back to dynamic posting when biliup upload is skipped'
     expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
 })
 
-test('BiliForwarder tightens X tweet header spacing for Bilibili posts', async () => {
+test('BiliForwarder tightens X action header spacing for Bilibili posts', async () => {
     const forwarder = new BiliForwarder(
         {
             bili_jct: 'csrf-token',
@@ -390,20 +390,29 @@ test('BiliForwarder tightens X tweet header spacing for Bilibili posts', async (
         'bili-test',
     )
 
-    let uploadText = ''
-    let dynamicText = ''
+    let uploadTexts: string[] = []
+    let dynamicTexts: string[] = []
     ;(forwarder as any).tryVideoUpload = async (texts: string[]) => {
-        uploadText = texts[0] || ''
+        uploadTexts = texts
         return false
     }
     ;(forwarder as any).sendDynamicContent = async (texts: string[]) => {
-        dynamicText = texts[0] || ''
+        dynamicTexts = texts
         return [{ ok: true, mode: 'dynamic' }]
     }
 
-    await (forwarder as any).realSend(['@member 0203⁹ X发推\n\n本文\n\nmember 0203⁹（260101） X 发推'], {})
+    await (forwarder as any).realSend(
+        [
+            '@member 0203⁹ X发推\n\n本文\n\nmember 0203⁹（260101） X 发推',
+            '@member 0204⁹ X引用\n\n引用本文\n\nmember 0204⁹（260101） X 引用',
+        ],
+        {},
+    )
 
-    expect(uploadText).toContain('@member 0203⁹ X发推:\n本文')
-    expect(dynamicText).toContain('@member 0203⁹ X发推:\n本文')
-    expect(dynamicText).not.toContain('X发推\n\n本文')
+    expect(uploadTexts[0]).toContain('@member 0203⁹ X发推:\n本文')
+    expect(dynamicTexts[0]).toContain('@member 0203⁹ X发推:\n本文')
+    expect(dynamicTexts[0]).not.toContain('X发推\n\n本文')
+    expect(uploadTexts[1]).toContain('@member 0204⁹ X引用:\n引用本文')
+    expect(dynamicTexts[1]).toContain('@member 0204⁹ X引用:\n引用本文')
+    expect(dynamicTexts[1]).not.toContain('X引用\n\n引用本文')
 })
