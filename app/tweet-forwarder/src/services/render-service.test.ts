@@ -148,8 +148,11 @@ describe('RenderService text-compact', () => {
 
         const expectedClock = expectedTime.split('(')[0]
         const expectedAttributionTime = expectedTime.replace('(', '（').replace(')', '）')
-        expect(result.text.split('\n')[0]).toBe(`@mao_asaoka227 ${expectedClock} X引用`)
-        expect(result.text.split('\n').at(-1)).toBe(`麻丘真央 ${expectedAttributionTime} X 引用`)
+        const lines = result.text.split('\n')
+        expect(lines[0]).toBe(`@mao_asaoka227 ${expectedClock} X引用`)
+        expect(lines[1]).toBe('')
+        expect(lines.at(-2)).toBe('')
+        expect(lines.at(-1)).toBe(`麻丘真央 ${expectedAttributionTime} X 引用`)
         expect(result.text).not.toContain('发布推文')
         expect(result.text).not.toContain('引用推文')
     })
@@ -186,14 +189,69 @@ describe('RenderService text-compact', () => {
         expect(formatTime(1710000000).startsWith('240310 ')).toBeTrue()
         const expectedClock = expectedTime.split('(')[0]
         const expectedAttributionTime = expectedTime.replace('(', '（').replace(')', '）')
-        expect(result.text.split('\n')[0]).toBe(`@kawase_uta ${expectedClock} IG发帖`)
-        expect(result.text.split('\n').at(-1)).toBe(`河瀬詩 ${expectedAttributionTime} IG 发帖`)
+        const lines = result.text.split('\n')
+        expect(lines[0]).toBe(`@kawase_uta ${expectedClock} IG发帖`)
+        expect(lines[1]).toBe('')
+        expect(lines.at(-2)).toBe('')
+        expect(lines.at(-1)).toBe(`河瀬詩 ${expectedAttributionTime} IG 发帖`)
         expect(result.text).toContain('IG')
         expect(result.text).toContain('河瀬詩')
         expect(result.text).toContain('@kawase_uta')
         expect(result.text).toContain('hello world')
         expect(result.text).not.toContain('    ')
         expect(result.text).not.toContain('发布帖子')
+    })
+
+    test('keeps reference separator compact while surrounding article body with blank lines', async () => {
+        const service = new RenderService()
+        const quoteClock = formatArticleTimeToken(1710000600).split('(')[0]
+        const refClock = formatArticleTimeToken(1710000000).split('(')[0]
+        const result = await service.process(
+            {
+                id: 4,
+                a_id: 'quote-with-ref',
+                u_id: 'satsuki_shiina',
+                username: '椎名桜月',
+                created_at: 1710000600,
+                content: '引用コメント',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/satsuki_shiina/status/quote-with-ref',
+                type: 'quoted',
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+                ref: {
+                    id: 5,
+                    a_id: 'quoted-ref',
+                    u_id: 'needygirl_anime',
+                    username: 'アニメ「NEEDY GIRL OVERDOSE」公式',
+                    created_at: 1710000000,
+                    content: '第6話\nTurn Around and Count 2 Ten',
+                    translation: null,
+                    translated_by: null,
+                    url: 'https://x.com/needygirl_anime/status/quoted-ref',
+                    type: 'tweet',
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                    platform: Platform.X,
+                },
+            } as any,
+            {
+                taskId: 'test-compact-ref-separator',
+                render_type: 'text-compact',
+            },
+        )
+
+        expect(result.text).toContain(`@satsuki_shiina ${quoteClock} X引用\n\n引用コメント\n\n椎名桜月`)
+        expect(result.text).toContain(`X 引用\n------------\n@needygirl_anime ${refClock} X发推`)
+        expect(result.text).not.toContain('\n\n------------')
+        expect(result.text).not.toContain('------------\n\n')
     })
 
     test('truncates overly long YouTube descriptions in compact mode', async () => {

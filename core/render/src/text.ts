@@ -339,21 +339,26 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
             format_article += formatCollapsedReferenceChain(currentArticle, rootArticle, options)
             break
         }
-        format_article += `${formatArticleHeaderLine(currentArticle)}\n`
+        format_article += formatArticleHeaderLine(currentArticle)
         if (currentArticle.translated_by) {
             let translation = parseTranslationContent(currentArticle)
-            format_article += `${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
+            format_article += `\n\n${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
         }
 
         /* 原文 */
         let raw_article = parseRawContent(currentArticle)
-        format_article += `${raw_article}`
+        if (!currentArticle.translated_by && raw_article) {
+            format_article += '\n\n'
+        }
+        format_article += raw_article
         if (raw_article || currentArticle.translated_by) {
+            format_article += '\n\n'
+        } else {
             format_article += '\n'
         }
         format_article += formatArticleAttributionLine(currentArticle)
         if (currentArticle.ref) {
-            format_article += `\n\n${'-'.repeat(12)}\n\n`
+            format_article += `\n${'-'.repeat(12)}\n`
         }
         // get ready for next run
         if (currentArticle.ref && typeof currentArticle.ref === 'object') {
@@ -376,20 +381,25 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
             format_article += formatCollapsedReferenceChain(currentArticle, rootArticle, options)
             break
         }
-        format_article += `${formatArticleHeaderLine(currentArticle)}\n`
+        format_article += formatArticleHeaderLine(currentArticle)
         if (currentArticle.translated_by) {
             const translation = parseTranslationContent(currentArticle)
-            format_article += `${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
+            format_article += `\n\n${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
         }
 
         const raw_article = parseCompactRawContent(currentArticle)
-        format_article += `${raw_article}`
+        if (!currentArticle.translated_by && raw_article) {
+            format_article += '\n\n'
+        }
+        format_article += raw_article
         if (raw_article || currentArticle.translated_by) {
+            format_article += '\n\n'
+        } else {
             format_article += '\n'
         }
         format_article += formatArticleAttributionLine(currentArticle)
         if (currentArticle.ref) {
-            format_article += `\n\n${'-'.repeat(12)}\n\n`
+            format_article += `\n${'-'.repeat(12)}\n`
         }
         if (currentArticle.ref && typeof currentArticle.ref === 'object') {
             currentArticle = currentArticle.ref
