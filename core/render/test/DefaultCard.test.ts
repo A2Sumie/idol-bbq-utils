@@ -1,6 +1,12 @@
 import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import { CARD_FONT_FAMILY, layoutMediaRows, resolve227WebsiteBrandKey } from '../template/img/DefaultCard'
+import {
+    CARD_FONT_FAMILY,
+    estimateTextLinesHeight,
+    layoutMediaRows,
+    resolve227WebsiteBrandKey,
+} from '../template/img/DefaultCard'
+import { languageFontMap } from '../src/img/utils/font'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
     return {
@@ -58,10 +64,33 @@ test('layoutMediaRows handles three and four image sets without pairing incompat
     expect(layoutMediaRows([wide, portrait, ultraWide, ultraTall], 0).map((row) => row.length)).toEqual([1, 1, 1, 1])
 })
 
+test('layoutMediaRows gives a single portrait image a readable contained shape', () => {
+    const portrait = { type: 'photo' as const, url: 'portrait', width: 900, height: 1600 }
+    const [[tile]] = layoutMediaRows([portrait], 0)
+
+    expect(tile?.width).toBeGreaterThanOrEqual(340)
+    expect(tile?.height).toBeGreaterThanOrEqual(560)
+    expect(tile?.height).toBeLessThanOrEqual(620)
+})
+
+test('estimateTextLinesHeight stays conservative for long mixed Japanese text', () => {
+    const text =
+        '【本日の東京】\n最高気温26℃/最低気温15℃\nくもり☁昼前から昼過ぎは晴れ☀\n\n' +
+        '服装:日中半袖で⭕朝晩外出の方も薄手の長袖1枚で大丈夫🩵半袖の方はカーディガン等薄手のアウターあると安心。\n'.repeat(
+            4,
+        )
+
+    expect(estimateTextLinesHeight(text, 16, 492)).toBeGreaterThan(280)
+})
+
 test('card font family keeps CJK before broad fallback fonts', () => {
     const families = CARD_FONT_FAMILY.split(',').map((font) => font.trim())
 
     expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Noto Sans'))
     expect(families).toContain('Noto Sans JP')
     expect(families).not.toContain('Unifont')
+})
+
+test('dynamic fallback font list covers decorative lisu-shaped glyphs', () => {
+    expect(languageFontMap.unknown).toContain('Noto+Sans+Lisu')
 })

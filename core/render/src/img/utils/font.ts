@@ -137,10 +137,12 @@ export const languageFontMap = {
     devanagari: 'Noto+Sans+Devanagari',
     kannada: 'Noto+Sans+Kannada',
     yi: 'Noto+Sans+Yi',
+    lisu: 'Noto+Sans+Lisu',
     symbol: ['Noto+Sans+Symbols+2', 'Noto+Sans+Symbols'],
     math: 'Noto+Sans+Math',
     unknown: [
         'Noto+Sans',
+        'Noto+Sans+Lisu',
         'Noto+Sans+Lao',
         'Noto+Sans+Yi',
         'Noto+Sans+Symbols+2',

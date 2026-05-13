@@ -146,7 +146,10 @@ describe('RenderService text-compact', () => {
             },
         )
 
-        expect(result.text.split('\n')[0]).toBe(`麻丘真央 @mao_asaoka227 ${expectedTime} X引用`)
+        const expectedClock = expectedTime.split('(')[0]
+        const expectedAttributionTime = expectedTime.replace('(', '（').replace(')', '）')
+        expect(result.text.split('\n')[0]).toBe(`@mao_asaoka227 ${expectedClock} X引用`)
+        expect(result.text.split('\n').at(-1)).toBe(`麻丘真央 ${expectedAttributionTime} X 引用`)
         expect(result.text).not.toContain('发布推文')
         expect(result.text).not.toContain('引用推文')
     })
@@ -181,7 +184,10 @@ describe('RenderService text-compact', () => {
 
         expect(expectedTime).toContain('⁹(')
         expect(formatTime(1710000000).startsWith('240310 ')).toBeTrue()
-        expect(result.text.split('\n')[0]).toBe(`河瀬詩 @kawase_uta ${expectedTime} IG发帖`)
+        const expectedClock = expectedTime.split('(')[0]
+        const expectedAttributionTime = expectedTime.replace('(', '（').replace(')', '）')
+        expect(result.text.split('\n')[0]).toBe(`@kawase_uta ${expectedClock} IG发帖`)
+        expect(result.text.split('\n').at(-1)).toBe(`河瀬詩 ${expectedAttributionTime} IG 发帖`)
         expect(result.text).toContain('IG')
         expect(result.text).toContain('河瀬詩')
         expect(result.text).toContain('@kawase_uta')

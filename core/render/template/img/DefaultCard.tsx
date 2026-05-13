@@ -1,12 +1,4 @@
-import {
-    formatArticleActionLabel,
-    formatArticleSourceActionLabel,
-    formatArticleTimeToken,
-    formatArticleUserId,
-    formatTime,
-    parseRawContent,
-    parseTranslationContent,
-} from '@/text'
+import { formatArticleAttributionLine, formatArticleHeaderLine, parseRawContent, parseTranslationContent } from '@/text'
 import type { Article } from '@/types'
 import { X } from '@idol-bbq-utils/spider'
 import { Platform } from '@idol-bbq-utils/spider/types'
@@ -202,10 +194,10 @@ function getMediaAspect(media: VisualMedia) {
 
 function getSingleTileWidth(contentWidth: number, aspect: number) {
     if (aspect < 0.55) {
-        return clamp(520 * aspect, 120, contentWidth * 0.5)
+        return clamp(600 * aspect, 160, contentWidth * 0.58)
     }
     if (aspect < 1) {
-        return Math.min(contentWidth, Math.max(300, contentWidth * 0.72))
+        return Math.min(contentWidth * 0.86, Math.max(340, 560 * aspect))
     }
     return contentWidth
 }
@@ -213,7 +205,7 @@ function getSingleTileWidth(contentWidth: number, aspect: number) {
 function getTileHeight(width: number, aspect: number, singleColumn: boolean) {
     const normalizedAspect = singleColumn ? clamp(aspect, 0.18, 4.8) : clamp(aspect, 0.45, 2.8)
     const rawHeight = width / normalizedAspect
-    return clamp(rawHeight, 112, singleColumn ? 520 : 360)
+    return clamp(rawHeight, 112, singleColumn ? 620 : 360)
 }
 
 function shouldPairMedia(left: VisualMedia, right: VisualMedia) {
@@ -456,23 +448,35 @@ function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
 }
 
 function Metaline({ article }: { article: Article }) {
-    const userId = formatArticleUserId(article)
     return (
         <div
-            tw="flex flex-wrap text-base leading-tight items-baseline"
+            tw="flex text-base leading-tight"
             style={{
-                columnGap: '8px',
+                maxWidth: '100%',
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
             }}
         >
-            <span tw="font-bold" lang="ja-JP" style={{ fontWeight: 700 }}>
-                {article.username}
+            <span tw="font-normal text-[#46556a]" lang="ja-JP" style={{ fontWeight: 700 }}>
+                {formatArticleHeaderLine(article)}
             </span>
-            <span tw="font-normal text-[#46556a]" lang="ja-JP" style={{ fontWeight: 400 }}>
-                {userId}
-            </span>
-            <span tw="text-xs text-[#46556a]" lang="ja-JP" style={{ fontWeight: 700 }}>
-                {`${formatArticleTimeToken(article.created_at)} ${formatArticleSourceActionLabel(article)}`}
-            </span>
+        </div>
+    )
+}
+
+function AttributionLine({ article }: { article: Article }) {
+    return (
+        <div
+            tw="flex text-xs leading-snug text-[#64748b]"
+            lang="ja-JP"
+            style={{
+                fontWeight: 700,
+                maxWidth: '100%',
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
+            }}
+        >
+            {formatArticleAttributionLine(article)}
         </div>
     )
 }
@@ -616,6 +620,8 @@ function InlineWebsiteContent({
                     style={{
                         whiteSpace: 'pre-wrap',
                         fontWeight: 700,
+                        overflowWrap: 'anywhere',
+                        wordBreak: 'break-word',
                     }}
                 >
                     {title}
@@ -629,6 +635,8 @@ function InlineWebsiteContent({
                         style={{
                             whiteSpace: 'pre-wrap',
                             fontWeight: 400,
+                            overflowWrap: 'anywhere',
+                            wordBreak: 'break-word',
                         }}
                     >
                         {block.text}
@@ -663,8 +671,8 @@ function estimateTextLinesHeight(text: string, fontSize: number, containerWidth:
 
     // 2. 估算每个字符的平均宽度 - 一个粗略的估计
     // 英文字符约为字体大小的0.6倍，中日韩字符约为字体大小的1.0倍
-    const avgCharWidthLatin = fontSize * 0.6 // 拉丁字符(英文、数字等)
-    const avgCharWidthCJK = fontSize * 0.95 // 中日韩字符、magic number
+    const avgCharWidthLatin = fontSize * 0.66 // 拉丁字符(英文、数字等)
+    const avgCharWidthCJK = fontSize * 1.02 // 中日韩字符、emoji 和装饰符号需要更保守的估算
 
     let totalLines = 0
 
@@ -683,7 +691,7 @@ function estimateTextLinesHeight(text: string, fontSize: number, containerWidth:
             // 判断字符是拉丁字符还是CJK字符
             // 这是一个简化的判断，实际情况可能更复杂
             const charCode = char.charCodeAt(0)
-            if (charCode > 0x3000) {
+            if (charCode > 0x3000 || charCode < 0x20) {
                 // 粗略判断是否为CJK字符
                 paragraphWidth += avgCharWidthCJK
             } else {
@@ -694,7 +702,7 @@ function estimateTextLinesHeight(text: string, fontSize: number, containerWidth:
         const linesNeeded = Math.max(1, Math.ceil(paragraphWidth / containerWidth))
         totalLines += linesNeeded
     }
-    return totalLines * fontSize * 1.25 // 1.25是行高的倍数
+    return totalLines * fontSize * 1.42 + paragraphs.length * 2
 }
 
 function estimateImagesHeight(media: Exclude<Article['media'], null>, level: number = 0) {
@@ -769,6 +777,8 @@ function ArticleContent({
                         style={{
                             whiteSpace: 'pre-wrap',
                             fontWeight: 400,
+                            overflowWrap: 'anywhere',
+                            wordBreak: 'break-word',
                         }}
                     >
                         {parseTranslationContent(article)}
@@ -783,6 +793,8 @@ function ArticleContent({
                         style={{
                             whiteSpace: 'pre-wrap',
                             fontWeight: 400,
+                            overflowWrap: 'anywhere',
+                            wordBreak: 'break-word',
                         }}
                     >
                         {parseRawContent(article)}
@@ -796,6 +808,7 @@ function ArticleContent({
                         features={features}
                     />
                 )}
+                <AttributionLine article={article} />
                 {shouldRenderMedia && <Divider dash />}
                 {shouldRenderMedia && article.media && (
                     <MediaGroup
@@ -915,7 +928,7 @@ function estimatedArticleHeight(article: Article, level: number = 0, features: C
     const inlineWebsiteHeight = estimateInlineWebsiteHeight(article, level, features)
     const articleHeightArray = [
         estimateTextLinesHeight(
-            `${article.username} ${formatArticleUserId(article)} ${formatTime(article.created_at)} ${formatArticleActionLabel(article)}`,
+            formatArticleHeaderLine(article),
             BASE_FONT_SIZE,
             getContentWidth(level) - (level === 0 ? 0 : 32), // maybe subtract the avatar width
         ), // metaline
@@ -925,6 +938,7 @@ function estimatedArticleHeight(article: Article, level: number = 0, features: C
             estimateTextLinesHeight(parseRawContent(article) ?? '', BASE_FONT_SIZE, getContentWidth(level)), // content
         article.has_media ? 12 : 0, // media or extra divider
         inlineWebsiteHeight === null ? estimateImagesHeight(article.media ?? [], level) : 0, // media
+        estimateTextLinesHeight(formatArticleAttributionLine(article), 12, getContentWidth(level)),
         article.ref && typeof article.ref === 'object'
             ? estimatedArticleHeight(article.ref, level + 1, features) + basePadding * (level + 1)
             : 0, // ref
@@ -957,6 +971,7 @@ function articleParser(
     ]
         .flat()
         .reduce((a, b) => a + b, 0)
+    estimatedHeight = Math.ceil(estimatedHeight * 1.08 + 10)
 
     let paddingHeight = 0
     const minimumCardRatio = hasVisualMedia ? 1 / 3 : 0.27

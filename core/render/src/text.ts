@@ -108,6 +108,10 @@ function formatArticleTimeToken(unix_timestamp: number) {
     return `${formatClock(unix_timestamp)}(${formatDisplayDate(unix_timestamp)})`
 }
 
+function formatArticleAttributionTimeToken(unix_timestamp: number) {
+    return `${formatClock(unix_timestamp)}（${formatDisplayDate(unix_timestamp)}）`
+}
+
 function formatArticleUserId(article: Pick<Article, 'u_id' | 'username' | 'a_id'>) {
     const id = String(article.u_id || article.username || article.a_id || '').trim()
     if (!id) {
@@ -133,6 +137,26 @@ function formatArticleActionLabel(article: Pick<Article, 'platform' | 'type'>) {
 
 function formatArticleSourceActionLabel(article: Pick<Article, 'platform' | 'type'>) {
     return `${formatArticlePlatformLabel(article)}${formatArticleActionLabel(article)}`
+}
+
+function formatArticleSourceActionAttribution(article: Pick<Article, 'platform' | 'type'>) {
+    return `${formatArticlePlatformLabel(article)} ${formatArticleActionLabel(article)}`
+}
+
+function formatArticleHeaderLine(article: Article) {
+    return [formatArticleUserId(article), formatClock(article.created_at), formatArticleSourceActionLabel(article)]
+        .filter(Boolean)
+        .join(' ')
+}
+
+function formatArticleAttributionLine(article: Article) {
+    return [
+        article.username,
+        formatArticleAttributionTimeToken(article.created_at),
+        formatArticleSourceActionAttribution(article),
+    ]
+        .filter(Boolean)
+        .join(' ')
 }
 
 function parseTranslationContent(article: Article) {
@@ -315,11 +339,7 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
             format_article += formatCollapsedReferenceChain(currentArticle, rootArticle, options)
             break
         }
-        const metaline = formatMetaline(currentArticle)
-        format_article += `${metaline}`
-        if (currentArticle.content || currentArticle.translated_by) {
-            format_article += '\n'
-        }
+        format_article += `${formatArticleHeaderLine(currentArticle)}\n`
         if (currentArticle.translated_by) {
             let translation = parseTranslationContent(currentArticle)
             format_article += `${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
@@ -328,6 +348,10 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
         /* 原文 */
         let raw_article = parseRawContent(currentArticle)
         format_article += `${raw_article}`
+        if (raw_article || currentArticle.translated_by) {
+            format_article += '\n'
+        }
+        format_article += formatArticleAttributionLine(currentArticle)
         if (currentArticle.ref) {
             format_article += `\n\n${'-'.repeat(12)}\n\n`
         }
@@ -352,11 +376,7 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
             format_article += formatCollapsedReferenceChain(currentArticle, rootArticle, options)
             break
         }
-        const metaline = formatCompactMetaline(currentArticle)
-        format_article += `${metaline}`
-        if (currentArticle.content || currentArticle.translated_by) {
-            format_article += '\n'
-        }
+        format_article += `${formatArticleHeaderLine(currentArticle)}\n`
         if (currentArticle.translated_by) {
             const translation = parseTranslationContent(currentArticle)
             format_article += `${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
@@ -364,6 +384,10 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
 
         const raw_article = parseCompactRawContent(currentArticle)
         format_article += `${raw_article}`
+        if (raw_article || currentArticle.translated_by) {
+            format_article += '\n'
+        }
+        format_article += formatArticleAttributionLine(currentArticle)
         if (currentArticle.ref) {
             format_article += `\n\n${'-'.repeat(12)}\n\n`
         }
@@ -414,14 +438,7 @@ function followsToText(data: Array<[Platform, Array<[Follows, Follows | null]>]>
 }
 
 function formatMetaline(article: Article) {
-    return [
-        article.username,
-        formatArticleUserId(article),
-        formatArticleTimeToken(article.created_at),
-        formatArticleSourceActionLabel(article),
-    ]
-        .filter(Boolean)
-        .join(' ')
+    return formatArticleHeaderLine(article)
 }
 
 function formatCompactMetaline(article: Article) {
@@ -436,7 +453,11 @@ export {
     extractTextHeadline,
     followsToText,
     formatArticleActionLabel,
+    formatArticleAttributionLine,
+    formatArticleAttributionTimeToken,
+    formatArticleHeaderLine,
     formatArticlePlatformLabel,
+    formatArticleSourceActionAttribution,
     formatArticleSourceActionLabel,
     formatArticleTimeToken,
     formatArticleUserId,
