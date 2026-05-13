@@ -164,6 +164,27 @@ function formatArticleAttributionLine(article: Article) {
         .join(' ')
 }
 
+function normalizeIdentityToken(value: string | null | undefined) {
+    return String(value || '')
+        .trim()
+        .replace(/^@+/, '')
+        .toLocaleLowerCase()
+}
+
+function formatEmptyBodyArticleLine(article: Article) {
+    const userId = formatArticleUserId(article)
+    const username = String(article.username || '').trim()
+    const shouldShowUsername = username && normalizeIdentityToken(username) !== normalizeIdentityToken(userId)
+    return [
+        shouldShowUsername ? username : '',
+        userId,
+        formatClock(article.created_at),
+        formatArticleSourceActionLabel(article),
+    ]
+        .filter(Boolean)
+        .join(' ')
+}
+
 function parseTranslationContent(article: Article) {
     /***** 翻译原文 *****/
     let content = article.translation || ''
@@ -246,7 +267,11 @@ function isDuplicateExtraContent(content: string, extraContent: string) {
         return true
     }
 
-    if (extractLeadingTitleCandidates(content).some((candidate) => normalizeComparableText(candidate) === normalizedExtra)) {
+    if (
+        extractLeadingTitleCandidates(content).some(
+            (candidate) => normalizeComparableText(candidate) === normalizedExtra,
+        )
+    ) {
         return true
     }
 
@@ -387,6 +412,7 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
             format_article += formatCollapsedReferenceChain(currentArticle, rootArticle, options)
             break
         }
+        const segmentStart = format_article.length
         format_article += formatArticleHeaderLine(currentArticle)
         if (currentArticle.translated_by) {
             let translation = parseTranslationContent(currentArticle)
@@ -403,7 +429,7 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
             format_article += '\n\n'
             format_article += formatArticleAttributionLine(currentArticle)
         } else {
-            format_article += ` / ${formatArticleAttributionLine(currentArticle)}`
+            format_article = `${format_article.slice(0, segmentStart)}${formatEmptyBodyArticleLine(currentArticle)}`
         }
         if (currentArticle.ref) {
             format_article += `\n${'-'.repeat(12)}\n`
@@ -429,6 +455,7 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
             format_article += formatCollapsedReferenceChain(currentArticle, rootArticle, options)
             break
         }
+        const segmentStart = format_article.length
         format_article += formatArticleHeaderLine(currentArticle)
         if (currentArticle.translated_by) {
             const translation = parseTranslationContent(currentArticle)
@@ -444,7 +471,7 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
             format_article += '\n\n'
             format_article += formatArticleAttributionLine(currentArticle)
         } else {
-            format_article += ` / ${formatArticleAttributionLine(currentArticle)}`
+            format_article = `${format_article.slice(0, segmentStart)}${formatEmptyBodyArticleLine(currentArticle)}`
         }
         if (currentArticle.ref) {
             format_article += `\n${'-'.repeat(12)}\n`

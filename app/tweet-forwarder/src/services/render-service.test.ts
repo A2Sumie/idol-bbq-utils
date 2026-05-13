@@ -206,7 +206,6 @@ describe('RenderService text-compact', () => {
         const service = new RenderService()
         const expectedTime = formatArticleTimeToken(1710000000)
         const expectedClock = expectedTime.split('(')[0]
-        const expectedAttributionTime = expectedTime.replace('(', '（').replace(')', '）')
         const result = await service.process(
             {
                 id: 6,
@@ -232,9 +231,9 @@ describe('RenderService text-compact', () => {
             },
         )
 
-        expect(result.text).toBe(
-            `@nao_aikawa227 ${expectedClock} IG故事 / nao_aikawa227 ${expectedAttributionTime} IG 故事`,
-        )
+        expect(result.text).toBe(`@nao_aikawa227 ${expectedClock} IG故事`)
+        expect(result.text).not.toContain(' / ')
+        expect(result.text).not.toContain('（')
     })
 
     test('keeps reference separator compact while surrounding article body with blank lines', async () => {
