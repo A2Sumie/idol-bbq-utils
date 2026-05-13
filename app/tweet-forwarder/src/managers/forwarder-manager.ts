@@ -1476,11 +1476,9 @@ class ForwarderPools extends BaseCompatibleModel {
         runtime_config: ForwardTargetPlatformCommonConfig | undefined,
         config: ResolvedSummaryCardConfig,
     ) {
-        const hash = crypto
-            .createHash('md5')
-            .update(JSON.stringify({ runtime_config: runtime_config || {}, config }))
-            .digest('hex')
-        return `${targetId}:${hash}`
+        void runtime_config
+        void config
+        return targetId
     }
 
     private async sendImmediateSummaryCardItem(
