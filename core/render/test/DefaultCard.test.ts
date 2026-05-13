@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import {
     CARD_FONT_FAMILY,
+    CARD_UI_FONT_FAMILY,
     estimateTextLinesHeight,
     layoutMediaRows,
     resolve227WebsiteBrandKey,
@@ -89,6 +90,14 @@ test('card font family keeps CJK before broad fallback fonts', () => {
     expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Noto Sans'))
     expect(families).toContain('Noto Sans JP')
     expect(families).not.toContain('Unifont')
+})
+
+test('card UI metadata font prefers modern sans before simplified CJK fallback', () => {
+    const families = CARD_UI_FONT_FAMILY.split(',').map((font) => font.trim())
+
+    expect(families[0]).toBe('Noto Sans')
+    expect(families.indexOf('Noto Sans CJK SC')).toBeGreaterThan(families.indexOf('Noto Sans'))
+    expect(families).not.toContain('Noto Sans CJK JP')
 })
 
 test('dynamic fallback font list covers decorative lisu-shaped glyphs', () => {

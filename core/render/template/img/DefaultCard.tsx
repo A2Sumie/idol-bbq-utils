@@ -1,4 +1,11 @@
-import { formatArticleAttributionLine, formatArticleHeaderLine, parseRawContent, parseTranslationContent } from '@/text'
+import {
+    formatArticleAttributionLine,
+    formatArticleAttributionTimeToken,
+    formatArticleHeaderLine,
+    formatArticleSourceActionAttribution,
+    parseRawContent,
+    parseTranslationContent,
+} from '@/text'
 import type { Article } from '@/types'
 import { X } from '@idol-bbq-utils/spider'
 import { Platform } from '@idol-bbq-utils/spider/types'
@@ -34,6 +41,13 @@ export const CARD_FONT_FAMILY = [
     'Noto Sans Gujarati',
     'Noto Sans Georgian',
     'Noto Sans Oriya',
+].join(', ')
+export const CARD_UI_FONT_FAMILY = [
+    'Noto Sans',
+    'Noto Sans CJK SC',
+    'Noto Sans SC',
+    'Noto Sans Symbols 2',
+    'Noto Sans Symbols',
 ].join(', ')
 
 type CardRenderFeatures = Set<string>
@@ -457,7 +471,11 @@ function Metaline({ article }: { article: Article }) {
                 wordBreak: 'break-word',
             }}
         >
-            <span tw="font-normal text-[#46556a]" lang="ja-JP" style={{ fontWeight: 700 }}>
+            <span
+                tw="font-normal text-[#46556a]"
+                lang="zh-CN"
+                style={{ fontFamily: CARD_UI_FONT_FAMILY, fontWeight: 700 }}
+            >
                 {formatArticleHeaderLine(article)}
             </span>
         </div>
@@ -467,16 +485,21 @@ function Metaline({ article }: { article: Article }) {
 function AttributionLine({ article }: { article: Article }) {
     return (
         <div
-            tw="flex text-xs leading-snug text-[#64748b]"
-            lang="ja-JP"
+            tw="flex flex-wrap text-xs leading-snug text-[#64748b]"
             style={{
+                columnGap: '5px',
                 fontWeight: 700,
                 maxWidth: '100%',
                 overflowWrap: 'anywhere',
                 wordBreak: 'break-word',
             }}
         >
-            {formatArticleAttributionLine(article)}
+            {article.username && <span lang="ja-JP">{article.username}</span>}
+            <span lang="zh-CN" style={{ fontFamily: CARD_UI_FONT_FAMILY }}>
+                {[formatArticleAttributionTimeToken(article.created_at), formatArticleSourceActionAttribution(article)]
+                    .filter(Boolean)
+                    .join(' ')}
+            </span>
         </div>
     )
 }
@@ -491,7 +514,7 @@ function Divider({ text, dash }: { text?: string; dash?: boolean }) {
                 }}
             />
             {text && (
-                <span tw="mx-2 text-idol-tertiary" lang="ja-JP">
+                <span tw="mx-2 text-idol-tertiary" lang="zh-CN" style={{ fontFamily: CARD_UI_FONT_FAMILY }}>
                     {text}
                 </span>
             )}
