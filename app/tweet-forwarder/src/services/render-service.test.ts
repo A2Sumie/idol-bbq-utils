@@ -236,6 +236,64 @@ describe('RenderService text-compact', () => {
         expect(result.text).not.toContain('（')
     })
 
+    test('uses the same empty-body identity line for other source platforms', async () => {
+        const service = new RenderService()
+        const expectedClock = formatArticleTimeToken(1710000000).split('(')[0]
+        const cases = [
+            {
+                name: 'x-empty-tweet',
+                article: {
+                    id: 7,
+                    a_id: 'x-empty-tweet',
+                    u_id: 'mao_asaoka227',
+                    username: '麻丘真央',
+                    url: 'https://x.com/mao_asaoka227/status/x-empty-tweet',
+                    type: 'tweet',
+                    platform: Platform.X,
+                },
+                expectedText: `麻丘真央 @mao_asaoka227 ${expectedClock} X发推`,
+            },
+            {
+                name: 'website-empty-article',
+                article: {
+                    id: 8,
+                    a_id: 'fc-empty-article',
+                    u_id: '22/7:blog',
+                    username: '22/7 Blog',
+                    url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/empty',
+                    type: 'article',
+                    platform: Platform.Website,
+                },
+                expectedText: `22/7 Blog 22/7:blog ${expectedClock} Web更新`,
+            },
+        ]
+
+        for (const testCase of cases) {
+            const result = await service.process(
+                {
+                    created_at: 1710000000,
+                    content: null,
+                    translation: null,
+                    translated_by: null,
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                    ...testCase.article,
+                },
+                {
+                    taskId: testCase.name,
+                    render_type: 'text-compact',
+                },
+            )
+
+            expect(result.text).toBe(testCase.expectedText)
+            expect(result.text).not.toContain(' / ')
+            expect(result.text).not.toContain('（')
+        }
+    })
+
     test('keeps reference separator compact while surrounding article body with blank lines', async () => {
         const service = new RenderService()
         const quoteClock = formatArticleTimeToken(1710000600).split('(')[0]
