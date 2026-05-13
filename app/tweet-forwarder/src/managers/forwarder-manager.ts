@@ -13,7 +13,7 @@ import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } fr
 import { getForwarder } from '@/middleware/forwarder'
 import crypto from 'crypto'
 import { RenderService, type RenderResult } from '@/services/render-service'
-import { extractArticleHeadline, followsToText } from '@idol-bbq-utils/render'
+import { extractArticleHeadline, followsToText, formatArticleHeaderLine } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
 import {
@@ -1632,9 +1632,16 @@ class ForwarderPools extends BaseCompatibleModel {
             ? allItems.flatMap((item) => item.originalMediaFiles)
             : []
         const mediaFiles = [...cardResult.cardMediaFiles, ...originalMediaFiles]
+        const hasRenderedCard = cardResult.cardMediaFiles.length > 0
+        const sendText = hasRenderedCard ? title : content || title
+        if (!hasRenderedCard) {
+            this.log?.warn(
+                `Message pack card render produced no card media; sending readable text fallback to ${queue.target.id}`,
+            )
+        }
 
         try {
-            await queue.target.send(title, {
+            await queue.target.send(sendText, {
                 media: mediaFiles,
                 cardMedia: cardResult.cardMediaFiles,
                 contentMedia: originalMediaFiles,
@@ -1659,10 +1666,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private buildSummaryCardBatchContent(
-        groups: SummaryCardGroup[],
-        config: ResolvedSummaryCardConfig,
-    ) {
+    private buildSummaryCardBatchContent(groups: SummaryCardGroup[], config: ResolvedSummaryCardConfig) {
         const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
         const allItems = sortedGroups.flatMap((group) => group.items)
         if (sortedGroups.length === 1) {
@@ -1723,7 +1727,8 @@ class ForwarderPools extends BaseCompatibleModel {
             range: this.formatSummaryCardRange(allItems.map((item) => item.article)),
             groups: sortedGroups.map((group, index) => {
                 const shown = group.items.slice(0, config.maxItems)
-                const tags = group.kind === 'storm' ? uniquePreserveOrder(group.items.flatMap((item) => item.digestTags)) : []
+                const tags =
+                    group.kind === 'storm' ? uniquePreserveOrder(group.items.flatMap((item) => item.digestTags)) : []
                 const title =
                     group.kind === 'storm'
                         ? `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}话题串 ${group.label}`.trim()
@@ -1739,7 +1744,6 @@ class ForwarderPools extends BaseCompatibleModel {
                     omitted: Math.max(0, group.items.length - shown.length),
                     avatars,
                     items: shown.map((item, itemIndex) => {
-                        const message = this.renderService.renderText(item.article, { render_type: 'text-compact' }).trim()
                         const nonStormTags =
                             group.kind === 'storm'
                                 ? extractArticleHashtags(item.article).filter(
@@ -1749,13 +1753,13 @@ class ForwarderPools extends BaseCompatibleModel {
                                           ),
                                   )
                                 : []
+                        const media = this.buildSummaryCardItemMedia(item)
                         return {
                             index: itemIndex + 1,
-                            text:
-                                nonStormTags.length > 0
-                                    ? `${message}\n其他标签: ${uniquePreserveOrder(nonStormTags).join(' ')}`
-                                    : message,
+                            text: this.buildSummaryCardItemText(item.article, nonStormTags),
                             avatar: this.buildSummaryCardAvatar(item.article),
+                            media,
+                            mediaLabel: media.length > 0 ? `#${itemIndex + 1} 图集` : undefined,
                         }
                     }),
                 }
@@ -1842,6 +1846,44 @@ class ForwarderPools extends BaseCompatibleModel {
         return result
     }
 
+    private buildSummaryCardItemMedia(item: SummaryCardQueueItem, maxItems: number = 4): NonNullable<Article['media']> {
+        const fromRenderedFiles = this.renderService.buildCardMediaFromRenderedFiles(
+            item.cardSourceMediaFiles,
+            maxItems,
+        )
+        if (fromRenderedFiles.length > 0) {
+            return fromRenderedFiles
+        }
+        return this.collectSummaryArticleMedia([item.article], maxItems)
+    }
+
+    private countSummaryCardItemMedia(item: SummaryCardQueueItem) {
+        const renderedCount = item.cardSourceMediaFiles.filter(
+            (file) => file.media_type === 'photo' || file.media_type === 'video_thumbnail',
+        ).length
+        if (renderedCount > 0) {
+            return renderedCount
+        }
+        return this.collectSummaryArticleMedia([item.article], DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA).length
+    }
+
+    private buildSummaryCardItemText(article: ArticleWithId, nonStormTags: Array<string> = []) {
+        const message =
+            this.renderService.renderText(article, { render_type: 'text-compact' }).trim() ||
+            formatArticleHeaderLine(article as any).trim() ||
+            extractArticleHeadline(article as any, 100).trim() ||
+            article.url ||
+            article.a_id ||
+            '无正文'
+        const tagLine = nonStormTags.length > 0 ? `其他标签: ${uniquePreserveOrder(nonStormTags).join(' ')}` : ''
+        return [message, tagLine].filter(Boolean).join('\n')
+    }
+
+    private buildSummaryCardItemMediaLine(item: SummaryCardQueueItem) {
+        const count = this.countSummaryCardItemMedia(item)
+        return count > 0 ? `图集: ${count} 张` : ''
+    }
+
     private buildSummaryCardContent(
         kind: 'storm' | 'thread',
         items: SummaryCardQueueItem[],
@@ -1853,13 +1895,16 @@ class ForwarderPools extends BaseCompatibleModel {
         if (kind === 'storm') {
             const tags = uniquePreserveOrder(items.flatMap((item) => item.digestTags))
             const lines = shown.map((item, index) => {
-                const message = this.renderService.renderText(item.article, { render_type: 'text-compact' }).trim()
                 const nonStormTags = extractArticleHashtags(item.article).filter(
                     (tag) => !tags.some((stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag)),
                 )
-                const tagLine =
-                    nonStormTags.length > 0 ? `其他标签: ${uniquePreserveOrder(nonStormTags).join(' ')}` : ''
-                return [`【${index + 1}】`, message, tagLine].filter(Boolean).join('\n')
+                return [
+                    `【${index + 1}】`,
+                    this.buildSummaryCardItemText(item.article, nonStormTags),
+                    this.buildSummaryCardItemMediaLine(item),
+                ]
+                    .filter(Boolean)
+                    .join('\n')
             })
             if (omitted > 0) {
                 lines.push(`另有 ${omitted} 条更新已合并`)
@@ -1876,8 +1921,13 @@ class ForwarderPools extends BaseCompatibleModel {
             ? `串: ${root.username || root.u_id || 'unknown'} / ${extractArticleHeadline(root as any, 100)}`
             : undefined
         const lines = shown.map((item, index) => {
-            const message = this.renderService.renderText(item.article, { render_type: 'text-compact' }).trim()
-            return [`【${index + 1}】`, message].filter(Boolean).join('\n')
+            return [
+                `【${index + 1}】`,
+                this.buildSummaryCardItemText(item.article),
+                this.buildSummaryCardItemMediaLine(item),
+            ]
+                .filter(Boolean)
+                .join('\n')
         })
         if (omitted > 0) {
             lines.push(`另有 ${omitted} 条更新已合并`)

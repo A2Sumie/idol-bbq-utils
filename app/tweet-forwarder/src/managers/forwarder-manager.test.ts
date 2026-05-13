@@ -1770,3 +1770,145 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(packedArticles[1]?.extra?.data?.groups?.[1]?.avatars?.[0]?.url).toBe('https://example.com/avatar-3.jpg')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })
+
+test('sendArticles keeps media-only summary-card items readable when card rendering fails', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+            },
+        } as any,
+        'target-summary-card-media-only',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [],
+                    originalMediaFiles: [],
+                    mediaFiles: [],
+                }
+            }
+            return {
+                text: '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [
+                    {
+                        media_type: 'photo',
+                        path: '/tmp/original-media-only.jpg',
+                        sourceArticleId: article.a_id,
+                        sourceUrl: 'https://example.com/media-only.jpg',
+                    },
+                ],
+                mediaFiles: [
+                    {
+                        media_type: 'photo',
+                        path: '/tmp/original-media-only.jpg',
+                        sourceArticleId: article.a_id,
+                        sourceUrl: 'https://example.com/media-only.jpg',
+                    },
+                ],
+            }
+        },
+        renderText: () => '',
+        buildCardMediaFromRenderedFiles: (files: Array<any>) =>
+            files.map((file) => ({
+                type: 'photo',
+                url: `data:image/png;base64,${Buffer.from(file.sourceArticleId || file.path).toString('base64')}`,
+                alt: file.sourceArticleId,
+            })),
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => false
+    const now = Math.floor(Date.now() / 1000)
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-media-only',
+            [
+                {
+                    id: 11,
+                    a_id: 'media-only-11',
+                    platform: Platform.X,
+                    username: 'media member',
+                    u_id: 'media_member',
+                    content: null,
+                    url: 'https://x.com/media_member/status/11',
+                    type: 'tweet',
+                    created_at: now,
+                    ref: null,
+                    has_media: true,
+                    media: [{ type: 'photo', url: 'https://example.com/media-only.jpg' }],
+                    extra: null,
+                    u_avatar: 'https://example.com/avatar-media.jpg',
+                },
+            ],
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text-card',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('【消息合并】1 条')
+    expect(target.sent[0]?.texts[0]).toContain('@media_member')
+    expect(target.sent[0]?.texts[0]).toContain('图集: 1 张')
+    expect(target.sent[0]?.texts[0]).not.toBe(packedArticles[0]?.content?.split('\n')[0])
+    expect(target.sent[0]?.props?.cardMedia).toEqual([])
+    expect(packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('@media_member')
+    expect(packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[0]?.media).toEqual([
+        {
+            type: 'photo',
+            url: `data:image/png;base64,${Buffer.from('media-only-11').toString('base64')}`,
+            alt: 'media-only-11',
+        },
+    ])
+})

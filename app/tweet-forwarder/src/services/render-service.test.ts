@@ -95,6 +95,14 @@ function decodePngPixels(buffer: Buffer) {
     })
 }
 
+function readPngSize(buffer: Buffer) {
+    expect(buffer.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    return {
+        width: buffer.readUInt32BE(16),
+        height: buffer.readUInt32BE(20),
+    }
+}
+
 describe('formatPlatformTag', () => {
     test('includes platform and display name for image-tag style labels', () => {
         expect(
@@ -707,6 +715,63 @@ describe('RenderService text-card', () => {
         expect(result.text).toContain('打包正文 18')
         expect(result.text).not.toBe('消息合并 18条')
         expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
+
+    test('renders message-pack item media inside the card', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: -17,
+                a_id: 'summary-card-item-media',
+                u_id: 'message_pack',
+                username: '消息合并',
+                created_at: 1710000000,
+                content: '消息合并 1条 / 23:20-23:20',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/member/status/source',
+                type: 'message_pack',
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: SAMPLE_PROGRESSIVE_JPEG_DATA_URL }],
+                extra: {
+                    extra_type: 'message_pack_meta',
+                    data: {
+                        total: 1,
+                        range: '1条 / 23:20-23:20',
+                        groups: [
+                            {
+                                title: '消息串 1条 / 23:20-23:20',
+                                items: [
+                                    {
+                                        index: 1,
+                                        text: '@media_member 2320⁹ X发推',
+                                        mediaLabel: '#1 图集',
+                                        media: [{ type: 'photo', url: SAMPLE_PROGRESSIVE_JPEG_DATA_URL }],
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                } as any,
+                u_avatar: null,
+                platform: Platform.X,
+            } as any,
+            {
+                taskId: 'test-message-pack-item-media-card',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(result.cardMediaFiles).toHaveLength(1)
+        const cardBuffer = readFileSync(result.cardMediaFiles[0]!.path)
+        const size = readPngSize(cardBuffer)
+        const pixels = decodePngPixels(cardBuffer)
+        const saturatedPixels = pixels.filter(([r, g, b, a]) => a > 0 && Math.max(r, g, b) - Math.min(r, g, b) > 60)
+        expect(size.height).toBeGreaterThan(900)
+        expect(saturatedPixels.length).toBeGreaterThan(10000)
 
         service.cleanup(result.mediaFiles)
     })

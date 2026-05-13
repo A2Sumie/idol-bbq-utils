@@ -77,6 +77,8 @@ type MessagePackItem = {
     index?: number
     text?: string
     avatar?: MessagePackAvatar
+    media?: Exclude<Article['media'], null>
+    mediaLabel?: string
 }
 type MessagePackGroup = {
     title?: string
@@ -523,6 +525,14 @@ function getMessagePackMeta(article: Article): MessagePackMeta | null {
     return data
 }
 
+function formatCardHeaderLine(article: Article) {
+    const messagePackMeta = getMessagePackMeta(article)
+    if (messagePackMeta) {
+        return ['消息合并', messagePackMeta.range].filter(Boolean).join(' ')
+    }
+    return formatArticleHeaderLine(article)
+}
+
 function avatarFallbackText(avatar: MessagePackAvatar) {
     const value = String(avatar.name || avatar.id || 'N').trim()
     return Array.from(value)[0] || 'N'
@@ -586,7 +596,15 @@ function AvatarStack({ avatars }: { avatars: Array<MessagePackAvatar> }) {
     )
 }
 
-function MessagePackContent({ article }: { article: Article }) {
+function MessagePackContent({
+    article,
+    level,
+    features,
+}: {
+    article: Article
+    level: number
+    features: CardRenderFeatures
+}) {
     const meta = getMessagePackMeta(article)
     if (!meta) {
         return null
@@ -626,22 +644,39 @@ function MessagePackContent({ article }: { article: Article }) {
                                     {sanitizeCardText(group.title)}
                                 </div>
                             )}
-                            {(group.items || []).map((item, itemIndex) => (
-                                <pre
-                                    key={itemIndex}
-                                    tw="w-full text-[#202733] my-0 text-sm leading-snug"
-                                    style={{
-                                        whiteSpace: 'pre-wrap',
-                                        fontWeight: 400,
-                                        overflowWrap: 'anywhere',
-                                        wordBreak: 'break-word',
-                                    }}
-                                >
-                                    {sanitizeCardText(
-                                        `${item.index ? `【${item.index}】\n` : ''}${String(item.text || '').trim()}`,
-                                    )}
-                                </pre>
-                            ))}
+                            {(group.items || []).map((item, itemIndex) => {
+                                const text = String(item.text || '').trim()
+                                const media = (item.media || []).filter(
+                                    (m) => m.type === 'photo' || m.type === 'video_thumbnail',
+                                )
+                                return (
+                                    <div key={itemIndex} tw="flex flex-col w-full" style={{ rowGap: '4px' }}>
+                                        {text && (
+                                            <pre
+                                                tw="w-full text-[#202733] my-0 text-sm leading-snug"
+                                                style={{
+                                                    whiteSpace: 'pre-wrap',
+                                                    fontWeight: 400,
+                                                    overflowWrap: 'anywhere',
+                                                    wordBreak: 'break-word',
+                                                }}
+                                            >
+                                                {sanitizeCardText(`${item.index ? `【${item.index}】\n` : ''}${text}`)}
+                                            </pre>
+                                        )}
+                                        {media.length > 0 && (
+                                            <MediaGroup
+                                                media={media}
+                                                level={level + 1}
+                                                features={features}
+                                                marker={
+                                                    item.mediaLabel || (item.index ? `#${item.index} 图集` : '图集')
+                                                }
+                                            />
+                                        )}
+                                    </div>
+                                )
+                            })}
                             {Number(group.omitted || 0) > 0 && (
                                 <div
                                     tw="text-xs leading-snug text-[#64748b]"
@@ -683,13 +718,17 @@ function Metaline({ article }: { article: Article }) {
                 lang="zh-CN"
                 style={{ fontFamily: CARD_UI_FONT_FAMILY, fontWeight: 700 }}
             >
-                {sanitizeCardText(formatArticleHeaderLine(article))}
+                {sanitizeCardText(formatCardHeaderLine(article))}
             </span>
         </div>
     )
 }
 
 function AttributionLine({ article }: { article: Article }) {
+    if (isMessagePackArticle(article)) {
+        return null
+    }
+
     return (
         <div
             tw="flex text-xs leading-snug text-[#64748b]"
@@ -970,8 +1009,10 @@ function estimateMessagePackHeight(article: Article, level: number) {
     return meta.groups.reduce((sum, group) => {
         const titleHeight = group.title ? estimateTextLinesHeight(group.title, 12, contentWidth) : 0
         const itemsHeight = (group.items || []).reduce((itemSum, item) => {
-            const text = `${item.index ? `【${item.index}】\n` : ''}${String(item.text || '').trim()}`
-            return itemSum + estimateTextLinesHeight(sanitizeCardText(text), 14, contentWidth) + 5
+            const rawText = String(item.text || '').trim()
+            const text = rawText ? `${item.index ? `【${item.index}】\n` : ''}${rawText}` : ''
+            const mediaHeight = item.media?.length ? estimateImagesHeight(item.media, level + 1) + 4 : 0
+            return itemSum + estimateTextLinesHeight(sanitizeCardText(text), 14, contentWidth) + mediaHeight + 5
         }, 0)
         const omittedHeight = Number(group.omitted || 0) > 0 ? 18 : 0
         const avatarHeight = Math.max(26, Math.min(5, Math.max(1, group.avatars?.length || 0)) * 28)
@@ -992,7 +1033,9 @@ function ArticleContent({
     const useInlineWebsiteBlocks = inlineWebsiteBlocks.length > 0
     const messagePackMeta = getMessagePackMeta(article)
     const useMessagePackBlocks = Boolean(messagePackMeta)
-    const shouldRenderMedia = Boolean(article.media && article.media.length > 0 && !useInlineWebsiteBlocks)
+    const shouldRenderMedia = Boolean(
+        article.media && article.media.length > 0 && !useInlineWebsiteBlocks && !useMessagePackBlocks,
+    )
     function Content() {
         return (
             <div
@@ -1047,7 +1090,7 @@ function ArticleContent({
                         {sanitizeCardText(parseRawContent(article))}
                     </pre>
                 )}
-                {useMessagePackBlocks && <MessagePackContent article={article} />}
+                {useMessagePackBlocks && <MessagePackContent article={article} level={level} features={features} />}
                 {useInlineWebsiteBlocks && (
                     <InlineWebsiteContent
                         article={article}
@@ -1175,9 +1218,10 @@ function estimatedArticleHeight(article: Article, level: number = 0, features: C
     const basePadding = 16 * 2
     const inlineWebsiteHeight = estimateInlineWebsiteHeight(article, level, features)
     const messagePackHeight = estimateMessagePackHeight(article, level)
+    const shouldEstimateStandaloneMedia = inlineWebsiteHeight === null && messagePackHeight === null
     const articleHeightArray = [
         estimateTextLinesHeight(
-            sanitizeCardText(formatArticleHeaderLine(article)),
+            sanitizeCardText(formatCardHeaderLine(article)),
             BASE_FONT_SIZE,
             getContentWidth(level) - (level === 0 ? 0 : 32), // maybe subtract the avatar width
         ), // metaline
@@ -1190,9 +1234,15 @@ function estimatedArticleHeight(article: Article, level: number = 0, features: C
         messagePackHeight ??
             inlineWebsiteHeight ??
             estimateTextLinesHeight(sanitizeCardText(parseRawContent(article)), BASE_FONT_SIZE, getContentWidth(level)), // content
-        article.has_media ? 12 : 0, // media or extra divider
-        inlineWebsiteHeight === null ? estimateImagesHeight(article.media ?? [], level) : 0, // media
-        estimateTextLinesHeight(sanitizeCardText(formatArticleAttributionLine(article)), 12, getContentWidth(level)),
+        article.has_media && shouldEstimateStandaloneMedia ? 12 : 0, // media or extra divider
+        shouldEstimateStandaloneMedia ? estimateImagesHeight(article.media ?? [], level) : 0, // media
+        isMessagePackArticle(article)
+            ? 0
+            : estimateTextLinesHeight(
+                  sanitizeCardText(formatArticleAttributionLine(article)),
+                  12,
+                  getContentWidth(level),
+              ),
         article.ref && typeof article.ref === 'object'
             ? estimatedArticleHeight(article.ref, level + 1, features) + basePadding * (level + 1)
             : 0, // ref

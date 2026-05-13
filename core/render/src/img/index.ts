@@ -137,8 +137,25 @@ async function fetchFont(text: string, font: string, weight: number = 400): Prom
     if (!resource || !resource[1]) return null
 
     const res = await fetch(resource[1])
+    const buffer = await res.arrayBuffer()
 
-    return res.arrayBuffer()
+    return isSupportedOpenTypeFont(buffer) ? buffer : null
+}
+
+function isSupportedOpenTypeFont(buffer: ArrayBuffer | Buffer | null | undefined) {
+    if (!buffer || buffer.byteLength < 4) {
+        return false
+    }
+    const bytes = buffer instanceof Buffer ? buffer : Buffer.from(buffer)
+    const signature = bytes.subarray(0, 4)
+    const asciiSignature = signature.toString('ascii')
+    return (
+        asciiSignature === 'OTTO' ||
+        asciiSignature === 'ttcf' ||
+        asciiSignature === 'true' ||
+        asciiSignature === 'typ1' ||
+        signature.equals(Buffer.from([0x00, 0x01, 0x00, 0x00]))
+    )
 }
 
 async function loadGoogleFont(fonts: string[], text: string) {
@@ -190,9 +207,13 @@ function loadBundledFallbackFont(name: string): Font | null {
     }
 
     try {
+        const data = fs.readFileSync(`${fontsDir}/${font.font_file_name}`)
+        if (!isSupportedOpenTypeFont(data)) {
+            return null
+        }
         return {
             name: font.name,
-            data: fs.readFileSync(`${fontsDir}/${font.font_file_name}`),
+            data,
             weight: font.weight,
             style: font.style,
         }
@@ -296,6 +317,9 @@ class ImgConverter {
             .map((font) => {
                 try {
                     const data = fs.readFileSync(`${process.env.FONTS_DIR || './assets/fonts'}/${font.font_file_name}`)
+                    if (!isSupportedOpenTypeFont(data)) {
+                        return undefined
+                    }
                     return {
                         name: font.name,
                         data,
@@ -316,9 +340,13 @@ class ImgConverter {
                 return undefined
             }
             try {
+                const data = fs.readFileSync(path)
+                if (!isSupportedOpenTypeFont(data)) {
+                    return undefined
+                }
                 return {
                     name: font.name,
-                    data: fs.readFileSync(path),
+                    data,
                     weight: font.weight,
                     style: font.style,
                 }
