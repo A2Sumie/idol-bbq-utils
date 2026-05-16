@@ -10,6 +10,7 @@ import {
 } from '../template/img/DefaultCard'
 import { languageFontMap } from '../src/img/utils/font'
 import { getIconCode } from '../src/img/utils/twemoji'
+import { isSupportedOpenTypeFont } from '../src/img'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
     return {
@@ -114,4 +115,9 @@ test('emoji icon code ignores text and emoji variation selectors', () => {
 test('sanitizeCardText removes stray selectors from rino-style decorative text', () => {
     expect(sanitizeCardText('おはりのち︎︎︎︎❤︎')).toBe('おはりのち❤️')
     expect(sanitizeCardText('今日も素敵🪄︎︎◝✩ ‌‌ ‌')).toBe('今日も素敵🪄◝✩  ')
+})
+
+test('font loader rejects TTC collections because satori cannot render them', () => {
+    expect(isSupportedOpenTypeFont(Buffer.from('ttcf0000'))).toBeFalse()
+    expect(isSupportedOpenTypeFont(Buffer.from('OTTO0000'))).toBeTrue()
 })

@@ -2058,7 +2058,7 @@ test('sendArticles promotes queued summary-card hashtag items after a storm acti
     expect(stormGroups[0]?.items).toHaveLength(2)
 })
 
-test('sendArticles keeps media-only summary-card items readable when card rendering fails', async () => {
+test('sendArticles keeps summary-card fallback compact when card rendering fails', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -2185,10 +2185,10 @@ test('sendArticles keeps media-only summary-card items readable when card render
     }
 
     expect(target.sent).toHaveLength(1)
-    expect(target.sent[0]?.texts[0]).toContain('【消息合并】1 条')
-    expect(target.sent[0]?.texts[0]).toContain('@media_member')
-    expect(target.sent[0]?.texts[0]).toContain('图集: 1 张')
-    expect(target.sent[0]?.texts[0]).not.toBe(packedArticles[0]?.content?.split('\n')[0])
+    expect(target.sent[0]?.texts[0]).toContain('消息合并 1条 /')
+    expect(target.sent[0]?.texts[0]).not.toContain('@media_member')
+    expect(target.sent[0]?.texts[0]).not.toContain('图集: 1 张')
+    expect(target.sent[0]?.texts[0]).toBe(packedArticles[0]?.content?.split('\n')[0])
     expect(target.sent[0]?.props?.cardMedia).toEqual([])
     expect(packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('@media_member')
     expect(packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[0]?.media).toEqual([

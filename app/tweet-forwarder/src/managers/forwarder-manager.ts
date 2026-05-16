@@ -1653,10 +1653,10 @@ class ForwarderPools extends BaseCompatibleModel {
             : []
         const mediaFiles = [...cardResult.cardMediaFiles, ...originalMediaFiles]
         const hasRenderedCard = cardResult.cardMediaFiles.length > 0
-        const sendText = hasRenderedCard ? title : content || title
+        const sendText = title
         if (!hasRenderedCard) {
             this.log?.warn(
-                `Message pack card render produced no card media; sending readable text fallback to ${queue.target.id}`,
+                `Message pack card render produced no card media; sending compact title fallback to ${queue.target.id}`,
             )
         }
 

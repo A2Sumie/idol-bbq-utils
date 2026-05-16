@@ -179,7 +179,6 @@ function isSupportedOpenTypeFont(buffer: ArrayBuffer | Buffer | null | undefined
     const asciiSignature = signature.toString('ascii')
     return (
         asciiSignature === 'OTTO' ||
-        asciiSignature === 'ttcf' ||
         asciiSignature === 'true' ||
         asciiSignature === 'typ1' ||
         signature.equals(Buffer.from([0x00, 0x01, 0x00, 0x00]))
@@ -416,4 +415,4 @@ class ImgConverter {
     }
 }
 
-export { loadDynamicAsset, ImgConverter }
+export { loadDynamicAsset, ImgConverter, isSupportedOpenTypeFont }
