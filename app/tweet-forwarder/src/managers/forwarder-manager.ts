@@ -1631,8 +1631,8 @@ class ForwarderPools extends BaseCompatibleModel {
         const totalArticles = allItems.length
         const title =
             hasStorm && groups.length === 1
-                ? `话题消息合并 ${groups[0]?.label || ''}`.trim()
-                : `消息合并 ${this.formatSummaryCardRange(allItems.map((item) => item.article))}`
+                ? `话题聚合 ${groups[0]?.label || ''}`.trim()
+                : `聚合 ${this.formatSummaryCardRange(allItems.map((item) => item.article))}`
         const now = Math.floor(Date.now() / 1000)
         const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems)
         const summaryArticle = this.buildSyntheticSummaryArticle(
@@ -1705,7 +1705,7 @@ class ForwarderPools extends BaseCompatibleModel {
         )
 
         return [
-            `【消息合并】${this.formatSummaryCardRange(
+            `【聚合】${this.formatSummaryCardRange(
                 allItems.map((item) => item.article),
                 { spaced: true },
             )}`,
@@ -1726,7 +1726,7 @@ class ForwarderPools extends BaseCompatibleModel {
             platform: sourceArticle?.platform || Platform.X,
             a_id: `summary-card-${now}`,
             u_id: 'message_pack',
-            username: '消息合并',
+            username: '聚合',
             created_at: now,
             content: `${title}\n\n${content}`,
             url: sourceArticle?.url || '',
@@ -1973,7 +1973,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 lines.push(`另有 ${omitted} 条更新已合并`)
             }
             return [
-                `【话题消息合并】${tags.join(' ')} / ${items.length} 条`,
+                `【话题聚合】${tags.join(' ')} / ${items.length} 条`,
                 `范围: ${this.formatSummaryCardTimeRange(items.map((item) => item.article))}`,
                 ...lines,
             ].join('\n\n')
@@ -1998,7 +1998,7 @@ class ForwarderPools extends BaseCompatibleModel {
             lines.push(`另有 ${omitted} 条更新已合并`)
         }
         return [
-            `【消息合并】${this.formatSummaryCardRange(
+            `【聚合】${this.formatSummaryCardRange(
                 items.map((item) => item.article),
                 { spaced: true },
             )}`,

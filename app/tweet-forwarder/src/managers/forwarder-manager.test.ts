@@ -1756,9 +1756,9 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent).toHaveLength(2)
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
-    expect(target.sent[0]?.texts[0]).toContain('消息合并')
+    expect(target.sent[0]?.texts[0]).toContain('聚合')
     expect(target.sent[0]?.texts[0]).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
-    expect(packedArticles[0]?.content).toContain('【消息合并】1 条')
+    expect(packedArticles[0]?.content).toContain('【聚合】1 条')
     expect(packedArticles[0]?.content).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
     expect(packedArticles[0]?.content).toContain('summary content 1')
     expect(packedArticles[0]?.extra?.extra_type).toBe('message_pack_meta')
@@ -1774,7 +1774,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
             alt: 'summary-1',
         },
     ])
-    expect(packedArticles[1]?.content).toContain('【消息合并】2 条')
+    expect(packedArticles[1]?.content).toContain('【聚合】2 条')
     expect(packedArticles[1]?.content).toContain('summary content 2')
     expect(packedArticles[1]?.content).toContain('summary content 3')
     expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('summary content 2')
@@ -2185,7 +2185,7 @@ test('sendArticles keeps summary-card fallback compact when card rendering fails
     }
 
     expect(target.sent).toHaveLength(1)
-    expect(target.sent[0]?.texts[0]).toContain('消息合并 1条 /')
+    expect(target.sent[0]?.texts[0]).toContain('聚合 1条 /')
     expect(target.sent[0]?.texts[0]).not.toContain('@media_member')
     expect(target.sent[0]?.texts[0]).not.toContain('图集: 1 张')
     expect(target.sent[0]?.texts[0]).toBe(packedArticles[0]?.content?.split('\n')[0])

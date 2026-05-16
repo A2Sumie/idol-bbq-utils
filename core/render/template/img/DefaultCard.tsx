@@ -526,7 +526,7 @@ function getMessagePackMeta(article: Article): MessagePackMeta | null {
 function formatCardHeaderLine(article: Article) {
     const messagePackMeta = getMessagePackMeta(article)
     if (messagePackMeta) {
-        return ['消息合并', messagePackMeta.range].filter(Boolean).join(' ')
+        return ['聚合', messagePackMeta.range].filter(Boolean).join(' ')
     }
     return formatArticleHeaderLine(article)
 }

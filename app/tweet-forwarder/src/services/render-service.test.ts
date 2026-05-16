@@ -691,9 +691,9 @@ describe('RenderService text-card', () => {
                 id: -16,
                 a_id: 'summary-card-long-pack',
                 u_id: 'message_pack',
-                username: '消息合并',
+                username: '聚合',
                 created_at: 1710000000,
-                content: `消息合并 18条\n\n${body}`,
+                content: `聚合 18条\n\n${body}`,
                 translation: null,
                 translated_by: null,
                 url: 'https://x.com/member/status/source',
@@ -713,7 +713,7 @@ describe('RenderService text-card', () => {
 
         expect(result.text.length).toBeGreaterThan(1000)
         expect(result.text).toContain('打包正文 18')
-        expect(result.text).not.toBe('消息合并 18条')
+        expect(result.text).not.toBe('聚合 18条')
         expect(result.cardMediaFiles).toHaveLength(1)
 
         service.cleanup(result.mediaFiles)
@@ -726,9 +726,9 @@ describe('RenderService text-card', () => {
                 id: -17,
                 a_id: 'summary-card-item-media',
                 u_id: 'message_pack',
-                username: '消息合并',
+                username: '聚合',
                 created_at: 1710000000,
-                content: '消息合并 1条 / 23:20-23:20',
+                content: '聚合 1条 / 23:20-23:20',
                 translation: null,
                 translated_by: null,
                 url: 'https://x.com/member/status/source',
