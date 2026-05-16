@@ -41,11 +41,9 @@ export function sanitizeCardText(value: string | null | undefined) {
     return (value || '').replace(/\u2764\uFE0E+/g, '\u2764\uFE0F').replace(CARD_TEXT_IGNORABLE_PATTERN, '')
 }
 export const CARD_UI_FONT_FAMILY = [
-    'Noto Sans CJK JP',
-    'Noto Sans JP',
+    'Noto Sans',
     'Noto Sans CJK SC',
     'Noto Sans SC',
-    'Noto Sans',
     'Noto Sans Symbols 2',
     'Noto Sans Symbols',
 ].join(', ')
@@ -655,6 +653,7 @@ function MessagePackContent({
                                             <pre
                                                 tw="w-full text-[#202733] my-0 text-sm leading-snug"
                                                 style={{
+                                                    fontFamily: CARD_UI_FONT_FAMILY,
                                                     whiteSpace: 'pre-wrap',
                                                     fontWeight: 400,
                                                     overflowWrap: 'anywhere',

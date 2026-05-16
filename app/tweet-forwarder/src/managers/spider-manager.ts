@@ -1,5 +1,9 @@
 import { Logger } from '@idol-bbq-utils/log'
-import { buildBrowserRequestHeaders, spiderRegistry, parseNetscapeCookieToPuppeteerCookie } from '@idol-bbq-utils/spider'
+import {
+    buildBrowserRequestHeaders,
+    spiderRegistry,
+    parseNetscapeCookieToPuppeteerCookie,
+} from '@idol-bbq-utils/spider'
 import { Page } from 'puppeteer-core'
 import { CronJob } from 'cron'
 import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
@@ -22,15 +26,13 @@ import crypto from 'crypto'
 import dayjs from 'dayjs'
 import { BrowserSessionPool } from '@/services/browser-session-pool'
 import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
+import { normalizeCronSecond } from '@/utils/cron'
 
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
 
-function lookupConnectionValues<T>(
-    map: Record<string, T> | undefined,
-    keys: Array<string | undefined>,
-): T | undefined {
+function lookupConnectionValues<T>(map: Record<string, T> | undefined, keys: Array<string | undefined>): T | undefined {
     if (!map) {
         return undefined
     }
@@ -110,8 +112,9 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 ...crawler.cfg_crawler,
             }
             let { interval_time, cron } = crawler.cfg_crawler
+            cron = normalizeCronSecond(cron)
             // 定时dispatch任务
-            const job = new CronJob(cron as string, async () => {
+            const job = new CronJob(cron, async () => {
                 const taskId = `${Math.random().toString(36).substring(2, 9)}`
                 this.log?.info(`[${taskId}] Starting to dispatch task: ${crawler.name}`)
                 const task: TaskScheduler.Task = {
@@ -128,24 +131,21 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             this.log?.debug(`Task dispatcher created with detail: ${JSON.stringify(crawler)}`)
             this.cronJobs.push(job)
 
-
-
             // Aggregation Task Scheduling
             if (crawler.cfg_crawler.aggregation && crawler.cfg_crawler.aggregation.cron) {
-                const aggCron = crawler.cfg_crawler.aggregation.cron
+                const aggCron = normalizeCronSecond(crawler.cfg_crawler.aggregation.cron)
                 const aggJob = new CronJob(aggCron, async () => {
                     const now = dayjs()
                     const start = now.startOf('day').unix()
                     const end = now.endOf('day').unix()
                     const targetIds =
-                        crawler.cfg_crawler?.aggregation?.target_ids ||
-                        this.resolveAggregationTargetIds(crawler)
+                        crawler.cfg_crawler?.aggregation?.target_ids || this.resolveAggregationTargetIds(crawler)
 
                     const websites = crawler.websites || []
                     const paths = crawler.paths || []
                     const origin = crawler.origin || ''
                     // Combine to full URLs
-                    const targets = [...websites, ...paths.map(p => origin + p)].filter(Boolean)
+                    const targets = [...websites, ...paths.map((p) => origin + p)].filter(Boolean)
 
                     for (const url of targets) {
                         let platform: Platform | null = null
@@ -162,7 +162,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                         } else if (url.includes('tiktok.com')) {
                             platform = Platform.TikTok
                             const parts = url.split('/').filter(Boolean)
-                            const userPart = parts.find(p => p.startsWith('@'))
+                            const userPart = parts.find((p) => p.startsWith('@'))
                             u_id = (userPart ? userPart.substring(1) : parts[parts.length - 1]) || null
                         } else if (url.includes('youtube.com')) {
                             platform = Platform.YouTube
@@ -184,9 +184,9 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                                     processorId:
                                         crawler.cfg_crawler?.aggregation?.processor_id ||
                                         crawler.cfg_crawler?.processor_id,
-                                    prompt: crawler.cfg_crawler?.aggregation?.prompt
+                                    prompt: crawler.cfg_crawler?.aggregation?.prompt,
                                 },
-                                now.unix()
+                                now.unix(),
                             )
                             this.log?.info(`Scheduled aggregation task for ${platform} ${u_id}`)
                         }
@@ -195,9 +195,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 this.cronJobs.push(aggJob)
                 this.log?.info(`Aggregation schedule created for ${crawler.name} at ${aggCron}`)
             }
-
         }
-
     }
 
     private resolveAggregationTargetIds(crawler: Crawler) {
@@ -483,9 +481,10 @@ class SpiderPools extends BaseCompatibleModel {
                         await this.primeBrowserSession(page, url, ctx.log)
                     }
 
-                    const sessionCookieString = needsBrowser && page
-                        ? await this.getBrowserCookieString(page, url).catch(() => undefined)
-                        : undefined
+                    const sessionCookieString =
+                        needsBrowser && page
+                            ? await this.getBrowserCookieString(page, url).catch(() => undefined)
+                            : undefined
                     const effectiveCookieString = this.mergeCookieStrings(cookieString, sessionCookieString)
 
                     ctx.log?.info(`[${taskId}] crawler wait for ${waitTime}ms before ${url.href}`)
@@ -576,9 +575,7 @@ class SpiderPools extends BaseCompatibleModel {
         this.log?.info('Spider Pools dropped')
     }
 
-    async exportCrawlerCookies(
-        crawler: Crawler,
-    ): Promise<{
+    async exportCrawlerCookies(crawler: Crawler): Promise<{
         cookies: Array<BrowserCookieSnapshot>
         visitedUrl: string
         sessionProfile: string | null
@@ -610,12 +607,14 @@ class SpiderPools extends BaseCompatibleModel {
 
         try {
             const existingCookies = await page.browserContext().cookies()
-            const existingRelevantCookies = existingCookies.filter((cookie) => this.matchCookieDomain(cookie.domain, targetDomains))
+            const existingRelevantCookies = existingCookies.filter((cookie) =>
+                this.matchCookieDomain(cookie.domain, targetDomains),
+            )
             if (existingRelevantCookies.length === 0 && crawler.cfg_crawler?.cookie_file) {
                 try {
-                    await page.browserContext().setCookie(
-                        ...parseNetscapeCookieToPuppeteerCookie(crawler.cfg_crawler.cookie_file),
-                    )
+                    await page
+                        .browserContext()
+                        .setCookie(...parseNetscapeCookieToPuppeteerCookie(crawler.cfg_crawler.cookie_file))
                     this.log?.info(
                         `Seeded browser session ${browserRequest.session_profile} from ${crawler.cfg_crawler.cookie_file} before cookie export.`,
                     )
@@ -660,25 +659,20 @@ class SpiderPools extends BaseCompatibleModel {
         }
     }
 
-    private resolveBrowserRequest(
-        cfg_crawler: Crawler['cfg_crawler'] | undefined,
-        url: URL,
-        platform: Platform,
-    ) {
-        const requiresMobileProfile =
-            platform === Platform.Website || url.hostname === 'nanabunnonijyuuni-mobile.com'
-        const deviceProfile = cfg_crawler?.device_profile || (requiresMobileProfile ? 'mobile_ios_safari_portrait' : 'desktop_chrome')
+    private resolveBrowserRequest(cfg_crawler: Crawler['cfg_crawler'] | undefined, url: URL, platform: Platform) {
+        const requiresMobileProfile = platform === Platform.Website || url.hostname === 'nanabunnonijyuuni-mobile.com'
+        const deviceProfile =
+            cfg_crawler?.device_profile || (requiresMobileProfile ? 'mobile_ios_safari_portrait' : 'desktop_chrome')
 
         if (requiresMobileProfile && deviceProfile !== 'mobile_ios_safari_portrait') {
-            throw new Error(
-                `Crawler for ${url.hostname} must use mobile_ios_safari_portrait, got ${deviceProfile}`,
-            )
+            throw new Error(`Crawler for ${url.hostname} must use mobile_ios_safari_portrait, got ${deviceProfile}`)
         }
 
         return {
             browser_mode: cfg_crawler?.browser_mode,
             device_profile: deviceProfile,
-            session_profile: cfg_crawler?.session_profile || (requiresMobileProfile ? `mobile:${url.hostname}` : undefined),
+            session_profile:
+                cfg_crawler?.session_profile || (requiresMobileProfile ? `mobile:${url.hostname}` : undefined),
             extra_headers: cfg_crawler?.extra_headers,
             viewport: cfg_crawler?.viewport,
             locale: cfg_crawler?.locale,
@@ -715,9 +709,11 @@ class SpiderPools extends BaseCompatibleModel {
                 waitUntil: 'domcontentloaded',
                 timeout: 15000,
             })
-            await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', {
-                timeout: 5000,
-            }).catch(() => null)
+            await page
+                .waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', {
+                    timeout: 5000,
+                })
+                .catch(() => null)
 
             const dwellTime = 900 + Math.floor(Math.random() * 1800)
             await delay(dwellTime)
@@ -778,7 +774,9 @@ class SpiderPools extends BaseCompatibleModel {
     }
 
     private matchCookieDomain(cookieDomain: string, targetDomains: Array<string>) {
-        const normalizedCookieDomain = String(cookieDomain || '').replace(/^\./, '').toLowerCase()
+        const normalizedCookieDomain = String(cookieDomain || '')
+            .replace(/^\./, '')
+            .toLowerCase()
         if (!normalizedCookieDomain || targetDomains.length === 0) {
             return true
         }
@@ -786,9 +784,9 @@ class SpiderPools extends BaseCompatibleModel {
         return targetDomains.some((targetDomain) => {
             const normalizedTargetDomain = targetDomain.replace(/^\./, '').toLowerCase()
             return (
-                normalizedCookieDomain === normalizedTargetDomain
-                || normalizedCookieDomain.endsWith(`.${normalizedTargetDomain}`)
-                || normalizedTargetDomain.endsWith(`.${normalizedCookieDomain}`)
+                normalizedCookieDomain === normalizedTargetDomain ||
+                normalizedCookieDomain.endsWith(`.${normalizedTargetDomain}`) ||
+                normalizedTargetDomain.endsWith(`.${normalizedCookieDomain}`)
             )
         })
     }
@@ -943,11 +941,7 @@ class SpiderPools extends BaseCompatibleModel {
         }
     }
 
-    private async doProcess(
-        ctx: TaskScheduler.TaskCtx,
-        article: Article,
-        processor?: BaseProcessor,
-    ): Promise<Article> {
+    private async doProcess(ctx: TaskScheduler.TaskCtx, article: Article, processor?: BaseProcessor): Promise<Article> {
         if (!processor) {
             return article
         }
@@ -980,10 +974,7 @@ class SpiderPools extends BaseCompatibleModel {
                 const { a_id, username, platform } = currentArticle
                 // maybe the ref article translated failed
                 const article_maybe_processed = await DB.Article.getByArticleCode(a_id, platform)
-                if (
-                    currentArticle.content &&
-                    !BaseProcessor.isValidResult(article_maybe_processed?.translation)
-                ) {
+                if (currentArticle.content && !BaseProcessor.isValidResult(article_maybe_processed?.translation)) {
                     const content = currentArticle.content
                     ctx.log?.info(`[${username}] [${a_id}] Starting to process...`)
                     const content_processed = await pRetry(() => processor.process(content), {

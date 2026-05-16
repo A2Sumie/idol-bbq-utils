@@ -21,6 +21,7 @@ import {
     isWebsitePhotoAlbumArticle,
     normalizeWebsitePhotoArticles,
 } from '@/utils/website-photo'
+import { normalizeCronSecond } from '@/utils/cron'
 
 type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
 type ForwarderTemplate = NonNullable<AppConfig['forwarders']>[number]
@@ -325,9 +326,9 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                 const { matchedForwarder, forwarderTaskData } = buildAutoBoundForwarderTaskData(crawler, this.props)
                 const taskName = crawler.name
                 const cfg_forwarder = forwarderTaskData.cfg_forwarder
-                const { cron } = cfg_forwarder
+                const cron = normalizeCronSecond(cfg_forwarder.cron)
 
-                const job = new CronJob(cron as string, async () => {
+                const job = new CronJob(cron, async () => {
                     const taskId = `${Math.random().toString(36).substring(2, 9)}`
                     this.log?.info(`starting to dispatch task ${taskName}...`)
                     const task: TaskScheduler.Task = {
@@ -366,7 +367,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                     : []
 
                 if (aggregatingFormatters.length > 0 || (cfg_forwarder as any).batch_mode) {
-                    const batchJob = new CronJob('0 * * * *', async () => {
+                    const batchJob = new CronJob('45 0 * * * *', async () => {
                         this.log?.info(`Dispatching Hourly Batch for ${taskName}`)
                         const formatterTargetMap = ((this.props.connections as any)?.['formatter-target'] ||
                             {}) as Record<string, Array<string>>
@@ -1436,6 +1437,9 @@ class ForwarderPools extends BaseCompatibleModel {
             originalMediaFiles: summaryConfig.includeOriginalMedia ? [...renderResult.originalMediaFiles] : [],
             digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
         }
+        if (existingQueue && item.digestTags.length > 0) {
+            this.applySummaryCardActiveDigestTags(existingQueue, item.digestTags)
+        }
 
         if (!existingQueue && this.canSendSummaryCardNow(queueKey, summaryConfig, now)) {
             const sent = await this.sendImmediateSummaryCardItem(target, runtime_config, summaryConfig, item)
@@ -1469,6 +1473,22 @@ class ForwarderPools extends BaseCompatibleModel {
             await this.flushSummaryCardQueue(queueKey, 'threshold')
         }
         return true
+    }
+
+    private applySummaryCardActiveDigestTags(queue: SummaryCardQueue, activeTags: Array<string>) {
+        const activeKeys = new Map(activeTags.map((tag) => [normalizeHashtagKey(tag), tag]))
+        if (activeKeys.size === 0) {
+            return
+        }
+
+        for (const item of queue.items.values()) {
+            const matchedTags = extractArticleHashtags(item.article)
+                .map((tag) => activeKeys.get(normalizeHashtagKey(tag)))
+                .filter((tag): tag is string => Boolean(tag))
+            if (matchedTags.length > 0) {
+                item.digestTags = uniquePreserveOrder([...item.digestTags, ...matchedTags])
+            }
+        }
     }
 
     private canSendSummaryCardNow(queueKey: string, config: ResolvedSummaryCardConfig, now: number) {
@@ -1606,7 +1626,7 @@ class ForwarderPools extends BaseCompatibleModel {
         if (allItems.length === 0) {
             return true
         }
-        const content = this.buildSummaryCardBatchContent(groups, queue.config)
+        const content = await this.buildSummaryCardBatchContent(queue, groups)
         const hasStorm = groups.some((group) => group.kind === 'storm')
         const totalArticles = allItems.length
         const title =
@@ -1621,7 +1641,7 @@ class ForwarderPools extends BaseCompatibleModel {
             allItems[0]?.article,
             now,
             embeddedMedia,
-            this.buildSummaryCardRenderMeta(groups, queue.config),
+            await this.buildSummaryCardRenderMeta(queue, groups),
         )
         const cardResult = await this.renderService.process(summaryArticle, {
             taskId: `summary-card-${queue.target.id}-${now}`,
@@ -1666,24 +1686,29 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private buildSummaryCardBatchContent(groups: SummaryCardGroup[], config: ResolvedSummaryCardConfig) {
+    private async buildSummaryCardBatchContent(queue: SummaryCardQueue, groups: SummaryCardGroup[]) {
         const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
         const allItems = sortedGroups.flatMap((group) => group.items)
         if (sortedGroups.length === 1) {
             const group = sortedGroups[0]
-            return this.buildSummaryCardContent(group.kind, group.items, config)
+            return this.buildSummaryCardContent(queue, group.kind, group.items)
         }
 
-        const sections = sortedGroups.map((group, index) => {
-            const sectionTitle =
-                group.kind === 'storm'
-                    ? `【${index + 1}. 话题串】${group.label}`
-                    : `【${index + 1}. 消息串】${this.formatSummaryCardRange(group.items.map((item) => item.article))}`
-            return [sectionTitle, this.buildSummaryCardContent(group.kind, group.items, config)].join('\n')
-        })
+        const sections = await Promise.all(
+            sortedGroups.map(async (group, index) => {
+                const sectionTitle =
+                    group.kind === 'storm'
+                        ? `【${index + 1}. 话题串】${group.label}`
+                        : `【${index + 1}. 消息串】${this.formatSummaryCardRange(group.items.map((item) => item.article))}`
+                return [sectionTitle, await this.buildSummaryCardContent(queue, group.kind, group.items)].join('\n')
+            }),
+        )
 
         return [
-            `【消息合并】${allItems.length} 条 / ${this.formatSummaryCardRange(allItems.map((item) => item.article))}`,
+            `【消息合并】${this.formatSummaryCardRange(
+                allItems.map((item) => item.article),
+                { spaced: true },
+            )}`,
             ...sections,
         ].join('\n\n')
     }
@@ -1719,51 +1744,58 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private buildSummaryCardRenderMeta(groups: SummaryCardGroup[], config: ResolvedSummaryCardConfig) {
+    private async buildSummaryCardRenderMeta(queue: SummaryCardQueue, groups: SummaryCardGroup[]) {
         const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
         const allItems = sortedGroups.flatMap((group) => group.items)
         return {
             total: allItems.length,
             range: this.formatSummaryCardRange(allItems.map((item) => item.article)),
-            groups: sortedGroups.map((group, index) => {
-                const shown = group.items.slice(0, config.maxItems)
-                const tags =
-                    group.kind === 'storm' ? uniquePreserveOrder(group.items.flatMap((item) => item.digestTags)) : []
-                const title =
-                    group.kind === 'storm'
-                        ? `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}话题串 ${group.label}`.trim()
-                        : `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}消息串 ${this.formatSummaryCardRange(
-                              group.items.map((item) => item.article),
-                          )}`.trim()
-                const avatars = this.collectSummaryCardGroupAvatars(group.items)
-                return {
-                    kind: group.kind,
-                    label: group.label,
-                    title,
-                    range: this.formatSummaryCardRange(group.items.map((item) => item.article)),
-                    omitted: Math.max(0, group.items.length - shown.length),
-                    avatars,
-                    items: shown.map((item, itemIndex) => {
-                        const nonStormTags =
-                            group.kind === 'storm'
-                                ? extractArticleHashtags(item.article).filter(
-                                      (tag) =>
-                                          !tags.some(
-                                              (stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag),
-                                          ),
-                                  )
-                                : []
-                        const media = this.buildSummaryCardItemMedia(item)
-                        return {
-                            index: itemIndex + 1,
-                            text: this.buildSummaryCardItemText(item.article, nonStormTags),
-                            avatar: this.buildSummaryCardAvatar(item.article),
-                            media,
-                            mediaLabel: media.length > 0 ? `#${itemIndex + 1} 图集` : undefined,
-                        }
-                    }),
-                }
-            }),
+            groups: await Promise.all(
+                sortedGroups.map(async (group, index) => {
+                    const shown = group.items.slice(0, queue.config.maxItems)
+                    const tags =
+                        group.kind === 'storm'
+                            ? uniquePreserveOrder(group.items.flatMap((item) => item.digestTags))
+                            : []
+                    const title =
+                        group.kind === 'storm'
+                            ? `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}话题串 ${group.label}`.trim()
+                            : `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}消息串 ${this.formatSummaryCardRange(
+                                  group.items.map((item) => item.article),
+                              )}`.trim()
+                    const avatars = this.collectSummaryCardGroupAvatars(group.items)
+                    return {
+                        kind: group.kind,
+                        label: group.label,
+                        title,
+                        range: this.formatSummaryCardRange(group.items.map((item) => item.article)),
+                        omitted: Math.max(0, group.items.length - shown.length),
+                        avatars,
+                        items: await Promise.all(
+                            shown.map(async (item, itemIndex) => {
+                                const nonStormTags =
+                                    group.kind === 'storm'
+                                        ? extractArticleHashtags(item.article).filter(
+                                              (tag) =>
+                                                  !tags.some(
+                                                      (stormTag) =>
+                                                          normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag),
+                                                  ),
+                                          )
+                                        : []
+                                const media = this.buildSummaryCardItemMedia(item)
+                                return {
+                                    index: itemIndex + 1,
+                                    text: await this.buildSummaryCardItemText(queue, item.article, nonStormTags),
+                                    avatar: this.buildSummaryCardAvatar(item.article),
+                                    media,
+                                    mediaLabel: media.length > 0 ? `#${itemIndex + 1} 图集` : undefined,
+                                }
+                            }),
+                        ),
+                    }
+                }),
+            ),
         }
     }
 
@@ -1867,9 +1899,38 @@ class ForwarderPools extends BaseCompatibleModel {
         return this.collectSummaryArticleMedia([item.article], DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA).length
     }
 
-    private buildSummaryCardItemText(article: ArticleWithId, nonStormTags: Array<string> = []) {
+    private shouldCollapseSummaryCardItemRefText(queue: SummaryCardQueue, article: ArticleWithId) {
+        if (!article.ref || typeof article.ref !== 'object') {
+            return false
+        }
+        const config = queue.target.getEffectiveConfig(queue.runtime_config)
+        if (config.collapse_forwarded_ref_text === false) {
+            return false
+        }
+        if (HIGH_REALTIME_GROUP_IDS.has(String((config as any).group_id || ''))) {
+            return false
+        }
+        return true
+    }
+
+    private async buildSummaryCardItemText(
+        queue: SummaryCardQueue,
+        article: ArticleWithId,
+        nonStormTags: Array<string> = [],
+    ) {
+        const config = queue.target.getEffectiveConfig(queue.runtime_config)
+        const collapsedArticleIds = this.shouldCollapseSummaryCardItemRefText(queue, article)
+            ? await this.collectForwardedReferenceIds(
+                  article,
+                  queue.target.id,
+                  this.resolvePositiveSeconds(
+                      config.collapse_forwarded_ref_window_seconds,
+                      DEFAULT_COLLAPSE_FORWARDED_REF_WINDOW_SECONDS,
+                  ),
+              )
+            : undefined
         const message =
-            this.renderService.renderText(article, { render_type: 'text-compact' }).trim() ||
+            this.renderService.renderText(article, { render_type: 'text-compact', collapsedArticleIds }).trim() ||
             formatArticleHeaderLine(article as any).trim() ||
             extractArticleHeadline(article as any, 100).trim() ||
             article.url ||
@@ -1884,34 +1945,36 @@ class ForwarderPools extends BaseCompatibleModel {
         return count > 0 ? `图集: ${count} 张` : ''
     }
 
-    private buildSummaryCardContent(
+    private async buildSummaryCardContent(
+        queue: SummaryCardQueue,
         kind: 'storm' | 'thread',
         items: SummaryCardQueueItem[],
-        config: ResolvedSummaryCardConfig,
     ) {
-        const shown = items.slice(0, config.maxItems)
+        const shown = items.slice(0, queue.config.maxItems)
         const omitted = items.length - shown.length
 
         if (kind === 'storm') {
             const tags = uniquePreserveOrder(items.flatMap((item) => item.digestTags))
-            const lines = shown.map((item, index) => {
-                const nonStormTags = extractArticleHashtags(item.article).filter(
-                    (tag) => !tags.some((stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag)),
-                )
-                return [
-                    `【${index + 1}】`,
-                    this.buildSummaryCardItemText(item.article, nonStormTags),
-                    this.buildSummaryCardItemMediaLine(item),
-                ]
-                    .filter(Boolean)
-                    .join('\n')
-            })
+            const lines = await Promise.all(
+                shown.map(async (item, index) => {
+                    const nonStormTags = extractArticleHashtags(item.article).filter(
+                        (tag) => !tags.some((stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag)),
+                    )
+                    return [
+                        `【${index + 1}】`,
+                        await this.buildSummaryCardItemText(queue, item.article, nonStormTags),
+                        this.buildSummaryCardItemMediaLine(item),
+                    ]
+                        .filter(Boolean)
+                        .join('\n')
+                }),
+            )
             if (omitted > 0) {
                 lines.push(`另有 ${omitted} 条更新已合并`)
             }
             return [
                 `【话题消息合并】${tags.join(' ')} / ${items.length} 条`,
-                `范围: ${this.formatSummaryCardRange(items.map((item) => item.article))}`,
+                `范围: ${this.formatSummaryCardTimeRange(items.map((item) => item.article))}`,
                 ...lines,
             ].join('\n\n')
         }
@@ -1920,20 +1983,25 @@ class ForwarderPools extends BaseCompatibleModel {
         const rootLine = root
             ? `串: ${root.username || root.u_id || 'unknown'} / ${extractArticleHeadline(root as any, 100)}`
             : undefined
-        const lines = shown.map((item, index) => {
-            return [
-                `【${index + 1}】`,
-                this.buildSummaryCardItemText(item.article),
-                this.buildSummaryCardItemMediaLine(item),
-            ]
-                .filter(Boolean)
-                .join('\n')
-        })
+        const lines = await Promise.all(
+            shown.map(async (item, index) => {
+                return [
+                    `【${index + 1}】`,
+                    await this.buildSummaryCardItemText(queue, item.article),
+                    this.buildSummaryCardItemMediaLine(item),
+                ]
+                    .filter(Boolean)
+                    .join('\n')
+            }),
+        )
         if (omitted > 0) {
             lines.push(`另有 ${omitted} 条更新已合并`)
         }
         return [
-            `【消息合并】${items.length} 条 / ${this.formatSummaryCardRange(items.map((item) => item.article))}`,
+            `【消息合并】${this.formatSummaryCardRange(
+                items.map((item) => item.article),
+                { spaced: true },
+            )}`,
             rootLine,
             ...lines,
         ]
@@ -1941,11 +2009,17 @@ class ForwarderPools extends BaseCompatibleModel {
             .join('\n\n')
     }
 
-    private formatSummaryCardRange(articles: ArticleWithId[]) {
+    private formatSummaryCardTimeRange(articles: ArticleWithId[]) {
         const sorted = orderBy(articles, ['created_at', 'id'], ['asc', 'asc'])
         const start = dayjs.unix(sorted[0]?.created_at || Math.floor(Date.now() / 1000)).format('HH:mm')
         const end = dayjs.unix(sorted[sorted.length - 1]?.created_at || Math.floor(Date.now() / 1000)).format('HH:mm')
-        return `${sorted.length}条 / ${start}-${end}`
+        return start === end ? start : `${start}-${end}`
+    }
+
+    private formatSummaryCardRange(articles: ArticleWithId[], options: { spaced?: boolean } = {}) {
+        const count = articles.length
+        const countLabel = options.spaced ? `${count} 条` : `${count}条`
+        return `${countLabel} / ${this.formatSummaryCardTimeRange(articles)}`
     }
 
     private getArticleThreadRoot(article?: ArticleWithId | Article | null): ArticleWithId | Article | null {

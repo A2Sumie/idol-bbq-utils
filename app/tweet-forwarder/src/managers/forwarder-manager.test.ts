@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url'
 import { Forwarder } from '@/middleware/forwarder/base'
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
+import { normalizeCronSecond } from '@/utils/cron'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
@@ -81,6 +82,12 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         includeOriginalMedia: true,
     })
     expect(resolveSummaryCardConfig({ summary_card: { enabled: false } } as any)).toBeNull()
+})
+
+test('normalizeCronSecond pins five-field cron jobs to the default forty-fifth second', () => {
+    expect(normalizeCronSecond('*/4 * * * *')).toBe('45 */4 * * * *')
+    expect(normalizeCronSecond('10-59/30 * * * * *')).toBe('10-59/30 * * * * *')
+    expect(normalizeCronSecond(' 7,27,47 * * * * ')).toBe('45 7,27,47 * * * *')
 })
 
 test('buildAutoBoundForwarderTaskData keeps crawler identity and merges media config from matching template', () => {
@@ -1357,7 +1364,11 @@ test('sendArticles does not materialize collapsed reply text for card-only rende
         new EventEmitter(),
     )
 
-    ;(pools as any).claimArticleChain = async () => true
+    const forwardedIds = new Set<number>()
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        forwardedIds.add(article.id)
+        return true
+    }
     ;(pools as any).renderService.process = async () => ({
         text: '',
         textCollapseMode: 'none',
@@ -1746,7 +1757,9 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
     expect(target.sent[0]?.texts[0]).toContain('消息合并')
+    expect(target.sent[0]?.texts[0]).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
     expect(packedArticles[0]?.content).toContain('【消息合并】1 条')
+    expect(packedArticles[0]?.content).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
     expect(packedArticles[0]?.content).toContain('summary content 1')
     expect(packedArticles[0]?.extra?.extra_type).toBe('message_pack_meta')
     expect(packedArticles[0]?.extra?.data?.groups?.[0]?.avatars?.[0]).toEqual({
@@ -1769,6 +1782,280 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(packedArticles[1]?.extra?.data?.groups?.[0]?.avatars?.[0]?.url).toBe('https://example.com/avatar-2.jpg')
     expect(packedArticles[1]?.extra?.data?.groups?.[1]?.avatars?.[0]?.url).toBe('https://example.com/avatar-3.jpg')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
+})
+
+test('sendArticles folds idle-first summary-card item when it appears as a later reply reference', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+            },
+        } as any,
+        'target-summary-card-fold-ref',
+    )
+
+    const forwardedIds = new Set<number>()
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        forwardedIds.add(article.id)
+        return true
+    }
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    const renderTextCalls: Array<{ article: any; collapsedArticleIds?: Set<string | number> }> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any, config?: any) => {
+            renderTextCalls.push({ article, collapsedArticleIds: config?.collapsedArticleIds })
+            if (article.ref && config?.collapsedArticleIds?.has(article.ref.id)) {
+                return '@reply_member 2325⁹ X回复\n\nreply body\n------------\n@first_member 2320⁹（略）'
+            }
+            if (article.ref) {
+                return `@reply_member 2325⁹ X回复\n\nreply body\n------------\n@first_member 2320⁹ X发推\n\n${article.ref.content}`
+            }
+            return article.content || ''
+        },
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const firstCreatedAt = Math.floor(Date.now() / 1000)
+    const firstArticle = {
+        id: 301,
+        a_id: 'idle-first-parent',
+        platform: Platform.X,
+        username: 'first member',
+        u_id: 'first_member',
+        content: 'first body should not repeat',
+        url: 'https://x.com/first_member/status/301',
+        type: 'tweet',
+        created_at: firstCreatedAt,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const replyArticle = {
+        id: 302,
+        a_id: 'reply-to-idle-first',
+        platform: Platform.X,
+        username: 'reply member',
+        u_id: 'reply_member',
+        content: 'reply body',
+        url: 'https://x.com/reply_member/status/302',
+        type: 'reply',
+        created_at: firstCreatedAt + 60,
+        ref: firstArticle,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async (refId: number) => {
+        if (forwardedIds.has(refId)) {
+            return { ref_id: refId }
+        }
+        return null
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-idle-first-parent',
+            [firstArticle],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-reply-after-idle-first',
+            [replyArticle],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        const queueKey = Array.from((pools as any).summaryCardLastSentAt.keys())[0]
+        expect(queueKey).toBeTruthy()
+        ;(pools as any).summaryCardLastSentAt.set(queueKey, Math.floor(Date.now() / 1000) - 1800)
+        await (pools as any).flushDueSummaryCardQueues()
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(2)
+    expect(packedArticles).toHaveLength(2)
+    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('@first_member 2320⁹（略）')
+    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).not.toContain('first body should not repeat')
+    expect(renderTextCalls.some((call) => call.article.id === 302 && call.collapsedArticleIds?.has(301))).toBeTrue()
+})
+
+test('sendArticles promotes queued summary-card hashtag items after a storm activates', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+            },
+            tag_digest_threshold: 3,
+            tag_digest_min_authors: 2,
+            tag_digest_detection_window_seconds: 300,
+            tag_digest_window_seconds: 1800,
+        } as any,
+        'target-summary-card-tag-storm',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        for (const index of [0, 1, 2]) {
+            await (pools as any).sendArticles(
+                undefined,
+                `summary-tag-storm-${index}`,
+                [
+                    {
+                        id: 510 + index,
+                        a_id: `summary-tag-storm-${index}`,
+                        platform: Platform.X,
+                        username: `tag member ${index}`,
+                        u_id: `tag_member_${index}`,
+                        content: `話題 ${index} #ナナニジ`,
+                        url: `https://x.com/member/status/tag-storm-${index}`,
+                        type: 'tweet',
+                        created_at: now + index,
+                        ref: null,
+                        has_media: false,
+                        media: [],
+                        extra: null,
+                        u_avatar: null,
+                    },
+                ],
+                [{ forwarder: target, runtime_config: undefined }],
+                { render_type: 'text-card' } as any,
+            )
+        }
+
+        const queueKey = Array.from((pools as any).summaryCardLastSentAt.keys())[0]
+        expect(queueKey).toBeTruthy()
+        ;(pools as any).summaryCardLastSentAt.set(queueKey, Math.floor(Date.now() / 1000) - 1800)
+        await (pools as any).flushDueSummaryCardQueues()
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(2)
+    expect(packedArticles).toHaveLength(2)
+    const stormGroups = packedArticles[1]?.extra?.data?.groups || []
+    expect(stormGroups).toHaveLength(1)
+    expect(stormGroups[0]?.kind).toBe('storm')
+    expect(stormGroups[0]?.label).toBe('#ナナニジ')
+    expect(stormGroups[0]?.items).toHaveLength(2)
 })
 
 test('sendArticles keeps media-only summary-card items readable when card rendering fails', async () => {

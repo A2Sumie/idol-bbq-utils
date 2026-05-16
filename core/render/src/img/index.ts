@@ -48,6 +48,34 @@ const SATORI_LANG_CODES = new Set([
 ])
 const SYSTEM_FALLBACK_FONTS: Array<FontConfig & { paths: Array<string> }> = [
     {
+        name: 'Noto Sans CJK SC',
+        font_file_name: '',
+        style: 'normal',
+        weight: 400,
+        paths: ['/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'],
+    },
+    {
+        name: 'Noto Sans CJK SC',
+        font_file_name: '',
+        style: 'normal',
+        weight: 700,
+        paths: ['/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc'],
+    },
+    {
+        name: 'Noto Sans SC',
+        font_file_name: '',
+        style: 'normal',
+        weight: 400,
+        paths: ['/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc'],
+    },
+    {
+        name: 'Noto Sans SC',
+        font_file_name: '',
+        style: 'normal',
+        weight: 700,
+        paths: ['/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc'],
+    },
+    {
         name: 'Noto Sans CJK JP',
         font_file_name: '',
         style: 'normal',

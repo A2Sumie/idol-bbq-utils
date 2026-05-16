@@ -9,6 +9,7 @@ import dayjs from 'dayjs'
 import type { ProcessorConfig } from '@/types/processor'
 import type { Processor } from '@/types'
 import { isPersistentMediaPath } from '@/services/media-cache-service'
+import { normalizeCronSecond } from '@/utils/cron'
 
 interface AggregatePayload {
     platform: Platform
@@ -35,8 +36,8 @@ export class TaskManager extends BaseCompatibleModel {
         this.forwarderPools = forwarderPools
         this.log = log?.child({ subservice: this.NAME })
         this.processors = options.processors || []
-        // Poll every minute
-        this.pollingJob = new CronJob('*/1 * * * *', this.poll.bind(this))
+        // Poll every minute, desynchronized from top-of-minute crawler/forwarder work.
+        this.pollingJob = new CronJob(normalizeCronSecond('*/1 * * * *'), this.poll.bind(this))
     }
 
     async init() {
@@ -98,14 +99,14 @@ export class TaskManager extends BaseCompatibleModel {
         }
 
         // 1. Text Summary
-        const contentLines = articles.map(a => {
+        const contentLines = articles.map((a) => {
             const time = dayjs.unix(a.created_at).format('HH:mm')
             return `[${time}] ${a.content ?? '(No Text)'}`
         })
         const summaryText = contentLines.join('\n\n')
 
         // 2. Generate Summary Image
-        let mediaFiles: { path: string, media_type: 'photo' | 'video' }[] = []
+        let mediaFiles: { path: string; media_type: 'photo' | 'video' }[] = []
         const fs = await import('fs')
 
         try {
@@ -125,7 +126,7 @@ export class TaskManager extends BaseCompatibleModel {
                 ref: null,
                 has_media: false,
                 media: [],
-                extra: null
+                extra: null,
             }
             const converter = new ImgConverter()
             const imgBuffer = await converter.articleToImg(fakeArticle as any, 'default')
@@ -147,7 +148,7 @@ export class TaskManager extends BaseCompatibleModel {
                     const result = await renderService.process(article, {
                         taskId: `batch-sub-${article.a_id}`,
                         render_type: 'text', // We only want media files
-                        mediaConfig: dummyMediaConfig
+                        mediaConfig: dummyMediaConfig,
                     })
                     if (result.mediaFiles.length > 0) {
                         mediaFiles = mediaFiles.concat(result.mediaFiles as any)
@@ -159,7 +160,7 @@ export class TaskManager extends BaseCompatibleModel {
         }
 
         // 4. Send
-        const idsToSend = target_ids && target_ids.length > 0 ? target_ids : (bot_id ? [bot_id] : [])
+        const idsToSend = target_ids && target_ids.length > 0 ? target_ids : bot_id ? [bot_id] : []
         if (idsToSend.length === 0) {
             this.log?.warn(`No target IDs provided for hourly batch of ${u_id}`)
         }
@@ -170,7 +171,7 @@ export class TaskManager extends BaseCompatibleModel {
                 try {
                     await forwarder.send(`Hourly Batch for ${u_id}`, {
                         timestamp: Math.floor(Date.now() / 1000),
-                        media: mediaFiles.length > 0 ? mediaFiles : undefined
+                        media: mediaFiles.length > 0 ? mediaFiles : undefined,
                     })
                 } catch (e) {
                     this.log?.error(`Failed to send hourly batch for ${u_id} to ${targetId}: ${e}`)
@@ -183,12 +184,12 @@ export class TaskManager extends BaseCompatibleModel {
         // Cleanup
         if (mediaFiles.length > 0) {
             setTimeout(() => {
-                mediaFiles.forEach(f => {
+                mediaFiles.forEach((f) => {
                     try {
                         if (!isPersistentMediaPath(f.path)) {
                             fs.unlinkSync(f.path)
                         }
-                    } catch (e) { }
+                    } catch (e) {}
                 })
             }, 60000) // Delayed cleanup 1 minute
         }
@@ -197,7 +198,9 @@ export class TaskManager extends BaseCompatibleModel {
     private async handleDailyAggregation(payload: AggregatePayload) {
         const { platform, u_id, start, end, bot_id, target_ids, processorConfig, processorId, prompt } = payload
 
-        this.log?.info(`Processing aggregation for ${u_id} on ${platform} (${dayjs.unix(start).format()} - ${dayjs.unix(end).format()})`)
+        this.log?.info(
+            `Processing aggregation for ${u_id} on ${platform} (${dayjs.unix(start).format()} - ${dayjs.unix(end).format()})`,
+        )
 
         const articles = await DB.Article.getArticlesByTimeRange(u_id, platform, start, end)
         if (articles.length === 0) {
@@ -207,7 +210,7 @@ export class TaskManager extends BaseCompatibleModel {
 
         const reversedArticles = articles.reverse() // created_at asc usually better for chronological summary
 
-        const contentLines = reversedArticles.map(a => {
+        const contentLines = reversedArticles.map((a) => {
             const time = dayjs.unix(a.created_at).format('YYYY-MM-DD HH:mm:ss')
             return `[${time}] ${a.content ?? '(No Text)'}\n`
         })
@@ -224,7 +227,9 @@ export class TaskManager extends BaseCompatibleModel {
             process.env.GOOGLE_API_KEY ||
             ''
 
-        const summaryPrompt = prompt || `You are a summarizer. Please summarize the following social media posts from today for a daily report. Format it nicely.`
+        const summaryPrompt =
+            prompt ||
+            `You are a summarizer. Please summarize the following social media posts from today for a daily report. Format it nicely.`
 
         let summary = ''
         try {
@@ -240,10 +245,10 @@ export class TaskManager extends BaseCompatibleModel {
             summary = `Summarization failed. Raw content count: ${articles.length}`
         }
 
-        let mediaFiles: { path: string, media_type: 'photo' }[] = []
+        let mediaFiles: { path: string; media_type: 'photo' }[] = []
         const fs = await import('fs')
 
-        const idsToSend = target_ids && target_ids.length > 0 ? target_ids : (bot_id ? [bot_id] : [])
+        const idsToSend = target_ids && target_ids.length > 0 ? target_ids : bot_id ? [bot_id] : []
         if (idsToSend.length === 0) {
             this.log?.warn(`No target IDs provided for daily aggregation of ${u_id}`)
         }
@@ -254,7 +259,7 @@ export class TaskManager extends BaseCompatibleModel {
                 try {
                     await forwarder.send(`Daily Report for ${u_id}:\n\n${summary}`, {
                         timestamp: Math.floor(Date.now() / 1000),
-                        media: mediaFiles.length > 0 ? mediaFiles : undefined
+                        media: mediaFiles.length > 0 ? mediaFiles : undefined,
                     })
                 } catch (e) {
                     this.log?.error(`Failed to send daily report for ${u_id} to ${targetId}: ${e}`)
@@ -266,12 +271,12 @@ export class TaskManager extends BaseCompatibleModel {
 
         // Cleanup
         if (mediaFiles.length > 0) {
-            mediaFiles.forEach(f => {
+            mediaFiles.forEach((f) => {
                 try {
                     if (!isPersistentMediaPath(f.path)) {
                         fs.unlinkSync(f.path)
                     }
-                } catch (e) { }
+                } catch (e) {}
             })
         }
     }
