@@ -1505,7 +1505,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private canFlushSummaryCardThreshold(queueKey: string, queue: SummaryCardQueue, now: number) {
         const effectiveConfig = queue.target.getEffectiveConfig(queue.runtime_config)
         if (!this.isTagDigestEnabled(effectiveConfig)) {
-            return this.canSendSummaryCardNow(queueKey, queue.config, now)
+            return true
         }
 
         const groups = this.buildSummaryCardGroups(Array.from(queue.items.values()))
@@ -1517,7 +1517,7 @@ class ForwarderPools extends BaseCompatibleModel {
             return false
         }
 
-        return this.canSendSummaryCardNow(queueKey, queue.config, now)
+        return true
     }
 
     private hasPendingSummaryCardTagStormCandidate(
