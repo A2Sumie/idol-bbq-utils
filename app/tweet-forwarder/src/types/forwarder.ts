@@ -153,6 +153,7 @@ interface ForwardTargetPlatformCommonConfig {
               threshold?: number
               max_items?: number
               include_original_media?: boolean
+              send_first_immediately?: boolean
           }
     /**
      * Collapse the text body of referenced/replied-to articles that were already forwarded to this target.

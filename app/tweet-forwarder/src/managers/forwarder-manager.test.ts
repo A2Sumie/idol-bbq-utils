@@ -64,6 +64,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         threshold: 8,
         maxItems: 14,
         includeOriginalMedia: false,
+        sendFirstImmediately: true,
     })
     expect(
         resolveSummaryCardConfig({
@@ -73,6 +74,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
                 threshold: 3,
                 max_items: 6,
                 include_original_media: true,
+                send_first_immediately: false,
             },
         } as any),
     ).toEqual({
@@ -80,6 +82,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         threshold: 3,
         maxItems: 6,
         includeOriginalMedia: true,
+        sendFirstImmediately: false,
     })
     expect(resolveSummaryCardConfig({ summary_card: { enabled: false } } as any)).toBeNull()
 })
@@ -2056,6 +2059,262 @@ test('sendArticles promotes queued summary-card hashtag items after a storm acti
     expect(stormGroups[0]?.kind).toBe('storm')
     expect(stormGroups[0]?.label).toBe('#ナナニジ')
     expect(stormGroups[0]?.items).toHaveLength(2)
+})
+
+test('sendArticles keeps first queued summary-card item inside a delayed hashtag storm', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+            tag_digest_threshold: 2,
+            tag_digest_min_authors: 2,
+            tag_digest_detection_window_seconds: 600,
+            tag_digest_window_seconds: 7200,
+        } as any,
+        'target-summary-card-delayed-tag-storm',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        for (const index of [0, 1, 2]) {
+            await (pools as any).sendArticles(
+                undefined,
+                `summary-delayed-tag-storm-${index}`,
+                [
+                    {
+                        id: 540 + index,
+                        a_id: `summary-delayed-tag-storm-${index}`,
+                        platform: Platform.X,
+                        username: `tag member ${index}`,
+                        u_id: `tag_member_${index}`,
+                        content: `話題 ${index} #ナナニジ`,
+                        url: `https://x.com/member/status/delayed-tag-storm-${index}`,
+                        type: 'tweet',
+                        created_at: now + index,
+                        ref: null,
+                        has_media: false,
+                        media: [],
+                        extra: null,
+                        u_avatar: null,
+                    },
+                ],
+                [{ forwarder: target, runtime_config: undefined }],
+                { render_type: 'text-card' } as any,
+            )
+        }
+
+        await (pools as any).flushAllSummaryCardQueues()
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(packedArticles).toHaveLength(1)
+    const stormGroups = packedArticles[0]?.extra?.data?.groups || []
+    expect(stormGroups).toHaveLength(1)
+    expect(stormGroups[0]?.kind).toBe('storm')
+    expect(stormGroups[0]?.label).toBe('#ナナニジ')
+    expect(stormGroups[0]?.items).toHaveLength(3)
+})
+
+test('sendArticles waits for a near-threshold summary-card hashtag storm instead of threshold-flushing early', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 2,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+            tag_digest_threshold: 3,
+            tag_digest_min_authors: 2,
+            tag_digest_detection_window_seconds: 600,
+            tag_digest_window_seconds: 7200,
+        } as any,
+        'target-summary-card-near-tag-storm',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        for (const index of [0, 1]) {
+            await (pools as any).sendArticles(
+                undefined,
+                `summary-near-tag-storm-${index}`,
+                [
+                    {
+                        id: 550 + index,
+                        a_id: `summary-near-tag-storm-${index}`,
+                        platform: Platform.X,
+                        username: `tag member ${index}`,
+                        u_id: `tag_member_${index}`,
+                        content: `話題 ${index} #ナナニジ`,
+                        url: `https://x.com/member/status/near-tag-storm-${index}`,
+                        type: 'tweet',
+                        created_at: now + index,
+                        ref: null,
+                        has_media: false,
+                        media: [],
+                        extra: null,
+                        u_avatar: null,
+                    },
+                ],
+                [{ forwarder: target, runtime_config: undefined }],
+                { render_type: 'text-card' } as any,
+            )
+        }
+
+        expect(target.sent).toHaveLength(0)
+
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-near-tag-storm-2',
+            [
+                {
+                    id: 552,
+                    a_id: 'summary-near-tag-storm-2',
+                    platform: Platform.X,
+                    username: 'tag member 2',
+                    u_id: 'tag_member_2',
+                    content: '話題 2 #ナナニジ',
+                    url: 'https://x.com/member/status/near-tag-storm-2',
+                    type: 'tweet',
+                    created_at: now + 2,
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(packedArticles).toHaveLength(1)
+    expect(packedArticles[0]?.extra?.data?.groups?.[0]?.kind).toBe('storm')
+    expect(packedArticles[0]?.extra?.data?.groups?.[0]?.items).toHaveLength(3)
 })
 
 test('sendArticles keeps summary-card fallback compact when card rendering fails', async () => {

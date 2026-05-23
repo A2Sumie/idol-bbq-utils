@@ -47,6 +47,7 @@ type ResolvedSummaryCardConfig = {
     threshold: number
     maxItems: number
     includeOriginalMedia: boolean
+    sendFirstImmediately: boolean
 }
 type SummaryCardQueueItem = {
     article: ArticleWithId
@@ -147,6 +148,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         threshold,
         maxItems,
         includeOriginalMedia: objectConfig.include_original_media === true,
+        sendFirstImmediately: objectConfig.send_first_immediately !== false,
     }
 }
 
@@ -1441,7 +1443,11 @@ class ForwarderPools extends BaseCompatibleModel {
             this.applySummaryCardActiveDigestTags(existingQueue, item.digestTags)
         }
 
-        if (!existingQueue && this.canSendSummaryCardNow(queueKey, summaryConfig, now)) {
+        if (
+            !existingQueue &&
+            summaryConfig.sendFirstImmediately &&
+            this.canSendSummaryCardNow(queueKey, summaryConfig, now)
+        ) {
             const sent = await this.sendImmediateSummaryCardItem(target, runtime_config, summaryConfig, item)
             if (!sent) {
                 await this.releaseArticleChain(item.article, item.article.platform, target.id)
@@ -1469,7 +1475,7 @@ class ForwarderPools extends BaseCompatibleModel {
             `Queued summary-card item ${article.a_id} for ${target.id}: ${queue.items.size}/${summaryConfig.threshold}`,
         )
 
-        if (queue.items.size >= summaryConfig.threshold && this.canSendSummaryCardNow(queueKey, summaryConfig, now)) {
+        if (queue.items.size >= summaryConfig.threshold && this.canFlushSummaryCardThreshold(queueKey, queue, now)) {
             await this.flushSummaryCardQueue(queueKey, 'threshold')
         }
         return true
@@ -1494,6 +1500,71 @@ class ForwarderPools extends BaseCompatibleModel {
     private canSendSummaryCardNow(queueKey: string, config: ResolvedSummaryCardConfig, now: number) {
         const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
         return !lastSentAt || now - lastSentAt >= config.intervalSeconds
+    }
+
+    private canFlushSummaryCardThreshold(queueKey: string, queue: SummaryCardQueue, now: number) {
+        const effectiveConfig = queue.target.getEffectiveConfig(queue.runtime_config)
+        if (!this.isTagDigestEnabled(effectiveConfig)) {
+            return this.canSendSummaryCardNow(queueKey, queue.config, now)
+        }
+
+        const groups = this.buildSummaryCardGroups(Array.from(queue.items.values()))
+        if (groups.some((group) => group.kind === 'storm')) {
+            return true
+        }
+
+        if (this.hasPendingSummaryCardTagStormCandidate(queue, effectiveConfig, now)) {
+            return false
+        }
+
+        return this.canSendSummaryCardNow(queueKey, queue.config, now)
+    }
+
+    private hasPendingSummaryCardTagStormCandidate(
+        queue: SummaryCardQueue,
+        config: ForwardTargetPlatformCommonConfig,
+        now: number,
+    ) {
+        const threshold = Math.max(2, Math.floor(Number(config.tag_digest_threshold || DEFAULT_TAG_DIGEST_THRESHOLD)))
+        const minAuthors = Math.max(
+            1,
+            Math.floor(Number(config.tag_digest_min_authors || DEFAULT_TAG_DIGEST_MIN_AUTHORS)),
+        )
+        const triggerAuthors = Math.min(minAuthors, threshold)
+        const detectionWindow = this.resolvePositiveSeconds(
+            config.tag_digest_detection_window_seconds,
+            DEFAULT_TAG_DIGEST_DETECTION_WINDOW_SECONDS,
+        )
+
+        const candidateCounts = new Map<string, { count: number; authors: Set<string> }>()
+        for (const item of queue.items.values()) {
+            for (const tag of extractArticleHashtags(item.article)) {
+                const state = this.tagDigestStates.get(this.getTagDigestStateKey(queue.target.id, tag))
+                if (state?.digestUntil && state.digestUntil >= now) {
+                    continue
+                }
+
+                const key = normalizeHashtagKey(tag)
+                const existing = candidateCounts.get(key) || { count: 0, authors: new Set<string>() }
+                if (state) {
+                    for (const event of state.events.filter(
+                        (candidate) => candidate.timestamp >= now - detectionWindow,
+                    )) {
+                        existing.count += 1
+                        existing.authors.add(event.authorKey)
+                    }
+                } else {
+                    existing.count += 1
+                    existing.authors.add(getArticleAuthorKey(item.article))
+                }
+                candidateCounts.set(key, existing)
+            }
+        }
+
+        return Array.from(candidateCounts.values()).some(
+            (candidate) =>
+                candidate.count >= threshold - 1 && candidate.authors.size >= Math.min(triggerAuthors, threshold - 1),
+        )
     }
 
     private getSummaryCardQueueKey(
