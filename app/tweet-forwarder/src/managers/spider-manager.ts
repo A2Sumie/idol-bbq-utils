@@ -371,7 +371,7 @@ class SpiderPools extends BaseCompatibleModel {
         this.emitter = emitter
         this.browserPool = new BrowserSessionPool(cacheRoot, this.log)
         this.instagramLiveRelay = new InstagramLiveRelayService(cacheRoot, this.log)
-        this.dispatchListener = this.onTaskReceived.bind(this)
+        this.dispatchListener = this.onDispatchReceived.bind(this)
     }
 
     async init() {
@@ -399,6 +399,29 @@ class SpiderPools extends BaseCompatibleModel {
             await DB.TaskQueue.updateStatus(taskQueueId, status, meta)
         } catch (error) {
             ctx.log?.warn(`Failed to update linked task_queue ${taskQueueId}: ${toErrorMessage(error)}`)
+        }
+    }
+
+    private async onDispatchReceived(ctx: TaskScheduler.TaskCtx) {
+        try {
+            await this.onTaskReceived(ctx)
+        } catch (error) {
+            const taskName = (ctx.task.data as Crawler | undefined)?.name || 'unknown'
+            const message = toErrorMessage(error)
+            ctx.log = ctx.log || this.log?.child({ label: taskName, trace_id: ctx.taskId })
+            ctx.log?.error(`Unexpected spider dispatch failure: ${message}`)
+            try {
+                this.emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
+                    taskId: ctx.taskId,
+                    status: TaskScheduler.TaskStatus.FAILED,
+                })
+            } catch (emitError) {
+                ctx.log?.warn(`Failed to emit spider failure status: ${toErrorMessage(emitError)}`)
+            }
+            await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Failed, {
+                last_error: message,
+                result_summary: `crawler ${taskName} failed: unexpected dispatch error`,
+            })
         }
     }
 
@@ -662,12 +685,16 @@ class SpiderPools extends BaseCompatibleModel {
             await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Completed, {
                 result_summary: summarizeCrawlerTaskResult(name, result),
             })
-            this.emitter.emit(`spider:${TaskScheduler.TaskEvent.FINISHED}`, {
-                taskId,
-                result,
-                immediate_notify: cfg_crawler?.immediate_notify,
-                crawlerName: name,
-            } as TaskResult)
+            try {
+                this.emitter.emit(`spider:${TaskScheduler.TaskEvent.FINISHED}`, {
+                    taskId,
+                    result,
+                    immediate_notify: cfg_crawler?.immediate_notify,
+                    crawlerName: name,
+                } as TaskResult)
+            } catch (error) {
+                ctx.log?.error(`Spider finished listener failed: ${toErrorMessage(error)}`)
+            }
         }
     }
 

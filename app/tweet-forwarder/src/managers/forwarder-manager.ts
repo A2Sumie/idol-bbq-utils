@@ -110,6 +110,10 @@ function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
 
+function toErrorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error)
+}
+
 function uniquePreserveOrder(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean)))
 }
@@ -658,7 +662,7 @@ class ForwarderPools extends BaseCompatibleModel {
         this.renderService = new RenderService(this.log)
         this.emitter = emitter
         this.props = props
-        this.dispatchListener = this.onTaskReceived.bind(this)
+        this.dispatchListener = this.onDispatchReceived.bind(this)
     }
 
     async init() {
@@ -799,6 +803,25 @@ class ForwarderPools extends BaseCompatibleModel {
         }
         if (restoredCount > 0) {
             this.log?.info(`Restored ${restoredCount} summary-card queue(s) from durable aggregation windows`)
+        }
+    }
+
+    private async onDispatchReceived(ctx: TaskScheduler.TaskCtx) {
+        try {
+            await this.onTaskReceived(ctx)
+        } catch (error) {
+            const taskName = (ctx.task.data as Forwarder | undefined)?.name || 'unknown'
+            const message = toErrorMessage(error)
+            ctx.log = ctx.log || this.log?.child({ label: taskName, trace_id: ctx.taskId })
+            ctx.log?.error(`Unexpected forwarder dispatch failure: ${message}`)
+            try {
+                this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
+                    taskId: ctx.taskId,
+                    status: TaskScheduler.TaskStatus.FAILED,
+                })
+            } catch (emitError) {
+                ctx.log?.warn(`Failed to emit forwarder failure status: ${toErrorMessage(emitError)}`)
+            }
         }
     }
 

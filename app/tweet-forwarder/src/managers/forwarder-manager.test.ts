@@ -501,6 +501,51 @@ test('ForwarderTaskScheduler dispatches immediate tasks with article_ids_by_url 
     })
 })
 
+test('ForwarderPools dispatch listener catches unexpected async failures', async () => {
+    const emitter = new EventEmitter()
+    const statusEvents: any[] = []
+    emitter.on(`forwarder:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, (payload) => statusEvents.push(payload))
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {
+                'crawler-formatter': {},
+                'crawler-processor': {},
+                'processor-formatter': {},
+                'formatter-target': {},
+            } as any,
+            formatters: [],
+            cfg_forwarder: {} as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        emitter,
+    )
+    ;(pools as any).onTaskReceived = async () => {
+        throw new Error('forwarder dispatch boom')
+    }
+
+    await (pools as any).dispatchListener({
+        taskId: 'forwarder-boom',
+        task: {
+            id: 'forwarder-boom',
+            status: TaskScheduler.TaskStatus.PENDING,
+            data: {
+                name: 'forwarder-boom',
+                websites: ['https://x.com'],
+            },
+        },
+    })
+
+    expect(statusEvents).toEqual([
+        {
+            taskId: 'forwarder-boom',
+            status: TaskScheduler.TaskStatus.FAILED,
+        },
+    ])
+})
+
 test('ForwarderPools resendArticle reuses crawler template media config', async () => {
     const pools = new ForwarderPools(
         {

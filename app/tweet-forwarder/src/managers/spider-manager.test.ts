@@ -23,6 +23,59 @@ test('SpiderTaskScheduler treats same crawler pending or running tasks as active
     expect((scheduler as any).hasActiveCrawlerTask('Instagram Live 抢抓 - 椎名桜月')).toBe(false)
 })
 
+test('SpiderPools dispatch listener catches unexpected async failures and fails linked task', async () => {
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const statusUpdates: any[] = []
+    const statusEvents: any[] = []
+
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const emitter = new EventEmitter()
+        emitter.on(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, (payload) => statusEvents.push(payload))
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', emitter)
+        ;(pools as any).onTaskReceived = async () => {
+            throw new Error('outer dispatch boom')
+        }
+
+        await (pools as any).dispatchListener({
+            taskId: 'manual-boom',
+            task: {
+                id: 'manual-boom',
+                status: TaskScheduler.TaskStatus.PENDING,
+                data: {
+                    name: 'crawler-boom',
+                    websites: ['https://unsupported.invalid/path'],
+                },
+                meta: {
+                    task_queue_id: 126,
+                },
+            },
+        })
+
+        expect(statusEvents).toEqual([
+            {
+                taskId: 'manual-boom',
+                status: TaskScheduler.TaskStatus.FAILED,
+            },
+        ])
+        expect(statusUpdates).toEqual([
+            {
+                id: 126,
+                status: DB.TaskQueue.STATUS.Failed,
+                meta: {
+                    last_error: 'outer dispatch boom',
+                    result_summary: 'crawler crawler-boom failed: unexpected dispatch error',
+                },
+            },
+        ])
+    } finally {
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
 test('SpiderPools marks linked manual crawler task completed after crawl handling finishes', async () => {
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
     const statusUpdates: any[] = []
