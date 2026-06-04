@@ -130,7 +130,12 @@ set -euo pipefail
 repo="${REMOTE_REPO:-$HOME/idol-bbq-utils}"
 cd "$BUILD_DIR"
 printf '%s\n' "$DEPLOY_COMMIT" > .codex-build-commit
-docker build -t "$IMAGE_NAME" -f app/tweet-forwarder/Dockerfile .
+build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+docker build \
+    --build-arg "BUILD_COMMIT=$DEPLOY_COMMIT" \
+    --build-arg "BUILD_DATE=$build_date" \
+    -t "$IMAGE_NAME" \
+    -f app/tweet-forwarder/Dockerfile .
 image_id="$(docker image inspect "$IMAGE_NAME" --format '{{.Id}}')"
 cd "$repo"
 docker compose up --no-start --force-recreate --no-build "$COMPOSE_SERVICE"
@@ -147,6 +152,7 @@ case "$status" in
 esac
 printf 'commit=%s\n' "$DEPLOY_COMMIT"
 printf 'image=%s\n' "$image_id"
+printf 'build_date=%s\n' "$build_date"
 printf 'build_dir=%s\n' "$BUILD_DIR"
 REMOTE
 }

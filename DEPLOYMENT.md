@@ -27,6 +27,10 @@
     ```bash
     bun run audit:config -- --fail-on-diagnostics
     ```
+6.  Check the current remote stopped deployment without printing secrets:
+    ```bash
+    bun run preflight:forwarder
+    ```
 
 ### 2. Stopped Deployment (Default)
 Use the guarded stopped deploy path unless the user explicitly asks to bring production online:
@@ -42,6 +46,7 @@ The script:
 - recreates the compose service with `--no-start`;
 - forces `forwarder-new` to `restart=no`;
 - verifies `running=false` before returning success.
+- writes the deployed commit into image labels and `/app/build-commit`.
 
 Do not use `docker compose up -d --build` as the default remediation deploy path. It starts the service and runs startup migrations via `app/tweet-forwarder/start.sh`.
 
@@ -57,15 +62,23 @@ Production start is a separate deliberate operation after stopped deploy verific
 
 ## Verification
 To verify changes:
-1.  **Stopped state**:
+1.  **Preflight summary**:
+    ```bash
+    STRICT_COMMIT=1 bun run preflight:forwarder
+    ```
+2.  **Stopped state**:
     ```bash
     ssh 3020e 'docker inspect forwarder-new --format "status={{.State.Status}} running={{.State.Running}} restart={{.HostConfig.RestartPolicy.Name}} image={{.Image}}"'
     ```
-2.  **Image audit command**:
+3.  **Image audit command**:
     ```bash
     ssh 3020e 'docker run --rm --entrypoint bun -v "$HOME/idol-bbq-utils/assets/config.yaml:/app/config.yaml:ro" idol-bbq-utils-spider:latest /app/tools/config-audit.js --config /app/config.yaml --fail-on-diagnostics'
     ```
-3.  **Logs after an explicit production start**:
+4.  **Remote dirty worktree inventory**:
+    ```bash
+    bun run audit:remote-drift
+    ```
+5.  **Logs after an explicit production start**:
     ```bash
     docker logs -f forwarder-new
     ```
