@@ -64,6 +64,7 @@ image_build_commit="$(docker image inspect "$container_image" --format '{{ index
 image_oci_revision="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
 image_created_label="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' 2>/dev/null || true)"
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
+backup_container_dir="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_DB_BACKUP_DIR" { print $2; found=1 } END { if (!found) print "/app/backups/db-migrations" }')"
 binds_tmp="$(mktemp)"
 docker inspect "$CONTAINER_NAME" --format '{{ range .HostConfig.Binds }}{{ println . }}{{ end }}' > "$binds_tmp"
 mount_source() {
@@ -75,6 +76,23 @@ mount_exists() {
 mount_config_yaml="$(mount_source /app/config.yaml)"
 mount_data_db="$(mount_source /app/data.db)"
 mount_app_backups="$(mount_source /app/backups)"
+resolve_backup_host_dir() {
+    case "$backup_container_dir" in
+        /app/backups)
+            printf '%s\n' "$mount_app_backups"
+            ;;
+        /app/backups/*)
+            if [ -n "$mount_app_backups" ]; then
+                printf '%s/%s\n' "$mount_app_backups" "${backup_container_dir#/app/backups/}"
+            fi
+            ;;
+        *)
+            printf '%s\n' "$backup_container_dir"
+            ;;
+    esac
+}
+backup_host_dir="$(resolve_backup_host_dir)"
+backup_parent_dir="$(dirname "$backup_host_dir")"
 build_commit_file="$(docker run --rm --entrypoint cat "$container_image" /app/build-commit 2>/dev/null || true)"
 migration_names="$(docker run --rm --entrypoint sh "$container_image" -lc 'find /app/prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort')"
 migration_head="$(printf '%s\n' "$migration_names" | tail -1)"
@@ -87,7 +105,7 @@ cd "$repo"
 remote_dirty_tracked="$(git status --porcelain=v1 --untracked-files=no | wc -l | tr -d ' ')"
 remote_dirty_untracked="$(git status --porcelain=v1 --untracked-files=normal | awk '$1 == "??" { count += 1 } END { print count + 0 }')"
 db_path="$repo/assets/refactor.db"
-backup_dir="/tmp/tweet-forwarder/logs/db-migrations"
+backup_dir="$backup_host_dir"
 backup_count=0
 latest_backup=""
 if [ -d "$backup_dir" ]; then
@@ -97,13 +115,13 @@ fi
 migration_names_tmp="$(mktemp)"
 printf '%s\n' "$migration_names" > "$migration_names_tmp"
 db_status_tmp="$(mktemp)"
-python3 - "$db_path" "$migration_names_tmp" "$backup_dir" "$backup_count" "$latest_backup" > "$db_status_tmp" <<'PY'
+python3 - "$db_path" "$migration_names_tmp" "$backup_container_dir" "$backup_host_dir" "$backup_parent_dir" "$backup_count" "$latest_backup" > "$db_status_tmp" <<'PY'
 import os
 import sqlite3
 import sys
 from urllib.request import pathname2url
 
-db_path, migrations_file, backup_dir, backup_count, latest_backup = sys.argv[1:6]
+db_path, migrations_file, backup_container_dir, backup_host_dir, backup_parent_dir, backup_count, latest_backup = sys.argv[1:8]
 with open(migrations_file, "r", encoding="utf-8") as handle:
     migration_names = [line.strip() for line in handle if line.strip()]
 
@@ -131,8 +149,12 @@ def emit_db_error(reason):
 
 emit("db_path", db_path)
 emit("db_exists", str(os.path.isfile(db_path)).lower())
-emit("db_backup_dir", backup_dir)
-emit("db_backup_dir_exists", str(os.path.isdir(backup_dir)).lower())
+emit("db_backup_dir", backup_container_dir)
+emit("db_backup_host_dir", backup_host_dir)
+emit("db_backup_dir_resolved", str(bool(backup_host_dir)).lower())
+emit("db_backup_dir_exists", str(os.path.isdir(backup_host_dir)).lower() if backup_host_dir else "false")
+emit("db_backup_parent_dir", backup_parent_dir)
+emit("db_backup_parent_exists", str(os.path.isdir(backup_parent_dir)).lower() if backup_parent_dir else "false")
 emit("db_backup_count", backup_count)
 emit("db_latest_backup", latest_backup)
 
@@ -274,6 +296,10 @@ if [ -n "${EXPECTED_RUNTIME_MODE:-}" ] && [ "$runtime_mode" != "$EXPECTED_RUNTIM
 fi
 if [ "$STRICT_MIGRATIONS" = "1" ] && [ "$migration_status" != "up-to-date" ]; then
     printf 'preflight failed: migration status is %s\n' "$migration_status" >&2
+    exit 1
+fi
+if [ "$STRICT_MIGRATIONS" = "1" ] && { [ -z "$backup_host_dir" ] || [ ! -d "$backup_parent_dir" ]; }; then
+    printf 'preflight failed: migration backup directory is not resolvable or its parent is missing\n' >&2
     exit 1
 fi
 if [ "$STRICT_COMMIT" = "1" ] && { [ -z "${EXPECTED_COMMIT:-}" ] || [ "$image_build_commit" != "$EXPECTED_COMMIT" ] || [ "$build_commit_file" != "$EXPECTED_COMMIT" ]; }; then

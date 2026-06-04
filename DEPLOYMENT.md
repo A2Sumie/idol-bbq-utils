@@ -5,9 +5,8 @@
 - **Path**: `~/idol-bbq-utils`
 - **Runtime database**: SQLite mounted as `./assets/refactor.db:/app/data.db`
 - **Runtime config**: host-mounted `./assets/config.yaml:/app/config.yaml`
-- **Migration backups**: default container path `/tmp/tweet-forwarder/logs/db-migrations`
-  (host path with the current compose volume). The checked-in compose file also
-  maps `./assets/backups:/app/backups` for explicit backup-dir overrides.
+- **Migration backups**: default container path `/app/backups/db-migrations`,
+  backed by the host `./assets/backups:/app/backups` compose volume.
 
 ## Standard Workflow
 
@@ -87,11 +86,9 @@ migrate deploy`, startup now:
 - writes a small backup manifest with the build commit and migration head;
 - runs another quick check after migration.
 
-The default backup directory is `/tmp/tweet-forwarder/logs/db-migrations`.
-Override with `IDOL_BBQ_DB_BACKUP_DIR=/app/backups/db-migrations` only after
-confirming the host `assets/backups` mount is present and writable by the
-container user. Running migrations in `api-only` or `offline` is refused even
-when `IDOL_BBQ_RUN_MIGRATIONS=1` is set, unless
+The default backup directory is `/app/backups/db-migrations`, backed by the
+host `assets/backups` mount. Running migrations in `api-only` or `offline` is
+refused even when `IDOL_BBQ_RUN_MIGRATIONS=1` is set, unless
 `IDOL_BBQ_ALLOW_NON_ONLINE_MIGRATIONS=1` is also set for a deliberate maintenance
 migration.
 

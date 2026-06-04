@@ -88,12 +88,21 @@ HELP
         'non-online migration refusal guard'
     require_contains "$start" 'IDOL_BBQ_REQUIRE_EXISTING_DB_FOR_MIGRATION' \
         'existing DB migration guard'
+    require_contains "$start" 'IDOL_BBQ_DB_BACKUP_DIR:-/app/backups/db-migrations' \
+        'persistent startup migration backup default'
     require_contains "$start" 'PRAGMA quick_check' \
         'startup sqlite quick_check'
     require_contains "$start" 'backup_method=%s' \
         'startup sqlite backup manifest field'
     require_contains "$start" 'sqlite_backup_api' \
         'startup sqlite backup manifest method'
+
+    require_contains "docker-compose.yaml" 'IDOL_BBQ_DB_BACKUP_DIR=${IDOL_BBQ_DB_BACKUP_DIR:-/app/backups/db-migrations}' \
+        'compose persistent migration backup env'
+    require_contains "$preflight" 'backup_container_dir' \
+        'preflight backup container env resolution'
+    require_contains "$preflight" 'db_backup_host_dir' \
+        'preflight backup host path visibility'
 
     python3 - "$dockerfile" <<'PY'
 import sys

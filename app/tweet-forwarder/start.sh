@@ -122,7 +122,7 @@ prepare_migration_backup() {
         return
     fi
 
-    backup_dir="${IDOL_BBQ_DB_BACKUP_DIR:-/tmp/tweet-forwarder/logs/db-migrations}"
+    backup_dir="${IDOL_BBQ_DB_BACKUP_DIR:-/app/backups/db-migrations}"
     mkdir -p "$backup_dir"
     if [ ! -w "$backup_dir" ]; then
         echo "Migration backup directory is not writable: $backup_dir" >&2
