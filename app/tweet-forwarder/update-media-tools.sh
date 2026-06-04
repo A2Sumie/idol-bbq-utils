@@ -4,6 +4,7 @@ set -eu
 TOOLS_DIR="${TOOLS_DIR:-/app/tools}"
 BIN_DIR="${TOOLS_DIR}/bin"
 BILIUP_VENV="${TOOLS_DIR}/biliup-venv"
+GALLERY_DL_VENV="${TOOLS_DIR}/gallery-dl-venv"
 YT_DLP_URL="${YT_DLP_URL:-https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux}"
 
 mkdir -p "$BIN_DIR"
@@ -24,6 +25,15 @@ curl -fsSL "$YT_DLP_URL" -o "$tmp_file"
 chmod +x "$tmp_file"
 mv "$tmp_file" "$BIN_DIR/yt-dlp"
 "$BIN_DIR/yt-dlp" --version
+
+echo "Refreshing gallery-dl toolchain..."
+if [ ! -x "$GALLERY_DL_VENV/bin/python" ]; then
+    python3 -m venv "$GALLERY_DL_VENV"
+fi
+"$GALLERY_DL_VENV/bin/python" -m pip install --upgrade pip setuptools wheel
+"$GALLERY_DL_VENV/bin/python" -m pip install --upgrade gallery-dl
+ln -sf ../gallery-dl-venv/bin/gallery-dl "$BIN_DIR/gallery-dl"
+"$BIN_DIR/gallery-dl" --version
 
 echo "Refreshing biliup toolchain..."
 if [ ! -x "$BILIUP_VENV/bin/python" ]; then

@@ -65,6 +65,26 @@ export interface RenderResult {
 const CARD_TEXT_TITLE_THRESHOLD = 1000
 const LONG_TEXT_CARD_TYPES = new Set(['message_pack', 'summary'])
 
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function normalizeMediaDownloadDelayMs(mediaUse: MediaTool | undefined) {
+    const fixedDelayMs = Math.floor(Number((mediaUse as any)?.request_interval_ms))
+    if (Number.isFinite(fixedDelayMs) && fixedDelayMs > 0) {
+        return fixedDelayMs
+    }
+
+    const interval = (mediaUse as any)?.request_interval
+    const min = Math.max(0, Math.floor(Number(interval?.min || 0)))
+    const max = Math.max(min, Math.floor(Number(interval?.max || min)))
+    if (max <= 0) {
+        return 0
+    }
+
+    return min + Math.floor(Math.random() * (max - min + 1))
+}
+
 function formatPlatformTag(
     article: Pick<Article, 'platform' | 'username' | 'a_id'>,
     log?: Pick<Logger, 'warn'>,
@@ -630,23 +650,26 @@ export class RenderService {
                     mediaList: Array<{ url: string; type: MediaType }>,
                     overrideType?: boolean,
                 ) => {
-                    return Promise.all(
-                        mediaList.map(async ({ url, type }) => {
-                            try {
-                                const path = await plainDownloadMediaFile(url, taskId, {
-                                    cookie: cookie || '',
-                                    ...(currentArticle?.platform
-                                        ? platformPresetHeadersMap[currentArticle.platform]
-                                        : {}),
-                                })
+                    const files = [] as Array<RenderedMediaFile | undefined>
+                    for (const [index, { url, type }] of mediaList.entries()) {
+                        try {
+                            const path = await plainDownloadMediaFile(url, taskId, {
+                                cookie: cookie || '',
+                                ...(currentArticle?.platform ? platformPresetHeadersMap[currentArticle.platform] : {}),
+                            })
 
-                                return finalizeDownloadedFile(path, url, overrideType ? undefined : type)
-                            } catch (e) {
-                                this.log?.error(`Error while downloading media file: ${e}, skipping ${url}`)
-                            }
-                            return undefined
-                        }),
-                    )
+                            files.push(await finalizeDownloadedFile(path, url, overrideType ? undefined : type))
+                        } catch (e) {
+                            this.log?.error(`Error while downloading media file: ${e}, skipping ${url}`)
+                            files.push(undefined)
+                        }
+
+                        const delayMs = index < mediaList.length - 1 ? normalizeMediaDownloadDelayMs(media.use) : 0
+                        if (delayMs > 0) {
+                            await sleep(delayMs)
+                        }
+                    }
+                    return files
                 }
 
                 const getUniqueExtraMedia = () => {

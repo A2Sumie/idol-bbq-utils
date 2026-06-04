@@ -8,7 +8,16 @@ enum MediaToolEnum {
 }
 
 type MediaToolConfigMap = {
-    [MediaToolEnum.DEFAULT]: {}
+    [MediaToolEnum.DEFAULT]: {
+        /**
+         * Random pause between plain HTTP media downloads in one article.
+         */
+        request_interval?: {
+            min?: number
+            max?: number
+        }
+        request_interval_ms?: number
+    }
     [MediaToolEnum.GALLERY_DL]: {
         /**
          * 可以为空，默认寻找系统路径中的 gallery-dl
@@ -23,6 +32,12 @@ type MediaToolConfigMap = {
         path?: string
         cookie_file?: string
         format?: string
+        sleep_requests?: number
+        sleep_interval?: number
+        max_sleep_interval?: number
+        concurrent_fragments?: number
+        limit_rate?: string
+        retry_sleep?: string
     }
 }
 

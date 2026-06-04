@@ -93,6 +93,17 @@ interface CrawlerConfig extends CommonCfgConfig {
      */
     hydrate_limit?: number
     /**
+     * Unified crawler: cap concurrent account hydration requests.
+     */
+    hydrate_concurrency?: number
+    /**
+     * Unified crawler: random pause between hydration chunks.
+     */
+    hydrate_interval_time?: {
+        max: number
+        min: number
+    }
+    /**
      * Website crawler: cap list pagination per feed. Useful for high-frequency shallow scans.
      */
     max_list_pages?: number

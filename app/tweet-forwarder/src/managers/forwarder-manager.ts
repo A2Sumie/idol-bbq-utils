@@ -79,6 +79,8 @@ const DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS = 30 * 60
 const DEFAULT_SUMMARY_CARD_THRESHOLD = 8
 const DEFAULT_SUMMARY_CARD_MAX_ITEMS = 14
 const DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA = 12
+const DEFAULT_BATCH_AGGREGATION_CRON = '0 * * * *'
+const DEFAULT_BATCH_AGGREGATION_WINDOW_SECONDS = 3600
 const HIGH_REALTIME_GROUP_IDS = new Set(['742435777'])
 const HASHTAG_REGEX = /[#＃][\p{L}\p{N}_ー一-龯ぁ-んァ-ヶ]+/gu
 
@@ -214,6 +216,35 @@ function resolveBatchTargetIds(
         }
     }
     return sortUnique(Array.from(targetIds))
+}
+
+function resolveBatchAggregationConfig(
+    cfg_forwarder: Forwarder['cfg_forwarder'] | undefined,
+    aggregatingFormatters: Array<Record<string, any>> = [],
+) {
+    const raw = cfg_forwarder as any
+    const formatterCron = aggregatingFormatters.find((formatter) => formatter?.aggregation_cron)?.aggregation_cron
+    const formatterWindowSeconds = aggregatingFormatters.find(
+        (formatter) => formatter?.aggregation_window_seconds,
+    )?.aggregation_window_seconds
+    const cron = normalizeCronSecond(
+        raw?.aggregation_cron || raw?.batch_cron || formatterCron || DEFAULT_BATCH_AGGREGATION_CRON,
+    )
+    const windowSeconds = Math.max(
+        60,
+        Math.floor(
+            Number(
+                raw?.aggregation_window_seconds ||
+                    raw?.batch_window_seconds ||
+                    formatterWindowSeconds ||
+                    DEFAULT_BATCH_AGGREGATION_WINDOW_SECONDS,
+            ),
+        ),
+    )
+    return {
+        cron,
+        windowSeconds,
+    }
 }
 
 function resolveMatchingForwarderTemplate(
@@ -369,8 +400,9 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                     : []
 
                 if (aggregatingFormatters.length > 0 || (cfg_forwarder as any).batch_mode) {
-                    const batchJob = new CronJob('45 0 * * * *', async () => {
-                        this.log?.info(`Dispatching Hourly Batch for ${taskName}`)
+                    const batchConfig = resolveBatchAggregationConfig(cfg_forwarder, aggregatingFormatters as any)
+                    const batchJob = new CronJob(batchConfig.cron, async () => {
+                        this.log?.info(`Dispatching Batch for ${taskName}`)
                         const formatterTargetMap = ((this.props.connections as any)?.['formatter-target'] ||
                             {}) as Record<string, Array<string>>
                         const targetIds = resolveBatchTargetIds(
@@ -389,7 +421,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                             paths: crawler.paths || matchedForwarder?.paths,
                         })
                         const end = Math.floor(Date.now() / 1000)
-                        const start = end - 3600
+                        const start = end - batchConfig.windowSeconds
 
                         for (const website of websites) {
                             const info = spiderRegistry.extractBasicInfo(website)
@@ -410,7 +442,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                         }
                     })
                     this.log?.info(
-                        `Batch Job created for ${taskName} to send to ${aggregatingFormatters.length} aggregating formatters`,
+                        `Batch Job created for ${taskName} with cron ${batchConfig.cron}, window ${batchConfig.windowSeconds}s, to send to ${aggregatingFormatters.length} aggregating formatters`,
                     )
                     this.cronJobs.push(batchJob)
                 }
@@ -2645,6 +2677,7 @@ class ForwarderPools extends BaseCompatibleModel {
 export { ForwarderTaskScheduler, ForwarderPools }
 export {
     buildAutoBoundForwarderTaskData,
+    resolveBatchAggregationConfig,
     resolveBatchTargetIds,
     resolveMatchingForwarderTemplate,
     resolveSummaryCardConfig,

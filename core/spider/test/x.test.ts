@@ -76,3 +76,30 @@ test('X API JSON Parser', async () => {
     expect(x_replies_response).toEqual(x_replies_result)
     expect(x_follows_response).toEqual(x_follows_result)
 })
+
+test('X unified list hydration honors configured concurrency', async () => {
+    const spider = new X.XListSpider()
+    let activeRequests = 0
+    let maxActiveRequests = 0
+    const requestedUsers: Array<string> = []
+    const client = {
+        grabTweets: async (userId: string) => {
+            activeRequests += 1
+            maxActiveRequests = Math.max(maxActiveRequests, activeRequests)
+            requestedUsers.push(userId)
+            await new Promise((resolve) => setTimeout(resolve, 1))
+            activeRequests -= 1
+            return []
+        },
+        grabReplies: async () => [],
+    }
+
+    await (spider as any).hydrateUsersFromListActivity(['alpha', 'beta', 'gamma'], client, 'cookie', {
+        fetchTweets: true,
+        fetchReplies: false,
+        hydrateConcurrency: 1,
+    })
+
+    expect(maxActiveRequests).toBe(1)
+    expect(requestedUsers).toEqual(['alpha', 'beta', 'gamma'])
+})

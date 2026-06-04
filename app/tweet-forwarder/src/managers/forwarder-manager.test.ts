@@ -4,6 +4,7 @@ import {
     ForwarderPools,
     ForwarderTaskScheduler,
     buildAutoBoundForwarderTaskData,
+    resolveBatchAggregationConfig,
     resolveBatchTargetIds,
     resolveSummaryCardConfig,
 } from './forwarder-manager'
@@ -56,6 +57,33 @@ test('resolveBatchTargetIds skips targets with bypass_batch enabled', () => {
     )
 
     expect(targetIds).toEqual(['group-1', 'group-3'])
+})
+
+test('resolveBatchAggregationConfig uses configurable cron and window', () => {
+    expect(resolveBatchAggregationConfig({} as any)).toEqual({
+        cron: '45 0 * * * *',
+        windowSeconds: 3600,
+    })
+    expect(
+        resolveBatchAggregationConfig({
+            aggregation_cron: '*/30 * * * *',
+            aggregation_window_seconds: 1800,
+        } as any),
+    ).toEqual({
+        cron: '45 */30 * * * *',
+        windowSeconds: 1800,
+    })
+    expect(
+        resolveBatchAggregationConfig({} as any, [
+            {
+                aggregation_cron: '17 1-23/2 * * *',
+                aggregation_window_seconds: 7200,
+            },
+        ]),
+    ).toEqual({
+        cron: '45 17 1-23/2 * * *',
+        windowSeconds: 7200,
+    })
 })
 
 test('resolveSummaryCardConfig defaults to an eight-item summary card threshold', () => {

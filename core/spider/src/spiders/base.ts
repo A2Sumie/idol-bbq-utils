@@ -95,6 +95,11 @@ abstract class BaseSpider {
             sub_task_type?: Array<string>
             hydrate_users?: Array<string>
             hydrate_limit?: number
+            hydrate_concurrency?: number
+            hydrate_interval_time?: {
+                min?: number
+                max?: number
+            }
             crawl_engine?: CrawlEngine
             cookieString?: string
             requestHeaders?: Record<string, string>
@@ -124,6 +129,11 @@ abstract class BaseSpider {
             sub_task_type?: Array<string>
             hydrate_users?: Array<string>
             hydrate_limit?: number
+            hydrate_concurrency?: number
+            hydrate_interval_time?: {
+                min?: number
+                max?: number
+            }
             cookieString?: string
             requestHeaders?: Record<string, string>
             max_list_pages?: number

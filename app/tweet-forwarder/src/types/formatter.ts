@@ -24,6 +24,8 @@ interface Formatter {
      * Enable hourly batch aggregation for this formatter
      */
     aggregation?: boolean
+    aggregation_cron?: string
+    aggregation_window_seconds?: number
     /**
      * Enable media deduplication (skip if media already sent)
      */

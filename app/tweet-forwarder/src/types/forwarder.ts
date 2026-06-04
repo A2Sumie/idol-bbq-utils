@@ -240,6 +240,8 @@ interface ForwarderConfig extends CommonCfgConfig {
     card_features?: Array<'media-contain' | 'website-inline-media' | string>
     keywords?: Array<string>
     aggregation?: boolean
+    aggregation_cron?: string
+    aggregation_window_seconds?: number
     deduplication?: boolean
 }
 

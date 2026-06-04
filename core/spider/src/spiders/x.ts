@@ -70,7 +70,8 @@ enum XTweetsTaskType {
 }
 
 const X_UNIFIED_LIST_MAX_HYDRATED_USERS = 10
-const X_UNIFIED_LIST_CONCURRENCY = 4
+const X_UNIFIED_LIST_DEFAULT_CONCURRENCY = 2
+const X_UNIFIED_LIST_MAX_CONCURRENCY = 4
 const X_UNIFIED_LIST_MEMBER_CURSORS = new Map<string, number>()
 
 interface XOperationProfile {
@@ -90,6 +91,23 @@ function normalizeRequestHeaders(headers?: Record<string, string>) {
 
 function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function clampPositiveInteger(value: unknown, fallback: number, max: number) {
+    const normalized = Math.floor(Number(value))
+    if (!Number.isFinite(normalized) || normalized <= 0) {
+        return fallback
+    }
+    return Math.min(normalized, max)
+}
+
+function resolveRandomIntervalMs(interval?: { min?: number; max?: number }) {
+    const min = Math.max(0, Math.floor(Number(interval?.min || 0)))
+    const max = Math.max(min, Math.floor(Number(interval?.max || min)))
+    if (max <= 0) {
+        return 0
+    }
+    return min + Math.floor(Math.random() * (max - min + 1))
 }
 
 class XUserTimeLineSpider extends BaseSpider {
@@ -113,6 +131,11 @@ class XUserTimeLineSpider extends BaseSpider {
             sub_task_type?: Array<string>
             hydrate_users?: Array<string>
             hydrate_limit?: number
+            hydrate_concurrency?: number
+            hydrate_interval_time?: {
+                min?: number
+                max?: number
+            }
             cookieString?: string
             requestHeaders?: Record<string, string>
         },
@@ -236,6 +259,11 @@ class XListSpider extends BaseSpider {
             sub_task_type?: Array<string>
             hydrate_users?: Array<string>
             hydrate_limit?: number
+            hydrate_concurrency?: number
+            hydrate_interval_time?: {
+                min?: number
+                max?: number
+            }
             cookieString?: string
             requestHeaders?: Record<string, string>
         },
@@ -249,7 +277,16 @@ class XListSpider extends BaseSpider {
             throw new Error(`Invalid URL: ${url}, id not found`)
         }
 
-        const { task_type, cookieString, requestHeaders, sub_task_type, hydrate_users, hydrate_limit } = config
+        const {
+            task_type,
+            cookieString,
+            requestHeaders,
+            sub_task_type,
+            hydrate_users,
+            hydrate_limit,
+            hydrate_concurrency,
+            hydrate_interval_time,
+        } = config
         const graphqlClient = new XApiClient(requestHeaders, page, this.log)
         let cookie_string = cookieString
         if (!cookie_string && page) {
@@ -281,6 +318,8 @@ class XListSpider extends BaseSpider {
                     fetchReplies,
                     hydrateUsers: hydrate_users,
                     hydrateLimit: hydrate_limit,
+                    hydrateConcurrency: hydrate_concurrency,
+                    hydrateIntervalTime: hydrate_interval_time,
                 })
             } else {
                 if (config.crawl_engine === 'api-graphql') {
@@ -318,6 +357,11 @@ class XListSpider extends BaseSpider {
             fetchReplies: boolean
             hydrateUsers?: Array<string>
             hydrateLimit?: number
+            hydrateConcurrency?: number
+            hydrateIntervalTime?: {
+                min?: number
+                max?: number
+            }
         },
     ): Promise<Array<GenericArticle<Platform.X>>> {
         const discoveryTweets = await client.grabTweetsFromList(list_id, cookie)
@@ -382,12 +426,22 @@ class XListSpider extends BaseSpider {
         options: {
             fetchTweets: boolean
             fetchReplies: boolean
+            hydrateConcurrency?: number
+            hydrateIntervalTime?: {
+                min?: number
+                max?: number
+            }
         },
     ) {
         const articles = [] as Array<GenericArticle<Platform.X>>
+        const concurrency = clampPositiveInteger(
+            options.hydrateConcurrency,
+            X_UNIFIED_LIST_DEFAULT_CONCURRENCY,
+            X_UNIFIED_LIST_MAX_CONCURRENCY,
+        )
 
-        for (let index = 0; index < userIds.length; index += X_UNIFIED_LIST_CONCURRENCY) {
-            const chunk = userIds.slice(index, index + X_UNIFIED_LIST_CONCURRENCY)
+        for (let index = 0; index < userIds.length; index += concurrency) {
+            const chunk = userIds.slice(index, index + concurrency)
             const chunkResults = await Promise.allSettled(
                 chunk.map(async (userId) => {
                     const userArticles = [] as Array<GenericArticle<Platform.X>>
@@ -409,6 +463,12 @@ class XListSpider extends BaseSpider {
                 }
                 this.log?.warn(`Unified list hydration failed for @${userId}: ${result.reason}`)
             })
+
+            const delayMs =
+                index + concurrency < userIds.length ? resolveRandomIntervalMs(options.hydrateIntervalTime) : 0
+            if (delayMs > 0) {
+                await sleep(delayMs)
+            }
         }
 
         return articles
@@ -834,7 +894,9 @@ class XApiClient {
                         'signup',
                         'tos',
                     ])
-                    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('article a[href*="/status/"]'))
+                    const links = Array.from(
+                        document.querySelectorAll<HTMLAnchorElement>('article a[href*="/status/"]'),
+                    )
                     const users = new Set<string>()
                     for (const link of links) {
                         const href = link.getAttribute('href') || ''
@@ -871,7 +933,8 @@ class XApiClient {
             await this.page
                 .evaluate((amount) => {
                     const primaryColumn = document.querySelector('[data-testid="primaryColumn"]') as HTMLElement | null
-                    const scroller = (primaryColumn?.querySelector('section')?.parentElement as HTMLElement | null) || null
+                    const scroller =
+                        (primaryColumn?.querySelector('section')?.parentElement as HTMLElement | null) || null
                     if (scroller && typeof scroller.scrollBy === 'function') {
                         scroller.scrollBy({ top: amount, behavior: 'instant' })
                         return
@@ -934,7 +997,10 @@ class XApiClient {
     }
 
     private getOperationProfile(operation: XApis, fallbackOperations: Array<XApis> = []) {
-        return this.operationProfiles[operation] || fallbackOperations.map((entry) => this.operationProfiles[entry]).find(Boolean)
+        return (
+            this.operationProfiles[operation] ||
+            fallbackOperations.map((entry) => this.operationProfiles[entry]).find(Boolean)
+        )
     }
 
     private async ensureQueryIds(requiredApis: Array<XApis> = DEFAULT_QUERY_APIS) {
@@ -970,7 +1036,10 @@ class XApiClient {
             }
         }
 
-        if (targets.includes(XApis.ListLatestTweetsTimeline) && !this.api_with_queryid[XApis.ListLatestTweetsTimeline]) {
+        if (
+            targets.includes(XApis.ListLatestTweetsTimeline) &&
+            !this.api_with_queryid[XApis.ListLatestTweetsTimeline]
+        ) {
             await this.getGraphqlQueryId(html)
         }
 
@@ -1618,7 +1687,7 @@ namespace XApiJsonParser {
                     return {
                         type,
                         url: media_url_https,
-                        alt: ext_alt_text,
+                        ...(ext_alt_text ? { alt: ext_alt_text } : {}),
                     }
                 }
                 if (type === 'video' || type === 'animated_gif') {
@@ -1644,7 +1713,7 @@ namespace XApiJsonParser {
         // TweetWithVisibilityResults --> result.tweet
         const legacy = result.legacy || result.tweet?.legacy
         const userResult = (result.core || result.tweet?.core)?.user_results?.result
-        const userLegacy = userResult?.core
+        const userLegacy = userResult?.core || userResult?.legacy
         let content = legacy?.full_text
         for (const { url } of legacy?.entities?.media || []) {
             content = content.replace(url, '')
@@ -1663,8 +1732,8 @@ namespace XApiJsonParser {
             ref: result.quoted_status_result?.result
                 ? tweetParser(result.quoted_status_result.result)
                 : result.retweeted_status_result?.result
-                    ? tweetParser(result.retweeted_status_result.result)
-                    : null,
+                  ? tweetParser(result.retweeted_status_result.result)
+                  : null,
             media: mediaParser(legacy?.extended_entities?.media || legacy?.entities?.media),
             has_media: !!legacy?.extended_entities?.media || !!legacy?.entities?.media,
             extra: Card.cardParser(result.card?.legacy),
@@ -1900,8 +1969,8 @@ namespace XApiJsonParser {
                 height: number
             }
         } = {
-                viewport: defaultViewport,
-            },
+            viewport: defaultViewport,
+        },
     ): Promise<Array<GenericArticle<Platform.X>>> {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
@@ -1951,8 +2020,8 @@ namespace XApiJsonParser {
                 height: number
             }
         } = {
-                viewport: defaultViewport,
-            },
+            viewport: defaultViewport,
+        },
     ): Promise<Array<GenericArticle<Platform.X>>> {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()

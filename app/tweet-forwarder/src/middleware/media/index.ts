@@ -1,5 +1,5 @@
 import fs, { writeFileSync } from 'fs'
-import { execFileSync, execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 import { CACHE_DIR_ROOT, log } from '@/config'
 import path from 'path'
 import { MediaToolEnum, type MediaToolConfigMap } from '@/types/media'
@@ -82,7 +82,7 @@ async function tryGetCookie(url: string) {
     try {
         const res = await fetch(url)
         cookieString = res.headers.get('set-cookie')
-    } catch (e) { }
+    } catch (e) {}
     if (!cookieString) {
         return
     }
@@ -115,20 +115,20 @@ function galleryDownloadMediaFile(
     if (!gallery_dl) {
         return []
     }
-    let args = []
+    const args: string[] = []
     let exec_path = 'gallery-dl'
     if (gallery_dl.cookie_file) {
-        args.push(`--cookies ${gallery_dl.cookie_file}`)
+        args.push('--cookies', gallery_dl.cookie_file)
     }
     if (gallery_dl.path) {
         exec_path = gallery_dl.path
     }
 
-    args.push(`--directory ${CACHE_DIR_ROOT}/media/gallery-dl`)
+    args.push('--directory', `${CACHE_DIR_ROOT}/media/gallery-dl`)
     args.push(url)
-    log.debug(`downloading media files with args: ${args}`)
+    log.debug(`downloading media files with args: ${args.join(' ')}`)
     try {
-        const res = execSync(`${exec_path} ${args.join(' ')}`, { encoding: 'utf-8' })
+        const res = execFileSync(exec_path, args, { encoding: 'utf-8' })
             .split('\n')
             .filter((path) => path !== '')
             .map((path) => {
@@ -149,6 +149,13 @@ function safeFilenamePrefix(prefix?: string): string {
     return (prefix || Math.random().toString(36).slice(2, 10)).replace(/[^a-zA-Z0-9._-]/g, '_')
 }
 
+function pushPositiveNumberArg(args: string[], option: string, value: unknown) {
+    const normalized = Math.floor(Number(value))
+    if (Number.isFinite(normalized) && normalized > 0) {
+        args.push(option, String(normalized))
+    }
+}
+
 function buildYtDlpArgs(
     url: string,
     yt_dlp: MediaToolConfigMap[MediaToolEnum.YT_DLP],
@@ -166,6 +173,16 @@ function buildYtDlpArgs(
     ]
     if (yt_dlp.cookie_file) {
         args.push('--cookies', yt_dlp.cookie_file)
+    }
+    pushPositiveNumberArg(args, '--sleep-requests', yt_dlp.sleep_requests)
+    pushPositiveNumberArg(args, '--sleep-interval', yt_dlp.sleep_interval)
+    pushPositiveNumberArg(args, '--max-sleep-interval', yt_dlp.max_sleep_interval)
+    pushPositiveNumberArg(args, '--concurrent-fragments', yt_dlp.concurrent_fragments)
+    if (yt_dlp.limit_rate) {
+        args.push('--limit-rate', yt_dlp.limit_rate)
+    }
+    if (yt_dlp.retry_sleep) {
+        args.push('--retry-sleep', yt_dlp.retry_sleep)
     }
     args.push('-f', yt_dlp.format || DEFAULT_YT_DLP_FORMAT, url)
     return args

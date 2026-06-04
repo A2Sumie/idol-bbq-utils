@@ -1,5 +1,4 @@
 ARG CHROME_VERSION=142.0.7444.175-1
-ARG GALLERY_DL_VERSION=v1.28.5
 
 FROM oven/bun:1.2.8-slim AS base
 FROM base AS builder
@@ -26,7 +25,6 @@ RUN bun build app/tweet-forwarder/scripts/export-biliup-browser-cookies.ts --out
 FROM base AS runner
 
 ARG CHROME_VERSION
-ARG GALLERY_DL_VERSION
 RUN apt-get update \
     && apt-get install -y wget gnupg curl unzip ffmpeg xvfb dbus-x11 python3 python3-venv \
     # Required for Chrome
@@ -38,10 +36,6 @@ RUN apt-get update \
 RUN wget --no-verbose -O /tmp/chrome.deb https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_${CHROME_VERSION}_amd64.deb \
     && apt install -y /tmp/chrome.deb \
     && rm /tmp/chrome.deb
-
-# Install gallery-dl
-RUN wget https://github.com/mikf/gallery-dl/releases/download/${GALLERY_DL_VERSION}/gallery-dl.bin -O /usr/local/bin/gallery-dl \
-    && chmod +x /usr/local/bin/gallery-dl
 
 WORKDIR /app
 COPY app/tweet-forwarder/update-media-tools.sh /app/tools/update-media-tools.sh
