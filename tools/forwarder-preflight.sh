@@ -6,6 +6,7 @@ REMOTE_REPO="${REMOTE_REPO:-}"
 IMAGE_NAME="${IMAGE_NAME:-idol-bbq-utils-spider:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
 EXPECTED_COMMIT="${EXPECTED_COMMIT:-$(git rev-parse HEAD 2>/dev/null || true)}"
+EXPECTED_RUNTIME_MODE="${EXPECTED_RUNTIME_MODE:-offline}"
 STRICT_COMMIT="${STRICT_COMMIT:-0}"
 
 if [ -n "${SSH_OPTS:-}" ]; then
@@ -17,7 +18,7 @@ fi
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT STRICT_COMMIT; do
+    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE STRICT_COMMIT; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -40,6 +41,7 @@ Environment:
   IMAGE_NAME=idol-bbq-utils-spider:latest
   CONTAINER_NAME=forwarder-new
   EXPECTED_COMMIT=<local HEAD>
+  EXPECTED_RUNTIME_MODE=offline
   STRICT_COMMIT=0         # set 1 to fail when image commit != expected commit
 HELP
         return
@@ -81,6 +83,7 @@ printf 'image_oci_revision=%s\n' "$image_oci_revision"
 printf 'image_created=%s\n' "$image_created_label"
 printf 'build_commit_file=%s\n' "$build_commit_file"
 printf 'expected_commit=%s\n' "${EXPECTED_COMMIT:-}"
+printf 'expected_runtime_mode=%s\n' "${EXPECTED_RUNTIME_MODE:-}"
 if [ -n "${EXPECTED_COMMIT:-}" ] && [ "$image_build_commit" = "$EXPECTED_COMMIT" ] && [ "$build_commit_file" = "$EXPECTED_COMMIT" ]; then
     printf 'commit_match=true\n'
 else
@@ -111,6 +114,10 @@ printf 'remote_dirty_untracked=%s\n' "$remote_dirty_untracked"
 
 if [ "$container_running" != "false" ] || [ "$restart_policy" != "no" ]; then
     printf 'preflight failed: container is not safely stopped\n' >&2
+    exit 1
+fi
+if [ -n "${EXPECTED_RUNTIME_MODE:-}" ] && [ "$runtime_mode" != "$EXPECTED_RUNTIME_MODE" ]; then
+    printf 'preflight failed: runtime mode mismatch expected=%s actual=%s\n' "$EXPECTED_RUNTIME_MODE" "$runtime_mode" >&2
     exit 1
 fi
 if [ "$STRICT_COMMIT" = "1" ] && { [ -z "${EXPECTED_COMMIT:-}" ] || [ "$image_build_commit" != "$EXPECTED_COMMIT" ] || [ "$build_commit_file" != "$EXPECTED_COMMIT" ]; }; then

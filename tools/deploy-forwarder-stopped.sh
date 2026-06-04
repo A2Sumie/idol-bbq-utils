@@ -6,6 +6,7 @@ REMOTE_REPO="${REMOTE_REPO:-}"
 IMAGE_NAME="${IMAGE_NAME:-idol-bbq-utils-spider:latest}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-spider}"
 CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
+DEPLOY_RUNTIME_MODE="${DEPLOY_RUNTIME_MODE:-offline}"
 BUILD_DIR_PREFIX="${BUILD_DIR_PREFIX:-/tmp/idol-bbq-utils-build}"
 SKIP_UPSTREAM_CHECK="${SKIP_UPSTREAM_CHECK:-0}"
 
@@ -53,7 +54,7 @@ require_pushed_head() {
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO BUILD_DIR DEPLOY_COMMIT IMAGE_NAME COMPOSE_SERVICE CONTAINER_NAME; do
+    for name in REMOTE_REPO BUILD_DIR DEPLOY_COMMIT IMAGE_NAME COMPOSE_SERVICE CONTAINER_NAME DEPLOY_RUNTIME_MODE; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -96,6 +97,7 @@ Environment:
   IMAGE_NAME=idol-bbq-utils-spider:latest
   COMPOSE_SERVICE=spider
   CONTAINER_NAME=forwarder-new
+  DEPLOY_RUNTIME_MODE=offline
   BUILD_DIR_PREFIX=/tmp/idol-bbq-utils-build
   SKIP_UPSTREAM_CHECK=0
 
@@ -125,6 +127,7 @@ HELP
     IMAGE_NAME="$IMAGE_NAME" \
     COMPOSE_SERVICE="$COMPOSE_SERVICE" \
     CONTAINER_NAME="$CONTAINER_NAME" \
+    DEPLOY_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" \
         ssh_remote <<'REMOTE'
 set -euo pipefail
 repo="${REMOTE_REPO:-$HOME/idol-bbq-utils}"
@@ -138,10 +141,22 @@ docker build \
     -f app/tweet-forwarder/Dockerfile .
 image_id="$(docker image inspect "$IMAGE_NAME" --format '{{.Id}}')"
 cd "$repo"
-docker compose up --no-start --force-recreate --no-build "$COMPOSE_SERVICE"
+compose_override="$(mktemp "$BUILD_DIR/compose-stopped-override.XXXXXX.yaml")"
+cat > "$compose_override" <<OVERRIDE
+services:
+  $COMPOSE_SERVICE:
+    image: "$IMAGE_NAME"
+    restart: "no"
+    environment:
+      IDOL_BBQ_RUNTIME_MODE: "$DEPLOY_RUNTIME_MODE"
+OVERRIDE
+IDOL_BBQ_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" IDOL_BBQ_RESTART_POLICY=no \
+    docker compose -f docker-compose.yaml -f "$compose_override" up --no-start --force-recreate --no-build "$COMPOSE_SERVICE"
 docker update --restart=no "$CONTAINER_NAME" >/dev/null
 status="$(docker inspect "$CONTAINER_NAME" --format 'status={{.State.Status}} running={{.State.Running}} restart={{.HostConfig.RestartPolicy.Name}} image={{.Image}}')"
+runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
 printf '%s\n' "$status"
+printf 'runtime_mode=%s\n' "$runtime_mode"
 case "$status" in
     *'running=false'*'restart=no'*)
         ;;
@@ -150,6 +165,10 @@ case "$status" in
         exit 1
         ;;
 esac
+if [ "$runtime_mode" != "$DEPLOY_RUNTIME_MODE" ]; then
+    printf 'container runtime mode mismatch after recreate: expected=%s actual=%s\n' "$DEPLOY_RUNTIME_MODE" "$runtime_mode" >&2
+    exit 1
+fi
 printf 'commit=%s\n' "$DEPLOY_COMMIT"
 printf 'image=%s\n' "$image_id"
 printf 'build_date=%s\n' "$build_date"
