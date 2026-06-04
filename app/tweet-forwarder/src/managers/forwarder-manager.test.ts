@@ -501,6 +501,68 @@ test('ForwarderTaskScheduler dispatches immediate tasks with article_ids_by_url 
     })
 })
 
+test('ForwarderTaskScheduler registers immediate tasks before dispatch status events', async () => {
+    const emitter = new EventEmitter()
+    const scheduler = new ForwarderTaskScheduler(
+        {
+            cfg_forwarder: {
+                render_type: 'img-tag',
+            } as any,
+            forwarders: [
+                {
+                    name: 'X图文模板',
+                    origin: 'https://x.com',
+                    cfg_forwarder: {},
+                },
+            ] as any,
+            connections: {
+                'crawler-formatter': {},
+                'crawler-processor': {},
+                'processor-formatter': {},
+                'formatter-target': {},
+            } as any,
+            crawlers: [
+                {
+                    name: '22/7-cast-成员统一列表',
+                    origin: 'https://x.com',
+                    paths: ['i/lists/1936785344072151389'],
+                },
+            ] as any,
+            formatters: [],
+            forward_targets: [],
+        },
+        emitter,
+    )
+    await scheduler.init()
+    const registeredAtDispatch: boolean[] = []
+    emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => {
+        registeredAtDispatch.push((scheduler as any).tasks.has(payload.taskId))
+        emitter.emit(`forwarder:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
+            taskId: payload.taskId,
+            status: TaskScheduler.TaskStatus.CANCELLED,
+        })
+    })
+
+    try {
+        ;(scheduler as any).onSpiderTaskFinished({
+            taskId: 'spider-2',
+            crawlerName: '22/7-cast-成员统一列表',
+            result: [
+                {
+                    task_type: 'article',
+                    url: 'https://x.com/i/lists/1936785344072151389',
+                    data: [201],
+                },
+            ],
+        })
+
+        expect(registeredAtDispatch).toEqual([true])
+        expect((scheduler as any).tasks.has('spider-spider-2')).toBeFalse()
+    } finally {
+        await scheduler.drop()
+    }
+})
+
 test('ForwarderPools dispatch listener catches unexpected async failures', async () => {
     const emitter = new EventEmitter()
     const statusEvents: any[] = []

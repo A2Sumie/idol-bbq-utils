@@ -503,11 +503,15 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
 
         this.log?.info(`Dispatching immediate forwarder task for crawler ${crawlerName}`)
-        this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, {
+        this.tasks.set(forwardTaskId, task)
+        const dispatched = this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, {
             taskId: forwardTaskId,
             task,
         })
-        this.tasks.set(forwardTaskId, task)
+        if (!dispatched) {
+            this.tasks.delete(forwardTaskId)
+            this.log?.warn(`Forwarder dispatcher unavailable for immediate task ${forwardTaskId}`)
+        }
     }
 
     /**
