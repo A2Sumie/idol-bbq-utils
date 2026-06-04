@@ -7,8 +7,14 @@ IMAGE_NAME="${IMAGE_NAME:-idol-bbq-utils-spider:latest}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-spider}"
 CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
 BUILD_DIR_PREFIX="${BUILD_DIR_PREFIX:-/tmp/idol-bbq-utils-build}"
-SSH_OPTS=(${SSH_OPTS:-"-o BatchMode=yes -o ConnectTimeout=10"})
 SKIP_UPSTREAM_CHECK="${SKIP_UPSTREAM_CHECK:-0}"
+
+if [ -n "${SSH_OPTS:-}" ]; then
+    # shellcheck disable=SC2206
+    SSH_ARGS=(${SSH_OPTS})
+else
+    SSH_ARGS=(-o BatchMode=yes -o ConnectTimeout=10)
+fi
 
 die() {
     printf 'deploy-forwarder-stopped: %s\n' "$*" >&2
@@ -58,13 +64,13 @@ remote_env_prefix() {
 ssh_remote() {
     local env_prefix
     env_prefix="$(remote_env_prefix)"
-    ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "${env_prefix}bash -s"
+    ssh "${SSH_ARGS[@]}" "$REMOTE_HOST" "${env_prefix}bash -s"
 }
 
 remote_dirty_summary() {
     local env_prefix
     env_prefix="$(remote_env_prefix)"
-    ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "${env_prefix}bash -s" <<'REMOTE' || true
+    ssh "${SSH_ARGS[@]}" "$REMOTE_HOST" "${env_prefix}bash -s" <<'REMOTE' || true
 set -euo pipefail
 repo="${REMOTE_REPO:-$HOME/idol-bbq-utils}"
 cd "$repo"
@@ -111,8 +117,8 @@ HELP
     printf 'deploy_commit=%s\n' "$commit"
     remote_dirty_summary
 
-    run ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "rm -rf $(printf '%q' "$build_dir") && mkdir -p $(printf '%q' "$build_dir")"
-    git archive --format=tar HEAD | ssh "${SSH_OPTS[@]}" "$REMOTE_HOST" "tar -xf - -C $(printf '%q' "$build_dir")"
+    run ssh "${SSH_ARGS[@]}" "$REMOTE_HOST" "rm -rf $(printf '%q' "$build_dir") && mkdir -p $(printf '%q' "$build_dir")"
+    git archive --format=tar HEAD | ssh "${SSH_ARGS[@]}" "$REMOTE_HOST" "tar -xf - -C $(printf '%q' "$build_dir")"
 
     BUILD_DIR="$build_dir" \
     DEPLOY_COMMIT="$commit" \
