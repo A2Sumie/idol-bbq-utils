@@ -1334,10 +1334,17 @@ export class APIManager extends BaseCompatibleModel {
             source_ref: body.a_id || body.u_id || body.id?.toString() || null || undefined,
             action_type: action,
         })
+        let processorRunRecorded = false
+        let processorInput: { sourceType: string; sourceRef: string; text: string } | null = null
 
         try {
             const processor = await this.createProcessor(processorDef)
             const input = await this.buildProcessorInput(body)
+            processorInput = {
+                sourceType: input.sourceType,
+                sourceRef: input.sourceRef,
+                text: input.text,
+            }
             if (action === 'translate' && input.article) {
                 await this.translateArticleChain(input.article, processor, true)
             }
@@ -1372,6 +1379,7 @@ export class APIManager extends BaseCompatibleModel {
                     schedules: scheduleResults,
                 },
             })
+            processorRunRecorded = true
 
             await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Completed, {
                 result_summary: `${action} completed`,
@@ -1388,10 +1396,62 @@ export class APIManager extends BaseCompatibleModel {
                 },
             })
         } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error)
+            if (!processorRunRecorded) {
+                const fallbackSource = this.resolveProcessorRunFallbackSource(body)
+                await DB.ProcessorRun.create({
+                    processor_id: processorDef.id || processorDef.name || null,
+                    action,
+                    source_type: processorInput?.sourceType || fallbackSource.sourceType,
+                    source_ref: processorInput?.sourceRef || fallbackSource.sourceRef,
+                    status: DB.ProcessorRun.STATUS.Failed,
+                    input: {
+                        request: body,
+                        ...(processorInput ? { text: processorInput.text } : {}),
+                    },
+                    error: errorMessage,
+                }).catch((recordError) => {
+                    this.log?.error(`Failed to record processor run failure: ${recordError}`)
+                })
+            }
             await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Failed, {
-                last_error: error instanceof Error ? error.message : String(error),
+                last_error: errorMessage,
             })
             throw error
+        }
+    }
+
+    private resolveProcessorRunFallbackSource(body: {
+        platform?: string
+        id?: number
+        a_id?: string
+        u_id?: string
+        start?: number
+        end?: number
+        text?: string
+    }): { sourceType: string | null; sourceRef: string | null } {
+        const platform = resolvePlatform(body.platform)
+        if (platform && (body.id || body.a_id)) {
+            return {
+                sourceType: 'article',
+                sourceRef: `${platform}:${body.a_id || body.id}`,
+            }
+        }
+        if (platform && body.u_id && body.start && body.end) {
+            return {
+                sourceType: 'window',
+                sourceRef: `${platform}:${body.u_id}:${body.start}-${body.end}`,
+            }
+        }
+        if (body.text) {
+            return {
+                sourceType: 'text',
+                sourceRef: 'manual:text',
+            }
+        }
+        return {
+            sourceType: null,
+            sourceRef: null,
         }
     }
 

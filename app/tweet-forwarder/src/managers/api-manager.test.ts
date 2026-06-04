@@ -320,6 +320,76 @@ test('APIManager marks manual crawler run task failed when dispatch throws', asy
     }
 })
 
+test('APIManager records failed processor runs when processor execution fails', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const originalProcessorRunCreate = DB.ProcessorRun.create
+    const statusUpdates: any[] = []
+    const processorRuns: any[] = []
+
+    ;(DB.TaskQueue as any).add = async () => ({ id: 77 })
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+    ;(DB.ProcessorRun as any).create = async (data: any) => {
+        processorRuns.push(data)
+        return { id: 1, ...data }
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    processors: [
+                        {
+                            id: 'broken-processor',
+                            name: 'broken-processor',
+                            provider: 'missing-provider',
+                        },
+                    ],
+                }) as any,
+            getDeps: () => ({}) as any,
+        })
+
+        await expect(
+            (manager as any).handleProcessorRun(
+                new Request('http://localhost/api/actions/processors/run', {
+                    method: 'POST',
+                    body: JSON.stringify({ text: 'hello' }),
+                }),
+            ),
+        ).rejects.toThrow('Unknown processor provider')
+
+        expect(processorRuns).toHaveLength(1)
+        expect(processorRuns[0]).toMatchObject({
+            processor_id: 'broken-processor',
+            action: 'extract',
+            source_type: 'text',
+            source_ref: 'manual:text',
+            status: DB.ProcessorRun.STATUS.Failed,
+            input: {
+                request: {
+                    text: 'hello',
+                },
+            },
+        })
+        expect(processorRuns[0]?.error).toContain('Unknown processor provider')
+        expect(statusUpdates).toHaveLength(1)
+        expect(statusUpdates[0]).toMatchObject({
+            id: 77,
+            status: DB.TaskQueue.STATUS.Failed,
+        })
+        expect(statusUpdates[0]?.meta?.last_error).toContain('Unknown processor provider')
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+        ;(DB.ProcessorRun as any).create = originalProcessorRunCreate
+    }
+})
+
 test('APIManager resend infers website crawler platform from websites config', async () => {
     const originalGetSingleArticle = DB.Article.getSingleArticle
     const originalTaskAdd = DB.TaskQueue.add

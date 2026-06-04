@@ -694,12 +694,19 @@ namespace DB {
     }
 
     export namespace ProcessorRun {
+        export const STATUS = {
+            Completed: 'completed',
+            Failed: 'failed',
+        } as const
+
+        export type Status = (typeof STATUS)[keyof typeof STATUS]
+
         export async function create(data: {
             processor_id?: string | null
             action: string
             source_type?: string | null
             source_ref?: string | null
-            status?: string
+            status?: Status
             input?: any
             output?: any
             error?: string | null
@@ -711,7 +718,7 @@ namespace DB {
                     action: data.action,
                     source_type: data.source_type || null,
                     source_ref: data.source_ref || null,
-                    status: data.status || 'completed',
+                    status: data.status || STATUS.Completed,
                     input: (data.input as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                     output: (data.output as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                     error: data.error || null,
