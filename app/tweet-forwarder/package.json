@@ -23,6 +23,7 @@
         "db:generate-client": "bunx prisma generate",
         "db:deploy": "bunx prisma migrate deploy",
         "db:init": "bunx prisma migrate dev --name init",
+        "config:audit": "bun scripts/config-audit.ts",
         "build": "bun build src/main.ts --outdir=./build --target=bun --minify",
         "dev": "bun src/main.ts",
         "start": "bun src/main.ts"

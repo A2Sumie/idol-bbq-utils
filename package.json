@@ -6,6 +6,8 @@
     "scripts": {
         "start:forwarder": "bun --filter @idol-bbq-utils/tweet-forwarder start",
         "build:forwarder": "bun --filter @idol-bbq-utils/tweet-forwarder build",
+        "audit:config": "bun app/tweet-forwarder/scripts/config-audit.ts --config assets/config.yaml",
+        "deploy:forwarder:stopped": "tools/deploy-forwarder-stopped.sh",
         "format": "pnpm prettier --write . --ignore-path .prettierignore",
         "docs:dev": "bun --filter docs dev",
         "docs:build": "bun --filter docs build",

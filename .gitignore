@@ -163,6 +163,7 @@ assets/*.db
 !config.example.yaml
 *.md
 !README.md
+!DEPLOYMENT.md
 !private/README.md
 .vscode/
 

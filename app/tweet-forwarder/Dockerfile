@@ -21,6 +21,7 @@ RUN bun install --filter "./app/tweet-forwarder" --filter "./core/*" --frozen-lo
 RUN bun --filter "@idol-bbq-utils/tweet-forwarder" db:generate-client
 RUN bun --filter "@idol-bbq-utils/tweet-forwarder" build
 RUN bun build app/tweet-forwarder/scripts/export-biliup-browser-cookies.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
+RUN bun build app/tweet-forwarder/scripts/config-audit.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
 
 FROM base AS runner
 
@@ -45,6 +46,7 @@ RUN chmod +x /app/tools/update-media-tools.sh \
     && /app/tools/update-media-tools.sh
 COPY --from=builder /app/app/tweet-forwarder/build/main.js /app/bin.js
 COPY --from=builder /app/app/tweet-forwarder/build/export-biliup-browser-cookies.js /app/tools/export-biliup-browser-cookies.js
+COPY --from=builder /app/app/tweet-forwarder/build/config-audit.js /app/tools/config-audit.js
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
 # Copy assets
 COPY --from=builder /app/assets/fonts /app/assets/fonts
