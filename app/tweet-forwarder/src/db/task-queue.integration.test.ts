@@ -452,6 +452,51 @@ test('OutboundMessage suppresses terminal duplicates while recording payload dri
     })
 })
 
+test('OutboundMessage payload drift preserves partial segment evidence on SQLite', async () => {
+    const partialSegments = [{ message_id: 'visible-1' }, { diagnostic: 'tail-not-sent' }]
+
+    await DB.OutboundMessage.claim(outboundData({ idempotency_key: 'partial-drift-key' }))
+    await DB.OutboundMessage.markSending('partial-drift-key')
+    await DB.OutboundMessage.markPartial('partial-drift-key', partialSegments, new Error('tail failed'))
+
+    const suppressed = await DB.OutboundMessage.claim(
+        outboundData({
+            idempotency_key: 'partial-drift-key',
+            payload_hash: 'payload-changed',
+        }),
+    )
+
+    expect(suppressed.claimed).toBe(false)
+    expect(suppressed.record.status).toBe('partial')
+    expect(suppressed.record.segment_results).toMatchObject({
+        diagnostic: 'suppressed_payload_drift',
+        existing: {
+            payload_hash: 'payload-a',
+            status: 'partial',
+        },
+        incoming: {
+            payload_hash: 'payload-changed',
+        },
+        previous_segment_results: partialSegments,
+    })
+
+    const repeated = await DB.OutboundMessage.claim(
+        outboundData({
+            idempotency_key: 'partial-drift-key',
+            payload_hash: 'payload-changed-again',
+        }),
+    )
+
+    expect(repeated.claimed).toBe(false)
+    expect(repeated.record.segment_results).toMatchObject({
+        diagnostic: 'suppressed_payload_drift',
+        incoming: {
+            payload_hash: 'payload-changed-again',
+        },
+        previous_segment_results: partialSegments,
+    })
+})
+
 test('AggregationWindow creates idempotent open windows and lists oldest open windows on SQLite', async () => {
     const first = await DB.AggregationWindow.getOrCreateOpen({
         idempotency_key: 'summary-window-a',

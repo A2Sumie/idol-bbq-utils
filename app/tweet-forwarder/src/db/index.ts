@@ -786,6 +786,18 @@ namespace DB {
             )
         }
 
+        function preservedSegmentResultsForDrift(segmentResults: unknown) {
+            if (
+                segmentResults &&
+                typeof segmentResults === 'object' &&
+                !Array.isArray(segmentResults) &&
+                (segmentResults as Record<string, unknown>).diagnostic === 'suppressed_payload_drift'
+            ) {
+                return (segmentResults as Record<string, unknown>).previous_segment_results ?? null
+            }
+            return segmentResults ?? null
+        }
+
         async function recordSuppressedPayloadDrift(
             existing: DBOutboundMessage,
             data: {
@@ -802,6 +814,7 @@ namespace DB {
             if (!hasSuppressedPayloadDrift(existing, data)) {
                 return existing
             }
+            const previousSegmentResults = preservedSegmentResultsForDrift(existing.segment_results)
             const diagnostic = {
                 diagnostic: 'suppressed_payload_drift',
                 observed_at: now,
@@ -824,6 +837,9 @@ namespace DB {
                     synthetic_key: data.synthetic_key || null,
                     payload_hash: data.payload_hash,
                 },
+                ...(previousSegmentResults === null
+                    ? {}
+                    : { previous_segment_results: previousSegmentResults as Prisma.InputJsonValue }),
             }
             return await prisma.outbound_messages.update({
                 where: { idempotency_key: existing.idempotency_key },
