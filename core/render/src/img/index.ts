@@ -26,6 +26,24 @@ function withCache(fn: Function) {
     }
 }
 
+function isFalseEnvValue(value: string | undefined) {
+    return ['0', 'false', 'no', 'off'].includes(String(value || '').trim().toLowerCase())
+}
+
+function isRemoteRenderAssetEnabled() {
+    return !isFalseEnvValue(process.env.RENDER_REMOTE_ASSETS)
+}
+
+function shouldLogRemoteAssetFailure() {
+    return !isFalseEnvValue(process.env.RENDER_LOG_REMOTE_ASSET_FAILURES)
+}
+
+function logRemoteAssetFailure(message: string, text: string, error: unknown) {
+    if (shouldLogRemoteAssetFailure()) {
+        console.error(message, text, '. Error:', error)
+    }
+}
+
 const detector = new FontDetector()
 const SATORI_LANG_CODES = new Set([
     'ja-JP',
@@ -249,14 +267,17 @@ function loadBundledFallbackFont(name: string): Font | null {
     }
 }
 
-const loadDynamicAsset = withCache(async (emojiType: keyof typeof apis, _code: string, text: string) => {
+async function loadDynamicAssetUncached(emojiType: keyof typeof apis, _code: string, text: string) {
     if (_code === 'emoji') {
+        if (!isRemoteRenderAssetEnabled()) {
+            return TRANSPARENT_SVG_DATA_URL
+        }
         // It's an emoji, load the image.
         try {
             const svg = await loadEmoji(emojiType, getIconCode(text))
             return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`
         } catch (error) {
-            console.error('Failed to load emoji asset for', text, '. Error:', error)
+            logRemoteAssetFailure('Failed to load emoji asset for', text, error)
             return TRANSPARENT_SVG_DATA_URL
         }
     }
@@ -272,6 +293,14 @@ const loadDynamicAsset = withCache(async (emojiType: keyof typeof apis, _code: s
         .map((code) => languageFontMap[code as keyof typeof languageFontMap])
         .filter(Boolean)
         .flat()
+
+    if (!isRemoteRenderAssetEnabled()) {
+        if (codes.some((code) => UNIFONT_FALLBACK_CODES.has(code))) {
+            const unifont = loadBundledFallbackFont('Unifont')
+            return unifont ? [unifont] : []
+        }
+        return []
+    }
 
     if (fonts.length === 0) return []
 
@@ -319,7 +348,7 @@ const loadDynamicAsset = withCache(async (emojiType: keyof typeof apis, _code: s
 
         return res_fonts
     } catch (e) {
-        console.error('Failed to load dynamic font for', text, '. Error:', e)
+        logRemoteAssetFailure('Failed to load dynamic font for', text, e)
     }
 
     if (codes.some((code) => UNIFONT_FALLBACK_CODES.has(code))) {
@@ -328,7 +357,16 @@ const loadDynamicAsset = withCache(async (emojiType: keyof typeof apis, _code: s
     }
 
     return []
-})
+}
+
+const loadCachedDynamicAsset = withCache(loadDynamicAssetUncached)
+
+async function loadDynamicAsset(emojiType: keyof typeof apis, _code: string, text: string) {
+    if (!isRemoteRenderAssetEnabled()) {
+        return loadDynamicAssetUncached(emojiType, _code, text)
+    }
+    return loadCachedDynamicAsset(emojiType, _code, text)
+}
 
 class ImgConverter {
     private fonts: Array<FontConfig>

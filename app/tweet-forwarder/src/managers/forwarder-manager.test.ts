@@ -17,6 +17,7 @@ import { normalizeCronSecond } from '@/utils/cron'
 import { articleOutboundKey } from '@/services/outbound-message-service'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
+process.env.RENDER_REMOTE_ASSETS = '0'
 
 const originalOutboundMessage = { ...DB.OutboundMessage }
 const originalAggregationWindow = { ...DB.AggregationWindow }

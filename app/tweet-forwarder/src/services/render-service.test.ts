@@ -11,6 +11,7 @@ import path from 'path'
 import { inflateSync } from 'zlib'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
+process.env.RENDER_REMOTE_ASSETS = '0'
 
 const SAMPLE_PNG_DATA_URL =
     'data:image/png;base64,' +

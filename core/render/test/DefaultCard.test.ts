@@ -10,7 +10,7 @@ import {
 } from '../template/img/DefaultCard'
 import { languageFontMap } from '../src/img/utils/font'
 import { getIconCode } from '../src/img/utils/twemoji'
-import { isSupportedOpenTypeFont } from '../src/img'
+import { isSupportedOpenTypeFont, loadDynamicAsset } from '../src/img'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
     return {
@@ -120,4 +120,28 @@ test('sanitizeCardText removes stray selectors from rino-style decorative text',
 test('font loader rejects TTC collections because satori cannot render them', () => {
     expect(isSupportedOpenTypeFont(Buffer.from('ttcf0000'))).toBeFalse()
     expect(isSupportedOpenTypeFont(Buffer.from('OTTO0000'))).toBeTrue()
+})
+
+test('dynamic asset loader can run in deterministic no-remote mode', async () => {
+    const previousRemoteAssets = process.env.RENDER_REMOTE_ASSETS
+    const previousFetch = globalThis.fetch
+    process.env.RENDER_REMOTE_ASSETS = '0'
+    globalThis.fetch = (() => {
+        throw new Error('fetch should not be called when RENDER_REMOTE_ASSETS=0')
+    }) as typeof fetch
+
+    try {
+        expect(await loadDynamicAsset('twemoji', 'emoji', '🧪')).toStartWith('data:image/svg+xml;base64,')
+        expect(await loadDynamicAsset('twemoji', 'ja-JP', 'テスト')).toEqual([])
+        const fallbackFonts = await loadDynamicAsset('twemoji', 'unknown', 'ᓚᘏᗢ')
+        expect(fallbackFonts).toBeArray()
+        expect((fallbackFonts as any[])[0]?.name).toBe('Unifont')
+    } finally {
+        if (previousRemoteAssets === undefined) {
+            delete process.env.RENDER_REMOTE_ASSETS
+        } else {
+            process.env.RENDER_REMOTE_ASSETS = previousRemoteAssets
+        }
+        globalThis.fetch = previousFetch
+    }
 })
