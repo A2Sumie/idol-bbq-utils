@@ -2840,6 +2840,145 @@ test('flushSummaryCardQueue treats blocked summary-card outbound as terminally s
     expect(summaryOutbound?.provider_message_ids?.reason).toBe('summary_card_blocked')
 })
 
+test('flushSummaryCardQueue keeps summary-card windows retryable after transient send failure', async () => {
+    class FlakySummaryForwarder extends Forwarder {
+        NAME = 'recording'
+        calls: Array<{ text: string; props: any }> = []
+
+        public override async send(text: string, props?: any): Promise<any> {
+            this.calls.push({ text, props })
+            if (this.calls.length === 1) {
+                throw new Error('temporary provider outage')
+            }
+            return { status: 'sent', providerResult: { ok: true } }
+        }
+
+        protected async realSend(): Promise<any> {
+            return { ok: true }
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new FlakySummaryForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-transient-failure',
+    )
+
+    const claimed = new Set<number>()
+    const released: number[] = []
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        if (claimed.has(article.id)) {
+            return false
+        }
+        claimed.add(article.id)
+        return true
+    }
+    ;(pools as any).releaseArticleChain = async (article: any) => {
+        released.push(article.id)
+        claimed.delete(article.id)
+    }
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-retry.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-retry.png' }],
+                }
+            }
+            return {
+                text: article.content,
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-transient-failure',
+        [
+            {
+                id: 718,
+                a_id: 'summary-transient-failure',
+                platform: Platform.X,
+                username: 'retry summary',
+                u_id: 'retry_summary',
+                content: 'summary-card should retry after transient failure',
+                url: 'https://x.com/retry_summary/status/718',
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    const queueKey = Array.from((pools as any).summaryCardQueues.keys())[0]
+    const queue = (pools as any).summaryCardQueues.get(queueKey)
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const outboundRecords = (DB.OutboundMessage as any).__records as Map<string, any>
+
+    await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+
+    const failedOutbound = Array.from(outboundRecords.values()).find(
+        (record: any) => record.task_kind === 'summary_card',
+    )
+    expect(target.calls).toHaveLength(1)
+    expect(released).toEqual([718])
+    expect(Array.from(claimed)).toEqual([])
+    expect((pools as any).summaryCardQueues.has(queueKey)).toBeTrue()
+    expect(windows.get(queue.windowId)?.status).toBe('open')
+    expect(failedOutbound?.status).toBe('failed')
+
+    await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+
+    const sentOutbound = Array.from(outboundRecords.values()).find(
+        (record: any) => record.task_kind === 'summary_card',
+    )
+    expect(target.calls).toHaveLength(2)
+    expect(released).toEqual([718])
+    expect(Array.from(claimed)).toEqual([718])
+    expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
+    expect(windows.get(queue.windowId)?.status).toBe('completed')
+    expect(sentOutbound?.status).toBe('sent')
+})
+
 test('summary-card queues are isolated by route for the same target', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

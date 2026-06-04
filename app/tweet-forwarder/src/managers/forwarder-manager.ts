@@ -2481,6 +2481,10 @@ class ForwarderPools extends BaseCompatibleModel {
             for (const item of claimedItems) {
                 await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)
             }
+            this.summaryCardQueues.set(queueKey, queue)
+            this.log?.warn(
+                `Retained summary-card queue for ${queue.target.id} after non-terminal ${reason} flush failure`,
+            )
         }
     }
 
@@ -2724,7 +2728,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 },
             }).catch(() => undefined)
             if (queue.windowId) {
-                await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Failed, {
+                await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Open, {
                     payload_hash: outboundPayloadHash,
                 }).catch(() => undefined)
             }
