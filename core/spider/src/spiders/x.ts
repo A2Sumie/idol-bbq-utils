@@ -110,6 +110,18 @@ function resolveRandomIntervalMs(interval?: { min?: number; max?: number }) {
     return min + Math.floor(Math.random() * (max - min + 1))
 }
 
+function formatHydrationError(error: unknown) {
+    return error instanceof Error ? error.message : String(error)
+}
+
+function isTooManyRequestsError(error: unknown) {
+    return /too many requests|(^|\s)429(\s|$)/i.test(formatHydrationError(error))
+}
+
+function isNotFoundError(error: unknown) {
+    return /not found|(^|\s)404(\s|$)/i.test(formatHydrationError(error))
+}
+
 class XUserTimeLineSpider extends BaseSpider {
     // extends from XBaseSpider regex
     static _VALID_URL = new RegExp(X_BASE_VALID_URL.source + /(?<id>\w+)$/.source)
@@ -439,30 +451,65 @@ class XListSpider extends BaseSpider {
             X_UNIFIED_LIST_DEFAULT_CONCURRENCY,
             X_UNIFIED_LIST_MAX_CONCURRENCY,
         )
+        let rateLimited = false
 
-        for (let index = 0; index < userIds.length; index += concurrency) {
+        for (let index = 0; index < userIds.length && !rateLimited; index += concurrency) {
             const chunk = userIds.slice(index, index + concurrency)
             const chunkResults = await Promise.allSettled(
-                chunk.map(async (userId) => {
+                chunk.map(async (userId): Promise<{
+                    userId: string
+                    articles: Array<GenericArticle<Platform.X>>
+                    failures: Array<{ scope: 'tweets' | 'replies'; error: unknown }>
+                    rateLimited: boolean
+                }> => {
                     const userArticles = [] as Array<GenericArticle<Platform.X>>
+                    const failures = [] as Array<{ scope: 'tweets' | 'replies'; error: unknown }>
                     if (options.fetchTweets) {
-                        userArticles.push(...(await client.grabTweets(userId, cookie)))
+                        try {
+                            userArticles.push(...(await client.grabTweets(userId, cookie)))
+                        } catch (error) {
+                            failures.push({ scope: 'tweets', error })
+                            if (isTooManyRequestsError(error)) {
+                                return { userId, articles: userArticles, failures, rateLimited: true }
+                            }
+                        }
                     }
                     if (options.fetchReplies) {
-                        userArticles.push(...(await client.grabReplies(userId, cookie)))
+                        try {
+                            userArticles.push(...(await client.grabReplies(userId, cookie)))
+                        } catch (error) {
+                            failures.push({ scope: 'replies', error })
+                            if (isTooManyRequestsError(error)) {
+                                return { userId, articles: userArticles, failures, rateLimited: true }
+                            }
+                        }
                     }
-                    return userArticles
+                    return { userId, articles: userArticles, failures, rateLimited: false }
                 }),
             )
 
             chunkResults.forEach((result, chunkIndex) => {
                 const userId = chunk[chunkIndex]
                 if (result.status === 'fulfilled') {
-                    articles.push(...result.value)
+                    articles.push(...result.value.articles)
+                    if (result.value.failures.length > 0) {
+                        this.logHydrationFailures(result.value.userId, result.value.failures, result.value.articles.length)
+                    }
+                    if (result.value.rateLimited) {
+                        rateLimited = true
+                    }
                     return
                 }
                 this.log?.warn(`Unified list hydration failed for @${userId}: ${result.reason}`)
+                if (isTooManyRequestsError(result.reason)) {
+                    rateLimited = true
+                }
             })
+
+            if (rateLimited) {
+                this.log?.warn('Unified list hydration stopped early after rate limit response.')
+                break
+            }
 
             const delayMs =
                 index + concurrency < userIds.length ? resolveRandomIntervalMs(options.hydrateIntervalTime) : 0
@@ -472,6 +519,24 @@ class XListSpider extends BaseSpider {
         }
 
         return articles
+    }
+
+    private logHydrationFailures(
+        userId: string,
+        failures: Array<{ scope: 'tweets' | 'replies'; error: unknown }>,
+        preservedArticleCount: number,
+    ) {
+        const formatted = failures.map((failure) => `${failure.scope}: ${formatHydrationError(failure.error)}`).join('; ')
+        const onlyRepliesNotFound = failures.every(
+            (failure) => failure.scope === 'replies' && isNotFoundError(failure.error),
+        )
+        if (preservedArticleCount > 0 && onlyRepliesNotFound) {
+            this.log?.debug(`Unified list replies unavailable for @${userId}, preserved ${preservedArticleCount} tweet(s): ${formatted}`)
+            return
+        }
+
+        const prefix = preservedArticleCount > 0 ? 'partially failed' : 'failed'
+        this.log?.warn(`Unified list hydration ${prefix} for @${userId}: ${formatted}`)
     }
 
     private mergeArticles(...articleGroups: Array<Array<GenericArticle<Platform.X>>>) {
@@ -1281,7 +1346,7 @@ class XApiClient {
             }),
         })
         if (!res.ok) {
-            throw new Error(`Failed to fetch tweets: ${res.statusText}`)
+            throw new Error(`Failed to fetch tweets: ${res.status} ${res.statusText}`)
         }
         const json = await res.json()
         if (json.errors) {
@@ -1351,7 +1416,7 @@ class XApiClient {
             }),
         })
         if (!res.ok) {
-            throw new Error(`Failed to fetch replies: ${res.statusText}`)
+            throw new Error(`Failed to fetch replies: ${res.status} ${res.statusText}`)
         }
         const json = await res.json()
         if (json.errors) {
@@ -1662,7 +1727,12 @@ namespace XApiJsonParser {
         let tweets = JSONPath({ path: "$..instructions[?(@.type === 'TimelineAddEntries')].entries", json })[0]
         let pin_tweet = JSONPath({ path: "$..instructions[?(@.type === 'TimelinePinEntry')].entry", json })[0]
         if (!tweets) {
-            throw new Error('Tweet json format may have changed')
+            const instructionTypes = Array.from(
+                new Set(JSONPath({ path: '$..instructions[*].type', json }).filter(Boolean)),
+            )
+            throw new Error(
+                `Tweet json format may have changed (instruction types: ${instructionTypes.join(', ') || 'none'})`,
+            )
         }
 
         if (pin_tweet) {

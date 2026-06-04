@@ -103,3 +103,57 @@ test('X unified list hydration honors configured concurrency', async () => {
     expect(maxActiveRequests).toBe(1)
     expect(requestedUsers).toEqual(['alpha', 'beta', 'gamma'])
 })
+
+test('X unified list hydration preserves tweets when replies fail', async () => {
+    const spider = new X.XListSpider()
+    const client = {
+        grabTweets: async (userId: string) => [
+            {
+                platform: 0,
+                a_id: `${userId}-tweet`,
+                u_id: userId,
+                username: userId,
+                created_at: 1,
+                content: 'tweet',
+                url: `https://x.com/${userId}/status/1`,
+                type: 'tweet',
+                ref: null,
+                media: null,
+                has_media: false,
+                extra: null,
+            },
+        ],
+        grabReplies: async () => {
+            throw new Error('Failed to fetch replies: 404 Not Found')
+        },
+    }
+
+    const articles = await (spider as any).hydrateUsersFromListActivity(['alpha'], client, 'cookie', {
+        fetchTweets: true,
+        fetchReplies: true,
+        hydrateConcurrency: 1,
+    })
+
+    expect(articles.map((article: any) => article.a_id)).toEqual(['alpha-tweet'])
+})
+
+test('X unified list hydration stops after rate limit response', async () => {
+    const spider = new X.XListSpider()
+    const requestedUsers: Array<string> = []
+    const client = {
+        grabTweets: async (userId: string) => {
+            requestedUsers.push(userId)
+            throw new Error('Failed to fetch tweets: 429 Too Many Requests')
+        },
+        grabReplies: async () => [],
+    }
+
+    const articles = await (spider as any).hydrateUsersFromListActivity(['alpha', 'beta', 'gamma'], client, 'cookie', {
+        fetchTweets: true,
+        fetchReplies: true,
+        hydrateConcurrency: 1,
+    })
+
+    expect(articles).toEqual([])
+    expect(requestedUsers).toEqual(['alpha'])
+})
