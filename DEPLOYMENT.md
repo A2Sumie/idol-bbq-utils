@@ -87,6 +87,10 @@ To verify changes:
     bun run audit:remote-drift -- --compare-local-head
     ```
     Runtime backup/config artifacts are classified without hashing their contents.
+    For automation, use the no-content JSON form:
+    ```bash
+    bun run audit:remote-drift -- --compare-local-head --json
+    ```
 6.  **Full local gate plus remote proof**:
     ```bash
     RUN_REMOTE_PREFLIGHT=1 RUN_REMOTE_DRIFT_COMPARE=1 bun run verify:forwarder

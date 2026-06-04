@@ -20,7 +20,7 @@ remote_env_prefix() {
 main() {
     if [ "${1:-}" = "--help" ]; then
         cat <<'HELP'
-Usage: tools/forwarder-remote-drift.sh [--compare-local-head]
+Usage: tools/forwarder-remote-drift.sh [--compare-local-head [--json]]
 
 Prints a no-content inventory of the remote idol-bbq-utils dirty worktree.
 Only git status codes and paths are shown; file contents are never read.
@@ -29,12 +29,15 @@ Options:
   --compare-local-head  Expand untracked source files and compare remote
                         worktree blob hashes against local HEAD. Runtime
                         backup/config artifacts are classified without hashing.
+  --json                With --compare-local-head, emit machine-readable counts
+                        and rows without file contents or blob hashes.
 HELP
         return
     fi
 
     if [ "${1:-}" = "--compare-local-head" ]; then
-        compare_local_head
+        shift
+        compare_local_head "$@"
         return
     fi
 
@@ -100,7 +103,21 @@ REMOTE
 compare_local_head() {
     git rev-parse --is-inside-work-tree >/dev/null
 
-    local expected_json remote_json env_prefix expected_commit
+    local expected_json remote_json env_prefix expected_commit output_format
+    output_format="text"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json)
+                output_format="json"
+                ;;
+            *)
+                printf 'forwarder-remote-drift: unknown --compare-local-head argument: %s\n' "$1" >&2
+                return 2
+                ;;
+        esac
+        shift
+    done
+
     expected_json="$(mktemp)"
     remote_json="$(mktemp)"
     trap 'rm -f "${expected_json:-}" "${remote_json:-}"' RETURN
@@ -213,7 +230,7 @@ json.dump(
 )
 REMOTE
 
-    python3 - "$expected_json" "$remote_json" <<'PY'
+    python3 - "$expected_json" "$remote_json" "$output_format" <<'PY'
 import json
 import sys
 from collections import Counter
@@ -222,6 +239,7 @@ with open(sys.argv[1], "r", encoding="utf-8") as handle:
     expected = json.load(handle)
 with open(sys.argv[2], "r", encoding="utf-8") as handle:
     remote = json.load(handle)
+output_format = sys.argv[3]
 
 files = expected["files"]
 relation_counts = Counter()
@@ -246,7 +264,11 @@ def relation(row):
 
 rows = []
 for row in remote["rows"]:
-    item = dict(row)
+    item = {
+        "status": row["status"],
+        "bucket": row["bucket"],
+        "path": row["path"],
+    }
     item["relation"] = relation(row)
     rows.append(item)
     relation_counts[item["relation"]] += 1
@@ -255,6 +277,27 @@ for row in remote["rows"]:
         untracked += 1
     else:
         tracked += 1
+
+summary = {
+    "remote_repo": remote["remote_repo"],
+    "remote_head": remote["remote_head"],
+    "remote_branch": remote["remote_branch"],
+    "expected_commit": expected["expected_commit"],
+    "expanded_untracked_files": True,
+    "counts": {
+        "tracked": tracked,
+        "untracked": untracked,
+        "total": tracked + untracked,
+    },
+    "relations": dict(sorted(relation_counts.items())),
+    "buckets": dict(sorted(bucket_counts.items())),
+    "rows": rows,
+}
+
+if output_format == "json":
+    json.dump(summary, sys.stdout, ensure_ascii=False, indent=2, sort_keys=True)
+    print()
+    raise SystemExit(0)
 
 print(f'remote_repo={remote["remote_repo"]}')
 print(f'remote_head={remote["remote_head"]}')
