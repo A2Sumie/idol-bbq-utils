@@ -4,10 +4,13 @@ import os from 'os'
 import path from 'path'
 import YAML from 'yaml'
 import { RuntimeController, resolveRuntimeMode } from './runtime-controller'
+import DB from './db'
 
 const tempRoots: string[] = []
+const originalTaskQueue = { ...DB.TaskQueue }
 
 afterEach(async () => {
+    Object.assign(DB.TaskQueue, originalTaskQueue)
     for (const root of tempRoots.splice(0)) {
         await fs.promises.rm(root, { recursive: true, force: true })
     }
@@ -37,6 +40,11 @@ test('resolveRuntimeMode accepts explicit safe startup modes', () => {
 
 test('RuntimeController api-only mode loads config without activating schedulers or senders', async () => {
     const root = makeTempRoot()
+    const cleanupCalls: number[] = []
+    ;(DB.TaskQueue as any).failInterruptedInlineProcessing = async () => {
+        cleanupCalls.push(Date.now())
+        return { count: 2 }
+    }
     const configPath = writeConfig(root, {
         crawlers: [
             {
@@ -90,6 +98,7 @@ test('RuntimeController api-only mode loads config without activating schedulers
         expect(runtime.compatibleModels).toHaveLength(0)
         expect(runtime.forwarderPools).toBeUndefined()
         expect(runtime.spiderPools).toBeUndefined()
+        expect(cleanupCalls).toHaveLength(1)
     } finally {
         await controller.shutdown()
     }
@@ -97,6 +106,11 @@ test('RuntimeController api-only mode loads config without activating schedulers
 
 test('RuntimeController offline mode does not parse config or create runtime', async () => {
     const root = makeTempRoot()
+    let cleanupCalls = 0
+    ;(DB.TaskQueue as any).failInterruptedInlineProcessing = async () => {
+        cleanupCalls += 1
+        throw new Error('offline must not touch db')
+    }
     const missingConfigPath = path.join(root, 'missing-config.yaml')
     const controller = new RuntimeController(missingConfigPath, path.join(root, 'cache'), undefined, {
         runtimeMode: 'offline',
@@ -106,6 +120,7 @@ test('RuntimeController offline mode does not parse config or create runtime', a
     try {
         expect(controller.getRuntimeMeta().mode).toBe('offline')
         expect((controller as any).runtime).toBeUndefined()
+        expect(cleanupCalls).toBe(0)
     } finally {
         await controller.shutdown()
     }

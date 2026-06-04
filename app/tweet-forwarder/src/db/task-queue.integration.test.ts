@@ -365,6 +365,72 @@ test('TaskQueue pending and stale recovery filters isolate worker task types on 
     ])
 })
 
+test('TaskQueue interrupted inline cleanup fails only non-resumable API tasks on SQLite', async () => {
+    const aggregate = await DB.TaskQueue.add('aggregate_hourly', { value: 'aggregate' }, 100, {
+        source_ref: 'x:aggregate',
+        action_type: 'aggregate_hourly',
+    })
+    const manual = await DB.TaskQueue.add('manual_crawler_run', { crawler: 'crawler-a' }, 100, {
+        source_ref: 'crawler-a',
+        action_type: 'crawl',
+    })
+    const resend = await DB.TaskQueue.add('article_resend', { id: 99 }, 100, {
+        source_ref: 'x:article-99',
+        action_type: 'resend',
+    })
+
+    await DB.TaskQueue.claimPending(aggregate.id)
+    await DB.TaskQueue.claimPending(manual.id)
+    await DB.TaskQueue.claimPending(resend.id)
+
+    const failed = await DB.TaskQueue.failInterruptedInlineProcessing(2000)
+    expect(failed.count).toBe(2)
+
+    const rows = await testPrisma.task_queue.findMany({
+        where: {
+            id: {
+                in: [aggregate.id, manual.id, resend.id],
+            },
+        },
+        orderBy: { id: 'asc' },
+    })
+    expect(
+        rows.map((task) => ({
+            id: task.id,
+            type: task.type,
+            status: task.status,
+            finished_at: task.finished_at,
+            last_error: task.last_error,
+            result_summary: task.result_summary,
+        })),
+    ).toEqual([
+        {
+            id: aggregate.id,
+            type: 'aggregate_hourly',
+            status: DB.TaskQueue.STATUS.Processing,
+            finished_at: null,
+            last_error: null,
+            result_summary: null,
+        },
+        {
+            id: manual.id,
+            type: 'manual_crawler_run',
+            status: DB.TaskQueue.STATUS.Failed,
+            finished_at: 2000,
+            last_error: 'Inline API action was interrupted by runtime restart and cannot resume',
+            result_summary: 'failed interrupted inline API action',
+        },
+        {
+            id: resend.id,
+            type: 'article_resend',
+            status: DB.TaskQueue.STATUS.Failed,
+            finished_at: 2000,
+            last_error: 'Inline API action was interrupted by runtime restart and cannot resume',
+            result_summary: 'failed interrupted inline API action',
+        },
+    ])
+})
+
 test('ProcessorRun persists completed and failed audit rows on SQLite', async () => {
     const completed = await DB.ProcessorRun.create({
         processor_id: 'processor-a',

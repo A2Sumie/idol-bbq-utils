@@ -80,7 +80,7 @@ export class TaskManager extends BaseCompatibleModel {
     private readonly taskRetryLimit = 5
     private readonly taskRetryBaseSeconds = 120
     private readonly taskRetryMaxSeconds = 3600
-    private readonly workerTaskTypes = ['aggregate_daily', 'aggregate_hourly']
+    private readonly workerTaskTypes = [...DB.TaskQueue.WORKER_TYPES]
 
     constructor(forwarderPools: ForwarderPools, options: { processors?: Processor[] } = {}, log?: Logger) {
         super()

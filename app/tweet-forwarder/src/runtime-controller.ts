@@ -2,6 +2,7 @@ import EventEmitter from 'events'
 import { Logger } from '@idol-bbq-utils/log'
 import { BaseCompatibleModel, TaskScheduler } from './utils/base'
 import { CACHE_DIR_ROOT, configParser, log } from './config'
+import DB from './db'
 import { initializeCacheDirectories } from './utils/directories'
 import type { AppConfig } from './types'
 import { SpiderPools, SpiderTaskScheduler } from './managers/spider-manager'
@@ -86,6 +87,7 @@ export class RuntimeController {
         }
 
         initializeCacheDirectories(this.cacheRoot)
+        await this.failInterruptedInlineApiTasks()
         if (this.runtimeMode === 'online') {
             this.mediaCacheCleanupJob = startMediaCacheCleanupJob(this.log)
         } else {
@@ -165,6 +167,19 @@ export class RuntimeController {
             emitter: this.runtime?.emitter,
             forwarderPools: this.runtime?.forwarderPools,
             spiderPools: this.runtime?.spiderPools,
+        }
+    }
+
+    private async failInterruptedInlineApiTasks() {
+        try {
+            const result = await DB.TaskQueue.failInterruptedInlineProcessing()
+            if (result.count > 0) {
+                this.log.warn(`Marked ${result.count} interrupted inline API task(s) as failed`)
+            }
+        } catch (error) {
+            this.log.warn(
+                `Failed to mark interrupted inline API tasks: ${error instanceof Error ? error.message : String(error)}`,
+            )
         }
     }
 

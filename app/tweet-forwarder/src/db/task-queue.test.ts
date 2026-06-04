@@ -14,6 +14,20 @@ test('TaskQueue idempotent add only revives failed existing tasks', () => {
     }
 })
 
+test('TaskQueue task type groups keep worker and inline API tasks distinct', () => {
+    expect(DB.TaskQueue.WORKER_TYPES).toEqual(['aggregate_daily', 'aggregate_hourly'])
+    expect(DB.TaskQueue.INLINE_API_TYPES).toEqual([
+        'manual_crawler_run',
+        'article_simulate',
+        'article_reprocess',
+        'article_resend',
+        'processor_run',
+    ])
+    for (const inlineType of DB.TaskQueue.INLINE_API_TYPES) {
+        expect(DB.TaskQueue.WORKER_TYPES.includes(inlineType as any)).toBeFalse()
+    }
+})
+
 test('TaskQueue requeue data clears terminal failure fields while preserving reschedule metadata', () => {
     const data = DB.TaskQueue.buildRequeueFailedTaskData(
         { a: 1 },
@@ -36,6 +50,16 @@ test('TaskQueue requeue data clears terminal failure fields while preserving res
         result_summary: 'requeued failed idempotent task',
         source_ref: 'x:member',
         action_type: 'aggregate_hourly',
+    })
+})
+
+test('TaskQueue interrupted inline failure data is terminal and operator-readable', () => {
+    expect(DB.TaskQueue.buildInterruptedInlineFailureData(1234)).toEqual({
+        status: 'failed',
+        updated_at: 1234,
+        finished_at: 1234,
+        last_error: 'Inline API action was interrupted by runtime restart and cannot resume',
+        result_summary: 'failed interrupted inline API action',
     })
 })
 

@@ -439,6 +439,27 @@ namespace DB {
     }
 
     export namespace TaskQueue {
+        export const TYPE = {
+            AggregateDaily: 'aggregate_daily',
+            AggregateHourly: 'aggregate_hourly',
+            ManualCrawlerRun: 'manual_crawler_run',
+            ArticleSimulate: 'article_simulate',
+            ArticleReprocess: 'article_reprocess',
+            ArticleResend: 'article_resend',
+            ProcessorRun: 'processor_run',
+        } as const
+
+        export type Type = (typeof TYPE)[keyof typeof TYPE]
+
+        export const WORKER_TYPES = [TYPE.AggregateDaily, TYPE.AggregateHourly] as const
+        export const INLINE_API_TYPES = [
+            TYPE.ManualCrawlerRun,
+            TYPE.ArticleSimulate,
+            TYPE.ArticleReprocess,
+            TYPE.ArticleResend,
+            TYPE.ProcessorRun,
+        ] as const
+
         export const STATUS = {
             Pending: 'pending',
             Processing: 'processing',
@@ -485,6 +506,16 @@ namespace DB {
 
         export function summarizeStatusCounts(rows: Array<{ status: string; _count: { _all: number } }>) {
             return Object.fromEntries(rows.map((row) => [row.status, row._count._all]))
+        }
+
+        export function buildInterruptedInlineFailureData(now: number) {
+            return {
+                status: STATUS.Failed,
+                updated_at: now,
+                finished_at: now,
+                last_error: 'Inline API action was interrupted by runtime restart and cannot resume',
+                result_summary: 'failed interrupted inline API action',
+            }
         }
 
         export function buildRequeueFailedTaskData(
@@ -613,6 +644,18 @@ namespace DB {
                     updated_at: now,
                     last_error: 'Recovered stale processing task after runtime interruption',
                 },
+            })
+        }
+
+        export async function failInterruptedInlineProcessing(now = Math.floor(Date.now() / 1000)) {
+            return await prisma.task_queue.updateMany({
+                where: {
+                    status: STATUS.Processing,
+                    type: {
+                        in: [...INLINE_API_TYPES],
+                    },
+                },
+                data: buildInterruptedInlineFailureData(now),
             })
         }
 
