@@ -91,11 +91,25 @@ To verify changes:
     ```bash
     bun run audit:remote-drift -- --compare-local-head --json
     ```
-6.  **Full local gate plus remote proof**:
+6.  **Remote source convergence plan**:
+    ```bash
+    bun run converge:remote-source
+    ```
+    This defaults to dry-run and does not write to the remote host. Runtime config,
+    database files, and runtime backups are protected. To write a source archive
+    without replacing files, use:
+    ```bash
+    bun run converge:remote-source -- --archive-only
+    ```
+    Replacing remote source candidates from local `HEAD` is deliberately explicit:
+    ```bash
+    bun run converge:remote-source -- --apply --yes
+    ```
+7.  **Full local gate plus remote proof**:
     ```bash
     RUN_REMOTE_PREFLIGHT=1 RUN_REMOTE_DRIFT_COMPARE=1 bun run verify:forwarder
     ```
-7.  **Logs after an explicit production start**:
+8.  **Logs after an explicit production start**:
     ```bash
     docker logs -f forwarder-new
     ```

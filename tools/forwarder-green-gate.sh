@@ -31,6 +31,7 @@ HELP
         tools/deploy-forwarder-stopped.sh \
         tools/forwarder-preflight.sh \
         tools/forwarder-remote-drift.sh \
+        tools/forwarder-remote-converge.sh \
         tools/forwarder-green-gate.sh
     run bun run audit:config -- --fail-on-diagnostics
     run bun test
