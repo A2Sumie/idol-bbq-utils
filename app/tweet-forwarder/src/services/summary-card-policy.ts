@@ -1,0 +1,114 @@
+import type { ForwardTargetPlatformCommonConfig } from '@/types'
+
+type SummaryCardWindowAlignment = 'none' | 'hour' | 'interval'
+
+type ResolvedSummaryCardConfig = {
+    intervalSeconds: number
+    threshold: number
+    maxItems: number
+    includeOriginalMedia: boolean
+    sendFirstImmediately: boolean
+    sendFirstNative: boolean
+    mediaRealtime: boolean
+    mediaRealtimeText: 'none' | 'basic' | 'rendered'
+    flushOnThreshold: boolean
+    flushDelaySeconds: number
+    windowAlignment: SummaryCardWindowAlignment
+    mediaDuplicateLimit: number | null
+}
+
+type SummaryCardRoutePolicy = {
+    enabled: boolean
+    interval_seconds: number
+    threshold: number
+    max_items: number
+    include_original_media: boolean
+    send_first_immediately: boolean
+    send_first_native: boolean
+    media_realtime: boolean
+    media_realtime_text: 'none' | 'basic' | 'rendered'
+    flush_on_threshold: boolean
+    flush_delay_seconds: number
+    window_alignment: SummaryCardWindowAlignment
+    media_duplicate_limit: number | null
+}
+
+const DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS = 30 * 60
+const DEFAULT_SUMMARY_CARD_THRESHOLD = 8
+const DEFAULT_SUMMARY_CARD_MAX_ITEMS = 14
+
+function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): ResolvedSummaryCardConfig | null {
+    const raw = config.summary_card
+    const enabled = raw === true || (typeof raw === 'object' && raw?.enabled !== false)
+    if (!enabled) {
+        return null
+    }
+
+    const objectConfig = typeof raw === 'object' && raw ? raw : {}
+    const intervalSeconds = Math.max(
+        60,
+        Math.floor(Number(objectConfig.interval_seconds || DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS)),
+    )
+    const threshold = Math.max(2, Math.floor(Number(objectConfig.threshold || DEFAULT_SUMMARY_CARD_THRESHOLD)))
+    const maxItems = Math.max(
+        3,
+        Math.min(Math.floor(Number(objectConfig.max_items || DEFAULT_SUMMARY_CARD_MAX_ITEMS)), 30),
+    )
+    const duplicateLimit = Math.floor(Number((objectConfig as any).media_duplicate_limit || 0))
+    const windowAlignment: SummaryCardWindowAlignment =
+        (objectConfig as any).align_to_interval === true
+            ? 'interval'
+            : (objectConfig as any).align_to_hour === true
+              ? 'hour'
+              : 'none'
+    const mediaRealtimeText = ['basic', 'rendered'].includes(String((objectConfig as any).media_realtime_text))
+        ? ((objectConfig as any).media_realtime_text as 'basic' | 'rendered')
+        : 'none'
+
+    return {
+        intervalSeconds,
+        threshold,
+        maxItems,
+        includeOriginalMedia: objectConfig.include_original_media === true,
+        sendFirstImmediately: objectConfig.send_first_immediately !== false,
+        sendFirstNative: (objectConfig as any).send_first_native === true,
+        mediaRealtime: (objectConfig as any).media_realtime === true,
+        mediaRealtimeText,
+        flushOnThreshold: (objectConfig as any).flush_on_threshold !== false,
+        flushDelaySeconds: Math.max(0, Math.floor(Number((objectConfig as any).flush_delay_seconds || 0))),
+        windowAlignment,
+        mediaDuplicateLimit: Number.isFinite(duplicateLimit) && duplicateLimit > 0 ? duplicateLimit : null,
+    }
+}
+
+function toSummaryCardRoutePolicy(config: ResolvedSummaryCardConfig): SummaryCardRoutePolicy {
+    return {
+        enabled: true,
+        interval_seconds: config.intervalSeconds,
+        threshold: config.threshold,
+        max_items: config.maxItems,
+        include_original_media: config.includeOriginalMedia,
+        send_first_immediately: config.sendFirstImmediately,
+        send_first_native: config.sendFirstNative,
+        media_realtime: config.mediaRealtime,
+        media_realtime_text: config.mediaRealtimeText,
+        flush_on_threshold: config.flushOnThreshold,
+        flush_delay_seconds: config.flushDelaySeconds,
+        window_alignment: config.windowAlignment,
+        media_duplicate_limit: config.mediaDuplicateLimit,
+    }
+}
+
+function resolveSummaryCardRoutePolicy(config: ForwardTargetPlatformCommonConfig): SummaryCardRoutePolicy | undefined {
+    const resolved = resolveSummaryCardConfig(config)
+    return resolved ? toSummaryCardRoutePolicy(resolved) : undefined
+}
+
+export {
+    resolveSummaryCardConfig,
+    resolveSummaryCardRoutePolicy,
+    toSummaryCardRoutePolicy,
+    type ResolvedSummaryCardConfig,
+    type SummaryCardRoutePolicy,
+    type SummaryCardWindowAlignment,
+}

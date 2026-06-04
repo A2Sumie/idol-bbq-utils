@@ -1,5 +1,6 @@
 import type { AppConfig, ForwardTargetPlatformCommonConfig } from '@/types'
 import { routeKey } from './outbound-message-service'
+import { resolveSummaryCardRoutePolicy, type SummaryCardRoutePolicy } from './summary-card-policy'
 
 type RouteModeFlags = {
     realtime: boolean
@@ -8,6 +9,10 @@ type RouteModeFlags = {
     tag_digest: boolean
     media_batch: boolean
     aggregation: boolean
+}
+
+type RoutePolicy = {
+    summary_card?: SummaryCardRoutePolicy
 }
 
 type RouteGraphRoute = {
@@ -20,6 +25,7 @@ type RouteGraphRoute = {
     target_name: string
     target_platform: string
     mode: RouteModeFlags
+    policy: RoutePolicy
     dedup_contract: Array<'article' | 'payload' | 'window' | 'media'>
 }
 
@@ -62,14 +68,15 @@ function lookupValue(map: Record<string, string> | undefined, keys: Array<string
     return undefined
 }
 
-function resolveMode(formatter: any, targetConfig: ForwardTargetPlatformCommonConfig = {}): RouteModeFlags {
+function resolveMode(
+    formatter: any,
+    targetConfig: ForwardTargetPlatformCommonConfig = {},
+    summaryCardPolicy = resolveSummaryCardRoutePolicy(targetConfig),
+): RouteModeFlags {
     return {
         realtime: !formatter?.aggregation && !(targetConfig as any)?.batch_mode,
         digest: Number(targetConfig.digest_threshold || 0) >= 2,
-        summary_card: Boolean(
-            targetConfig.summary_card === true ||
-                (typeof targetConfig.summary_card === 'object' && targetConfig.summary_card?.enabled !== false),
-        ),
+        summary_card: Boolean(summaryCardPolicy),
         tag_digest: Number(targetConfig.tag_digest_threshold || 0) >= 2,
         media_batch: Number(targetConfig.media_batch_threshold || 0) >= 2,
         aggregation: formatter?.aggregation === true,
@@ -85,6 +92,68 @@ function dedupContract(mode: RouteModeFlags, formatter: any) {
         contracts.push('media')
     }
     return Array.from(new Set(contracts))
+}
+
+function addSummaryCardDiagnostics(
+    diagnostics: RouteGraphDiagnostic[],
+    route_key: string,
+    targetLabel: string,
+    targetPlatform: string,
+    policy?: SummaryCardRoutePolicy,
+) {
+    if (!policy) {
+        return
+    }
+
+    if (policy.send_first_native && !policy.send_first_immediately) {
+        diagnostics.push({
+            severity: 'error',
+            code: 'summary_card_native_first_disabled',
+            message: `${targetLabel} sets send_first_native but disables send_first_immediately, so idle-first native send cannot run`,
+            route_key,
+        })
+    }
+
+    if (
+        !policy.send_first_immediately &&
+        !policy.send_first_native &&
+        policy.media_realtime &&
+        !policy.flush_on_threshold
+    ) {
+        diagnostics.push({
+            severity: 'warn',
+            code: 'summary_card_no_native_idle_first',
+            message: `${targetLabel} uses fixed-window summary media realtime but idle-first native send is disabled`,
+            route_key,
+        })
+    }
+
+    if (policy.media_realtime && policy.include_original_media) {
+        diagnostics.push({
+            severity: 'warn',
+            code: 'summary_card_media_duplicate_risk',
+            message: `${targetLabel} sends media realtime and also includes original media in the summary card`,
+            route_key,
+        })
+    }
+
+    if ((policy.window_alignment !== 'none' || policy.flush_delay_seconds > 0) && policy.flush_on_threshold) {
+        diagnostics.push({
+            severity: 'warn',
+            code: 'summary_card_threshold_preempts_window',
+            message: `${targetLabel} has aligned/delayed summary windows but threshold flushing can still send before the fixed slot`,
+            route_key,
+        })
+    }
+
+    if (policy.media_realtime && policy.media_realtime_text === 'none' && targetPlatform !== 'qq') {
+        diagnostics.push({
+            severity: 'warn',
+            code: 'summary_card_empty_realtime_text_non_qq',
+            message: `${targetLabel} sends realtime media without text on non-QQ target ${targetPlatform}`,
+            route_key,
+        })
+    }
 }
 
 function buildRouteGraph(config: AppConfig) {
@@ -166,7 +235,16 @@ function buildRouteGraph(config: AppConfig) {
                     })
                 }
                 targetSeen.set(targetId, formatterId)
-                const mode = resolveMode(formatter, targetConfig)
+                const summaryCardPolicy = resolveSummaryCardRoutePolicy(targetConfig)
+                const mode = resolveMode(formatter, targetConfig, summaryCardPolicy)
+                const targetName = nodeName(target, targetId)
+                addSummaryCardDiagnostics(
+                    diagnostics,
+                    baseRouteKey,
+                    targetName,
+                    String(target.platform),
+                    summaryCardPolicy,
+                )
                 routes.push({
                     route_key: baseRouteKey,
                     crawler_id: crawlerId,
@@ -174,9 +252,12 @@ function buildRouteGraph(config: AppConfig) {
                     formatter_id: formatterId,
                     formatter_name: nodeName(formatter, formatterId),
                     target_id: targetId,
-                    target_name: nodeName(target, targetId),
+                    target_name: targetName,
                     target_platform: String(target.platform),
                     mode,
+                    policy: {
+                        ...(summaryCardPolicy ? { summary_card: summaryCardPolicy } : {}),
+                    },
                     dedup_contract: dedupContract(mode, formatter),
                 })
             }
