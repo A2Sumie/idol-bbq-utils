@@ -14,6 +14,7 @@ import { Forwarder, PartialForwarderSendError } from '@/middleware/forwarder/bas
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { normalizeCronSecond } from '@/utils/cron'
+import { articleOutboundKey } from '@/services/outbound-message-service'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
@@ -69,6 +70,28 @@ beforeEach(() => {
     ;(DB.OutboundMessage as any).claim = async (data: any) => {
         const existing = outboundRecords.get(data.idempotency_key)
         if (existing && existing.status !== 'failed') {
+            if (
+                existing.route_key !== data.route_key ||
+                existing.target_id !== data.target_id ||
+                (existing.target_platform || null) !== (data.target_platform || null) ||
+                existing.task_kind !== data.task_kind ||
+                (existing.article_key || null) !== (data.article_key || null) ||
+                (existing.synthetic_key || null) !== (data.synthetic_key || null) ||
+                existing.payload_hash !== data.payload_hash
+            ) {
+                existing.segment_results = {
+                    diagnostic: 'suppressed_payload_drift',
+                    existing: {
+                        route_key: existing.route_key,
+                        payload_hash: existing.payload_hash,
+                        status: existing.status,
+                    },
+                    incoming: {
+                        route_key: data.route_key,
+                        payload_hash: data.payload_hash,
+                    },
+                }
+            }
             return { claimed: false, record: existing }
         }
         const now = Math.floor(Date.now() / 1000)
@@ -84,6 +107,7 @@ beforeEach(() => {
         outboundRecords.set(data.idempotency_key, record)
         return { claimed: true, record }
     }
+    ;(DB.OutboundMessage as any).__records = outboundRecords
     ;(DB.OutboundMessage as any).markSending = async (idempotencyKey: string) => {
         const record = outboundRecords.get(idempotencyKey)
         Object.assign(record, {
@@ -185,6 +209,8 @@ beforeEach(() => {
     }
     ;(DB.AggregationWindow as any).listItems = async (windowId: number) =>
         Array.from(aggregationItems.values()).filter((item) => item.window_id === windowId)
+    ;(DB.AggregationWindow as any).__windows = aggregationWindows
+    ;(DB.AggregationWindow as any).__items = aggregationItems
 })
 
 afterEach(() => {
@@ -2315,6 +2341,163 @@ test('summary-card queues are isolated by route for the same target', async () =
     expect(new Set(queues.map((queue: any) => queue.routeKey))).toEqual(
         new Set([`route-a:target:${target.id}`, `route-b:target:${target.id}`]),
     )
+})
+
+test('sendArticles records suppressed payload drift for target-once article outbox keys', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder({ block_until: '32h' } as any, 'target-article-payload-drift')
+    const article = {
+        id: 730,
+        a_id: 'article-payload-drift',
+        platform: Platform.X,
+        username: 'drift member',
+        u_id: 'drift_member',
+        content: 'new payload text',
+        url: 'https://x.com/drift_member/status/730',
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'new rendered payload',
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: () => 'new rendered payload',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const outboundRecords = (DB.OutboundMessage as any).__records as Map<string, any>
+    const outboundKey = articleOutboundKey(target.id, article)
+    outboundRecords.set(outboundKey, {
+        id: 1,
+        idempotency_key: outboundKey,
+        route_key: 'old-route',
+        target_id: target.id,
+        target_platform: target.NAME,
+        task_kind: 'article',
+        article_key: `${article.platform}:${article.a_id}`,
+        synthetic_key: null,
+        payload_hash: 'old-payload-hash',
+        status: 'sent',
+        created_at: article.created_at - 60,
+        updated_at: article.created_at - 60,
+        attempt_count: 1,
+    })
+
+    await (pools as any).sendArticles(
+        undefined,
+        'article-payload-drift-task',
+        [article],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text' } as any,
+        undefined,
+        { routeKey: 'new-route' },
+    )
+
+    const record = outboundRecords.get(outboundKey)
+    expect(target.sent).toHaveLength(0)
+    expect(record.segment_results?.diagnostic).toBe('suppressed_payload_drift')
+    expect(record.segment_results?.existing?.payload_hash).toBe('old-payload-hash')
+    expect(record.segment_results?.incoming?.payload_hash).not.toBe('old-payload-hash')
+})
+
+test('restoreSummaryCardQueues cancels stale open windows instead of restoring them', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-stale-window',
+    )
+    ;(pools as any).forward_to.set(target.id, target)
+
+    const now = Math.floor(Date.now() / 1000)
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    windows.set(1, {
+        id: 1,
+        idempotency_key: 'stale-summary-window',
+        route_key: `route-stale:target:${target.id}`,
+        target_id: target.id,
+        mode: 'summary_card',
+        window_start: now - 24 * 3600 - 1800,
+        window_end: now - 24 * 3600,
+        status: 'open',
+        created_at: now - 24 * 3600,
+        updated_at: now - 24 * 3600,
+        finished_at: null,
+        payload_hash: null,
+    })
+
+    await (pools as any).restoreSummaryCardQueues()
+
+    expect(windows.get(1)?.status).toBe('cancelled')
+    expect(windows.get(1)?.payload_hash).toBe('stale-window')
+    expect((pools as any).summaryCardQueues.size).toBe(0)
+    expect(target.sent).toHaveLength(0)
 })
 
 test('sendArticles folds idle-first summary-card item when it appears as a later reply reference', async () => {

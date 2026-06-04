@@ -658,6 +658,76 @@ namespace DB {
             return Math.min(FAILED_RETRY_MAX_SECONDS, FAILED_RETRY_BASE_SECONDS * 2 ** exponent)
         }
 
+        function hasSuppressedPayloadDrift(
+            existing: DBOutboundMessage,
+            data: {
+                route_key: string
+                target_id: string
+                target_platform?: string | null
+                task_kind: string
+                article_key?: string | null
+                synthetic_key?: string | null
+                payload_hash: string
+            },
+        ) {
+            return (
+                existing.route_key !== data.route_key ||
+                existing.target_id !== data.target_id ||
+                (existing.target_platform || null) !== (data.target_platform || null) ||
+                existing.task_kind !== data.task_kind ||
+                (existing.article_key || null) !== (data.article_key || null) ||
+                (existing.synthetic_key || null) !== (data.synthetic_key || null) ||
+                existing.payload_hash !== data.payload_hash
+            )
+        }
+
+        async function recordSuppressedPayloadDrift(
+            existing: DBOutboundMessage,
+            data: {
+                route_key: string
+                target_id: string
+                target_platform?: string | null
+                task_kind: string
+                article_key?: string | null
+                synthetic_key?: string | null
+                payload_hash: string
+            },
+            now: number,
+        ) {
+            if (!hasSuppressedPayloadDrift(existing, data)) {
+                return existing
+            }
+            const diagnostic = {
+                diagnostic: 'suppressed_payload_drift',
+                observed_at: now,
+                existing: {
+                    route_key: existing.route_key,
+                    target_id: existing.target_id,
+                    target_platform: existing.target_platform || null,
+                    task_kind: existing.task_kind,
+                    article_key: existing.article_key || null,
+                    synthetic_key: existing.synthetic_key || null,
+                    payload_hash: existing.payload_hash,
+                    status: existing.status,
+                },
+                incoming: {
+                    route_key: data.route_key,
+                    target_id: data.target_id,
+                    target_platform: data.target_platform || null,
+                    task_kind: data.task_kind,
+                    article_key: data.article_key || null,
+                    synthetic_key: data.synthetic_key || null,
+                    payload_hash: data.payload_hash,
+                },
+            }
+            return await prisma.outbound_messages.update({
+                where: { idempotency_key: existing.idempotency_key },
+                data: {
+                    segment_results: diagnostic as Prisma.InputJsonValue,
+                },
+            })
+        }
+
         export async function claim(
             data: {
                 idempotency_key: string
@@ -687,7 +757,7 @@ namespace DB {
                     ((existing.status === 'planned' || existing.status === 'sending' || existing.status === 'queued') &&
                         stale)
                 if (!retryable) {
-                    return { claimed: false, record: existing }
+                    return { claimed: false, record: await recordSuppressedPayloadDrift(existing, data, now) }
                 }
                 const record = await prisma.outbound_messages.update({
                     where: { idempotency_key: data.idempotency_key },
@@ -723,9 +793,10 @@ namespace DB {
                 return { claimed: true, record }
             } catch (error) {
                 if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-                    const record = await prisma.outbound_messages.findUniqueOrThrow({
+                    const existingRecord = await prisma.outbound_messages.findUniqueOrThrow({
                         where: { idempotency_key: data.idempotency_key },
                     })
+                    const record = await recordSuppressedPayloadDrift(existingRecord, data, now)
                     return { claimed: false, record }
                 }
                 throw error

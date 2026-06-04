@@ -116,6 +116,7 @@ const DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS = 30 * 60
 const DEFAULT_SUMMARY_CARD_THRESHOLD = 8
 const DEFAULT_SUMMARY_CARD_MAX_ITEMS = 14
 const DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA = 12
+const DEFAULT_SUMMARY_CARD_STALE_GRACE_SECONDS = 3600
 const DEFAULT_BATCH_AGGREGATION_CRON = '0 * * * *'
 const DEFAULT_BATCH_AGGREGATION_WINDOW_SECONDS = 3600
 const HIGH_REALTIME_GROUP_IDS = new Set(['742435777'])
@@ -767,11 +768,20 @@ class ForwarderPools extends BaseCompatibleModel {
     private async restoreSummaryCardQueues() {
         const windows = await DB.AggregationWindow.listOpen('summary_card')
         let restoredCount = 0
+        const now = Math.floor(Date.now() / 1000)
         for (const window of windows) {
             const target = this.forward_to.get(window.target_id)
             if (!target) {
                 await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
                     payload_hash: 'missing-target',
+                }).catch(() => undefined)
+                continue
+            }
+
+            const baseConfig = resolveSummaryCardConfig(target.getEffectiveConfig(undefined))
+            if (baseConfig && this.isSummaryCardWindowStale(window, baseConfig, now)) {
+                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                    payload_hash: 'stale-window',
                 }).catch(() => undefined)
                 continue
             }
@@ -813,6 +823,13 @@ class ForwarderPools extends BaseCompatibleModel {
             if (!config) {
                 await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
                     payload_hash: 'summary-card-disabled',
+                }).catch(() => undefined)
+                continue
+            }
+
+            if (this.isSummaryCardWindowStale(window, config, now)) {
+                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                    payload_hash: 'stale-window',
                 }).catch(() => undefined)
                 continue
             }
@@ -2187,6 +2204,19 @@ class ForwarderPools extends BaseCompatibleModel {
             config.includeOriginalMedia ? 'with-original' : 'card-only',
             config.mediaDuplicateLimit || 0,
         ].join(':')
+    }
+
+    private isSummaryCardWindowStale(
+        window: { window_end?: number | null },
+        config: ResolvedSummaryCardConfig,
+        now: number,
+    ) {
+        const windowEnd = Number(window.window_end || 0)
+        if (!windowEnd) {
+            return false
+        }
+        const graceSeconds = Math.max(DEFAULT_SUMMARY_CARD_STALE_GRACE_SECONDS, config.intervalSeconds * 2)
+        return now > windowEnd + config.flushDelaySeconds + graceSeconds
     }
 
     private async sendImmediateSummaryCardItem(
