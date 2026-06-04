@@ -161,6 +161,64 @@ test('APIManager keeps runtime reload available in api-only mode', async () => {
     expect(reloadCalls).toBe(1)
 })
 
+test('APIManager marks manual crawler run task failed when dispatch throws', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const statusUpdates: any[] = []
+
+    ;(DB.TaskQueue as any).add = async () => ({ id: 88 })
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            name: 'crawler-a',
+                            origin: 'https://x.com',
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    emitter: {
+                        emit: () => {
+                            throw new Error('dispatch unavailable')
+                        },
+                    },
+                }) as any,
+        })
+
+        await expect(
+            (manager as any).handleCrawlerRun(
+                new Request('http://localhost/api/actions/crawlers/run', {
+                    method: 'POST',
+                    body: JSON.stringify({ name: 'crawler-a' }),
+                }),
+            ),
+        ).rejects.toThrow('dispatch unavailable')
+
+        expect(statusUpdates).toEqual([
+            {
+                id: 88,
+                status: 'failed',
+                meta: {
+                    last_error: 'dispatch unavailable',
+                },
+            },
+        ])
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
 test('APIManager resend infers website crawler platform from websites config', async () => {
     const originalGetSingleArticle = DB.Article.getSingleArticle
     const originalTaskAdd = DB.TaskQueue.add

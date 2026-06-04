@@ -1074,10 +1074,17 @@ export class APIManager extends BaseCompatibleModel {
             status: TaskScheduler.TaskStatus.PENDING,
             data: crawler,
         }
-        this.deps.emitter.emit(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, {
-            taskId,
-            task,
-        })
+        try {
+            this.deps.emitter.emit(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, {
+                taskId,
+                task,
+            })
+        } catch (error) {
+            await DB.TaskQueue.updateStatus(queueTask.id, 'failed', {
+                last_error: error instanceof Error ? error.message : String(error),
+            })
+            throw error
+        }
         await DB.TaskQueue.updateStatus(queueTask.id, 'completed', {
             result_summary: `crawler ${crawler.name} dispatched`,
         })
