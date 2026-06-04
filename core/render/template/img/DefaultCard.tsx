@@ -21,6 +21,17 @@ const FC_227_WEBSITE_FEEDS = new Set(['fc-news', 'ticket', 'radio', 'movie', 'ph
 const DEFAULT_PLATFORM_BADGE_WIDTH = 32
 const DEFAULT_CARD_FEATURES = new Set(['media-contain', 'website-inline-media'])
 const MEDIA_GAP = 4
+const CARD_TEXT_SIZE = {
+    xs: 12,
+    sm: 14,
+    base: 16,
+}
+const CARD_LINE_HEIGHT = {
+    xs: '16px',
+    sm: '19px',
+    base: '22px',
+    tightBase: '20px',
+}
 const CARD_TEXT_IGNORABLE_PATTERN = /[\uFE0E\u200B\u200C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
 export const CARD_FONT_FAMILY = [
     'Noto Sans CJK JP',
@@ -449,11 +460,12 @@ function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
                 }}
             >
                 <span
-                    tw="font-bold leading-none"
+                    tw="font-bold"
                     style={{
                         color: '#0284c7',
                         fontFamily: CARD_UI_FONT_FAMILY,
                         fontSize: size * 0.48,
+                        lineHeight: `${size * 0.48}px`,
                     }}
                 >
                     N
@@ -495,10 +507,11 @@ function Avatar({ article, size }: { article: Article; size: 32 | 64 }) {
             }}
         >
             <span
-                tw="font-bold leading-none"
+                tw="font-bold"
                 style={{
                     color: brand.avatarTextColor,
                     fontSize: (brand.avatarFontSizeAt64 * size) / 64,
+                    lineHeight: `${(brand.avatarFontSizeAt64 * size) / 64}px`,
                     letterSpacing: brand.avatarLetterSpacing,
                 }}
             >
@@ -566,8 +579,8 @@ function MiniAvatar({ avatar, size = 26 }: { avatar: MessagePackAvatar; size?: n
             }}
         >
             <span
-                tw="font-bold leading-none text-[#64748b]"
-                style={{ fontFamily: CARD_UI_FONT_FAMILY, fontSize: size * 0.44 }}
+                tw="font-bold text-[#64748b]"
+                style={{ fontFamily: CARD_UI_FONT_FAMILY, fontSize: size * 0.44, lineHeight: `${size * 0.44}px` }}
             >
                 {sanitizeCardText(avatarFallbackText(avatar))}
             </span>
@@ -631,9 +644,11 @@ function MessagePackContent({
                         <div tw="flex flex-col flex-1 min-w-0" style={{ rowGap: '5px' }}>
                             {group.title && (
                                 <div
-                                    tw="text-xs leading-snug text-[#2563eb]"
+                                    tw="text-[#2563eb]"
                                     style={{
                                         fontFamily: CARD_UI_FONT_FAMILY,
+                                        fontSize: CARD_TEXT_SIZE.xs,
+                                        lineHeight: CARD_LINE_HEIGHT.xs,
                                         fontWeight: 700,
                                         overflowWrap: 'anywhere',
                                         wordBreak: 'break-word',
@@ -651,9 +666,11 @@ function MessagePackContent({
                                     <div key={itemIndex} tw="flex flex-col w-full" style={{ rowGap: '4px' }}>
                                         {text && (
                                             <pre
-                                                tw="w-full text-[#202733] my-0 text-sm leading-snug"
+                                                tw="w-full text-[#202733] my-0"
                                                 style={{
                                                     fontFamily: CARD_UI_FONT_FAMILY,
+                                                    fontSize: CARD_TEXT_SIZE.sm,
+                                                    lineHeight: CARD_LINE_HEIGHT.sm,
                                                     whiteSpace: 'pre-wrap',
                                                     fontWeight: 400,
                                                     overflowWrap: 'anywhere',
@@ -678,8 +695,12 @@ function MessagePackContent({
                             })}
                             {Number(group.omitted || 0) > 0 && (
                                 <div
-                                    tw="text-xs leading-snug text-[#64748b]"
-                                    style={{ fontFamily: CARD_UI_FONT_FAMILY }}
+                                    tw="text-[#64748b]"
+                                    style={{
+                                        fontFamily: CARD_UI_FONT_FAMILY,
+                                        fontSize: CARD_TEXT_SIZE.xs,
+                                        lineHeight: CARD_LINE_HEIGHT.xs,
+                                    }}
                                 >
                                     {`另有 ${group.omitted} 条更新已合并`}
                                 </div>
@@ -705,8 +726,10 @@ function MessagePackContent({
 function Metaline({ article }: { article: Article }) {
     return (
         <div
-            tw="flex text-base leading-tight"
+            tw="flex"
             style={{
+                fontSize: CARD_TEXT_SIZE.base,
+                lineHeight: CARD_LINE_HEIGHT.tightBase,
                 maxWidth: '100%',
                 overflowWrap: 'anywhere',
                 wordBreak: 'break-word',
@@ -730,8 +753,10 @@ function AttributionLine({ article }: { article: Article }) {
 
     return (
         <div
-            tw="flex text-xs leading-snug text-[#64748b]"
+            tw="flex text-[#64748b]"
             style={{
+                fontSize: CARD_TEXT_SIZE.xs,
+                lineHeight: CARD_LINE_HEIGHT.xs,
                 fontWeight: 700,
                 maxWidth: '100%',
                 overflowWrap: 'anywhere',
@@ -747,7 +772,7 @@ function AttributionLine({ article }: { article: Article }) {
 
 function Divider({ text, dash }: { text?: string; dash?: boolean }) {
     return (
-        <div tw="flex items-center px-5 h-3 text-xs leading-tight">
+        <div tw="flex items-center px-5 h-3" style={{ fontSize: CARD_TEXT_SIZE.xs, lineHeight: '14px' }}>
             <div
                 tw="border-t border-idol-tertiary flex-grow"
                 style={{
@@ -824,8 +849,10 @@ function MediaGroup({
         <div tw="flex flex-col" style={{ rowGap: '3px' }}>
             {marker && (
                 <div
-                    tw="flex self-start rounded-sm px-1.5 py-0.5 text-[10px] leading-none text-[#64748b] bg-[#f1f5f9]"
+                    tw="flex self-start rounded-sm px-1.5 py-0.5 text-[#64748b] bg-[#f1f5f9]"
                     style={{
+                        fontSize: 10,
+                        lineHeight: '10px',
                         fontWeight: 700,
                     }}
                 >
@@ -880,8 +907,10 @@ function InlineWebsiteContent({
         <div tw="flex flex-col" style={{ rowGap: '4px' }}>
             {title && (
                 <pre
-                    tw="w-full text-[#202733] my-0 text-base leading-snug"
+                    tw="w-full text-[#202733] my-0"
                     style={{
+                        fontSize: CARD_TEXT_SIZE.base,
+                        lineHeight: CARD_LINE_HEIGHT.base,
                         whiteSpace: 'pre-wrap',
                         fontWeight: 700,
                         overflowWrap: 'anywhere',
@@ -895,8 +924,10 @@ function InlineWebsiteContent({
                 block.type === 'text' ? (
                     <pre
                         key={index}
-                        tw="w-full text-[#202733] my-0 text-base leading-snug"
+                        tw="w-full text-[#202733] my-0"
                         style={{
+                            fontSize: CARD_TEXT_SIZE.base,
+                            lineHeight: CARD_LINE_HEIGHT.base,
                             whiteSpace: 'pre-wrap',
                             fontWeight: 400,
                             overflowWrap: 'anywhere',
@@ -1062,8 +1093,10 @@ function ArticleContent({
                 )}
                 {article.translation && (
                     <pre
-                        tw="w-full my-0 text-base leading-snug text-[#1f2937]"
+                        tw="w-full my-0 text-[#1f2937]"
                         style={{
+                            fontSize: CARD_TEXT_SIZE.base,
+                            lineHeight: CARD_LINE_HEIGHT.base,
                             whiteSpace: 'pre-wrap',
                             fontWeight: 400,
                             overflowWrap: 'anywhere',
@@ -1078,8 +1111,10 @@ function ArticleContent({
                 )}
                 {article.content && !useInlineWebsiteBlocks && !useMessagePackBlocks && (
                     <pre
-                        tw="w-full text-[#202733] my-0 text-base leading-snug"
+                        tw="w-full text-[#202733] my-0"
                         style={{
+                            fontSize: CARD_TEXT_SIZE.base,
+                            lineHeight: CARD_LINE_HEIGHT.base,
                             whiteSpace: 'pre-wrap',
                             fontWeight: 400,
                             overflowWrap: 'anywhere',
