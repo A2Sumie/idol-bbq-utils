@@ -884,6 +884,8 @@ namespace DB {
                         synthetic_key: data.synthetic_key || null,
                         payload_hash: data.payload_hash,
                         status: 'planned',
+                        provider_message_ids: Prisma.JsonNull,
+                        segment_results: Prisma.JsonNull,
                         last_error: null,
                         updated_at: now,
                         finished_at: null,
@@ -924,7 +926,10 @@ namespace DB {
                 data: {
                     status: 'sending',
                     attempt_count: { increment: 1 },
+                    provider_message_ids: Prisma.JsonNull,
+                    segment_results: Prisma.JsonNull,
                     updated_at: now,
+                    finished_at: null,
                     last_error: null,
                 },
             })
@@ -937,6 +942,7 @@ namespace DB {
                 data: {
                     status: 'queued',
                     provider_message_ids: (details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    segment_results: Prisma.JsonNull,
                     updated_at: now,
                     finished_at: null,
                     last_error: null,
@@ -958,6 +964,7 @@ namespace DB {
                 data: {
                     status: 'skipped',
                     provider_message_ids: payload as Prisma.InputJsonValue,
+                    segment_results: Prisma.JsonNull,
                     updated_at: now,
                     finished_at: now,
                     last_error: null,
@@ -972,6 +979,7 @@ namespace DB {
                 data: {
                     status: 'sent',
                     provider_message_ids: (providerResult as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    segment_results: Prisma.JsonNull,
                     updated_at: now,
                     finished_at: now,
                     last_error: null,
@@ -985,6 +993,7 @@ namespace DB {
                 where: { idempotency_key },
                 data: {
                     status: 'partial',
+                    provider_message_ids: Prisma.JsonNull,
                     segment_results: (providerResult as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                     last_error: error instanceof Error ? error.message : String(error),
                     updated_at: now,
@@ -999,6 +1008,8 @@ namespace DB {
                 where: { idempotency_key },
                 data: {
                     status: 'failed',
+                    provider_message_ids: Prisma.JsonNull,
+                    segment_results: Prisma.JsonNull,
                     last_error: error instanceof Error ? error.message : String(error),
                     updated_at: now,
                     finished_at: now,

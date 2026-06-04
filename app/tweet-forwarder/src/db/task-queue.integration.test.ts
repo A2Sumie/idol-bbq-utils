@@ -38,6 +38,59 @@ async function createTaskQueueSchema(prisma: PrismaClientInstance) {
     )
 }
 
+async function createOutboundMessageSchema(prisma: PrismaClientInstance) {
+    await prisma.$executeRawUnsafe(`
+        CREATE TABLE "outbound_messages" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "idempotency_key" TEXT NOT NULL,
+            "route_key" TEXT NOT NULL,
+            "target_id" TEXT NOT NULL,
+            "target_platform" TEXT,
+            "task_kind" TEXT NOT NULL,
+            "article_key" TEXT,
+            "synthetic_key" TEXT,
+            "payload_hash" TEXT NOT NULL,
+            "status" TEXT NOT NULL DEFAULT 'planned',
+            "provider_message_ids" JSONB,
+            "segment_results" JSONB,
+            "attempt_count" INTEGER NOT NULL DEFAULT 0,
+            "last_error" TEXT,
+            "created_at" INTEGER NOT NULL,
+            "updated_at" INTEGER NOT NULL,
+            "finished_at" INTEGER
+        )
+    `)
+    await prisma.$executeRawUnsafe(
+        'CREATE UNIQUE INDEX "outbound_messages_idempotency_key_key" ON "outbound_messages"("idempotency_key")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "outbound_messages_target_id_status_idx" ON "outbound_messages"("target_id", "status")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "outbound_messages_route_key_task_kind_idx" ON "outbound_messages"("route_key", "task_kind")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "outbound_messages_article_key_idx" ON "outbound_messages"("article_key")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "outbound_messages_synthetic_key_idx" ON "outbound_messages"("synthetic_key")',
+    )
+}
+
+function outboundData(overrides: Partial<Parameters<typeof DB.OutboundMessage.claim>[0]> = {}) {
+    return {
+        idempotency_key: 'outbound-key',
+        route_key: 'route:target',
+        target_id: 'target-a',
+        target_platform: 'QQ',
+        task_kind: 'summary_card',
+        article_key: 'x:1',
+        synthetic_key: 'window:1',
+        payload_hash: 'payload-a',
+        ...overrides,
+    }
+}
+
 beforeEach(async () => {
     previousPrisma = activePrisma
     tempDir = mkdtempSync(join(tmpdir(), 'idol-bbq-taskqueue-'))
@@ -50,6 +103,7 @@ beforeEach(async () => {
     })
     setPrismaForTesting(testPrisma)
     await createTaskQueueSchema(testPrisma)
+    await createOutboundMessageSchema(testPrisma)
 })
 
 afterEach(async () => {
@@ -159,5 +213,165 @@ test('TaskQueue claim, stale recovery, filtering, and terminal status updates wo
     expect(await DB.TaskQueue.countsByStatus()).toEqual({
         completed: 1,
         pending: 1,
+    })
+})
+
+test('OutboundMessage retry resets stale provider and segment fields on SQLite', async () => {
+    const firstClaim = await DB.OutboundMessage.claim(outboundData())
+    expect(firstClaim.claimed).toBe(true)
+    expect(firstClaim.record).toMatchObject({
+        status: 'planned',
+        attempt_count: 0,
+        provider_message_ids: null,
+        segment_results: null,
+    })
+
+    const sending = await DB.OutboundMessage.markSending('outbound-key')
+    expect(sending).toMatchObject({
+        status: 'sending',
+        attempt_count: 1,
+        provider_message_ids: null,
+        segment_results: null,
+        finished_at: null,
+    })
+
+    const queued = await DB.OutboundMessage.markQueued('outbound-key', {
+        batchKey: 'old-batch',
+        pendingUnits: 1,
+    })
+    expect(queued).toMatchObject({
+        status: 'queued',
+        provider_message_ids: {
+            batchKey: 'old-batch',
+            pendingUnits: 1,
+        },
+        segment_results: null,
+    })
+
+    await testPrisma.outbound_messages.update({
+        where: { idempotency_key: 'outbound-key' },
+        data: {
+            updated_at: Math.floor(Date.now() / 1000) - 3600,
+            segment_results: {
+                diagnostic: 'old-diagnostic',
+            },
+        },
+    })
+
+    const reclaimed = await DB.OutboundMessage.claim(
+        outboundData({
+            route_key: 'route:new-target',
+            payload_hash: 'payload-b',
+        }),
+    )
+    expect(reclaimed.claimed).toBe(true)
+    expect(reclaimed.record).toMatchObject({
+        status: 'planned',
+        route_key: 'route:new-target',
+        payload_hash: 'payload-b',
+        attempt_count: 1,
+        provider_message_ids: null,
+        segment_results: null,
+        last_error: null,
+        finished_at: null,
+    })
+
+    const resent = await DB.OutboundMessage.markSending('outbound-key')
+    expect(resent).toMatchObject({
+        status: 'sending',
+        attempt_count: 2,
+        provider_message_ids: null,
+        segment_results: null,
+        finished_at: null,
+    })
+})
+
+test('OutboundMessage terminal states clear unrelated stale fields on SQLite', async () => {
+    await DB.OutboundMessage.claim(outboundData({ idempotency_key: 'sent-key' }))
+    await DB.OutboundMessage.markSending('sent-key')
+    await testPrisma.outbound_messages.update({
+        where: { idempotency_key: 'sent-key' },
+        data: {
+            segment_results: {
+                diagnostic: 'stale-before-sent',
+            },
+        },
+    })
+    const sent = await DB.OutboundMessage.markSent('sent-key', { message_id: 'msg-1' })
+    expect(sent).toMatchObject({
+        status: 'sent',
+        provider_message_ids: {
+            message_id: 'msg-1',
+        },
+        segment_results: null,
+        last_error: null,
+    })
+
+    await DB.OutboundMessage.claim(outboundData({ idempotency_key: 'partial-key' }))
+    await DB.OutboundMessage.markSending('partial-key')
+    await testPrisma.outbound_messages.update({
+        where: { idempotency_key: 'partial-key' },
+        data: {
+            provider_message_ids: {
+                stale: true,
+            },
+        },
+    })
+    const partial = await DB.OutboundMessage.markPartial(
+        'partial-key',
+        [{ message_id: 'visible-1' }],
+        new Error('tail failed'),
+    )
+    expect(partial).toMatchObject({
+        status: 'partial',
+        provider_message_ids: null,
+        segment_results: [{ message_id: 'visible-1' }],
+        last_error: 'tail failed',
+    })
+
+    await DB.OutboundMessage.claim(outboundData({ idempotency_key: 'failed-key' }))
+    await DB.OutboundMessage.markSending('failed-key')
+    await testPrisma.outbound_messages.update({
+        where: { idempotency_key: 'failed-key' },
+        data: {
+            provider_message_ids: {
+                stale: true,
+            },
+            segment_results: {
+                diagnostic: 'stale-before-failed',
+            },
+        },
+    })
+    const failed = await DB.OutboundMessage.markFailed('failed-key', new Error('network failed'))
+    expect(failed).toMatchObject({
+        status: 'failed',
+        provider_message_ids: null,
+        segment_results: null,
+        last_error: 'network failed',
+    })
+})
+
+test('OutboundMessage suppresses terminal duplicates while recording payload drift on SQLite', async () => {
+    await DB.OutboundMessage.claim(outboundData({ idempotency_key: 'terminal-key' }))
+    await DB.OutboundMessage.markSending('terminal-key')
+    await DB.OutboundMessage.markSent('terminal-key', { message_id: 'msg-1' })
+
+    const suppressed = await DB.OutboundMessage.claim(
+        outboundData({
+            idempotency_key: 'terminal-key',
+            payload_hash: 'payload-changed',
+        }),
+    )
+    expect(suppressed.claimed).toBe(false)
+    expect(suppressed.record.status).toBe('sent')
+    expect(suppressed.record.segment_results).toMatchObject({
+        diagnostic: 'suppressed_payload_drift',
+        existing: {
+            payload_hash: 'payload-a',
+            status: 'sent',
+        },
+        incoming: {
+            payload_hash: 'payload-changed',
+        },
     })
 })
