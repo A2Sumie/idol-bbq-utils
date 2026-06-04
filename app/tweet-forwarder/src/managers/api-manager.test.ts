@@ -27,6 +27,140 @@ test('APIManager adds CIC CORS headers to control responses', () => {
     expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Authorization')
 })
 
+test('APIManager blocks high-risk actions in api-only mode before queue side effects', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    let taskAddCalls = 0
+    ;(DB.TaskQueue as any).add = async () => {
+        taskAddCalls += 1
+        return { id: 1 }
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            name: 'crawler-a',
+                            origin: 'https://x.com',
+                        },
+                    ],
+                    processors: [
+                        {
+                            id: 'processor-a',
+                            name: 'processor-a',
+                            provider: 'noop',
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    emitter: { emit: () => undefined },
+                    forwarderPools: { resendArticle: async () => undefined },
+                    spiderPools: { exportCrawlerCookies: async () => ({ cookies: [] }) },
+                }) as any,
+            getRuntimeMeta: () =>
+                ({
+                    generation: 0,
+                    configPath: 'config.yaml',
+                    mode: 'api-only',
+                    startedAt: new Date(0).toISOString(),
+                    lastReloadedAt: new Date(0).toISOString(),
+                    reloading: false,
+                }) as any,
+        })
+        const server = { timeout: () => undefined }
+        const requests = [
+            ['/api/actions/crawlers/run', { name: 'crawler-a' }],
+            ['/api/actions/articles/simulate', { platform: 'x', content: 'hello' }],
+            ['/api/actions/articles/reprocess', { platform: 'x', id: 1 }],
+            ['/api/actions/articles/resend', { platform: 'x', id: 1, crawlerName: 'crawler-a' }],
+            ['/api/actions/processors/run', { text: 'hello' }],
+            ['/api/cookies/sync', { finder: 'crawler-a' }],
+            ['/api/archives/archive-a/upload', {}],
+            ['/api/server/restart', {}],
+        ] as const
+
+        for (const [pathname, body] of requests) {
+            const response = await (manager as any).dispatchApiRequest(
+                new Request(`http://localhost${pathname}`, {
+                    method: 'POST',
+                    headers: {
+                        Authorization: 'Bearer test-secret',
+                    },
+                    body: JSON.stringify(body),
+                }),
+                server,
+                'test-secret',
+            )
+            expect(response.status).toBe(503)
+            const payload = await response.json()
+            expect(payload).toMatchObject({
+                success: false,
+                error: 'runtime_mode_disabled',
+                runtime_mode: 'api-only',
+            })
+        }
+
+        expect(taskAddCalls).toBe(0)
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('APIManager keeps runtime reload available in api-only mode', async () => {
+    let reloadCalls = 0
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+            }) as any,
+        getDeps: () => ({}),
+        getRuntimeMeta: () =>
+            ({
+                generation: 0,
+                configPath: 'config.yaml',
+                mode: 'api-only',
+                startedAt: new Date(0).toISOString(),
+                lastReloadedAt: new Date(0).toISOString(),
+                reloading: false,
+            }) as any,
+        reloadRuntime: async () => {
+            reloadCalls += 1
+            return {
+                success: true,
+                generation: 1,
+                reloadedAt: new Date(1).toISOString(),
+                configPath: 'config.yaml',
+            }
+        },
+    })
+
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/runtime/reload', {
+            method: 'POST',
+            headers: {
+                Authorization: 'Bearer test-secret',
+            },
+        }),
+        { timeout: () => undefined },
+        'test-secret',
+    )
+
+    expect(response.status).toBe(200)
+    const payload = await response.json()
+    expect(payload.runtime).toMatchObject({
+        success: true,
+        generation: 1,
+    })
+    expect(reloadCalls).toBe(1)
+})
+
 test('APIManager resend infers website crawler platform from websites config', async () => {
     const originalGetSingleArticle = DB.Article.getSingleArticle
     const originalTaskAdd = DB.TaskQueue.add

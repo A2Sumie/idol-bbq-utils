@@ -441,6 +441,26 @@ export class APIManager extends BaseCompatibleModel {
         })
     }
 
+    private getRuntimeMode() {
+        return String(this.runtime.getRuntimeMeta?.().mode || 'online').trim() || 'online'
+    }
+
+    private rejectUnlessOnline(action: string): Response | null {
+        const mode = this.getRuntimeMode()
+        if (mode === 'online') {
+            return null
+        }
+        return jsonResponse(
+            {
+                success: false,
+                error: 'runtime_mode_disabled',
+                message: `${action} is disabled while runtime mode is ${mode}.`,
+                runtime_mode: mode,
+            },
+            503,
+        )
+    }
+
     async drop() {
         if (this.server) {
             this.server.stop()
@@ -487,6 +507,9 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleCookieSync(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Browser cookie sync')
+        if (disabled) return disabled
+
         try {
             const body = (await req.json()) as { finder?: string; crawlerName?: string }
             const finder = String(body.crawlerName || body.finder || '').trim()
@@ -780,6 +803,9 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleServerRestart(): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Server restart')
+        if (disabled) return disabled
+
         this.log?.warn('Server restart requested via API')
         setTimeout(() => {
             this.log?.info('Exiting process for restart...')
@@ -1008,6 +1034,9 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleArchiveUpload(archiveId: string, req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Archive upload')
+        if (disabled) return disabled
+
         try {
             const body = (await req.json()) as any
             const result = await uploadArchiveToBilibili(this.config, decodeURIComponent(archiveId), body, this.log)
@@ -1021,8 +1050,11 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleCrawlerRun(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Crawler run')
+        if (disabled) return disabled
+
         if (!this.deps.emitter) {
-            return new Response('Emitter unavailable', { status: 500 })
+            return new Response('Emitter unavailable', { status: 503 })
         }
         const body = (await req.json()) as { crawler?: string; name?: string }
         const crawlerName = body.crawler || body.name
@@ -1053,6 +1085,9 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleArticleSimulate(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Article simulation')
+        if (disabled) return disabled
+
         const body = (await req.json()) as {
             crawlerName?: string
             platform?: string
@@ -1154,6 +1189,9 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleArticleReprocess(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Article reprocess')
+        if (disabled) return disabled
+
         const body = (await req.json()) as {
             platform?: string
             id?: number
@@ -1196,8 +1234,11 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleArticleResend(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Article resend')
+        if (disabled) return disabled
+
         if (!this.deps.forwarderPools) {
-            return new Response('Forwarder runtime unavailable', { status: 500 })
+            return new Response('Forwarder runtime unavailable', { status: 503 })
         }
         const body = (await req.json()) as {
             platform?: string
@@ -1253,6 +1294,9 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleProcessorRun(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Processor run')
+        if (disabled) return disabled
+
         const body = (await req.json()) as {
             processorId?: string
             action?: 'translate' | 'extract' | 'merge' | 'plan'
