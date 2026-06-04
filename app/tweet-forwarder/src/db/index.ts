@@ -527,6 +527,28 @@ namespace DB {
             })
         }
 
+        export async function claimPending(id: number) {
+            const now = Math.floor(Date.now() / 1000)
+            const updated = await prisma.task_queue.updateMany({
+                where: {
+                    id,
+                    status: 'pending',
+                },
+                data: {
+                    status: 'processing',
+                    updated_at: now,
+                    finished_at: null,
+                    last_error: null,
+                },
+            })
+            if (updated.count === 0) {
+                return null
+            }
+            return await prisma.task_queue.findUnique({
+                where: { id },
+            })
+        }
+
         export async function updateStatus(
             id: number,
             status: string,
@@ -627,6 +649,15 @@ namespace DB {
     }
 
     export namespace OutboundMessage {
+        const FAILED_RETRY_LIMIT = 5
+        const FAILED_RETRY_BASE_SECONDS = 60
+        const FAILED_RETRY_MAX_SECONDS = 3600
+
+        function failedBackoffSeconds(attemptCount: number) {
+            const exponent = Math.max(0, Math.min(attemptCount, 6))
+            return Math.min(FAILED_RETRY_MAX_SECONDS, FAILED_RETRY_BASE_SECONDS * 2 ** exponent)
+        }
+
         export async function claim(
             data: {
                 idempotency_key: string
@@ -646,9 +677,15 @@ namespace DB {
             })
             if (existing) {
                 const stale = existing.updated_at <= now - staleAfterSeconds
+                const failedAttempts = existing.attempt_count || 0
+                const failedRetryable =
+                    existing.status === 'failed' &&
+                    failedAttempts < FAILED_RETRY_LIMIT &&
+                    existing.updated_at <= now - failedBackoffSeconds(failedAttempts)
                 const retryable =
-                    existing.status === 'failed' ||
-                    ((existing.status === 'planned' || existing.status === 'sending') && stale)
+                    failedRetryable ||
+                    ((existing.status === 'planned' || existing.status === 'sending' || existing.status === 'queued') &&
+                        stale)
                 if (!retryable) {
                     return { claimed: false, record: existing }
                 }
@@ -703,6 +740,41 @@ namespace DB {
                     status: 'sending',
                     attempt_count: { increment: 1 },
                     updated_at: now,
+                    last_error: null,
+                },
+            })
+        }
+
+        export async function markQueued(idempotency_key: string, details?: unknown) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.outbound_messages.update({
+                where: { idempotency_key },
+                data: {
+                    status: 'queued',
+                    provider_message_ids: (details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    updated_at: now,
+                    finished_at: null,
+                    last_error: null,
+                },
+            })
+        }
+
+        export async function markSkipped(idempotency_key: string, reason: string, details?: unknown) {
+            const now = Math.floor(Date.now() / 1000)
+            const payload =
+                details === undefined
+                    ? { reason }
+                    : {
+                          reason,
+                          details,
+                      }
+            return await prisma.outbound_messages.update({
+                where: { idempotency_key },
+                data: {
+                    status: 'skipped',
+                    provider_message_ids: payload as Prisma.InputJsonValue,
+                    updated_at: now,
+                    finished_at: now,
                     last_error: null,
                 },
             })
@@ -779,24 +851,30 @@ namespace DB {
             window_start: number
             window_end: number
         }): Promise<DBAggregationWindow> {
-            const existing = await getOpen(data.route_key, data.target_id, data.mode)
+            const existing = await prisma.aggregation_windows.findUnique({
+                where: { idempotency_key: data.idempotency_key },
+            })
             if (existing) {
                 return existing
             }
             const now = Math.floor(Date.now() / 1000)
-            return await prisma.aggregation_windows.upsert({
-                where: { idempotency_key: data.idempotency_key },
-                create: {
-                    ...data,
-                    status: 'open',
-                    created_at: now,
-                    updated_at: now,
-                },
-                update: {
-                    status: 'open',
-                    updated_at: now,
-                },
-            })
+            try {
+                return await prisma.aggregation_windows.create({
+                    data: {
+                        ...data,
+                        status: 'open',
+                        created_at: now,
+                        updated_at: now,
+                    },
+                })
+            } catch (error) {
+                if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                    return await prisma.aggregation_windows.findUniqueOrThrow({
+                        where: { idempotency_key: data.idempotency_key },
+                    })
+                }
+                throw error
+            }
         }
 
         export async function listOpen(mode?: string): Promise<Array<DBAggregationWindow>> {

@@ -120,6 +120,16 @@ beforeEach(() => {
         }
         return record
     }
+    ;(DB.OutboundMessage as any).markQueued = async (idempotencyKey: string, details?: unknown) => {
+        const record = outboundRecords.get(idempotencyKey)
+        Object.assign(record, { status: 'queued', provider_message_ids: details ?? null })
+        return record
+    }
+    ;(DB.OutboundMessage as any).markSkipped = async (idempotencyKey: string, reason: string, details?: unknown) => {
+        const record = outboundRecords.get(idempotencyKey)
+        Object.assign(record, { status: 'skipped', provider_message_ids: { reason, details } })
+        return record
+    }
     ;(DB.OutboundMessage as any).list = async () => Array.from(outboundRecords.values())
     ;(DB.TargetHealth as any).mark = async (data: any) => {
         const record = {
@@ -132,15 +142,9 @@ beforeEach(() => {
     }
     ;(DB.TargetHealth as any).list = async () => Array.from(targetHealth.values())
     ;(DB.AggregationWindow as any).getOrCreateOpen = async (data: any) => {
-        const existing =
-            Array.from(aggregationWindows.values()).find(
-                (window) =>
-                    window.route_key === data.route_key &&
-                    window.target_id === data.target_id &&
-                    window.mode === data.mode &&
-                    window.status === 'open',
-            ) ||
-            Array.from(aggregationWindows.values()).find((window) => window.idempotency_key === data.idempotency_key)
+        const existing = Array.from(aggregationWindows.values()).find(
+            (window) => window.idempotency_key === data.idempotency_key,
+        )
         if (existing) {
             return existing
         }
@@ -195,6 +199,10 @@ function backdateSummaryCardQueues(pools: any, seconds: number) {
     for (const queue of pools.summaryCardQueues.values()) {
         queue.firstQueuedAt = now - seconds
     }
+}
+
+function getSummaryCardQueueForTarget(pools: any, targetId: string) {
+    return Array.from(pools.summaryCardQueues.values()).find((queue: any) => queue.target.id === targetId) as any
 }
 
 test('resolveBatchTargetIds skips targets with bypass_batch enabled', () => {
@@ -2130,7 +2138,183 @@ test('sendArticles does not flush a fresh summary-card queue from stale last sen
     }
 
     expect(target.sent).toHaveLength(0)
-    expect((pools as any).summaryCardQueues.get(target.id)?.items.size).toBe(1)
+    expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(1)
+})
+
+test('ForwarderPools drop does not visibly send a fresh summary-card queue', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-drop-no-send',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-drop-no-send',
+        [
+            {
+                id: 715,
+                a_id: 'summary-drop-no-send',
+                platform: Platform.X,
+                username: 'drop member',
+                u_id: 'drop_member',
+                content: 'fresh queue should survive without visible send',
+                url: 'https://x.com/drop_member/status/715',
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(1)
+    await pools.drop()
+    expect(target.sent).toHaveLength(0)
+})
+
+test('summary-card queues are isolated by route for the same target', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-route-isolation',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    for (const route of ['route-a', 'route-b']) {
+        const index = route === 'route-a' ? 0 : 1
+        await (pools as any).sendArticles(
+            undefined,
+            `summary-route-isolation-${index}`,
+            [
+                {
+                    id: 720 + index,
+                    a_id: `summary-route-isolation-${index}`,
+                    platform: Platform.X,
+                    username: `route member ${index}`,
+                    u_id: `route_member_${index}`,
+                    content: `route isolated text ${index}`,
+                    url: `https://x.com/route_member/status/${index}`,
+                    type: 'tweet',
+                    created_at: now + index,
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+            undefined,
+            { routeKey: route },
+        )
+    }
+
+    const queues = Array.from((pools as any).summaryCardQueues.values()).filter(
+        (queue: any) => queue.target.id === target.id,
+    )
+    expect(queues).toHaveLength(2)
+    expect(new Set(queues.map((queue: any) => queue.routeKey))).toEqual(
+        new Set([`route-a:target:${target.id}`, `route-b:target:${target.id}`]),
+    )
 })
 
 test('sendArticles folds idle-first summary-card item when it appears as a later reply reference', async () => {
@@ -2912,7 +3096,7 @@ test('sendArticles sends summary-card media immediately while keeping text queue
     expect(target.sent[0]?.texts).toEqual([''])
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media?.[0]?.path).toBe('/tmp/realtime-810.jpg')
-    expect((pools as any).summaryCardQueues.get(target.id)?.items.size).toBe(2)
+    expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(2)
 })
 
 test('summary-card aligned windows wait for the configured five-minute delay', async () => {
@@ -3015,7 +3199,7 @@ test('summary-card aligned windows wait for the configured five-minute delay', a
             { render_type: 'text-card' } as any,
         )
 
-        const queue = (pools as any).summaryCardQueues.get(target.id)
+        const queue = getSummaryCardQueueForTarget(pools, target.id)
         queue.windowStart = now - 2100
         queue.windowEnd = now - 299
         await (pools as any).flushDueSummaryCardQueues()
@@ -3121,7 +3305,7 @@ test('idle-first summary-card items can fall back to native article send', async
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toBe('native first text')
     expect(target.sent[0]?.texts[0]).not.toContain('聚合')
-    expect((pools as any).summaryCardQueues.get(target.id)).toBeUndefined()
+    expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
 })
 
 test('summary-card media duplicate budget omits the third visible occurrence', async () => {

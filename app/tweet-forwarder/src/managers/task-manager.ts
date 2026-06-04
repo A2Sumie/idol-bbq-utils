@@ -10,6 +10,15 @@ import type { ProcessorConfig } from '@/types/processor'
 import type { Processor } from '@/types'
 import { isPersistentMediaPath } from '@/services/media-cache-service'
 import { normalizeCronSecond } from '@/utils/cron'
+import { getForwarderProviderResult, PartialForwarderSendError } from '@/middleware/forwarder/base'
+import {
+    payloadHash,
+    providerCode,
+    routeKey,
+    summarizeProviderResult,
+    syntheticOutboundKey,
+    targetRouteKey,
+} from '@/services/outbound-message-service'
 
 interface AggregatePayload {
     platform: Platform
@@ -65,22 +74,26 @@ export class TaskManager extends BaseCompatibleModel {
                 this.log?.info(`Found ${tasks.length} pending tasks`)
             }
             for (const task of tasks) {
-                await DB.TaskQueue.updateStatus(task.id, 'processing')
+                const claimedTask = await DB.TaskQueue.claimPending(task.id)
+                if (!claimedTask) {
+                    this.log?.debug(`Task ${task.id} was already claimed by another worker`)
+                    continue
+                }
                 try {
-                    if (task.type === 'aggregate_daily') {
+                    if (claimedTask.type === 'aggregate_daily') {
                         // Cast payload safely
-                        const payload = task.payload as unknown as AggregatePayload
+                        const payload = claimedTask.payload as unknown as AggregatePayload
                         await this.handleDailyAggregation(payload)
-                    } else if (task.type === 'aggregate_hourly') {
-                        const payload = task.payload as unknown as AggregatePayload
+                    } else if (claimedTask.type === 'aggregate_hourly') {
+                        const payload = claimedTask.payload as unknown as AggregatePayload
                         await this.handleHourlyAggregation(payload)
                     } else {
-                        throw new Error(`Unsupported task type: ${task.type}`)
+                        throw new Error(`Unsupported task type: ${claimedTask.type}`)
                     }
-                    await DB.TaskQueue.updateStatus(task.id, 'completed')
+                    await DB.TaskQueue.updateStatus(claimedTask.id, 'completed')
                 } catch (e) {
-                    this.log?.error(`Task ${task.id} failed: ${e}`)
-                    await DB.TaskQueue.updateStatus(task.id, 'failed')
+                    this.log?.error(`Task ${claimedTask.id} failed: ${e}`)
+                    await DB.TaskQueue.updateStatus(claimedTask.id, 'failed')
                 }
             }
         } catch (e) {
@@ -166,19 +179,13 @@ export class TaskManager extends BaseCompatibleModel {
         }
 
         for (const targetId of idsToSend) {
-            const forwarder = this.forwarderPools.getTarget(targetId)
-            if (forwarder) {
-                try {
-                    await forwarder.send(`Hourly Batch for ${u_id}`, {
-                        timestamp: Math.floor(Date.now() / 1000),
-                        media: mediaFiles.length > 0 ? mediaFiles : undefined,
-                    })
-                } catch (e) {
-                    this.log?.error(`Failed to send hourly batch for ${u_id} to ${targetId}: ${e}`)
-                }
-            } else {
-                this.log?.warn(`Target ${targetId} not found for hourly batch`)
-            }
+            await this.sendAggregateToTarget(
+                'aggregate_hourly',
+                targetId,
+                payload,
+                `Hourly Batch for ${u_id}`,
+                mediaFiles,
+            )
         }
 
         // Cleanup
@@ -254,19 +261,13 @@ export class TaskManager extends BaseCompatibleModel {
         }
 
         for (const targetId of idsToSend) {
-            const forwarder = this.forwarderPools.getTarget(targetId)
-            if (forwarder) {
-                try {
-                    await forwarder.send(`Daily Report for ${u_id}:\n\n${summary}`, {
-                        timestamp: Math.floor(Date.now() / 1000),
-                        media: mediaFiles.length > 0 ? mediaFiles : undefined,
-                    })
-                } catch (e) {
-                    this.log?.error(`Failed to send daily report for ${u_id} to ${targetId}: ${e}`)
-                }
-            } else {
-                this.log?.warn(`Target ${targetId} not found for aggregation result`)
-            }
+            await this.sendAggregateToTarget(
+                'aggregate_daily',
+                targetId,
+                payload,
+                `Daily Report for ${u_id}:\n\n${summary}`,
+                mediaFiles,
+            )
         }
 
         // Cleanup
@@ -278,6 +279,133 @@ export class TaskManager extends BaseCompatibleModel {
                     }
                 } catch (e) {}
             })
+        }
+    }
+
+    private async sendAggregateToTarget(
+        taskKind: 'aggregate_hourly' | 'aggregate_daily',
+        targetId: string,
+        payload: AggregatePayload,
+        text: string,
+        mediaFiles: Array<{ path: string; media_type: 'photo' | 'video' }>,
+    ) {
+        const forwarder = this.forwarderPools.getTarget(targetId)
+        if (!forwarder) {
+            this.log?.warn(`Target ${targetId} not found for ${taskKind}`)
+            return
+        }
+
+        const routeKeyValue = targetRouteKey(
+            routeKey({
+                source: 'batch',
+                crawlerId: payload.u_id,
+                extra: taskKind,
+            }),
+            targetId,
+        )
+        const syntheticKey = `${payload.platform}:${payload.u_id}:${payload.start}:${payload.end}:${targetId}:${taskKind}`
+        const outboundIdempotencyKey = syntheticOutboundKey(targetId, taskKind, syntheticKey)
+        const outboundPayloadHash = payloadHash({
+            routeKey: routeKeyValue,
+            targetId,
+            taskKind,
+            text,
+            media: mediaFiles,
+            extra: {
+                platform: payload.platform,
+                u_id: payload.u_id,
+                start: payload.start,
+                end: payload.end,
+            },
+        })
+
+        try {
+            const outbound = await DB.OutboundMessage.claim({
+                idempotency_key: outboundIdempotencyKey,
+                route_key: routeKeyValue,
+                target_id: targetId,
+                target_platform: forwarder.NAME,
+                task_kind: taskKind,
+                synthetic_key: syntheticKey,
+                payload_hash: outboundPayloadHash,
+            })
+            if (!outbound.claimed) {
+                this.log?.debug(
+                    `${taskKind} outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping ${targetId}`,
+                )
+                return
+            }
+
+            await DB.OutboundMessage.markSending(outboundIdempotencyKey)
+            const sendResult = await forwarder.send(text, {
+                timestamp: Math.floor(Date.now() / 1000),
+                media: mediaFiles.length > 0 ? mediaFiles : undefined,
+                forceSend: true,
+            })
+            if (sendResult.status === 'queued') {
+                await DB.OutboundMessage.markQueued(outboundIdempotencyKey, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: targetId,
+                    provider: forwarder.NAME,
+                    status: 'ok',
+                    last_send_status: 'queued',
+                    details: sendResult,
+                })
+                return
+            }
+            if (sendResult.status === 'blocked') {
+                await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: targetId,
+                    provider: forwarder.NAME,
+                    status: 'ok',
+                    last_send_status: 'blocked',
+                    details: sendResult,
+                })
+                return
+            }
+
+            const providerResult = getForwarderProviderResult(sendResult)
+            await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
+            await DB.TargetHealth.mark({
+                target_id: targetId,
+                provider: forwarder.NAME,
+                status: 'ok',
+                last_send_status: 'sent',
+                last_provider_code: providerCode(providerResult),
+                details: summarizeProviderResult(providerResult),
+            })
+        } catch (error) {
+            this.log?.error(`Failed to send ${taskKind} for ${payload.u_id} to ${targetId}: ${error}`)
+            if (error instanceof PartialForwarderSendError) {
+                await DB.OutboundMessage.markPartial(
+                    outboundIdempotencyKey,
+                    summarizeProviderResult(error.partialResults),
+                    error,
+                ).catch(() => undefined)
+                await DB.TargetHealth.mark({
+                    target_id: targetId,
+                    provider: forwarder.NAME,
+                    status: 'degraded',
+                    last_send_status: 'partial',
+                    last_provider_code: providerCode(error.partialResults),
+                    disabled_reason: error.message,
+                    details: summarizeProviderResult(error.partialResults),
+                }).catch(() => undefined)
+                return
+            }
+            await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+            await DB.TargetHealth.mark({
+                target_id: targetId,
+                provider: forwarder.NAME,
+                status: 'error',
+                last_send_status: 'failed',
+                disabled_reason: error instanceof Error ? error.message : String(error),
+                details: {
+                    route_key: routeKeyValue,
+                    task_kind: taskKind,
+                },
+            }).catch(() => undefined)
         }
     }
 }

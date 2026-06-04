@@ -7,7 +7,12 @@ import type { AppConfig } from '@/types'
 import { Platform, type MediaType, type TaskType } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import type { Article, ArticleWithId, DBFollows } from '@/db'
-import { BaseForwarder, PartialForwarderSendError } from '@/middleware/forwarder/base'
+import {
+    BaseForwarder,
+    getForwarderProviderResult,
+    isForwarderSentResult,
+    PartialForwarderSendError,
+} from '@/middleware/forwarder/base'
 import { type Media, type MediaTool, MediaToolEnum } from '@/types/media'
 import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } from '@/types/forwarder'
 import { getForwarder } from '@/middleware/forwarder'
@@ -818,18 +823,21 @@ class ForwarderPools extends BaseCompatibleModel {
             const lastQueuedAt = Math.max(...Array.from(queueItems.values()).map((item) => item.queuedAt))
             const windowStart = Number(window.window_start || firstQueuedAt)
             const windowEnd = Number(window.window_end || firstQueuedAt + config.intervalSeconds)
-            this.summaryCardQueues.set(this.getSummaryCardQueueKey(target.id, runtime_config, config), {
-                routeKey: window.route_key,
-                windowId: window.id,
-                target,
-                runtime_config,
-                config,
-                items: queueItems,
-                firstQueuedAt,
-                lastQueuedAt,
-                windowStart,
-                windowEnd,
-            })
+            this.summaryCardQueues.set(
+                this.getSummaryCardQueueKey(window.route_key, target.id, runtime_config, config),
+                {
+                    routeKey: window.route_key,
+                    windowId: window.id,
+                    target,
+                    runtime_config,
+                    config,
+                    items: queueItems,
+                    firstQueuedAt,
+                    lastQueuedAt,
+                    windowStart,
+                    windowEnd,
+                },
+            )
             restoredCount += 1
         }
         if (restoredCount > 0) {
@@ -951,7 +959,11 @@ class ForwarderPools extends BaseCompatibleModel {
             clearInterval(this.summaryCardFlushTimer)
             this.summaryCardFlushTimer = undefined
         }
-        await this.flushAllSummaryCardQueues()
+        if (this.summaryCardQueues.size > 0) {
+            this.log?.info(
+                `Keeping ${this.summaryCardQueues.size} durable summary-card queue(s) unsent during pool drop`,
+            )
+        }
         for (const forwarder of this.forward_to.values()) {
             await forwarder.drop().catch((error) => {
                 this.log?.warn(`Failed to drop forwarder ${forwarder.id}: ${error}`)
@@ -1537,16 +1549,20 @@ class ForwarderPools extends BaseCompatibleModel {
                             claimed = await this.claimArticleChain(article, platform, target.id)
                             if (!claimed) {
                                 log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
-                                await DB.OutboundMessage.markSent(outboundIdempotencyKey, {
-                                    skipped: 'forward_by_already_claimed',
-                                })
+                                await DB.OutboundMessage.markSkipped(
+                                    outboundIdempotencyKey,
+                                    'forward_by_already_claimed',
+                                    {
+                                        skipped: 'forward_by_already_claimed',
+                                    },
+                                )
                                 hadNonErrorOutcome = true
                                 return
                             }
                         }
 
                         await DB.OutboundMessage.markSending(outboundIdempotencyKey)
-                        const providerResult = await target.send(text, {
+                        const sendResult = await target.send(text, {
                             media: renderResult.mediaFiles,
                             cardMedia: renderResult.cardMediaFiles,
                             contentMedia: renderResult.originalMediaFiles,
@@ -1555,10 +1571,47 @@ class ForwarderPools extends BaseCompatibleModel {
                             article: cloned_article,
                             forceSend: options?.forceSend,
                         })
-                        await DB.OutboundMessage.markSent(
-                            outboundIdempotencyKey,
-                            summarizeProviderResult(providerResult),
-                        )
+                        if (sendResult.status === 'queued') {
+                            await DB.OutboundMessage.markQueued(outboundIdempotencyKey, {
+                                reason: sendResult.reason,
+                                batchKey: sendResult.batchKey,
+                                pendingUnits: sendResult.pendingUnits,
+                                threshold: sendResult.threshold,
+                            })
+                            if (claimed && !options?.forceSend) {
+                                await this.releaseArticleChain(article, platform, target.id)
+                            }
+                            await DB.TargetHealth.mark({
+                                target_id: target.id,
+                                provider: target.NAME,
+                                status: 'ok',
+                                last_send_status: 'queued',
+                                details: sendResult,
+                            })
+                            error_for_all = false
+                            hadNonErrorOutcome = true
+                            return
+                        }
+                        if (sendResult.status === 'blocked') {
+                            await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
+                            if (claimed && !options?.forceSend) {
+                                await this.releaseArticleChain(article, platform, target.id)
+                            }
+                            await DB.TargetHealth.mark({
+                                target_id: target.id,
+                                provider: target.NAME,
+                                status: 'ok',
+                                last_send_status: 'blocked',
+                                details: sendResult,
+                            })
+                            error_for_all = false
+                            hadNonErrorOutcome = true
+                            return
+                        }
+                        const providerResult = getForwarderProviderResult(sendResult)
+                        const providerSummary = summarizeProviderResult(providerResult)
+                        await DB.OutboundMessage.markSent(outboundIdempotencyKey, providerSummary)
+                        await this.markMediaBatchArticlesSent(target, sendResult, providerSummary)
                         await DB.TargetHealth.mark({
                             target_id: target.id,
                             provider: target.NAME,
@@ -1779,7 +1832,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const now = Math.floor(Date.now() / 1000)
         const summaryRouteKey =
             routeKeyValue || targetRouteKey(routeKey({ source: 'system', crawlerId: 'unknown' }), target.id)
-        const queueKey = this.getSummaryCardQueueKey(target.id, runtime_config, summaryConfig)
+        const queueKey = this.getSummaryCardQueueKey(summaryRouteKey, target.id, runtime_config, summaryConfig)
         const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
         const existingQueue = this.summaryCardQueues.get(queueKey)
         const item: SummaryCardQueueItem = {
@@ -1851,7 +1904,9 @@ class ForwarderPools extends BaseCompatibleModel {
             queue.windowId = window.id
             queue.routeKey = window.route_key
             queue.windowStart = Number(window.window_start || queue.windowStart || queue.firstQueuedAt)
-            queue.windowEnd = Number(window.window_end || queue.windowEnd || queue.firstQueuedAt + summaryConfig.intervalSeconds)
+            queue.windowEnd = Number(
+                window.window_end || queue.windowEnd || queue.firstQueuedAt + summaryConfig.intervalSeconds,
+            )
         }
         queue.target = target
         queue.runtime_config = runtime_config
@@ -1988,7 +2043,7 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
-            const providerResult = await target.send(text, {
+            const sendResult = await target.send(text, {
                 media: mediaFiles,
                 contentMedia: mediaFiles,
                 timestamp: article.created_at,
@@ -1996,6 +2051,29 @@ class ForwarderPools extends BaseCompatibleModel {
                 article: cloneDeep(article),
                 forceSend: true,
             })
+            if (sendResult.status === 'queued') {
+                await DB.OutboundMessage.markQueued(outboundIdempotencyKey, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: target.id,
+                    provider: target.NAME,
+                    status: 'ok',
+                    last_send_status: 'queued',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return false
+            }
+            if (sendResult.status === 'blocked') {
+                await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: target.id,
+                    provider: target.NAME,
+                    status: 'ok',
+                    last_send_status: 'blocked',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return false
+            }
+            const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
             await DB.TargetHealth.mark({
                 target_id: target.id,
@@ -2090,13 +2168,25 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private getSummaryCardQueueKey(
+        routeKeyValue: string,
         targetId: string,
         runtime_config: ForwardTargetPlatformCommonConfig | undefined,
         config: ResolvedSummaryCardConfig,
     ) {
         void runtime_config
-        void config
-        return targetId
+        return [
+            'summary_card',
+            targetId,
+            hashValue(routeKeyValue),
+            config.intervalSeconds,
+            config.threshold,
+            config.flushDelaySeconds,
+            config.windowAlignment,
+            config.flushOnThreshold ? 'threshold' : 'interval',
+            config.mediaRealtime ? `media-${config.mediaRealtimeText}` : 'text',
+            config.includeOriginalMedia ? 'with-original' : 'card-only',
+            config.mediaDuplicateLimit || 0,
+        ].join(':')
     }
 
     private async sendImmediateSummaryCardItem(
@@ -2232,7 +2322,10 @@ class ForwarderPools extends BaseCompatibleModel {
         const title =
             hasStorm && groups.length === 1
                 ? `话题聚合 ${groups[0]?.label || ''}`.trim()
-                : `聚合 ${this.formatSummaryCardRangeForQueue(queue, allItems.map((item) => item.article))}`
+                : `聚合 ${this.formatSummaryCardRangeForQueue(
+                      queue,
+                      allItems.map((item) => item.article),
+                  )}`
         const now = Math.floor(Date.now() / 1000)
         const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems, queue.config, mediaUsage)
         const summaryArticle = this.buildSyntheticSummaryArticle(
@@ -2296,7 +2389,12 @@ class ForwarderPools extends BaseCompatibleModel {
                 )
                 if (['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)) {
                     this.summaryCardLastSentAt.set(
-                        this.getSummaryCardQueueKey(queue.target.id, queue.runtime_config, queue.config),
+                        this.getSummaryCardQueueKey(
+                            queue.routeKey,
+                            queue.target.id,
+                            queue.runtime_config,
+                            queue.config,
+                        ),
                         now,
                     )
                     if (queue.windowId) {
@@ -2310,7 +2408,7 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
-            const providerResult = await queue.target.send(sendText, {
+            const sendResult = await queue.target.send(sendText, {
                 media: mediaFiles,
                 cardMedia: cardResult.cardMediaFiles,
                 contentMedia: originalMediaFiles,
@@ -2319,6 +2417,29 @@ class ForwarderPools extends BaseCompatibleModel {
                 article: summaryArticle,
                 forceSend: true,
             })
+            if (sendResult.status === 'queued') {
+                await DB.OutboundMessage.markQueued(outboundIdempotencyKey, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'queued',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return false
+            }
+            if (sendResult.status === 'blocked') {
+                await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'blocked',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return false
+            }
+            const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
             await DB.TargetHealth.mark({
                 target_id: queue.target.id,
@@ -2334,7 +2455,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 }).catch(() => undefined)
             }
             this.summaryCardLastSentAt.set(
-                this.getSummaryCardQueueKey(queue.target.id, queue.runtime_config, queue.config),
+                this.getSummaryCardQueueKey(queue.routeKey, queue.target.id, queue.runtime_config, queue.config),
                 now,
             )
             this.log?.info(
@@ -2477,9 +2598,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     group.kind === 'storm'
                         ? extractArticleHashtags(item.article).filter(
                               (tag) =>
-                                  !tags.some(
-                                      (stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag),
-                                  ),
+                                  !tags.some((stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag)),
                           )
                         : []
                 const media = this.buildSummaryCardItemMedia(item, 4, queue.config, mediaUsage)
@@ -2495,7 +2614,10 @@ class ForwarderPools extends BaseCompatibleModel {
                 kind: group.kind,
                 label: group.label,
                 title,
-                range: this.formatSummaryCardRangeForQueue(queue, group.items.map((item) => item.article)),
+                range: this.formatSummaryCardRangeForQueue(
+                    queue,
+                    group.items.map((item) => item.article),
+                ),
                 omitted: Math.max(0, group.items.length - shown.length),
                 avatars,
                 items: itemMetas,
@@ -2503,7 +2625,10 @@ class ForwarderPools extends BaseCompatibleModel {
         }
         return {
             total: allItems.length,
-            range: this.formatSummaryCardRangeForQueue(queue, allItems.map((item) => item.article)),
+            range: this.formatSummaryCardRangeForQueue(
+                queue,
+                allItems.map((item) => item.article),
+            ),
             groups: groupMetas,
         }
     }
@@ -2660,7 +2785,9 @@ class ForwarderPools extends BaseCompatibleModel {
         mediaUsage?: SummaryCardMediaUsage,
     ): NonNullable<Article['media']> {
         const fromRenderedFiles = this.renderService.buildCardMediaFromRenderedFiles(
-            this.filterSummaryCardRenderedFiles(item.cardSourceMediaFiles, config, mediaUsage, { renderableOnly: true }),
+            this.filterSummaryCardRenderedFiles(item.cardSourceMediaFiles, config, mediaUsage, {
+                renderableOnly: true,
+            }),
             maxItems,
         )
         if (fromRenderedFiles.length > 0) {
@@ -3091,10 +3218,39 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
-            const providerResult = await group.target.send(digestText, {
+            const sendResult = await group.target.send(digestText, {
                 timestamp: Math.floor(Date.now() / 1000),
                 runtime_config: group.runtime_config,
             })
+            if (sendResult.status === 'queued') {
+                await DB.OutboundMessage.markQueued(outboundIdempotencyKey, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: targetId,
+                    provider: group.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'queued',
+                    details: sendResult,
+                }).catch(() => undefined)
+                for (const article of claimedArticles) {
+                    await this.releaseArticleChain(article, article.platform, targetId)
+                }
+                return []
+            }
+            if (sendResult.status === 'blocked') {
+                await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: targetId,
+                    provider: group.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'blocked',
+                    details: sendResult,
+                }).catch(() => undefined)
+                for (const article of claimedArticles) {
+                    await this.releaseArticleChain(article, article.platform, targetId)
+                }
+                return []
+            }
+            const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
             await DB.TargetHealth.mark({
                 target_id: targetId,
@@ -3288,6 +3444,34 @@ class ForwarderPools extends BaseCompatibleModel {
             currentArticle = currentArticle.ref as ArticleWithId | null
         }
         return true
+    }
+
+    private async markMediaBatchArticlesSent(target: BaseForwarder, sendResult: unknown, providerSummary: unknown) {
+        if (!isForwarderSentResult(sendResult) || !sendResult.batchArticles || sendResult.batchArticles.length === 0) {
+            return
+        }
+
+        for (const batchArticle of sendResult.batchArticles) {
+            const article = batchArticle as ArticleWithId
+            if (!article || !Number.isFinite(Number(article.id)) || article.id < 0 || article.platform === undefined) {
+                continue
+            }
+            const outboundKey = articleOutboundKey(target.id, article)
+            await DB.OutboundMessage.markSent(outboundKey, providerSummary).catch((error) => {
+                this.log?.warn(
+                    `Failed to mark media batch outbound ${outboundKey} sent for ${target.id}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                )
+            })
+            await DB.ForwardBy.save(article.id, article.platform, target.id, 'article').catch((error) => {
+                this.log?.warn(
+                    `Failed to mark media batch article ${article.a_id || article.id} forwarded for ${target.id}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                )
+            })
+        }
     }
 
     private async releaseArticleChain(article: ArticleWithId, platform: Platform, targetId: string) {

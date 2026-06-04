@@ -56,6 +56,39 @@ export interface SendProps {
     forceSend?: boolean
 }
 
+export type ForwarderSendResult =
+    | {
+          status: 'sent'
+          providerResult?: unknown
+          batchArticles?: Article[]
+      }
+    | {
+          status: 'queued'
+          reason: 'media_batch'
+          batchKey: string
+          pendingUnits: number
+          threshold: number
+      }
+    | {
+          status: 'blocked'
+          reason: string
+      }
+
+export function isForwarderSendResult(value: unknown): value is ForwarderSendResult {
+    if (!value || typeof value !== 'object') {
+        return false
+    }
+    return ['sent', 'queued', 'blocked'].includes(String((value as { status?: unknown }).status))
+}
+
+export function isForwarderSentResult(value: unknown): value is Extract<ForwarderSendResult, { status: 'sent' }> {
+    return isForwarderSendResult(value) && value.status === 'sent'
+}
+
+export function getForwarderProviderResult(value: unknown) {
+    return isForwarderSentResult(value) ? value.providerResult : value
+}
+
 class PartialForwarderSendError extends Error {
     readonly partialResults: unknown[]
     readonly failedSegment: string
@@ -98,7 +131,12 @@ abstract class BaseForwarder extends BaseCompatibleModel {
     }
 
     async drop(..._args: any[]): Promise<void> {
-        await this.flushPendingMediaBatches()
+        const discarded = this.discardPendingMediaBatches()
+        if (discarded.items > 0) {
+            this.log?.warn(
+                `Discarded ${discarded.items} pending media batch item(s) for ${this.id} during drop without visible send`,
+            )
+        }
     }
 
     protected createDefaultPipeline(): MiddlewarePipeline {
@@ -160,7 +198,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
     protected minInterval: number = 0
     private lastSentTime: number = 0
 
-    public async send(text: string, props?: SendProps): Promise<any> {
+    public async send(text: string, props?: SendProps): Promise<ForwarderSendResult> {
         const { runtime_config } = props || {}
         const mergedConfig = this.getEffectiveConfig(runtime_config)
 
@@ -178,20 +216,21 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         const shouldSend = await pipeline.execute(context)
 
         if (!shouldSend) {
-            this.log?.warn(context.abortReason || 'Message blocked by middleware')
-            return Promise.resolve()
+            const reason = context.abortReason || 'Message blocked by middleware'
+            this.log?.warn(reason)
+            return { status: 'blocked', reason }
         }
 
         const chunks = (context.metadata.get('chunks') as string[]) || [context.text]
-        const handledByBatch = await this.maybeHandleMediaBatch(chunks, props, mergedConfig)
-        if (handledByBatch) {
+        const batchResult = await this.maybeHandleMediaBatch(chunks, props, mergedConfig)
+        if (batchResult) {
             this.blockRuleMiddleware.commitPending(context)
-            return
+            return batchResult
         }
 
         const result = await this.sendPrepared(chunks, props)
         this.blockRuleMiddleware.commitPending(context)
-        return result
+        return { status: 'sent', providerResult: result }
     }
 
     protected async sendPrepared(texts: string[], props?: SendProps): Promise<any> {
@@ -224,14 +263,12 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         })
     }
 
-    private async flushPendingMediaBatches() {
+    private discardPendingMediaBatches() {
         const batches = Array.from(this.pendingMediaBatches.values())
         this.pendingMediaBatches.clear()
-        for (const batch of batches) {
-            if (batch.items.length === 0) {
-                continue
-            }
-            await this.sendPreparedBatchItems(batch.items, batch.config)
+        return {
+            batches: batches.length,
+            items: batches.reduce((sum, batch) => sum + batch.items.length, 0),
         }
     }
 
@@ -354,23 +391,36 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         return [fallback || normalized.slice(0, basicTextLimit).trimEnd()]
     }
 
-    private async sendPreparedBatchItems(items: PreparedBatchItem[], config: MediaBatchConfig) {
+    private async sendPreparedBatchItems(
+        items: PreparedBatchItem[],
+        config: MediaBatchConfig,
+    ): Promise<Extract<ForwarderSendResult, { status: 'sent' }>> {
         const firstItem = items[0]
         if (!firstItem) {
-            return
+            return { status: 'sent', providerResult: undefined, batchArticles: [] }
         }
 
         const baseProps: SendProps = {
             article: firstItem.article,
             timestamp: firstItem.timestamp,
         }
+        const batchArticles = items
+            .map((item) => item.article)
+            .filter((article): article is Article => Boolean(article))
+        const providerResults: unknown[] = []
 
         if (!config.separateCardMedia) {
-            await this.sendPrepared(this.buildTextChunksFromItems(items), {
-                ...baseProps,
-                media: items.flatMap((item) => item.media),
-            })
-            return
+            providerResults.push(
+                await this.sendPrepared(this.buildTextChunksFromItems(items), {
+                    ...baseProps,
+                    media: items.flatMap((item) => item.media),
+                }),
+            )
+            return {
+                status: 'sent',
+                providerResult: providerResults.length === 1 ? providerResults[0] : providerResults,
+                batchArticles,
+            }
         }
 
         const cardItems = items.filter((item) => item.cardMedia.length > 0)
@@ -378,24 +428,35 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         const splitMediaItems = items.filter((item) => item.cardMedia.length > 0 && item.contentMedia.length > 0)
 
         if (cardItems.length > 0) {
-            await this.sendPrepared(this.buildTextChunksFromItems(cardItems), {
-                ...baseProps,
-                media: cardItems.flatMap((item) => item.cardMedia),
-            })
+            providerResults.push(
+                await this.sendPrepared(this.buildTextChunksFromItems(cardItems), {
+                    ...baseProps,
+                    media: cardItems.flatMap((item) => item.cardMedia),
+                }),
+            )
         }
 
         if (normalItems.length > 0) {
-            await this.sendPrepared(this.buildTextChunksFromItems(normalItems), {
-                ...baseProps,
-                media: normalItems.flatMap((item) => item.media),
-            })
+            providerResults.push(
+                await this.sendPrepared(this.buildTextChunksFromItems(normalItems), {
+                    ...baseProps,
+                    media: normalItems.flatMap((item) => item.media),
+                }),
+            )
         }
 
         if (splitMediaItems.length > 0) {
-            await this.sendPrepared([], {
-                ...baseProps,
-                media: splitMediaItems.flatMap((item) => item.contentMedia),
-            })
+            providerResults.push(
+                await this.sendPrepared([], {
+                    ...baseProps,
+                    media: splitMediaItems.flatMap((item) => item.contentMedia),
+                }),
+            )
+        }
+        return {
+            status: 'sent',
+            providerResult: providerResults.length === 1 ? providerResults[0] : providerResults,
+            batchArticles,
         }
     }
 
@@ -403,31 +464,30 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         texts: string[],
         props: SendProps | undefined,
         mergedConfig: ForwardTargetPlatformCommonConfig,
-    ) {
+    ): Promise<ForwarderSendResult | null> {
         if (props?.forceSend) {
-            return false
+            return null
         }
 
         const batchConfig = this.resolveMediaBatchConfig(mergedConfig)
         if (!batchConfig) {
-            return false
+            return null
         }
 
         if (!props?.article || ![Platform.X, Platform.Twitter].includes(props.article.platform)) {
-            return false
+            return null
         }
 
         const item = this.createPreparedBatchItem(texts, props)
         if (item.unitCount === 0) {
-            return false
+            return null
         }
 
         if (item.hasVideo || item.sourceImageCount >= batchConfig.breakoutImages) {
             this.log?.debug(
                 `Bypassing pending media batch for ${this.id}: source images=${item.sourceImageCount}, hasVideo=${item.hasVideo}`,
             )
-            await this.sendPreparedBatchItems([item], batchConfig)
-            return true
+            return await this.sendPreparedBatchItems([item], batchConfig)
         }
 
         const batchKey = this.buildMediaBatchKey(batchConfig)
@@ -446,10 +506,16 @@ abstract class BaseForwarder extends BaseCompatibleModel {
 
         if (batch.unitCount >= batchConfig.threshold) {
             this.pendingMediaBatches.delete(batchKey)
-            await this.sendPreparedBatchItems(batch.items, batch.config)
+            return await this.sendPreparedBatchItems(batch.items, batch.config)
         }
 
-        return true
+        return {
+            status: 'queued',
+            reason: 'media_batch',
+            batchKey,
+            pendingUnits: batch.unitCount,
+            threshold: batchConfig.threshold,
+        }
     }
 
     protected abstract realSend(texts: string[], props?: SendProps): Promise<any>

@@ -98,24 +98,72 @@ test('QQForwarder batches image-like units until the configured threshold is rea
         return { ok: true }
     }
 
+    const results = []
     for (const index of [1, 2, 3]) {
-        await forwarder.send(`batch text ${index}`, {
-            media: [
-                {
-                    media_type: 'photo',
-                    path: `/tmp/batch-${index}.jpg`,
-                },
-            ],
-            article: {
-                platform: Platform.X,
-            } as any,
-        })
+        results.push(
+            await forwarder.send(`batch text ${index}`, {
+                media: [
+                    {
+                        media_type: 'photo',
+                        path: `/tmp/batch-${index}.jpg`,
+                    },
+                ],
+                article: {
+                    platform: Platform.X,
+                    id: index,
+                    a_id: `batch-${index}`,
+                } as any,
+            }),
+        )
     }
 
+    expect(results.map((result) => result.status)).toEqual(['queued', 'queued', 'sent'])
+    expect(results[2]?.status === 'sent' ? results[2].batchArticles?.map((article: any) => article.a_id) : []).toEqual([
+        'batch-1',
+        'batch-2',
+        'batch-3',
+    ])
     expect(payloads).toHaveLength(1)
     expect(payloads[0].filter((segment: any) => segment.type === 'image')).toHaveLength(3)
     expect(payloads[0][0]?.data?.text).toContain('batch text 1')
     expect(payloads[0][0]?.data?.text).toContain('batch text 3')
+})
+
+test('QQForwarder drops pending image-like batch items without visible send', async () => {
+    const forwarder = new QQForwarder(
+        {
+            group_id: '123',
+            url: 'http://127.0.0.1:3001',
+            token: '',
+            media_batch_threshold: 6,
+        } as any,
+        'qq-batch-drop-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    const payloads: any[] = []
+    ;(forwarder as any).sendWithPayload = async (segments: any) => {
+        payloads.push(segments)
+        return { ok: true }
+    }
+
+    const result = await forwarder.send('queued then drop', {
+        media: [
+            {
+                media_type: 'photo',
+                path: '/tmp/drop-queued.jpg',
+            },
+        ],
+        article: {
+            platform: Platform.X,
+            id: 10,
+            a_id: 'drop-queued',
+        } as any,
+    })
+
+    expect(result.status).toBe('queued')
+    await forwarder.drop()
+    expect(payloads).toHaveLength(0)
 })
 
 test('QQForwarder sends breakout image posts immediately without flushing the pending batch', async () => {
@@ -136,13 +184,13 @@ test('QQForwarder sends breakout image posts immediately without flushing the pe
         return { ok: true }
     }
 
-    await forwarder.send('queued one', {
+    const first = await forwarder.send('queued one', {
         media: [{ media_type: 'photo', path: '/tmp/q1.jpg' }],
         article: {
             platform: Platform.X,
         } as any,
     })
-    await forwarder.send('breakout now', {
+    const breakout = await forwarder.send('breakout now', {
         media: [
             { media_type: 'photo', path: '/tmp/breakout-1.jpg' },
             { media_type: 'photo', path: '/tmp/breakout-2.jpg' },
@@ -152,19 +200,20 @@ test('QQForwarder sends breakout image posts immediately without flushing the pe
             platform: Platform.X,
         } as any,
     })
-    await forwarder.send('queued two', {
+    const second = await forwarder.send('queued two', {
         media: [{ media_type: 'photo', path: '/tmp/q2.jpg' }],
         article: {
             platform: Platform.X,
         } as any,
     })
-    await forwarder.send('queued three', {
+    const third = await forwarder.send('queued three', {
         media: [{ media_type: 'photo', path: '/tmp/q3.jpg' }],
         article: {
             platform: Platform.X,
         } as any,
     })
 
+    expect([first.status, breakout.status, second.status, third.status]).toEqual(['queued', 'sent', 'queued', 'sent'])
     expect(payloads).toHaveLength(2)
     expect(payloads[0].filter((segment: any) => segment.type === 'image')).toHaveLength(3)
     expect(payloads[0][0]?.data?.text).toContain('breakout now')
@@ -192,7 +241,7 @@ test('QQForwarder can send rendered cards separately from original media', async
         return { ok: true }
     }
 
-    await forwarder.send('card caption', {
+    const result = await forwarder.send('card caption', {
         media: [
             { media_type: 'photo', path: '/tmp/card.jpg' },
             { media_type: 'photo', path: '/tmp/photo-1.jpg' },
@@ -208,6 +257,7 @@ test('QQForwarder can send rendered cards separately from original media', async
         } as any,
     })
 
+    expect(result.status).toBe('sent')
     expect(payloads).toHaveLength(2)
     expect(payloads[0].filter((segment: any) => segment.type === 'image')).toHaveLength(1)
     expect(payloads[0][0]?.data?.text).toContain('card caption')
@@ -233,24 +283,30 @@ test('QQForwarder counts text as one unit even when a rendered card is present',
         return { ok: true }
     }
 
+    const results = []
     for (const index of [1, 2]) {
-        await forwarder.send(`card text ${index}`, {
-            media: [
-                { media_type: 'photo', path: `/tmp/card-${index}.jpg`, sourceArticleId: `article-${index}` },
-                { media_type: 'photo', path: `/tmp/photo-${index}.jpg`, sourceArticleId: `article-${index}` },
-            ] as any,
-            cardMedia: [{ media_type: 'photo', path: `/tmp/card-${index}.jpg`, sourceArticleId: `article-${index}` }] as any,
-            contentMedia: [
-                { media_type: 'photo', path: `/tmp/photo-${index}.jpg`, sourceArticleId: `article-${index}` },
-            ] as any,
-            article: {
-                platform: Platform.X,
-                a_id: `article-${index}`,
-                u_id: 'member_a',
-            } as any,
-        })
+        results.push(
+            await forwarder.send(`card text ${index}`, {
+                media: [
+                    { media_type: 'photo', path: `/tmp/card-${index}.jpg`, sourceArticleId: `article-${index}` },
+                    { media_type: 'photo', path: `/tmp/photo-${index}.jpg`, sourceArticleId: `article-${index}` },
+                ] as any,
+                cardMedia: [
+                    { media_type: 'photo', path: `/tmp/card-${index}.jpg`, sourceArticleId: `article-${index}` },
+                ] as any,
+                contentMedia: [
+                    { media_type: 'photo', path: `/tmp/photo-${index}.jpg`, sourceArticleId: `article-${index}` },
+                ] as any,
+                article: {
+                    platform: Platform.X,
+                    a_id: `article-${index}`,
+                    u_id: 'member_a',
+                } as any,
+            }),
+        )
     }
 
+    expect(results.map((result) => result.status)).toEqual(['queued', 'sent'])
     expect(payloads).toHaveLength(1)
     expect(payloads[0].filter((segment: any) => segment.type === 'image')).toHaveLength(4)
     expect(payloads[0][0]?.data?.text).toContain('card text 1')
@@ -275,19 +331,20 @@ test('QQForwarder does not batch non-X articles even when the target has a media
         return { ok: true }
     }
 
-    await forwarder.send('website direct 1', {
+    const first = await forwarder.send('website direct 1', {
         media: [{ media_type: 'photo', path: '/tmp/non-x-1.jpg' }],
         article: {
             platform: Platform.Website,
         } as any,
     })
-    await forwarder.send('website direct 2', {
+    const second = await forwarder.send('website direct 2', {
         media: [{ media_type: 'photo', path: '/tmp/non-x-2.jpg' }],
         article: {
             platform: Platform.Website,
         } as any,
     })
 
+    expect([first.status, second.status]).toEqual(['sent', 'sent'])
     expect(payloads).toHaveLength(2)
 })
 
@@ -309,7 +366,7 @@ test('QQForwarder does not count ref media from users outside the list context',
         return { ok: true }
     }
 
-    await forwarder.send('root text', {
+    const first = await forwarder.send('root text', {
         media: [
             {
                 media_type: 'photo',
@@ -359,9 +416,10 @@ test('QQForwarder does not count ref media from users outside the list context',
         } as any,
     })
 
+    expect(first.status).toBe('queued')
     expect(payloads).toHaveLength(0)
 
-    await forwarder.send('follow-up text', {
+    const second = await forwarder.send('follow-up text', {
         media: [
             {
                 media_type: 'photo',
@@ -394,6 +452,7 @@ test('QQForwarder does not count ref media from users outside the list context',
         } as any,
     })
 
+    expect(second.status).toBe('sent')
     expect(payloads).toHaveLength(1)
     expect(payloads[0].filter((segment: any) => segment.type === 'image')).toHaveLength(3)
     expect(payloads[0][0]?.data?.text).toContain('root text')
