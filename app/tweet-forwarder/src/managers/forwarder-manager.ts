@@ -9,6 +9,7 @@ import DB from '@/db'
 import type { Article, ArticleWithId, DBFollows } from '@/db'
 import {
     BaseForwarder,
+    type DiscardedMediaBatch,
     getForwarderProviderResult,
     isForwarderSentResult,
     PartialForwarderSendError,
@@ -956,6 +957,45 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
+    private async markDiscardedMediaBatchOutboundsSkipped(target: BaseForwarder, batches: DiscardedMediaBatch[]) {
+        let marked = 0
+        for (const batch of batches) {
+            for (const item of batch.items) {
+                const article = item.article as ArticleWithId | undefined
+                const outboundKey =
+                    item.outboundKey ||
+                    (article && article.a_id && article.platform !== undefined
+                        ? articleOutboundKey(target.id, article)
+                        : null)
+                if (!outboundKey) {
+                    continue
+                }
+
+                try {
+                    await DB.OutboundMessage.markSkipped(outboundKey, 'media_batch_discarded_on_drop', {
+                        skipped: 'media_batch_discarded_on_drop',
+                        batchKey: batch.batchKey,
+                        pendingUnits: batch.pendingUnits,
+                        threshold: batch.threshold,
+                        unitCount: item.unitCount,
+                        articleKey: article ? articleKey(article) : null,
+                    })
+                    marked += 1
+                } catch (error) {
+                    this.log?.warn(
+                        `Failed to mark discarded media batch outbound ${outboundKey} skipped for ${target.id}: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    )
+                }
+            }
+        }
+
+        if (marked > 0) {
+            this.log?.warn(`Marked ${marked} discarded media batch outbound(s) skipped for ${target.id}`)
+        }
+    }
+
     async drop(...args: any[]): Promise<void> {
         this.log?.info('Dropping Pools...')
         this.emitter.off(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
@@ -969,6 +1009,8 @@ class ForwarderPools extends BaseCompatibleModel {
             )
         }
         for (const forwarder of this.forward_to.values()) {
+            const discardedMediaBatches = forwarder.drainPendingMediaBatches()
+            await this.markDiscardedMediaBatchOutboundsSkipped(forwarder, discardedMediaBatches)
             await forwarder.drop().catch((error) => {
                 this.log?.warn(`Failed to drop forwarder ${forwarder.id}: ${error}`)
             })
@@ -1633,6 +1675,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             runtime_config,
                             article: cloned_article,
                             forceSend: options?.forceSend,
+                            outboundKey: outboundIdempotencyKey,
                         })
                         if (sendResult.status === 'queued') {
                             await DB.OutboundMessage.markQueued(outboundIdempotencyKey, {
@@ -3609,12 +3652,9 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
 
-        for (const batchArticle of sendResult.batchArticles) {
-            const article = batchArticle as ArticleWithId
-            if (!article || !Number.isFinite(Number(article.id)) || article.id < 0 || article.platform === undefined) {
-                continue
-            }
-            const outboundKey = articleOutboundKey(target.id, article)
+        const markedOutboundKeys = new Set<string>()
+        for (const outboundKey of sendResult.batchOutbounds || []) {
+            markedOutboundKeys.add(outboundKey)
             await DB.OutboundMessage.markSent(outboundKey, providerSummary).catch((error) => {
                 this.log?.warn(
                     `Failed to mark media batch outbound ${outboundKey} sent for ${target.id}: ${
@@ -3622,6 +3662,23 @@ class ForwarderPools extends BaseCompatibleModel {
                     }`,
                 )
             })
+        }
+
+        for (const batchArticle of sendResult.batchArticles) {
+            const article = batchArticle as ArticleWithId
+            if (!article || !Number.isFinite(Number(article.id)) || article.id < 0 || article.platform === undefined) {
+                continue
+            }
+            const outboundKey = articleOutboundKey(target.id, article)
+            if (!markedOutboundKeys.has(outboundKey)) {
+                await DB.OutboundMessage.markSent(outboundKey, providerSummary).catch((error) => {
+                    this.log?.warn(
+                        `Failed to mark media batch outbound ${outboundKey} sent for ${target.id}: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    )
+                })
+            }
             await DB.ForwardBy.save(article.id, article.platform, target.id, 'article').catch((error) => {
                 this.log?.warn(
                     `Failed to mark media batch article ${article.a_id || article.id} forwarded for ${target.id}: ${

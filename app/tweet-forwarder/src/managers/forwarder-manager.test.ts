@@ -2099,6 +2099,96 @@ test('sendArticles does not increment article error count when every target is i
     expect(outboundRecord?.provider_message_ids?.reason).toBe('old_article')
 })
 
+test('drop marks queued media-batch outbound rows skipped', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            media_batch_threshold: 6,
+        } as any,
+        'target-media-batch-drop',
+    )
+    ;(pools as any).forward_to.set(target.id, target)
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const mediaFile = {
+        media_type: 'photo',
+        path: '/tmp/media-batch-drop.jpg',
+        sourceArticleId: 'media-batch-drop',
+        sourceUrl: 'https://example.com/media-batch-drop.jpg',
+    }
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'queued media batch',
+            mediaFiles: [mediaFile],
+            cardMediaFiles: [],
+            originalMediaFiles: [mediaFile],
+        }),
+        cleanup: () => undefined,
+    }
+
+    const article = {
+        id: 206,
+        a_id: 'media-batch-drop',
+        platform: Platform.X,
+        created_at: Math.floor(Date.now() / 1000),
+        content: 'queued media batch',
+        ref: null,
+    } as any
+
+    await (pools as any).sendArticles(
+        undefined,
+        'media-batch-drop-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: undefined,
+            },
+        ],
+        {
+            render_type: 'text-compact',
+        } as any,
+    )
+
+    const outboundKey = articleOutboundKey(target.id, article)
+    const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
+    expect(target.sent).toHaveLength(0)
+    expect(outboundRecord?.status).toBe('queued')
+    expect(outboundRecord?.provider_message_ids?.reason).toBe('media_batch')
+
+    await pools.drop()
+
+    expect(outboundRecord?.status).toBe('skipped')
+    expect(outboundRecord?.provider_message_ids?.reason).toBe('media_batch_discarded_on_drop')
+    expect(outboundRecord?.provider_message_ids?.details?.batchKey).toBeString()
+})
+
 test('sendArticles rate-limits summary-card sends to one card per interval', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

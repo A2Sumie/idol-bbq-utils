@@ -30,6 +30,7 @@ type MediaFile = {
 
 interface PreparedBatchItem {
     article?: Article
+    outboundKey?: string
     timestamp?: number
     text: string
     media: MediaFile[]
@@ -46,6 +47,21 @@ interface MediaBatchConfig {
     separateCardMedia: boolean
 }
 
+export interface DiscardedMediaBatchItem {
+    article?: Article
+    outboundKey?: string
+    unitCount: number
+    sourceImageCount: number
+    hasVideo: boolean
+}
+
+export interface DiscardedMediaBatch {
+    batchKey: string
+    pendingUnits: number
+    threshold: number
+    items: DiscardedMediaBatchItem[]
+}
+
 export interface SendProps {
     media?: MediaFile[]
     cardMedia?: MediaFile[]
@@ -54,6 +70,7 @@ export interface SendProps {
     runtime_config?: ForwardTargetPlatformCommonConfig
     article?: Article
     forceSend?: boolean
+    outboundKey?: string
 }
 
 export type ForwarderSendResult =
@@ -61,6 +78,7 @@ export type ForwarderSendResult =
           status: 'sent'
           providerResult?: unknown
           batchArticles?: Article[]
+          batchOutbounds?: string[]
       }
     | {
           status: 'queued'
@@ -68,6 +86,7 @@ export type ForwarderSendResult =
           batchKey: string
           pendingUnits: number
           threshold: number
+          outboundKey?: string
       }
     | {
           status: 'blocked'
@@ -131,10 +150,11 @@ abstract class BaseForwarder extends BaseCompatibleModel {
     }
 
     async drop(..._args: any[]): Promise<void> {
-        const discarded = this.discardPendingMediaBatches()
-        if (discarded.items > 0) {
+        const discarded = this.drainPendingMediaBatches()
+        const discardedItems = discarded.reduce((sum, batch) => sum + batch.items.length, 0)
+        if (discardedItems > 0) {
             this.log?.warn(
-                `Discarded ${discarded.items} pending media batch item(s) for ${this.id} during drop without visible send`,
+                `Discarded ${discardedItems} pending media batch item(s) for ${this.id} during drop without visible send`,
             )
         }
     }
@@ -263,13 +283,21 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         })
     }
 
-    private discardPendingMediaBatches() {
-        const batches = Array.from(this.pendingMediaBatches.values())
+    public drainPendingMediaBatches(): DiscardedMediaBatch[] {
+        const batches = Array.from(this.pendingMediaBatches.entries()).map(([batchKey, batch]) => ({
+            batchKey,
+            pendingUnits: batch.unitCount,
+            threshold: batch.config.threshold,
+            items: batch.items.map((item) => ({
+                article: item.article,
+                outboundKey: item.outboundKey,
+                unitCount: item.unitCount,
+                sourceImageCount: item.sourceImageCount,
+                hasVideo: item.hasVideo,
+            })),
+        }))
         this.pendingMediaBatches.clear()
-        return {
-            batches: batches.length,
-            items: batches.reduce((sum, batch) => sum + batch.items.length, 0),
-        }
+        return batches
     }
 
     private resolveMediaBatchConfig(config: ForwardTargetPlatformCommonConfig): MediaBatchConfig | null {
@@ -356,6 +384,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
 
         return {
             article: props?.article,
+            outboundKey: props?.outboundKey,
             timestamp: props?.timestamp,
             text,
             media: normalizedMedia,
@@ -407,6 +436,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         const batchArticles = items
             .map((item) => item.article)
             .filter((article): article is Article => Boolean(article))
+        const batchOutbounds = items.map((item) => item.outboundKey).filter((key): key is string => Boolean(key))
         const providerResults: unknown[] = []
 
         if (!config.separateCardMedia) {
@@ -420,6 +450,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
                 status: 'sent',
                 providerResult: providerResults.length === 1 ? providerResults[0] : providerResults,
                 batchArticles,
+                batchOutbounds,
             }
         }
 
@@ -457,6 +488,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             status: 'sent',
             providerResult: providerResults.length === 1 ? providerResults[0] : providerResults,
             batchArticles,
+            batchOutbounds,
         }
     }
 
@@ -515,6 +547,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             batchKey,
             pendingUnits: batch.unitCount,
             threshold: batchConfig.threshold,
+            outboundKey: item.outboundKey,
         }
     }
 

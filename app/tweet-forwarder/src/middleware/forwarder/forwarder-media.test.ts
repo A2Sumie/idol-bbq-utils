@@ -159,9 +159,13 @@ test('QQForwarder drops pending image-like batch items without visible send', as
             id: 10,
             a_id: 'drop-queued',
         } as any,
+        outboundKey: 'article:qq-batch-drop-test:1:drop-queued',
     })
 
     expect(result.status).toBe('queued')
+    const discarded = forwarder.drainPendingMediaBatches()
+    expect(discarded).toHaveLength(1)
+    expect(discarded[0]?.items[0]?.outboundKey).toBe('article:qq-batch-drop-test:1:drop-queued')
     await forwarder.drop()
     expect(payloads).toHaveLength(0)
 })
