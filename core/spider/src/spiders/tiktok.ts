@@ -15,7 +15,7 @@ enum ArticleTypeEnum {
 
 class TiktokSpider extends BaseSpider {
     // extends from XBaseSpider regex
-    static _VALID_URL = /(https:\/\/)?(www\.)?tiktok\.com\/@(?<id>\w+)/
+    static _VALID_URL = /^(https:\/\/)?(www\.)?tiktok\.com\/@(?<id>[A-Za-z0-9._]+)\/?(?:\?.*)?$/i
     static _PLATFORM = Platform.TikTok
     BASE_URL: string = 'https://www.tiktok.com/'
     NAME: string = 'Tiktok Generic Spider'
@@ -116,6 +116,30 @@ namespace TiktokApiJsonParser {
         return text.match(/<script\s*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/)?.[1] || null
     }
 
+    function pickUrl(value: any): string | null {
+        if (!value) {
+            return null
+        }
+        if (typeof value === 'string') {
+            return value
+        }
+        if (Array.isArray(value)) {
+            return (
+                value.find((item) => typeof item === 'string' && item.includes('aweme/v1/play')) ||
+                value.find((item) => typeof item === 'string') ||
+                null
+            )
+        }
+        return pickUrl(
+            value.UrlList ||
+                value.url_list ||
+                value.PlayAddr?.UrlList ||
+                value.playAddr?.url_list ||
+                value.Data ||
+                value.src,
+        )
+    }
+
     async function loadUniversalData(url: string, page?: Page, cookieString?: string): Promise<string> {
         const headers = buildHeaders(url, cookieString)
         const webpage = await HTTPClient.download_webpage(url, headers)
@@ -152,7 +176,8 @@ namespace TiktokApiJsonParser {
         }
 
         const arr = [] as Array<GenericMediaInfo>
-        const pushMedia = (type: GenericMediaInfo['type'], url?: string | null) => {
+        const pushMedia = (type: GenericMediaInfo['type'], value?: unknown) => {
+            const url = pickUrl(value)
             if (!url) {
                 return
             }
@@ -162,30 +187,6 @@ namespace TiktokApiJsonParser {
             })
         }
 
-        const pickUrl = (value: any): string | null => {
-            if (!value) {
-                return null
-            }
-            if (typeof value === 'string') {
-                return value
-            }
-            if (Array.isArray(value)) {
-                return (
-                    value.find((item) => typeof item === 'string' && item.includes('aweme/v1/play')) ||
-                    value.find((item) => typeof item === 'string') ||
-                    null
-                )
-            }
-            return pickUrl(
-                value.UrlList ||
-                    value.url_list ||
-                    value.PlayAddr?.UrlList ||
-                    value.playAddr?.url_list ||
-                    value.Data ||
-                    value.src,
-            )
-        }
-
         // cover
         pushMedia('video_thumbnail', video.cover)
         pushMedia('video_thumbnail', video.originCover)
@@ -193,10 +194,12 @@ namespace TiktokApiJsonParser {
 
         // Prefer the best playable address, but never fail the whole post if bitrate metadata is missing.
         const bitrateInfo = Array.isArray(video.bitrateInfo) ? [...video.bitrateInfo] : []
-        const bestBitrate = bitrateInfo.sort((a: any, b: any) => (b?.Bitrate || 0) - (a?.Bitrate || 0))[0]
-        pushMedia('video', pickUrl(bestBitrate?.PlayAddr))
-        pushMedia('video', pickUrl(video.playAddr))
-        pushMedia('video', pickUrl(video.downloadAddr))
+        const bestBitrate = bitrateInfo.sort(
+            (a: any, b: any) => (b?.Bitrate || b?.bitrate || 0) - (a?.Bitrate || a?.bitrate || 0),
+        )[0]
+        pushMedia('video', bestBitrate?.PlayAddr || bestBitrate?.playAddr)
+        pushMedia('video', video.playAddr)
+        pushMedia('video', video.downloadAddr)
 
         const dedup = new Map<string, GenericMediaInfo>()
         for (const media of arr) {
@@ -221,7 +224,7 @@ namespace TiktokApiJsonParser {
             has_media: media.length > 0,
             media,
             extra: null,
-            u_avatar: author?.avatarLarger ? author.avatarLarger.replace('\\u0026', '&') : null,
+            u_avatar: pickUrl(author?.avatarLarger)?.replace('\\u0026', '&') || null,
         }
     }
 

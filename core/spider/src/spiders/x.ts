@@ -1812,6 +1812,22 @@ namespace XApiJsonParser {
         if (!media) {
             return null
         }
+        const pickVideoVariantUrl = (variants: any) => {
+            if (!Array.isArray(variants) || variants.length === 0) {
+                return null
+            }
+            const playableVariants = variants.filter((variant: any) => typeof variant?.url === 'string' && variant.url)
+            if (playableVariants.length === 0) {
+                return null
+            }
+            const mp4Variants = playableVariants.filter((variant: any) =>
+                String(variant?.content_type || '').includes('mp4'),
+            )
+            const candidates = mp4Variants.length > 0 ? mp4Variants : playableVariants
+            return candidates
+                .sort((a: any, b: any) => (b?.bitrate || 0) - (a?.bitrate || 0))[0]
+                ?.url
+        }
         return media
             .map((m: any) => {
                 const { media_url_https, video_info, type, ext_alt_text } = m
@@ -1823,13 +1839,14 @@ namespace XApiJsonParser {
                     }
                 }
                 if (type === 'video' || type === 'animated_gif') {
+                    const videoUrl = pickVideoVariantUrl(video_info?.variants)
                     return [
-                        {
-                            type: 'video',
-                            url: video_info?.variants
-                                ?.filter((i: { bitrate?: number }) => i.bitrate !== undefined)
-                                .sort((a: { bitrate: number }, b: { bitrate: number }) => b.bitrate - a.bitrate)[0].url,
-                        },
+                        videoUrl
+                            ? {
+                                  type: 'video',
+                                  url: videoUrl,
+                              }
+                            : null,
                         {
                             type: 'video_thumbnail',
                             url: media_url_https,
@@ -1954,7 +1971,7 @@ namespace XApiJsonParser {
             tweet.extra = null
         }
 
-        let urls = legacy.entities.urls || []
+        let urls = legacy.entities?.urls || []
         for (const u of urls) {
             if (u.expanded_url && !u.expanded_url.startsWith('https://x.com/')) {
                 tweet.content = tweet.content?.replace(u.url, u.expanded_url) ?? null
@@ -1962,7 +1979,7 @@ namespace XApiJsonParser {
                 tweet.content = tweet.content?.replace(u.url, '') ?? null
             }
         }
-        let media_urls = legacy.entities.media?.map((m: { url: string }) => m.url) || []
+        let media_urls = legacy.entities?.media?.map((m: { url: string }) => m.url) || []
         for (const url of media_urls) {
             tweet.content = tweet.content?.replace(url, '') ?? null
         }
@@ -2002,8 +2019,8 @@ namespace XApiJsonParser {
             u_avatar: userLegacy?.profile_image_url_https?.replace('_normal', ''),
         } as GenericArticle<Platform.X>
 
-        let urls = legacy.entities.urls || []
-        let media_urls = legacy.entities.media?.map((m: { url: string }) => m.url) || []
+        let urls = legacy.entities?.urls || []
+        let media_urls = legacy.entities?.media?.map((m: { url: string }) => m.url) || []
         for (const u of urls) {
             if (u.expanded_url && !u.expanded_url.startsWith('https://x.com/')) {
                 tweet.content = tweet.content?.replace(u.url, u.expanded_url) ?? null

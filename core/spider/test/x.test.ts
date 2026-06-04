@@ -212,6 +212,101 @@ test('X replies parser keeps direct reply timeline entries', async () => {
     expect(replies[0]?.ref).toBe('200')
 })
 
+test('X parser keeps video variants without bitrate', async () => {
+    const result = buildXTimelineTweetResult('301', 'video_member', 'video post https://t.co/media')
+    result.legacy.entities.media = [
+        {
+            url: 'https://t.co/media',
+            media_url_https: 'https://pbs.twimg.com/ext_tw_video_thumb/301/pu/img/thumb.jpg',
+            type: 'video',
+        },
+    ]
+    ;(result.legacy as any).extended_entities = {
+        media: [
+            {
+                url: 'https://t.co/media',
+                media_url_https: 'https://pbs.twimg.com/ext_tw_video_thumb/301/pu/img/thumb.jpg',
+                type: 'video',
+                video_info: {
+                    variants: [
+                        {
+                            content_type: 'application/x-mpegURL',
+                            url: 'https://video.twimg.com/ext_tw_video/301/playlist.m3u8',
+                        },
+                        {
+                            content_type: 'video/mp4',
+                            url: 'https://video.twimg.com/ext_tw_video/301/vid/720x720/video.mp4',
+                        },
+                    ],
+                },
+            },
+        ],
+    }
+    const json = {
+        data: {
+            user: {
+                result: {
+                    timeline_v2: {
+                        timeline: {
+                            instructions: [
+                                {
+                                    type: 'TimelineAddEntries',
+                                    entries: [
+                                        {
+                                            entryId: 'tweet-301',
+                                            content: {
+                                                itemContent: {
+                                                    tweet_results: {
+                                                        result,
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    const tweets = X.XApiJsonParser.tweetsArticleParser(json)
+
+    expect(tweets[0]?.content).toBe('video post ')
+    expect(tweets[0]?.media).toEqual([
+        {
+            type: 'video',
+            url: 'https://video.twimg.com/ext_tw_video/301/vid/720x720/video.mp4',
+        },
+        {
+            type: 'video_thumbnail',
+            url: 'https://pbs.twimg.com/ext_tw_video_thumb/301/pu/img/thumb.jpg',
+        },
+    ])
+})
+
+test('X old API parser tolerates missing entities', async () => {
+    const tweet = X.XApiJsonParser.oldTweetParser({
+        id_str: '401',
+        full_text: 'legacy post',
+        created_at: 'Tue Mar 11 20:55:07 +0000 2025',
+        user: {
+            screen_name: 'legacy_member',
+            name: 'Legacy Member',
+        },
+    })
+
+    expect(tweet).toMatchObject({
+        a_id: '401',
+        u_id: 'legacy_member',
+        content: 'legacy post',
+        media: null,
+        has_media: false,
+    })
+})
+
 test('X unified list hydration honors configured concurrency', async () => {
     const spider = new X.XListSpider()
     let activeRequests = 0

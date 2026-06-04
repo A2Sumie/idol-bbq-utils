@@ -19,6 +19,21 @@ test('TikTok Spider URL Validation', async () => {
     }
 })
 
+test('TikTok Spider URL Validation supports dotted handles', async () => {
+    const url = 'https://www.tiktok.com/@nananiji.official'
+    const plugin = spiderRegistry.findByUrl(url)
+
+    expect(plugin).not.toBeNull()
+    expect(plugin?.id).toBe('tiktok')
+
+    if (plugin) {
+        const spider = plugin.create()
+        const match = spider._match_valid_url(url, TiktokSpider)
+        expect(match?.groups?.id).toBe('nananiji.official')
+    }
+    expect(spiderRegistry.findByUrl('https://www.tiktok.com/@nananiji.official/video/123')).toBeNull()
+})
+
 test('TikTok Spider URL Extraction', () => {
     const url = 'https://www.tiktok.com/@nirei_nozomi'
     const info = spiderRegistry.extractBasicInfo(url)
@@ -89,6 +104,53 @@ test('TikTok API JSON Parser tolerates missing bitrateInfo', () => {
     expect(posts).toHaveLength(1)
     expect(posts[0]?.media?.map((item) => item.type)).toEqual(['video_thumbnail', 'video_thumbnail'])
     expect(posts[0]?.media?.some((item) => item.type === 'video')).toBeFalse()
+})
+
+test('TikTok API JSON Parser normalizes structured media urls', () => {
+    const posts = TiktokApiJsonParser.postsParser({
+        itemList: [
+            {
+                id: '7351147085025500003',
+                createTime: 1710759603,
+                desc: 'Structured media case',
+                author: {
+                    uniqueId: 'nananiji.official',
+                    nickname: 'Nananiji Official',
+                    avatarLarger: {
+                        url_list: ['https://example.com/avatar.jpg\\u0026name=large'],
+                    },
+                },
+                video: {
+                    cover: {
+                        UrlList: ['https://example.com/cover.jpg\\u0026format=webp'],
+                    },
+                    bitrateInfo: [
+                        {
+                            bitrate: 100,
+                            playAddr: {
+                                url_list: ['https://example.com/video-low.mp4'],
+                            },
+                        },
+                        {
+                            bitrate: 1000,
+                            playAddr: {
+                                url_list: ['https://example.com/video-high.mp4'],
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    })
+
+    expect(posts[0]).toMatchObject({
+        u_id: 'nananiji.official',
+        u_avatar: 'https://example.com/avatar.jpg&name=large',
+        media: [
+            { type: 'video_thumbnail', url: 'https://example.com/cover.jpg&format=webp' },
+            { type: 'video', url: 'https://example.com/video-high.mp4' },
+        ],
+    })
 })
 
 test('TikTok API JSON Parser filters malformed post items', () => {

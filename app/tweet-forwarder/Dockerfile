@@ -14,7 +14,7 @@ COPY ./core ./core
 COPY ./assets/fonts ./assets/fonts
 COPY ./assets/branding ./assets/branding
 
-ENV PUPPETEER_SKIP_DOWNLOAD true
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV DATABASE_URL="file:/app/data.db"
 
 RUN bun install --filter "./app/tweet-forwarder" --filter "./core/*" --frozen-lockfile
