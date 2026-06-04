@@ -9,6 +9,7 @@
         "audit:config": "bun app/tweet-forwarder/scripts/config-audit.ts --config assets/config.yaml",
         "deploy:forwarder:stopped": "tools/deploy-forwarder-stopped.sh",
         "preflight:forwarder": "tools/forwarder-preflight.sh",
+        "drill:db-backup": "tools/forwarder-db-backup-drill.sh",
         "audit:remote-drift": "tools/forwarder-remote-drift.sh",
         "converge:remote-source": "tools/forwarder-remote-converge.sh",
         "verify:forwarder": "tools/forwarder-green-gate.sh",

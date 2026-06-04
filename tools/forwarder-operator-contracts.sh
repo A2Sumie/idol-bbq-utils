@@ -40,11 +40,12 @@ HELP
 
     git rev-parse --is-inside-work-tree >/dev/null
 
-    local deploy preflight start dockerfile
+    local deploy preflight start dockerfile drill
     deploy="tools/deploy-forwarder-stopped.sh"
     preflight="tools/forwarder-preflight.sh"
     start="app/tweet-forwarder/start.sh"
     dockerfile="app/tweet-forwarder/Dockerfile"
+    drill="tools/forwarder-db-backup-drill.sh"
 
     require_contains "$deploy" 'require_clean_local_worktree' \
         'local clean-worktree deploy guard'
@@ -103,6 +104,14 @@ HELP
         'preflight backup container env resolution'
     require_contains "$preflight" 'db_backup_host_dir' \
         'preflight backup host path visibility'
+    require_contains "$drill" '?mode=ro' \
+        'backup drill read-only source DB'
+    require_contains "$drill" 'source.backup(backup)' \
+        'backup drill sqlite backup API'
+    require_contains "$drill" 'PRAGMA quick_check' \
+        'backup drill sqlite quick_check'
+    require_contains "$drill" 'prisma migrate status' \
+        'backup drill migration status check'
 
     python3 - "$dockerfile" <<'PY'
 import sys

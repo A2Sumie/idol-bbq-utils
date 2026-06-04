@@ -147,7 +147,15 @@ To verify changes:
     ```bash
     RUN_REMOTE_PREFLIGHT=1 RUN_REMOTE_DRIFT_COMPARE=1 bun run verify:forwarder
     ```
-8.  **Logs after an explicit production start**:
+8.  **Temporary DB backup/restore drill**:
+    ```bash
+    bun run drill:db-backup
+    ```
+    This opens the production SQLite DB read-only, creates a temporary backup
+    copy, runs SQLite `quick_check`, and runs `prisma migrate status` against
+    the copy using the stopped image. It does not start the service and does not
+    run production migrations.
+9.  **Logs after an explicit production start**:
     ```bash
     docker logs -f forwarder-new
     ```
