@@ -1410,6 +1410,13 @@ class ForwarderPools extends BaseCompatibleModel {
             if (article_is_blocked) {
                 log?.warn(`[Trace] Article ${article.a_id} is blocked by all forwarders, skipping...`)
                 for (const { forwarder: target } of to) {
+                    const routeKeyForTarget = targetRouteKey(
+                        context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
+                        target.id,
+                    )
+                    await this.markArticleOutboundSkipped(log, article, target, routeKeyForTarget, 'blocked_by_all_forwarders', {
+                        skipped: 'blocked_by_all_forwarders',
+                    })
                     await this.claimArticleChain(article, platform, target.id)
                 }
                 continue
@@ -1430,6 +1437,22 @@ class ForwarderPools extends BaseCompatibleModel {
             if (renderResult.shouldSkipSend) {
                 log?.info(`Skipping article ${article.a_id}: ${renderResult.skipReason || 'deduplicated media'}`)
                 for (const { forwarder: target } of to) {
+                    const routeKeyForTarget = targetRouteKey(
+                        context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
+                        target.id,
+                    )
+                    await this.markArticleOutboundSkipped(
+                        log,
+                        article,
+                        target,
+                        routeKeyForTarget,
+                        renderResult.skipReason || 'deduplicated_media',
+                        {
+                            skipped: renderResult.skipReason || 'deduplicated_media',
+                        },
+                        renderResult,
+                        options?.forceSend ? taskId : undefined,
+                    )
                     await this.claimArticleChain(article, platform, target.id)
                 }
                 this.renderService.cleanup(renderResult.mediaFiles)
@@ -1454,6 +1477,19 @@ class ForwarderPools extends BaseCompatibleModel {
                             const now = dayjs().unix()
                             if (now - article.created_at > TWO_HOURS_SECONDS) {
                                 const claimed = await this.claimArticleChain(article, platform, target.id)
+                                await this.markArticleOutboundSkipped(
+                                    log,
+                                    article,
+                                    target,
+                                    routeKeyForTarget,
+                                    'old_article',
+                                    {
+                                        skipped: 'old_article',
+                                        created_at: article.created_at,
+                                        age_seconds: now - article.created_at,
+                                    },
+                                    renderResult,
+                                )
                                 if (claimed) {
                                     log?.info(
                                         `Skipping old article ${article.a_id} (created at ${dayjs.unix(article.created_at).format()}) for target ${target.id}`,
@@ -1466,6 +1502,17 @@ class ForwarderPools extends BaseCompatibleModel {
                             const isAggregation = cfg_forwarder?.aggregation || (cfg_forwarder as any)?.batch_mode
                             if (isAggregation && (runtime_config as any)?.bypass_batch !== true) {
                                 const claimed = await this.claimArticleChain(article, platform, target.id)
+                                await this.markArticleOutboundSkipped(
+                                    log,
+                                    article,
+                                    target,
+                                    routeKeyForTarget,
+                                    'aggregation_realtime_suppressed',
+                                    {
+                                        skipped: 'aggregation_realtime_suppressed',
+                                    },
+                                    renderResult,
+                                )
                                 if (claimed) {
                                     log?.info(
                                         `Skipping real-time send for ${article.a_id} to ${target.id} (Aggregation/Batch Mode ON)`,
@@ -1481,6 +1528,18 @@ class ForwarderPools extends BaseCompatibleModel {
                                 const hasKeyword = keywords.some((keyword) => content.includes(keyword))
                                 if (!hasKeyword) {
                                     const claimed = await this.claimArticleChain(article, platform, target.id)
+                                    await this.markArticleOutboundSkipped(
+                                        log,
+                                        article,
+                                        target,
+                                        routeKeyForTarget,
+                                        'keyword_mismatch',
+                                        {
+                                            skipped: 'keyword_mismatch',
+                                            keywords,
+                                        },
+                                        renderResult,
+                                    )
                                     if (claimed) {
                                         log?.debug(
                                             `Article ${article.a_id} does not contain any required keywords, skipping for ${target.id}`,
@@ -1708,6 +1767,59 @@ class ForwarderPools extends BaseCompatibleModel {
             if (forceSendError) {
                 throw forceSendError
             }
+        }
+    }
+
+    private async markArticleOutboundSkipped(
+        log: Logger | undefined,
+        article: ArticleWithId,
+        target: BaseForwarder,
+        routeKeyForTarget: string,
+        reason: string,
+        details?: unknown,
+        renderResult?: Pick<RenderResult, 'text' | 'mediaFiles' | 'cardMediaFiles' | 'originalMediaFiles'>,
+        forceKey?: string,
+    ) {
+        const outboundIdempotencyKey = articleOutboundKey(target.id, article, { forceKey })
+        const outboundPayloadHash = payloadHash({
+            routeKey: routeKeyForTarget,
+            targetId: target.id,
+            taskKind: 'article',
+            text: renderResult?.text,
+            articleKeys: [articleKey(article)],
+            media: [
+                ...(renderResult?.mediaFiles || []),
+                ...(renderResult?.cardMediaFiles || []),
+                ...(renderResult?.originalMediaFiles || []),
+            ],
+            extra: {
+                skipped: reason,
+                details: details || null,
+            },
+        })
+        try {
+            const outbound = await DB.OutboundMessage.claim({
+                idempotency_key: outboundIdempotencyKey,
+                route_key: routeKeyForTarget,
+                target_id: target.id,
+                target_platform: target.NAME,
+                task_kind: 'article',
+                article_key: articleKey(article),
+                payload_hash: outboundPayloadHash,
+            })
+            if (!outbound.claimed) {
+                log?.debug(
+                    `[Trace] Outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping durable skip marker for ${article.a_id} (${reason})`,
+                )
+                return
+            }
+            await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, reason, details)
+        } catch (error) {
+            log?.warn(
+                `Failed to mark outbound ${outboundIdempotencyKey} skipped for ${article.a_id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
         }
     }
 

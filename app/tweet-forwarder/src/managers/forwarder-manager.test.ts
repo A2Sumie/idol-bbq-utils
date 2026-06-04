@@ -1177,6 +1177,17 @@ test('sendArticles skips delivery when render service marks a cross-platform dup
     expect(target.sent).toHaveLength(0)
     expect(claimedArticleId).toBe(204)
     expect(cleanupCalled).toBe(true)
+    const outboundKey = articleOutboundKey(
+        'target-duplicate',
+        {
+            a_id: 'yt-short-dup',
+            platform: 4,
+        } as any,
+        { forceKey: 'manual-duplicate' },
+    )
+    const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
+    expect(outboundRecord?.status).toBe('skipped')
+    expect(outboundRecord?.provider_message_ids?.reason).toBe('Cross-platform short video duplicate matched 2:ig-short-1')
 })
 
 test('sendArticles sends a target-level digest for lower-noise targets', async () => {
@@ -2079,6 +2090,13 @@ test('sendArticles does not increment article error count when every target is i
 
     expect(target.sent).toHaveLength(0)
     expect((pools as any).errorCounter.get('5:website-old-skip')).toBeUndefined()
+    const outboundKey = articleOutboundKey('target-old-skip', {
+        a_id: 'website-old-skip',
+        platform: 5,
+    } as any)
+    const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
+    expect(outboundRecord?.status).toBe('skipped')
+    expect(outboundRecord?.provider_message_ids?.reason).toBe('old_article')
 })
 
 test('sendArticles rate-limits summary-card sends to one card per interval', async () => {
