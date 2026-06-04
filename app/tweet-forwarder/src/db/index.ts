@@ -1016,7 +1016,22 @@ namespace DB {
     }
 
     export namespace AggregationWindow {
-        export const TERMINAL_STATUSES = new Set(['sent', 'completed', 'failed', 'cancelled'])
+        export const STATUS = {
+            Open: 'open',
+            Sent: 'sent',
+            Completed: 'completed',
+            Failed: 'failed',
+            Cancelled: 'cancelled',
+        } as const
+
+        export type Status = (typeof STATUS)[keyof typeof STATUS]
+
+        export const TERMINAL_STATUSES = new Set<string>([
+            STATUS.Sent,
+            STATUS.Completed,
+            STATUS.Failed,
+            STATUS.Cancelled,
+        ])
 
         export function isTerminalStatus(status: string) {
             return TERMINAL_STATUSES.has(status)
@@ -1028,7 +1043,7 @@ namespace DB {
                     route_key,
                     target_id,
                     mode,
-                    status: 'open',
+                    status: STATUS.Open,
                 },
                 orderBy: { created_at: 'asc' },
             })
@@ -1053,7 +1068,7 @@ namespace DB {
                 return await prisma.aggregation_windows.create({
                     data: {
                         ...data,
-                        status: 'open',
+                        status: STATUS.Open,
                         created_at: now,
                         updated_at: now,
                     },
@@ -1071,14 +1086,14 @@ namespace DB {
         export async function listOpen(mode?: string): Promise<Array<DBAggregationWindow>> {
             return await prisma.aggregation_windows.findMany({
                 where: {
-                    status: 'open',
+                    status: STATUS.Open,
                     ...(mode ? { mode } : {}),
                 },
                 orderBy: { created_at: 'asc' },
             })
         }
 
-        export async function updateStatus(id: number, status: string, meta?: { payload_hash?: string | null }) {
+        export async function updateStatus(id: number, status: Status, meta?: { payload_hash?: string | null }) {
             const now = Math.floor(Date.now() / 1000)
             return await prisma.aggregation_windows.update({
                 where: { id },

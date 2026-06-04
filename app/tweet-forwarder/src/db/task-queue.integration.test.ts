@@ -497,7 +497,7 @@ test('AggregationWindow creates idempotent open windows and lists oldest open wi
         where: { id: second.id },
         data: { created_at: 100 },
     })
-    await DB.AggregationWindow.updateStatus(realtime.id, 'completed', {
+    await DB.AggregationWindow.updateStatus(realtime.id, DB.AggregationWindow.STATUS.Completed, {
         payload_hash: 'sent-realtime',
     })
 
@@ -521,7 +521,7 @@ test('AggregationWindow status updates use explicit terminal policy on SQLite', 
         window_end: 4600,
     })
 
-    const completed = await DB.AggregationWindow.updateStatus(window.id, 'completed', {
+    const completed = await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Completed, {
         payload_hash: 'hash-a',
     })
     expect(completed).toMatchObject({
@@ -530,18 +530,18 @@ test('AggregationWindow status updates use explicit terminal policy on SQLite', 
     })
     expect(completed.finished_at).toBeNumber()
 
-    const reopened = await DB.AggregationWindow.updateStatus(window.id, 'open')
+    const reopened = await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Open)
     expect(reopened).toMatchObject({
         status: 'open',
         payload_hash: 'hash-a',
         finished_at: null,
     })
 
-    const sent = await DB.AggregationWindow.updateStatus(window.id, 'sent')
+    const sent = await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Sent)
     expect(sent.status).toBe('sent')
     expect(sent.finished_at).toBeNumber()
-    expect(DB.AggregationWindow.isTerminalStatus('sent')).toBe(true)
-    expect(DB.AggregationWindow.isTerminalStatus('open')).toBe(false)
+    expect(DB.AggregationWindow.isTerminalStatus(DB.AggregationWindow.STATUS.Sent)).toBe(true)
+    expect(DB.AggregationWindow.isTerminalStatus(DB.AggregationWindow.STATUS.Open)).toBe(false)
 })
 
 test('AggregationWindow items upsert full restore identity while preserving queue order on SQLite', async () => {

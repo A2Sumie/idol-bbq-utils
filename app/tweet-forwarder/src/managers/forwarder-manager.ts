@@ -712,7 +712,7 @@ class ForwarderPools extends BaseCompatibleModel {
         for (const window of windows) {
             const target = this.forward_to.get(window.target_id)
             if (!target) {
-                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
                     payload_hash: 'missing-target',
                 }).catch(() => undefined)
                 continue
@@ -720,7 +720,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
             const baseConfig = resolveSummaryCardConfig(target.getEffectiveConfig(undefined))
             if (baseConfig && this.isSummaryCardWindowStale(window, baseConfig, now)) {
-                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
                     payload_hash: 'stale-window',
                 }).catch(() => undefined)
                 continue
@@ -753,7 +753,7 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             if (queueItems.size === 0) {
-                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
                     payload_hash: 'empty-window',
                 }).catch(() => undefined)
                 continue
@@ -761,14 +761,14 @@ class ForwarderPools extends BaseCompatibleModel {
 
             const config = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config)) || persistedConfig
             if (!config) {
-                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
                     payload_hash: 'summary-card-disabled',
                 }).catch(() => undefined)
                 continue
             }
 
             if (this.isSummaryCardWindowStale(window, config, now)) {
-                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
                     payload_hash: 'stale-window',
                 }).catch(() => undefined)
                 continue
@@ -1744,7 +1744,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 window_start: windowStart,
                 window_end: windowStart + config.intervalSeconds,
             })
-            if (window.status === 'open') {
+            if (window.status === DB.AggregationWindow.STATUS.Open) {
                 return window
             }
 
@@ -2397,7 +2397,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         now,
                     )
                     if (queue.windowId) {
-                        await DB.AggregationWindow.updateStatus(queue.windowId, 'completed', {
+                        await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Completed, {
                             payload_hash: outboundPayloadHash,
                         }).catch(() => undefined)
                     }
@@ -2449,7 +2449,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 details: summarizeProviderResult(providerResult),
             })
             if (queue.windowId) {
-                await DB.AggregationWindow.updateStatus(queue.windowId, 'completed', {
+                await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Completed, {
                     payload_hash: outboundPayloadHash,
                 }).catch(() => undefined)
             }
@@ -2479,7 +2479,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     details: summarizeProviderResult(error.partialResults),
                 }).catch(() => undefined)
                 if (queue.windowId) {
-                    await DB.AggregationWindow.updateStatus(queue.windowId, 'completed', {
+                    await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Completed, {
                         payload_hash: outboundPayloadHash,
                     }).catch(() => undefined)
                 }
@@ -2499,7 +2499,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 },
             }).catch(() => undefined)
             if (queue.windowId) {
-                await DB.AggregationWindow.updateStatus(queue.windowId, 'failed', {
+                await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Failed, {
                     payload_hash: outboundPayloadHash,
                 }).catch(() => undefined)
             }
