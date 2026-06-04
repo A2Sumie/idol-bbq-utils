@@ -24,6 +24,8 @@ import {
     targetRouteKey,
 } from '@/services/outbound-message-service'
 
+type AggregateTaskKind = typeof DB.TaskQueue.TYPE.AggregateHourly | typeof DB.TaskQueue.TYPE.AggregateDaily
+
 interface AggregatePayload {
     platform: Platform
     u_id: string
@@ -125,11 +127,11 @@ export class TaskManager extends BaseCompatibleModel {
                 }
                 try {
                     let resultSummary: string | undefined
-                    if (claimedTask.type === 'aggregate_daily') {
+                    if (claimedTask.type === DB.TaskQueue.TYPE.AggregateDaily) {
                         // Cast payload safely
                         const payload = claimedTask.payload as unknown as AggregatePayload
                         resultSummary = await this.handleDailyAggregation(payload)
-                    } else if (claimedTask.type === 'aggregate_hourly') {
+                    } else if (claimedTask.type === DB.TaskQueue.TYPE.AggregateHourly) {
                         const payload = claimedTask.payload as unknown as AggregatePayload
                         resultSummary = await this.handleHourlyAggregation(payload)
                     } else {
@@ -181,7 +183,7 @@ export class TaskManager extends BaseCompatibleModel {
         const articles = await DB.Article.getArticlesByTimeRange(u_id, platform, start, end)
         if (articles.length === 0) {
             this.log?.info(`No articles found for hourly batch.`)
-            return 'aggregate_hourly no_articles'
+            return `${DB.TaskQueue.TYPE.AggregateHourly} no_articles`
         }
 
         // 1. Text Summary
@@ -248,7 +250,7 @@ export class TaskManager extends BaseCompatibleModel {
         // 4. Send
         try {
             return await this.sendAggregateToTargets(
-                'aggregate_hourly',
+                DB.TaskQueue.TYPE.AggregateHourly,
                 payload,
                 target_ids && target_ids.length > 0 ? target_ids : bot_id ? [bot_id] : [],
                 `Hourly Batch for ${u_id}`,
@@ -280,7 +282,7 @@ export class TaskManager extends BaseCompatibleModel {
         const articles = await DB.Article.getArticlesByTimeRange(u_id, platform, start, end)
         if (articles.length === 0) {
             this.log?.info(`No articles found for aggregation.`)
-            return 'aggregate_daily no_articles'
+            return `${DB.TaskQueue.TYPE.AggregateDaily} no_articles`
         }
 
         const reversedArticles = articles.reverse() // created_at asc usually better for chronological summary
@@ -325,7 +327,7 @@ export class TaskManager extends BaseCompatibleModel {
 
         try {
             return await this.sendAggregateToTargets(
-                'aggregate_daily',
+                DB.TaskQueue.TYPE.AggregateDaily,
                 payload,
                 target_ids && target_ids.length > 0 ? target_ids : bot_id ? [bot_id] : [],
                 `Daily Report for ${u_id}:\n\n${summary}`,
@@ -346,7 +348,7 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     private async sendAggregateToTargets(
-        taskKind: 'aggregate_hourly' | 'aggregate_daily',
+        taskKind: AggregateTaskKind,
         payload: AggregatePayload,
         targetIds: string[],
         text: string,
@@ -370,7 +372,7 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     private finalizeAggregateOutcomes(
-        taskKind: 'aggregate_hourly' | 'aggregate_daily',
+        taskKind: AggregateTaskKind,
         payload: AggregatePayload,
         outcomes: AggregateSendOutcome[],
     ) {
@@ -412,7 +414,7 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     private formatAggregateOutcomeSummary(
-        taskKind: 'aggregate_hourly' | 'aggregate_daily',
+        taskKind: AggregateTaskKind,
         outcomes: AggregateSendOutcome[],
     ) {
         const counts = outcomes.reduce<Record<string, number>>((acc, outcome) => {
@@ -484,7 +486,7 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     private async sendAggregateToTarget(
-        taskKind: 'aggregate_hourly' | 'aggregate_daily',
+        taskKind: AggregateTaskKind,
         targetId: string,
         payload: AggregatePayload,
         text: string,

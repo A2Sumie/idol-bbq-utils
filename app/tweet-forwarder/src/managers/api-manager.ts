@@ -1075,7 +1075,8 @@ export class APIManager extends BaseCompatibleModel {
 
         const now = Math.floor(Date.now() / 1000)
         const taskId = `manual-${Math.random().toString(36).slice(2, 9)}`
-        const queueTask = await DB.TaskQueue.add('manual_crawler_run', { crawler: crawler.name, task_id: taskId }, now, {
+        const taskType = DB.TaskQueue.TYPE.ManualCrawlerRun
+        const queueTask = await DB.TaskQueue.add(taskType, { crawler: crawler.name, task_id: taskId }, now, {
             source_ref: crawler.name,
             action_type: 'crawl',
         })
@@ -1085,7 +1086,7 @@ export class APIManager extends BaseCompatibleModel {
             data: crawler,
             meta: {
                 task_queue_id: queueTask.id,
-                task_queue_type: 'manual_crawler_run',
+                task_queue_type: taskType,
             },
         }
         try {
@@ -1145,7 +1146,7 @@ export class APIManager extends BaseCompatibleModel {
 
         const article = this.buildSimulatedArticle(platform, body, crawler || undefined)
         const task = await DB.TaskQueue.add(
-            'article_simulate',
+            DB.TaskQueue.TYPE.ArticleSimulate,
             {
                 ...body,
                 platform,
@@ -1235,7 +1236,7 @@ export class APIManager extends BaseCompatibleModel {
             return new Response('Article not found', { status: 404 })
         }
 
-        const task = await DB.TaskQueue.add('article_reprocess', body, Math.floor(Date.now() / 1000), {
+        const task = await DB.TaskQueue.add(DB.TaskQueue.TYPE.ArticleReprocess, body, Math.floor(Date.now() / 1000), {
             source_ref: `${platform}:${article.a_id}`,
             action_type: 'reprocess',
         })
@@ -1304,7 +1305,7 @@ export class APIManager extends BaseCompatibleModel {
             )
         }
 
-        const task = await DB.TaskQueue.add('article_resend', body, Math.floor(Date.now() / 1000), {
+        const task = await DB.TaskQueue.add(DB.TaskQueue.TYPE.ArticleResend, body, Math.floor(Date.now() / 1000), {
             source_ref: `${platform}:${article.a_id}`,
             action_type: 'resend',
         })
@@ -1346,7 +1347,7 @@ export class APIManager extends BaseCompatibleModel {
         }
         const processorDef = this.resolveProcessorDefinition(body.processorId)
         const action = body.action || processorDef.cfg_processor?.action || 'extract'
-        const task = await DB.TaskQueue.add('processor_run', body, Math.floor(Date.now() / 1000), {
+        const task = await DB.TaskQueue.add(DB.TaskQueue.TYPE.ProcessorRun, body, Math.floor(Date.now() / 1000), {
             source_ref: body.a_id || body.u_id || body.id?.toString() || null || undefined,
             action_type: action,
         })

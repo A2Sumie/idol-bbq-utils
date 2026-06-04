@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import type { ArticleExtractType, GenericArticle, GenericFollows, GenericMediaInfo } from '@idol-bbq-utils/spider/types'
 import { prisma, Prisma } from './client'
@@ -8,6 +9,7 @@ import {
     isOutboundFailedStatus,
     isOutboundStaleRetryableStatus,
     OUTBOUND_STATUS,
+    hashValue,
 } from '@/services/outbound-message-service'
 
 type ArticleWithId = Article & { id: number }
@@ -451,6 +453,13 @@ namespace DB {
 
         export type Type = (typeof TYPE)[keyof typeof TYPE]
 
+        export const IDEMPOTENCY_FORMAT = {
+            Stable: 'stable',
+            LegacyJson: 'legacy_json',
+        } as const
+
+        export type IdempotencyFormat = (typeof IDEMPOTENCY_FORMAT)[keyof typeof IDEMPOTENCY_FORMAT]
+
         export const WORKER_TYPES = [TYPE.AggregateDaily, TYPE.AggregateHourly] as const
         export const INLINE_API_TYPES = [
             TYPE.ManualCrawlerRun,
@@ -471,6 +480,17 @@ namespace DB {
         export type Status = (typeof STATUS)[keyof typeof STATUS]
 
         export const TERMINAL_STATUSES = new Set<string>([STATUS.Completed, STATUS.Failed, STATUS.Cancelled])
+
+        export function buildIdempotencyKey(
+            type: Type | string,
+            payload: unknown,
+            format: IdempotencyFormat = IDEMPOTENCY_FORMAT.Stable,
+        ) {
+            if (format === IDEMPOTENCY_FORMAT.LegacyJson) {
+                return crypto.createHash('sha256').update(JSON.stringify({ type, payload })).digest('hex')
+            }
+            return hashValue({ type, payload })
+        }
 
         export function shouldReviveExistingTaskOnAdd(existing: { status: string }) {
             return existing.status === STATUS.Failed

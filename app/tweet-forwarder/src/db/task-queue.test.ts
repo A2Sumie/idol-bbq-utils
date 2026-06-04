@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { expect, test } from 'bun:test'
 import DB from '@/db'
 
@@ -26,6 +27,26 @@ test('TaskQueue task type groups keep worker and inline API tasks distinct', () 
     for (const inlineType of DB.TaskQueue.INLINE_API_TYPES) {
         expect(DB.TaskQueue.WORKER_TYPES.includes(inlineType as any)).toBeFalse()
     }
+})
+
+test('TaskQueue idempotency key builder preserves stable and legacy JSON modes', () => {
+    const stableA = DB.TaskQueue.buildIdempotencyKey(DB.TaskQueue.TYPE.AggregateHourly, { b: 2, a: 1 })
+    const stableB = DB.TaskQueue.buildIdempotencyKey(DB.TaskQueue.TYPE.AggregateHourly, { a: 1, b: 2 })
+    expect(stableA).toBe(stableB)
+
+    const legacyPayload = { platform: 'x', u_id: 'member', start: 100, end: 200, target_ids: ['target-a'] }
+    const legacy = DB.TaskQueue.buildIdempotencyKey(
+        DB.TaskQueue.TYPE.AggregateDaily,
+        legacyPayload,
+        DB.TaskQueue.IDEMPOTENCY_FORMAT.LegacyJson,
+    )
+    expect(legacy).toBe(
+        crypto
+            .createHash('sha256')
+            .update(JSON.stringify({ type: DB.TaskQueue.TYPE.AggregateDaily, payload: legacyPayload }))
+            .digest('hex'),
+    )
+    expect(legacy).not.toBe(DB.TaskQueue.buildIdempotencyKey(DB.TaskQueue.TYPE.AggregateDaily, legacyPayload))
 })
 
 test('TaskQueue requeue data clears terminal failure fields while preserving reschedule metadata', () => {

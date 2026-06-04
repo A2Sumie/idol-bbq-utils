@@ -28,10 +28,6 @@ import { BrowserSessionPool } from '@/services/browser-session-pool'
 import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
 import { normalizeCronSecond } from '@/utils/cron'
 
-function buildTaskQueueIdempotencyKey(type: string, payload: unknown) {
-    return crypto.createHash('sha256').update(JSON.stringify({ type, payload })).digest('hex')
-}
-
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
@@ -217,31 +213,38 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
 
                         // If we found a valid target, schedule aggregation
                         if (platform && u_id) {
+                            const taskType = DB.TaskQueue.TYPE.AggregateDaily
+                            const payload = {
+                                platform,
+                                u_id,
+                                start,
+                                end,
+                                target_ids: targetIds,
+                                processorConfig: crawler.cfg_crawler?.processor,
+                                processorId:
+                                    crawler.cfg_crawler?.aggregation?.processor_id ||
+                                    crawler.cfg_crawler?.processor_id,
+                                prompt: crawler.cfg_crawler?.aggregation?.prompt,
+                            }
+                            const idempotencyPayload = {
+                                platform,
+                                u_id,
+                                start,
+                                end,
+                                target_ids: targetIds,
+                            }
                             await DB.TaskQueue.add(
-                                'aggregate_daily',
-                                {
-                                    platform,
-                                    u_id,
-                                    start,
-                                    end,
-                                    target_ids: targetIds,
-                                    processorConfig: crawler.cfg_crawler?.processor,
-                                    processorId:
-                                        crawler.cfg_crawler?.aggregation?.processor_id ||
-                                        crawler.cfg_crawler?.processor_id,
-                                    prompt: crawler.cfg_crawler?.aggregation?.prompt,
-                                },
+                                taskType,
+                                payload,
                                 now.unix(),
                                 {
                                     source_ref: `${platform}:${u_id}`,
-                                    action_type: 'aggregate_daily',
-                                    idempotency_key: buildTaskQueueIdempotencyKey('aggregate_daily', {
-                                        platform,
-                                        u_id,
-                                        start,
-                                        end,
-                                        target_ids: targetIds,
-                                    }),
+                                    action_type: taskType,
+                                    idempotency_key: DB.TaskQueue.buildIdempotencyKey(
+                                        taskType,
+                                        idempotencyPayload,
+                                        DB.TaskQueue.IDEMPOTENCY_FORMAT.LegacyJson,
+                                    ),
                                 },
                             )
                             this.log?.info(`Scheduled aggregation task for ${platform} ${u_id}`)

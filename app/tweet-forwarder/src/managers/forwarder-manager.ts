@@ -248,10 +248,6 @@ function resolveBatchAggregationConfig(
     }
 }
 
-function buildTaskQueueIdempotencyKey(type: string, payload: unknown) {
-    return hashValue({ type, payload })
-}
-
 function resolveMatchingForwarderTemplate(
     crawler: CrawlerConfig,
     forwarders?: AppConfig['forwarders'],
@@ -433,26 +429,22 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                             if (!info?.u_id || !info.platform) {
                                 continue
                             }
+                            const taskType = DB.TaskQueue.TYPE.AggregateHourly
+                            const payload = {
+                                platform: info.platform,
+                                u_id: info.u_id,
+                                start,
+                                end,
+                                target_ids: targetIds,
+                            }
                             await DB.TaskQueue.add(
-                                'aggregate_hourly',
-                                {
-                                    platform: info.platform,
-                                    u_id: info.u_id,
-                                    start,
-                                    end,
-                                    target_ids: targetIds,
-                                },
+                                taskType,
+                                payload,
                                 end,
                                 {
                                     source_ref: `${info.platform}:${info.u_id}`,
-                                    action_type: 'aggregate_hourly',
-                                    idempotency_key: buildTaskQueueIdempotencyKey('aggregate_hourly', {
-                                        platform: info.platform,
-                                        u_id: info.u_id,
-                                        start,
-                                        end,
-                                        target_ids: targetIds,
-                                    }),
+                                    action_type: taskType,
+                                    idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, payload),
                                 },
                             )
                         }
