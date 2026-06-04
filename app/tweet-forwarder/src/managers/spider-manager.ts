@@ -905,8 +905,7 @@ class SpiderPools extends BaseCompatibleModel {
             },
         )
         await this.maybeSyncInstagramLiveRelay(ctx, url, page, cookieString, requestHeaders)
-        const existingArticleReusePolicy =
-            spiderRegistry.findByUrl(url.href)?.id === 'x-list' ? resolveExistingArticleReusePolicy(cfg_crawler) : null
+        const existingArticleReusePolicy = resolveExistingArticleReusePolicy(cfg_crawler)
         let new_articles: Array<Article> = []
         let dispatch_article_ids: Array<number> = []
         let saved_articles_count = 0

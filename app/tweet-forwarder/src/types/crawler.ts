@@ -123,8 +123,8 @@ interface CrawlerConfig extends CommonCfgConfig {
      */
     block_resource_types?: Array<string>
     /**
-     * Dangerous backfill-only option. When enabled, an X list crawl that finds no new rows may dispatch
-     * already-persisted article ids, bounded by age and count. Defaults to disabled.
+     * Dangerous backfill-only option. When enabled, a crawler that finds already-persisted rows may dispatch
+     * those article ids, bounded by age and count. Defaults to disabled.
      */
     reuse_existing_for_immediate_forward?:
         | boolean

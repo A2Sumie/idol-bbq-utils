@@ -24,7 +24,7 @@ type PlatformArticleMap = {
 type PlatformExtractMap = {
     [Platform.X]: ExtraContentType
     [Platform.Twitter]: ExtraContentType
-    [Platform.Instagram]: null
+    [Platform.Instagram]: Record<string, any> | null
     [Platform.TikTok]: null
     [Platform.YouTube]: null
     [Platform.Website]: Record<string, any>

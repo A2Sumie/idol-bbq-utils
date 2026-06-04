@@ -1,5 +1,13 @@
 import { Platform } from '@/types'
-import type { GenericMediaInfo, GenericArticle, GenericFollows, TaskType, TaskTypeResult, CrawlEngine } from '@/types'
+import type {
+    ArticleExtractType,
+    GenericMediaInfo,
+    GenericArticle,
+    GenericFollows,
+    TaskType,
+    TaskTypeResult,
+    CrawlEngine,
+} from '@/types'
 import { BaseSpider, waitForResponse } from './base'
 import { Page } from 'puppeteer-core'
 
@@ -36,6 +44,12 @@ interface InstagramProfileStatus {
     live_broadcast_visibility: string | null
     is_live: boolean
     live_url: string | null
+}
+
+interface InstagramProfileContext {
+    u_id: string
+    username: string
+    u_avatar: string | null
 }
 
 const INSTAGRAM_PROFILE_ID_PATTERN = /^[A-Za-z0-9._]+$/i
@@ -214,6 +228,39 @@ namespace InsApiJsonParser {
         return ''
     }
 
+    function normalizeInstagramUrl(url: unknown) {
+        return typeof url === 'string' && url.trim() ? url.replace('\\u0026', '&') : null
+    }
+
+    function profileContextFromUser(user: any): InstagramProfileContext | null {
+        const handle = fallbackUsername(user?.username)
+        if (!handle) {
+            return null
+        }
+        return {
+            u_id: handle,
+            username: fallbackUsername(user?.full_name, handle),
+            u_avatar: normalizeInstagramUrl(
+                user?.hd_profile_pic_url_info?.url || user?.profile_pic_url_hd || user?.profile_pic_url,
+            ),
+        }
+    }
+
+    function postProfileContext(node: any, crawledProfile: InstagramProfileContext | null) {
+        const owner = profileContextFromUser(node?.user) || profileContextFromUser(node?.owner)
+        if (!crawledProfile || !owner || crawledProfile.u_id === owner.u_id) {
+            return null
+        }
+
+        return {
+            data: {
+                crawled_profile: crawledProfile,
+                post_owner: owner,
+            },
+            extra_type: 'instagram_profile_context',
+        } as ArticleExtractType<Platform.Instagram>
+    }
+
     function mediaParser(edge: any): Array<GenericMediaInfo> {
         let arr = [] as Array<GenericMediaInfo>
         const pickBestCandidateUrl = (candidates: any): string | null => {
@@ -274,15 +321,17 @@ namespace InsApiJsonParser {
         return Array.from(dedup.values())
     }
 
-    function postParser(edge: any): GenericArticle<Platform.Instagram> {
+    function postParser(edge: any, crawledProfile: InstagramProfileContext | null): GenericArticle<Platform.Instagram> {
         const node = edge.node
-        const handle = fallbackUsername(node?.user?.username, node?.owner?.username)
-        const avatarUrl = node?.user?.hd_profile_pic_url_info?.url
+        const owner = profileContextFromUser(node?.user) || profileContextFromUser(node?.owner)
+        const handle = fallbackUsername(owner?.u_id, crawledProfile?.u_id)
+        const displayName = fallbackUsername(owner?.username, crawledProfile?.username, handle)
+        const avatarUrl = normalizeInstagramUrl(owner?.u_avatar || crawledProfile?.u_avatar)
         return {
             platform: Platform.Instagram,
             a_id: node?.code,
             u_id: handle,
-            username: fallbackUsername(node?.user?.full_name, node?.owner?.full_name, handle),
+            username: displayName,
             created_at: node?.taken_at,
             content: sanitizeInstagramGeneratedText(node?.caption?.text),
             url: `https://www.instagram.com/p/${node?.code}/`,
@@ -290,8 +339,8 @@ namespace InsApiJsonParser {
             ref: null,
             has_media: true,
             media: mediaParser(node),
-            extra: null,
-            u_avatar: avatarUrl ? avatarUrl.replace('\\u0026', '&') : null,
+            extra: postProfileContext(node, crawledProfile),
+            u_avatar: avatarUrl,
         }
     }
 
@@ -342,7 +391,8 @@ namespace InsApiJsonParser {
 
     export function postsParser(json: any): Array<GenericArticle<Platform.Instagram>> {
         let edges = parseEdges(json)
-        return edges.map(postParser)
+        const crawledProfile = profileContextFromUser(json?.data?.user)
+        return edges.map((edge: any) => postParser(edge, crawledProfile))
     }
 
     export function followsParser(json: any): GenericFollows {

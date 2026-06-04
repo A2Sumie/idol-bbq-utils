@@ -284,6 +284,60 @@ test('Instagram parser preserves videos inside carousel media', () => {
     ])
 })
 
+test('Instagram parser records crawled profile context for collaboration posts', () => {
+    const posts = InsApiJsonParser.postsParser({
+        data: {
+            user: {
+                username: 'shiina_satsuki227',
+                full_name: '椎名桜月',
+                profile_pic_url_hd: 'https://example.com/shiina-avatar.jpg',
+                edge_owner_to_timeline_media: {
+                    edges: [
+                        {
+                            node: {
+                                code: 'COLLABPOST',
+                                taken_at: 1773845200,
+                                caption: { text: 'collaboration caption' },
+                                user: {
+                                    username: 'em_matcha227',
+                                    full_name: '望月りの',
+                                    hd_profile_pic_url_info: {
+                                        url: 'https://example.com/rino-avatar.jpg',
+                                    },
+                                },
+                                image_versions2: {
+                                    candidates: [{ width: 720, url: 'https://example.com/photo.jpg' }],
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    })
+
+    expect(posts[0]).toMatchObject({
+        a_id: 'COLLABPOST',
+        u_id: 'em_matcha227',
+        username: '望月りの',
+        extra: {
+            extra_type: 'instagram_profile_context',
+            data: {
+                crawled_profile: {
+                    u_id: 'shiina_satsuki227',
+                    username: '椎名桜月',
+                    u_avatar: 'https://example.com/shiina-avatar.jpg',
+                },
+                post_owner: {
+                    u_id: 'em_matcha227',
+                    username: '望月りの',
+                    u_avatar: 'https://example.com/rino-avatar.jpg',
+                },
+            },
+        },
+    })
+})
+
 test('Instagram stories drop accessibility summaries', async () => {
     const page = {
         goto: async () => undefined,
