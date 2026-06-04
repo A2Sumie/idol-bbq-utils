@@ -1276,6 +1276,114 @@ test('sendArticles sends a target-level digest for lower-noise targets', async (
     expect(claimed).toEqual([300, 301, 302, 303])
 })
 
+test('sendArticles treats a blocked digest as handled instead of falling through to article sends', async () => {
+    class DigestBlockingForwarder extends Forwarder {
+        NAME = 'recording'
+        calls: Array<{ text: string; props: any }> = []
+        articleSends: Array<{ texts: string[]; props: any }> = []
+
+        public override async send(text: string, props?: any): Promise<any> {
+            this.calls.push({ text, props })
+            if (!props?.article) {
+                return { status: 'blocked', reason: 'digest_blocked' }
+            }
+            return super.send(text, props)
+        }
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.articleSends.push({ texts, props })
+            return { ok: true }
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new DigestBlockingForwarder(
+        {
+            block_until: '32h',
+            digest_threshold: 2,
+            digest_max_items: 4,
+        } as any,
+        'target-digest-blocked',
+    )
+
+    const claimed = new Set<number>()
+    const released: number[] = []
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        claimed.add(article.id)
+        return true
+    }
+    ;(pools as any).releaseArticleChain = async (article: any) => {
+        released.push(article.id)
+        claimed.delete(article.id)
+    }
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'manual-digest-blocked',
+            [0, 1].map((index) => ({
+                id: 320 + index,
+                a_id: `digest-blocked-${index}`,
+                platform: Platform.X,
+                username: `blocked-member-${index}`,
+                u_id: `blocked_member_${index}`,
+                content: `blocked digest update ${index}`,
+                url: `https://x.com/blocked_member/status/${index}`,
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000) + index,
+                ref: null,
+            })),
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    const outboundRecords = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values())
+    const digestOutbound = outboundRecords.find((record: any) => record.task_kind === 'digest')
+    expect(target.calls).toHaveLength(1)
+    expect(target.calls[0]?.props?.article).toBeUndefined()
+    expect(target.articleSends).toHaveLength(0)
+    expect(released).toEqual([])
+    expect(Array.from(claimed).sort()).toEqual([320, 321])
+    expect(digestOutbound?.status).toBe('skipped')
+    expect(digestOutbound?.provider_message_ids?.reason).toBe('digest_blocked')
+})
+
 test('sendArticles keeps high-frequency hashtags digestized and extracts non-tag text', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -2610,6 +2718,126 @@ test('flushSummaryCardQueue cancels durable windows when no queued items are cla
     expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
     expect(windows.get(queue.windowId)?.status).toBe('cancelled')
     expect(windows.get(queue.windowId)?.payload_hash).toBe('no-claimable-items')
+})
+
+test('flushSummaryCardQueue treats blocked summary-card outbound as terminally suppressed', async () => {
+    class BlockingSummaryForwarder extends Forwarder {
+        NAME = 'recording'
+        calls: Array<{ text: string; props: any }> = []
+
+        public override async send(text: string, props?: any): Promise<any> {
+            this.calls.push({ text, props })
+            return { status: 'blocked', reason: 'summary_card_blocked' }
+        }
+
+        protected async realSend(): Promise<any> {
+            return { ok: true }
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new BlockingSummaryForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-blocked-terminal',
+    )
+
+    const claimed = new Set<number>()
+    const released: number[] = []
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        claimed.add(article.id)
+        return true
+    }
+    ;(pools as any).releaseArticleChain = async (article: any) => {
+        released.push(article.id)
+        claimed.delete(article.id)
+    }
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-blocked.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-blocked.png' }],
+                }
+            }
+            return {
+                text: article.content,
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-blocked-terminal',
+        [
+            {
+                id: 717,
+                a_id: 'summary-blocked-terminal',
+                platform: Platform.X,
+                username: 'blocked summary',
+                u_id: 'blocked_summary',
+                content: 'blocked summary-card should not retry',
+                url: 'https://x.com/blocked_summary/status/717',
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    const queueKey = Array.from((pools as any).summaryCardQueues.keys())[0]
+    const queue = (pools as any).summaryCardQueues.get(queueKey)
+    await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const outboundRecords = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values())
+    const summaryOutbound = outboundRecords.find((record: any) => record.task_kind === 'summary_card')
+    expect(target.calls).toHaveLength(1)
+    expect(target.calls[0]?.props?.forceSend).toBeTrue()
+    expect(released).toEqual([])
+    expect(Array.from(claimed)).toEqual([717])
+    expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
+    expect(windows.get(queue.windowId)?.status).toBe('cancelled')
+    expect(summaryOutbound?.status).toBe('skipped')
+    expect(summaryOutbound?.provider_message_ids?.reason).toBe('summary_card_blocked')
 })
 
 test('summary-card queues are isolated by route for the same target', async () => {

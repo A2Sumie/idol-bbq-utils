@@ -32,6 +32,7 @@ import {
     articleKey,
     articleOutboundKey,
     hashValue,
+    isOutboundSuppressedCompletionStatus,
     isOutboundVisibleCompletionStatus,
     payloadHash,
     providerCode,
@@ -2599,18 +2600,24 @@ class ForwarderPools extends BaseCompatibleModel {
                 this.log?.debug(
                     `Summary-card outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible send`,
                 )
-                if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
-                    this.summaryCardLastSentAt.set(
-                        this.getSummaryCardQueueKey(
-                            queue.routeKey,
-                            queue.target.id,
-                            queue.runtime_config,
-                            queue.config,
-                        ),
-                        now,
-                    )
+                if (isOutboundSuppressedCompletionStatus(outbound.record.status)) {
+                    const visibleCompletion = isOutboundVisibleCompletionStatus(outbound.record.status)
+                    const terminalStatus = visibleCompletion
+                        ? DB.AggregationWindow.STATUS.Completed
+                        : DB.AggregationWindow.STATUS.Cancelled
+                    if (visibleCompletion) {
+                        this.summaryCardLastSentAt.set(
+                            this.getSummaryCardQueueKey(
+                                queue.routeKey,
+                                queue.target.id,
+                                queue.runtime_config,
+                                queue.config,
+                            ),
+                            now,
+                        )
+                    }
                     if (queue.windowId) {
-                        await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Completed, {
+                        await DB.AggregationWindow.updateStatus(queue.windowId, terminalStatus, {
                             payload_hash: outboundPayloadHash,
                         }).catch(() => undefined)
                     }
@@ -2642,6 +2649,11 @@ class ForwarderPools extends BaseCompatibleModel {
             }
             if (sendResult.status === 'blocked') {
                 await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
+                if (queue.windowId) {
+                    await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
+                        payload_hash: outboundPayloadHash,
+                    }).catch(() => undefined)
+                }
                 await DB.TargetHealth.mark({
                     target_id: queue.target.id,
                     provider: queue.target.NAME,
@@ -2649,7 +2661,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     last_send_status: 'blocked',
                     details: sendResult,
                 }).catch(() => undefined)
-                return false
+                return true
             }
             const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
@@ -3420,7 +3432,7 @@ class ForwarderPools extends BaseCompatibleModel {
             })
             if (!outbound.claimed) {
                 log?.debug(`Digest outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping send`)
-                if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
+                if (isOutboundSuppressedCompletionStatus(outbound.record.status)) {
                     return claimedArticles.map((article) => article.id)
                 }
                 for (const article of claimedArticles) {
@@ -3457,10 +3469,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     last_send_status: 'blocked',
                     details: sendResult,
                 }).catch(() => undefined)
-                for (const article of claimedArticles) {
-                    await this.releaseArticleChain(article, article.platform, targetId)
-                }
-                return []
+                return claimedArticles.map((article) => article.id)
             }
             const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
