@@ -841,7 +841,7 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleRuntimeStatus(): Promise<Response> {
-        const tasks = await DB.TaskQueue.list(50)
+        const [tasks, taskCounts] = await Promise.all([DB.TaskQueue.list(50), DB.TaskQueue.countsByStatus()])
         const runtime = this.runtime.getRuntimeMeta?.()
         return jsonResponse({
             uptime_sec: Math.floor(process.uptime()),
@@ -850,8 +850,11 @@ export class APIManager extends BaseCompatibleModel {
             formatters: this.config.formatters?.length || 0,
             forward_targets: this.config.forward_targets?.length || 0,
             forwarders: this.config.forwarders?.length || 0,
-            pending_tasks: tasks.filter((task) => task.status === 'pending').length,
-            processing_tasks: tasks.filter((task) => task.status === 'processing').length,
+            pending_tasks: taskCounts.pending || 0,
+            processing_tasks: taskCounts.processing || 0,
+            failed_tasks: taskCounts.failed || 0,
+            completed_tasks: taskCounts.completed || 0,
+            task_counts: taskCounts,
             latest_tasks: tasks.slice(0, 10),
             runtime,
         })

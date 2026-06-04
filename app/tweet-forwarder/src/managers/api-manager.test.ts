@@ -161,6 +161,63 @@ test('APIManager keeps runtime reload available in api-only mode', async () => {
     expect(reloadCalls).toBe(1)
 })
 
+test('APIManager runtime status uses full task status counts', async () => {
+    const originalTaskList = DB.TaskQueue.list
+    const originalTaskCountsByStatus = DB.TaskQueue.countsByStatus
+
+    ;(DB.TaskQueue as any).list = async () => [
+        { id: 1, status: 'completed' },
+        { id: 2, status: 'completed' },
+    ]
+    ;(DB.TaskQueue as any).countsByStatus = async () => ({
+        pending: 12,
+        processing: 3,
+        failed: 2,
+        completed: 80,
+    })
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [{ name: 'crawler-a' }],
+                    processors: [{ id: 'processor-a' }],
+                    formatters: [{ id: 'formatter-a' }],
+                    forward_targets: [{ id: 'target-a' }],
+                    forwarders: [{ id: 'forwarder-a' }],
+                }) as any,
+            getDeps: () => ({}),
+            getRuntimeMeta: () =>
+                ({
+                    mode: 'online',
+                    generation: 1,
+                }) as any,
+        })
+
+        const response = await (manager as any).handleRuntimeStatus()
+        expect(response.status).toBe(200)
+        const payload = await response.json()
+
+        expect(payload.pending_tasks).toBe(12)
+        expect(payload.processing_tasks).toBe(3)
+        expect(payload.failed_tasks).toBe(2)
+        expect(payload.completed_tasks).toBe(80)
+        expect(payload.task_counts).toEqual({
+            pending: 12,
+            processing: 3,
+            failed: 2,
+            completed: 80,
+        })
+        expect(payload.latest_tasks).toHaveLength(2)
+    } finally {
+        ;(DB.TaskQueue as any).list = originalTaskList
+        ;(DB.TaskQueue as any).countsByStatus = originalTaskCountsByStatus
+    }
+})
+
 test('APIManager marks manual crawler run task failed when dispatch throws', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus

@@ -635,6 +635,16 @@ namespace DB {
                 take: Math.max(1, Math.min(limit, 200)),
             })
         }
+
+        export async function countsByStatus(): Promise<Record<string, number>> {
+            const rows = await prisma.task_queue.groupBy({
+                by: ['status'],
+                _count: {
+                    _all: true,
+                },
+            })
+            return Object.fromEntries(rows.map((row) => [row.status, row._count._all]))
+        }
     }
 
     export namespace ProcessorRun {
