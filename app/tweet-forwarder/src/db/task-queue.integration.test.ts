@@ -78,6 +78,30 @@ async function createOutboundMessageSchema(prisma: PrismaClientInstance) {
     )
 }
 
+async function createProcessorRunSchema(prisma: PrismaClientInstance) {
+    await prisma.$executeRawUnsafe(`
+        CREATE TABLE "processor_runs" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "processor_id" TEXT,
+            "action" TEXT NOT NULL,
+            "source_type" TEXT,
+            "source_ref" TEXT,
+            "status" TEXT NOT NULL DEFAULT 'completed',
+            "input" JSONB,
+            "output" JSONB,
+            "error" TEXT,
+            "created_at" INTEGER NOT NULL,
+            "finished_at" INTEGER
+        )
+    `)
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "processor_runs_processor_id_created_at_idx" ON "processor_runs"("processor_id", "created_at" DESC)',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "processor_runs_source_ref_created_at_idx" ON "processor_runs"("source_ref", "created_at" DESC)',
+    )
+}
+
 async function createAggregationSchema(prisma: PrismaClientInstance) {
     await prisma.$executeRawUnsafe('PRAGMA foreign_keys = ON')
     await prisma.$executeRawUnsafe(`
@@ -178,6 +202,7 @@ beforeEach(async () => {
     setPrismaForTesting(testPrisma)
     await createTaskQueueSchema(testPrisma)
     await createOutboundMessageSchema(testPrisma)
+    await createProcessorRunSchema(testPrisma)
     await createAggregationSchema(testPrisma)
     await createArticleSchema(testPrisma)
 })
@@ -290,6 +315,71 @@ test('TaskQueue claim, stale recovery, filtering, and terminal status updates wo
         completed: 1,
         pending: 1,
     })
+})
+
+test('ProcessorRun persists completed and failed audit rows on SQLite', async () => {
+    const completed = await DB.ProcessorRun.create({
+        processor_id: 'processor-a',
+        action: 'extract',
+        source_type: 'text',
+        source_ref: 'manual:text',
+        input: { text: 'hello' },
+        output: { result: 'ok' },
+    })
+    expect(completed).toMatchObject({
+        processor_id: 'processor-a',
+        action: 'extract',
+        source_type: 'text',
+        source_ref: 'manual:text',
+        status: 'completed',
+        input: { text: 'hello' },
+        output: { result: 'ok' },
+        error: null,
+    })
+    expect(completed.finished_at).toBeNumber()
+
+    const failed = await DB.ProcessorRun.create({
+        processor_id: 'processor-a',
+        action: 'extract',
+        source_type: 'text',
+        source_ref: 'manual:text',
+        status: DB.ProcessorRun.STATUS.Failed,
+        input: { text: 'broken' },
+        error: 'provider unavailable',
+    })
+    expect(failed).toMatchObject({
+        processor_id: 'processor-a',
+        action: 'extract',
+        source_type: 'text',
+        source_ref: 'manual:text',
+        status: 'failed',
+        input: { text: 'broken' },
+        output: null,
+        error: 'provider unavailable',
+    })
+    expect(failed.finished_at).toBeNumber()
+
+    await DB.ProcessorRun.create({
+        processor_id: 'processor-b',
+        action: 'translate',
+        source_type: 'article',
+        source_ref: 'x:other',
+    })
+    await testPrisma.processor_runs.update({
+        where: { id: completed.id },
+        data: { created_at: 100 },
+    })
+    await testPrisma.processor_runs.update({
+        where: { id: failed.id },
+        data: { created_at: 200 },
+    })
+
+    const manualRuns = await DB.ProcessorRun.list(10, 'manual:text')
+    expect(manualRuns.map((run) => run.id)).toEqual([failed.id, completed.id])
+    expect(manualRuns.map((run) => run.status)).toEqual(['failed', 'completed'])
+
+    const limited = await DB.ProcessorRun.list(1)
+    expect(limited).toHaveLength(1)
 })
 
 test('OutboundMessage retry resets stale provider and segment fields on SQLite', async () => {
