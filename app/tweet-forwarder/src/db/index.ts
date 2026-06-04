@@ -23,6 +23,14 @@ type DBAggregationWindow = Prisma.aggregation_windowsGetPayload<{}>
 type DBAggregationItem = Prisma.aggregation_itemsGetPayload<{}>
 type DBTargetHealth = Prisma.target_healthGetPayload<{}>
 
+interface TaskQueueListFilters {
+    status?: string
+    type?: string
+    source_ref?: string
+    action_type?: string
+    idempotency_key?: string
+}
+
 interface ArticleQueryParams {
     platform?: Platform
     u_id?: string
@@ -440,11 +448,45 @@ namespace DB {
     }
 
     export namespace TaskQueue {
+        export const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+
         export function shouldReviveExistingTaskOnAdd(existing: { status: string }) {
             return existing.status === 'failed'
         }
 
-        function requeueFailedTaskData(
+        export function clampListLimit(limit = 50) {
+            const normalized = Number.isFinite(limit) ? Math.trunc(limit) : 50
+            return Math.max(1, Math.min(normalized, 200))
+        }
+
+        export function isTerminalStatus(status: string) {
+            return TERMINAL_STATUSES.has(status)
+        }
+
+        export function normalizeListFilters(filters?: string | TaskQueueListFilters): TaskQueueListFilters {
+            if (typeof filters === 'string') {
+                return filters ? { status: filters } : {}
+            }
+            if (!filters) {
+                return {}
+            }
+            return Object.fromEntries(
+                Object.entries(filters)
+                    .map(([key, value]) => [key, typeof value === 'string' ? value.trim() : value])
+                    .filter(([, value]) => Boolean(value)),
+            )
+        }
+
+        export function buildListWhere(filters?: string | TaskQueueListFilters) {
+            const normalized = normalizeListFilters(filters)
+            return Object.keys(normalized).length > 0 ? normalized : undefined
+        }
+
+        export function summarizeStatusCounts(rows: Array<{ status: string; _count: { _all: number } }>) {
+            return Object.fromEntries(rows.map((row) => [row.status, row._count._all]))
+        }
+
+        export function buildRequeueFailedTaskData(
             payload: any,
             execute_at: number,
             now: number,
@@ -491,7 +533,7 @@ namespace DB {
                     if (shouldReviveExistingTaskOnAdd(existing)) {
                         return await prisma.task_queue.update({
                             where: { id: existing.id },
-                            data: requeueFailedTaskData(payload, execute_at, now, meta),
+                            data: buildRequeueFailedTaskData(payload, execute_at, now, meta),
                         })
                     }
                     return existing
@@ -528,7 +570,7 @@ namespace DB {
                     if (shouldReviveExistingTaskOnAdd(existingRecord)) {
                         return await prisma.task_queue.update({
                             where: { id: existingRecord.id },
-                            data: requeueFailedTaskData(payload, execute_at, now, meta),
+                            data: buildRequeueFailedTaskData(payload, execute_at, now, meta),
                         })
                     }
                     return existingRecord
@@ -600,7 +642,7 @@ namespace DB {
                 data: {
                     status,
                     updated_at: now,
-                    finished_at: ['completed', 'failed', 'cancelled'].includes(status) ? now : null,
+                    finished_at: isTerminalStatus(status) ? now : null,
                     last_error: meta?.last_error ?? undefined,
                     result_summary: meta?.result_summary ?? undefined,
                 },
@@ -626,13 +668,16 @@ namespace DB {
             })
         }
 
-        export async function list(limit = 50, status?: string): Promise<Array<DBTaskQueue>> {
+        export async function list(
+            limit = 50,
+            filters?: string | TaskQueueListFilters,
+        ): Promise<Array<DBTaskQueue>> {
             return await prisma.task_queue.findMany({
-                where: status ? { status } : undefined,
+                where: buildListWhere(filters),
                 orderBy: {
                     created_at: 'desc',
                 },
-                take: Math.max(1, Math.min(limit, 200)),
+                take: clampListLimit(limit),
             })
         }
 
@@ -643,7 +688,7 @@ namespace DB {
                     _all: true,
                 },
             })
-            return Object.fromEntries(rows.map((row) => [row.status, row._count._all]))
+            return summarizeStatusCounts(rows)
         }
     }
 

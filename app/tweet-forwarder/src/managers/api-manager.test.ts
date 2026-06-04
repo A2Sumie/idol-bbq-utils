@@ -218,6 +218,50 @@ test('APIManager runtime status uses full task status counts', async () => {
     }
 })
 
+test('APIManager task list forwards operator filters safely', async () => {
+    const originalTaskList = DB.TaskQueue.list
+    const calls: any[] = []
+
+    ;(DB.TaskQueue as any).list = async (limit: number, filters: unknown) => {
+        calls.push({ limit, filters })
+        return []
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).handleTasks(
+            new URL(
+                'http://localhost/api/tasks?limit=abc&status=failed&type=aggregate_daily&source_ref=x%3Amember&action_type=aggregate&idempotency_key=idem-1',
+            ),
+        )
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual([])
+        expect(calls).toEqual([
+            {
+                limit: 50,
+                filters: {
+                    status: 'failed',
+                    type: 'aggregate_daily',
+                    source_ref: 'x:member',
+                    action_type: 'aggregate',
+                    idempotency_key: 'idem-1',
+                },
+            },
+        ])
+    } finally {
+        ;(DB.TaskQueue as any).list = originalTaskList
+    }
+})
+
 test('APIManager marks manual crawler run task failed when dispatch throws', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus

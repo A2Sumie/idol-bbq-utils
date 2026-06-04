@@ -8,3 +8,77 @@ test('TaskQueue idempotent add only revives failed existing tasks', () => {
         expect(DB.TaskQueue.shouldReviveExistingTaskOnAdd({ status })).toBeFalse()
     }
 })
+
+test('TaskQueue requeue data clears terminal failure fields while preserving reschedule metadata', () => {
+    const data = DB.TaskQueue.buildRequeueFailedTaskData(
+        { a: 1 },
+        222,
+        111,
+        {
+            source_ref: 'x:member',
+            action_type: 'aggregate_hourly',
+            idempotency_key: 'idem-1',
+        },
+    )
+
+    expect(data).toEqual({
+        payload: { a: 1 },
+        execute_at: 222,
+        updated_at: 111,
+        status: 'pending',
+        finished_at: null,
+        last_error: null,
+        result_summary: 'requeued failed idempotent task',
+        source_ref: 'x:member',
+        action_type: 'aggregate_hourly',
+    })
+})
+
+test('TaskQueue terminal status policy is explicit', () => {
+    for (const status of ['completed', 'failed', 'cancelled']) {
+        expect(DB.TaskQueue.isTerminalStatus(status)).toBeTrue()
+    }
+
+    for (const status of ['pending', 'processing', 'queued', 'retrying']) {
+        expect(DB.TaskQueue.isTerminalStatus(status)).toBeFalse()
+    }
+})
+
+test('TaskQueue list limits are clamped for operator endpoints', () => {
+    expect(DB.TaskQueue.clampListLimit(-1)).toBe(1)
+    expect(DB.TaskQueue.clampListLimit(0)).toBe(1)
+    expect(DB.TaskQueue.clampListLimit(50)).toBe(50)
+    expect(DB.TaskQueue.clampListLimit(Number.NaN)).toBe(50)
+    expect(DB.TaskQueue.clampListLimit(12.9)).toBe(12)
+    expect(DB.TaskQueue.clampListLimit(999)).toBe(200)
+})
+
+test('TaskQueue list filters trim empty operator query params', () => {
+    expect(DB.TaskQueue.buildListWhere()).toBeUndefined()
+    expect(DB.TaskQueue.buildListWhere('pending')).toEqual({ status: 'pending' })
+    expect(
+        DB.TaskQueue.buildListWhere({
+            status: ' failed ',
+            type: ' aggregate_hourly ',
+            source_ref: '',
+            action_type: 'aggregate',
+            idempotency_key: undefined,
+        }),
+    ).toEqual({
+        status: 'failed',
+        type: 'aggregate_hourly',
+        action_type: 'aggregate',
+    })
+})
+
+test('TaskQueue status counts summarize sparse groupBy rows', () => {
+    expect(
+        DB.TaskQueue.summarizeStatusCounts([
+            { status: 'pending', _count: { _all: 3 } },
+            { status: 'completed', _count: { _all: 9 } },
+        ]),
+    ).toEqual({
+        pending: 3,
+        completed: 9,
+    })
+})

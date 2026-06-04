@@ -924,9 +924,16 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleTasks(url: URL): Promise<Response> {
-        const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '100'), 200))
-        const status = url.searchParams.get('status') || undefined
-        return jsonResponse(await DB.TaskQueue.list(limit, status))
+        const limit = DB.TaskQueue.clampListLimit(Number(url.searchParams.get('limit') || '100'))
+        return jsonResponse(
+            await DB.TaskQueue.list(limit, {
+                status: url.searchParams.get('status') || undefined,
+                type: url.searchParams.get('type') || undefined,
+                source_ref: url.searchParams.get('source_ref') || undefined,
+                action_type: url.searchParams.get('action_type') || undefined,
+                idempotency_key: url.searchParams.get('idempotency_key') || undefined,
+            }),
+        )
     }
 
     private async handleOutboundMessages(url: URL): Promise<Response> {
