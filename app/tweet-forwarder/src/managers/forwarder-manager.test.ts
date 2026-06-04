@@ -3229,6 +3229,364 @@ test('restoreSummaryCardQueues cancels stale open windows instead of restoring t
     expect(target.sent).toHaveLength(0)
 })
 
+test('restoreSummaryCardQueues restores compatible open windows using current target config', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                max_items: 14,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-compatible-restore',
+    )
+    ;(pools as any).forward_to.set(target.id, target)
+
+    const now = Math.floor(Date.now() / 1000)
+    const article = {
+        id: 740,
+        a_id: 'summary-compatible-restore',
+        platform: Platform.X,
+        username: 'restore member',
+        u_id: 'restore_member',
+        content: 'compatible restore should keep queue',
+        url: 'https://x.com/restore_member/status/740',
+        type: 'tweet',
+        created_at: now - 60,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+    const summaryConfig = {
+        intervalSeconds: 1800,
+        threshold: 8,
+        maxItems: 14,
+        includeOriginalMedia: false,
+        sendFirstImmediately: false,
+        sendFirstNative: false,
+        mediaRealtime: false,
+        mediaRealtimeText: 'none',
+        flushOnThreshold: true,
+        flushDelaySeconds: 0,
+        windowAlignment: 'none',
+        mediaDuplicateLimit: null,
+    }
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const items = (DB.AggregationWindow as any).__items as Map<string, any>
+    windows.set(1, {
+        id: 1,
+        idempotency_key: 'compatible-summary-window',
+        route_key: `route-compatible:target:${target.id}`,
+        target_id: target.id,
+        mode: 'summary_card',
+        window_start: now - 300,
+        window_end: now + 1500,
+        status: 'open',
+        created_at: now - 300,
+        updated_at: now - 300,
+        finished_at: null,
+        payload_hash: null,
+    })
+    items.set('1:compatible-summary-item', {
+        id: 1,
+        window_id: 1,
+        article_key: 'compatible-summary-item',
+        article_row_id: article.id,
+        platform: article.platform,
+        payload: {
+            queuedAt: now - 120,
+            runtime_config: {
+                collapse_forwarded_ref_text: false,
+                summary_card: {
+                    enabled: true,
+                    interval_seconds: 9999,
+                },
+            },
+            summaryConfig,
+        },
+        created_at: now - 120,
+    })
+
+    const originalGetSingleArticle = DB.Article.getSingleArticle
+    ;(DB.Article as any).getSingleArticle = async () => article
+    try {
+        await (pools as any).restoreSummaryCardQueues()
+    } finally {
+        ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
+    }
+
+    const queues = Array.from((pools as any).summaryCardQueues.values()) as Array<any>
+    expect(windows.get(1)?.status).toBe('open')
+    expect(queues).toHaveLength(1)
+    expect(queues[0]?.config.intervalSeconds).toBe(1800)
+    expect(queues[0]?.runtime_config?.collapse_forwarded_ref_text).toBeFalse()
+    expect(queues[0]?.runtime_config?.summary_card).toBeUndefined()
+    expect(queues[0]?.items.get(article.id)?.article.a_id).toBe(article.a_id)
+    expect(target.sent).toHaveLength(0)
+})
+
+test('restoreSummaryCardQueues cancels open windows when summary-card is currently disabled', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: false,
+            },
+        } as any,
+        'target-summary-card-disabled-restore',
+    )
+    ;(pools as any).forward_to.set(target.id, target)
+
+    const now = Math.floor(Date.now() / 1000)
+    const article = {
+        id: 741,
+        a_id: 'summary-disabled-restore',
+        platform: Platform.X,
+        username: 'disabled restore',
+        u_id: 'disabled_restore',
+        content: 'disabled summary-card should cancel old window',
+        url: 'https://x.com/disabled_restore/status/741',
+        type: 'tweet',
+        created_at: now - 60,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const items = (DB.AggregationWindow as any).__items as Map<string, any>
+    windows.set(1, {
+        id: 1,
+        idempotency_key: 'disabled-summary-window',
+        route_key: `route-disabled:target:${target.id}`,
+        target_id: target.id,
+        mode: 'summary_card',
+        window_start: now - 300,
+        window_end: now + 1500,
+        status: 'open',
+        created_at: now - 300,
+        updated_at: now - 300,
+        finished_at: null,
+        payload_hash: null,
+    })
+    items.set('1:disabled-summary-item', {
+        id: 1,
+        window_id: 1,
+        article_key: 'disabled-summary-item',
+        article_row_id: article.id,
+        platform: article.platform,
+        payload: {
+            queuedAt: now - 120,
+            runtime_config: {
+                summary_card: {
+                    enabled: true,
+                    interval_seconds: 1800,
+                },
+            },
+            summaryConfig: {
+                intervalSeconds: 1800,
+                threshold: 8,
+                maxItems: 14,
+                includeOriginalMedia: false,
+                sendFirstImmediately: false,
+                sendFirstNative: false,
+                mediaRealtime: false,
+                mediaRealtimeText: 'none',
+                flushOnThreshold: true,
+                flushDelaySeconds: 0,
+                windowAlignment: 'none',
+                mediaDuplicateLimit: null,
+            },
+        },
+        created_at: now - 120,
+    })
+
+    const originalGetSingleArticle = DB.Article.getSingleArticle
+    ;(DB.Article as any).getSingleArticle = async () => article
+    try {
+        await (pools as any).restoreSummaryCardQueues()
+    } finally {
+        ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
+    }
+
+    expect(windows.get(1)?.status).toBe('cancelled')
+    expect(windows.get(1)?.payload_hash).toBe('summary-card-disabled')
+    expect((pools as any).summaryCardQueues.size).toBe(0)
+    expect(target.sent).toHaveLength(0)
+})
+
+test('restoreSummaryCardQueues cancels open windows when summary-card config changed', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 7200,
+                max_items: 14,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-config-changed-restore',
+    )
+    ;(pools as any).forward_to.set(target.id, target)
+
+    const now = Math.floor(Date.now() / 1000)
+    const article = {
+        id: 742,
+        a_id: 'summary-config-changed-restore',
+        platform: Platform.X,
+        username: 'changed restore',
+        u_id: 'changed_restore',
+        content: 'changed summary-card config should cancel old window',
+        url: 'https://x.com/changed_restore/status/742',
+        type: 'tweet',
+        created_at: now - 60,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const items = (DB.AggregationWindow as any).__items as Map<string, any>
+    windows.set(1, {
+        id: 1,
+        idempotency_key: 'changed-summary-window',
+        route_key: `route-changed:target:${target.id}`,
+        target_id: target.id,
+        mode: 'summary_card',
+        window_start: now - 300,
+        window_end: now + 1500,
+        status: 'open',
+        created_at: now - 300,
+        updated_at: now - 300,
+        finished_at: null,
+        payload_hash: null,
+    })
+    items.set('1:changed-summary-item', {
+        id: 1,
+        window_id: 1,
+        article_key: 'changed-summary-item',
+        article_row_id: article.id,
+        platform: article.platform,
+        payload: {
+            queuedAt: now - 120,
+            summaryConfig: {
+                intervalSeconds: 1800,
+                threshold: 8,
+                maxItems: 14,
+                includeOriginalMedia: false,
+                sendFirstImmediately: false,
+                sendFirstNative: false,
+                mediaRealtime: false,
+                mediaRealtimeText: 'none',
+                flushOnThreshold: true,
+                flushDelaySeconds: 0,
+                windowAlignment: 'none',
+                mediaDuplicateLimit: null,
+            },
+        },
+        created_at: now - 120,
+    })
+
+    const originalGetSingleArticle = DB.Article.getSingleArticle
+    ;(DB.Article as any).getSingleArticle = async () => article
+    try {
+        await (pools as any).restoreSummaryCardQueues()
+    } finally {
+        ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
+    }
+
+    expect(windows.get(1)?.status).toBe('cancelled')
+    expect(windows.get(1)?.payload_hash).toBe('summary-card-config-changed')
+    expect((pools as any).summaryCardQueues.size).toBe(0)
+    expect(target.sent).toHaveLength(0)
+})
+
 test('sendArticles folds idle-first summary-card item when it appears as a later reply reference', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

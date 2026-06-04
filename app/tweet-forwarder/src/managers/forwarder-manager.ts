@@ -784,13 +784,22 @@ class ForwarderPools extends BaseCompatibleModel {
                 continue
             }
 
-            const config = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config)) || persistedConfig
+            const config = resolveSummaryCardConfig(target.getEffectiveConfig(undefined))
             if (!config) {
                 await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
                     payload_hash: 'summary-card-disabled',
                 }).catch(() => undefined)
                 continue
             }
+
+            if (persistedConfig && !this.isSummaryCardConfigCompatibleForRestore(config, persistedConfig)) {
+                await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
+                    payload_hash: 'summary-card-config-changed',
+                }).catch(() => undefined)
+                continue
+            }
+
+            runtime_config = this.stripSummaryCardRuntimeConfig(runtime_config)
 
             if (this.isSummaryCardWindowStale(window, config, now)) {
                 await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
@@ -825,6 +834,35 @@ class ForwarderPools extends BaseCompatibleModel {
         if (restoredCount > 0) {
             this.log?.info(`Restored ${restoredCount} summary-card queue(s) from durable aggregation windows`)
         }
+    }
+
+    private isSummaryCardConfigCompatibleForRestore(
+        current: ResolvedSummaryCardConfig,
+        persisted: ResolvedSummaryCardConfig,
+    ) {
+        return (
+            current.intervalSeconds === persisted.intervalSeconds &&
+            current.threshold === persisted.threshold &&
+            current.maxItems === persisted.maxItems &&
+            current.includeOriginalMedia === persisted.includeOriginalMedia &&
+            current.sendFirstImmediately === persisted.sendFirstImmediately &&
+            current.sendFirstNative === persisted.sendFirstNative &&
+            current.mediaRealtime === persisted.mediaRealtime &&
+            current.mediaRealtimeText === persisted.mediaRealtimeText &&
+            current.flushOnThreshold === persisted.flushOnThreshold &&
+            current.flushDelaySeconds === persisted.flushDelaySeconds &&
+            current.windowAlignment === persisted.windowAlignment &&
+            current.mediaDuplicateLimit === persisted.mediaDuplicateLimit
+        )
+    }
+
+    private stripSummaryCardRuntimeConfig(runtime_config?: ForwardTargetPlatformCommonConfig) {
+        if (!runtime_config || !Object.prototype.hasOwnProperty.call(runtime_config, 'summary_card')) {
+            return runtime_config
+        }
+        const restoredRuntimeConfig = { ...(runtime_config as any) }
+        delete restoredRuntimeConfig.summary_card
+        return restoredRuntimeConfig as ForwardTargetPlatformCommonConfig
     }
 
     private async onDispatchReceived(payload: unknown) {
