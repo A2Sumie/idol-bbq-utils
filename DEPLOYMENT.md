@@ -23,11 +23,15 @@
     git commit -m "feat: your feature"
     git push
     ```
-5.  Run the no-secret config audit when config/route policy changed:
+5.  Run the local forwarder gate:
+    ```bash
+    bun run verify:forwarder
+    ```
+6.  Run the no-secret config audit when config/route policy changed:
     ```bash
     bun run audit:config -- --fail-on-diagnostics
     ```
-6.  Check the current remote stopped deployment without printing secrets:
+7.  Check the current remote stopped deployment without printing secrets:
     ```bash
     bun run preflight:forwarder
     ```
@@ -78,7 +82,16 @@ To verify changes:
     ```bash
     bun run audit:remote-drift
     ```
-5.  **Logs after an explicit production start**:
+5.  **Remote dirty worktree comparison against local HEAD**:
+    ```bash
+    bun run audit:remote-drift -- --compare-local-head
+    ```
+    Runtime backup/config artifacts are classified without hashing their contents.
+6.  **Full local gate plus remote proof**:
+    ```bash
+    RUN_REMOTE_PREFLIGHT=1 RUN_REMOTE_DRIFT_COMPARE=1 bun run verify:forwarder
+    ```
+7.  **Logs after an explicit production start**:
     ```bash
     docker logs -f forwarder-new
     ```

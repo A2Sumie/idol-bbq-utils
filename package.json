@@ -10,6 +10,7 @@
         "deploy:forwarder:stopped": "tools/deploy-forwarder-stopped.sh",
         "preflight:forwarder": "tools/forwarder-preflight.sh",
         "audit:remote-drift": "tools/forwarder-remote-drift.sh",
+        "verify:forwarder": "tools/forwarder-green-gate.sh",
         "format": "pnpm prettier --write . --ignore-path .prettierignore",
         "docs:dev": "bun --filter docs dev",
         "docs:build": "bun --filter docs build",
