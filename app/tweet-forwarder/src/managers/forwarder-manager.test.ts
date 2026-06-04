@@ -3399,6 +3399,304 @@ test('summary-card aligned windows wait for the configured five-minute delay', a
     expect(packedArticles[0]?.content).toMatch(/【聚合】1 条 \/ \d{4}～\d{4}/)
 })
 
+test('sendArticles starts a new summary-card window instead of appending to a due queue', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                flush_on_threshold: false,
+                flush_delay_seconds: 300,
+            },
+        } as any,
+        'target-summary-card-due-window-rollover',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-rollover.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-rollover.png' }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-due-window-old',
+            [
+                {
+                    id: 850,
+                    a_id: 'summary-due-window-old',
+                    platform: Platform.X,
+                    username: 'old window member',
+                    u_id: 'old_window_member',
+                    content: 'old due-window text',
+                    url: 'https://x.com/old_window_member/status/850',
+                    type: 'tweet',
+                    created_at: now,
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        expect(target.sent).toHaveLength(0)
+        const dueQueue = getSummaryCardQueueForTarget(pools, target.id)
+        expect(dueQueue?.items.size).toBe(1)
+        dueQueue.firstQueuedAt = now - 2101
+        dueQueue.windowStart = now - 2101
+        dueQueue.windowEnd = now - 301
+        const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+        const window = windows.get(dueQueue.windowId)
+        if (window) {
+            window.idempotency_key = 'backdated-summary-window'
+            window.window_start = dueQueue.windowStart
+            window.window_end = dueQueue.windowEnd
+        }
+
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-due-window-new',
+            [
+                {
+                    id: 851,
+                    a_id: 'summary-due-window-new',
+                    platform: Platform.X,
+                    username: 'new window member',
+                    u_id: 'new_window_member',
+                    content: 'new window text must wait',
+                    url: 'https://x.com/new_window_member/status/851',
+                    type: 'tweet',
+                    created_at: now + 1,
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(packedArticles).toHaveLength(1)
+    expect(packedArticles[0]?.content).toContain('old due-window text')
+    expect(packedArticles[0]?.content).not.toContain('new window text must wait')
+    const queue = getSummaryCardQueueForTarget(pools, target.id)
+    expect(queue?.items.size).toBe(1)
+    expect(Array.from(queue?.items.values() || [])[0]?.article?.a_id).toBe('summary-due-window-new')
+})
+
+test('sendArticles allocates a replacement summary-card window after a threshold-completed aligned window', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 2,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+                flush_on_threshold: true,
+                align_to_hour: true,
+                flush_delay_seconds: 300,
+            },
+        } as any,
+        'target-summary-card-threshold-reopen',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-threshold-reopen.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-threshold-reopen.png' }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-threshold-reopen-first',
+            [0, 1].map((index) => ({
+                id: 860 + index,
+                a_id: `summary-threshold-reopen-${index}`,
+                platform: Platform.X,
+                username: `threshold member ${index}`,
+                u_id: `threshold_member_${index}`,
+                content: `threshold window text ${index}`,
+                url: `https://x.com/threshold_member/status/${index}`,
+                type: 'tweet',
+                created_at: now + index,
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            })),
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        expect(target.sent).toHaveLength(1)
+        expect(packedArticles[0]?.content).toContain('threshold window text 0')
+        expect(packedArticles[0]?.content).toContain('threshold window text 1')
+
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-threshold-reopen-next',
+            [
+                {
+                    id: 862,
+                    a_id: 'summary-threshold-reopen-next',
+                    platform: Platform.X,
+                    username: 'threshold member next',
+                    u_id: 'threshold_member_next',
+                    content: 'threshold next text must survive restart',
+                    url: 'https://x.com/threshold_member/status/next',
+                    type: 'tweet',
+                    created_at: now + 2,
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(packedArticles).toHaveLength(1)
+    const queue = getSummaryCardQueueForTarget(pools, target.id)
+    expect(queue?.items.size).toBe(1)
+    expect(Array.from(queue?.items.values() || [])[0]?.article?.a_id).toBe('summary-threshold-reopen-next')
+
+    const windows = Array.from(((DB.AggregationWindow as any).__windows as Map<number, any>).values()).filter(
+        (window: any) => window.target_id === target.id,
+    )
+    expect(windows.filter((window: any) => window.status === 'completed')).toHaveLength(1)
+    const openWindows = windows.filter((window: any) => window.status === 'open')
+    expect(openWindows).toHaveLength(1)
+    expect(queue?.windowId).toBe(openWindows[0]?.id)
+    expect(openWindows[0]?.idempotency_key).toContain(':reopen:')
+})
+
 test('idle-first summary-card items can fall back to native article send', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

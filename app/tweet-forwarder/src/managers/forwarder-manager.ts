@@ -1786,19 +1786,36 @@ class ForwarderPools extends BaseCompatibleModel {
         firstQueuedAt: number,
     ) {
         const windowStart = this.resolveSummaryCardWindowStart(firstQueuedAt, config)
-        return await DB.AggregationWindow.getOrCreateOpen({
-            idempotency_key: this.buildSummaryCardWindowKey(
-                routeKeyValue,
-                target.id,
-                windowStart,
-                config.intervalSeconds,
-            ),
-            route_key: routeKeyValue,
-            target_id: target.id,
-            mode: 'summary_card',
-            window_start: windowStart,
-            window_end: windowStart + config.intervalSeconds,
-        })
+        const baseIdempotencyKey = this.buildSummaryCardWindowKey(
+            routeKeyValue,
+            target.id,
+            windowStart,
+            config.intervalSeconds,
+        )
+        let idempotencyKey = baseIdempotencyKey
+        let lastWindow: Awaited<ReturnType<typeof DB.AggregationWindow.getOrCreateOpen>> | undefined
+
+        for (let attempt = 0; attempt < 5; attempt++) {
+            const window = await DB.AggregationWindow.getOrCreateOpen({
+                idempotency_key: idempotencyKey,
+                route_key: routeKeyValue,
+                target_id: target.id,
+                mode: 'summary_card',
+                window_start: windowStart,
+                window_end: windowStart + config.intervalSeconds,
+            })
+            if (window.status === 'open') {
+                return window
+            }
+
+            lastWindow = window
+            idempotencyKey = `${baseIdempotencyKey}:reopen:${window.id}:${firstQueuedAt}:${attempt + 1}`
+        }
+
+        this.log?.warn(
+            `Unable to allocate open summary-card window for ${target.id}; reusing non-open window ${lastWindow?.id}`,
+        )
+        return lastWindow!
     }
 
     private async persistSummaryCardItem(queue: SummaryCardQueue, item: SummaryCardQueueItem) {
@@ -1850,8 +1867,14 @@ class ForwarderPools extends BaseCompatibleModel {
         const summaryRouteKey =
             routeKeyValue || targetRouteKey(routeKey({ source: 'system', crawlerId: 'unknown' }), target.id)
         const queueKey = this.getSummaryCardQueueKey(summaryRouteKey, target.id, runtime_config, summaryConfig)
-        const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
-        const existingQueue = this.summaryCardQueues.get(queueKey)
+        let existingQueue = this.summaryCardQueues.get(queueKey)
+        if (existingQueue && this.isSummaryCardQueueDue(existingQueue, now)) {
+            log?.debug(
+                `Flushing due summary-card queue for ${target.id} before queuing ${article.a_id}; keeping article in next window.`,
+            )
+            await this.flushSummaryCardQueue(queueKey, 'interval')
+            existingQueue = this.summaryCardQueues.get(queueKey)
+        }
         const item: SummaryCardQueueItem = {
             article: cloneDeep(article),
             queuedAt: now,
@@ -2251,14 +2274,20 @@ class ForwarderPools extends BaseCompatibleModel {
     private async flushDueSummaryCardQueues() {
         const now = Math.floor(Date.now() / 1000)
         for (const [queueKey, queue] of Array.from(this.summaryCardQueues.entries())) {
-            const dueAt =
-                queue.config.windowAlignment === 'none'
-                    ? queue.firstQueuedAt + queue.config.intervalSeconds
-                    : queue.windowEnd || queue.firstQueuedAt + queue.config.intervalSeconds
-            if (queue.items.size > 0 && now >= dueAt + queue.config.flushDelaySeconds) {
+            if (this.isSummaryCardQueueDue(queue, now)) {
                 await this.flushSummaryCardQueue(queueKey, 'interval')
             }
         }
+    }
+
+    private getSummaryCardQueueDueAt(queue: SummaryCardQueue) {
+        return queue.config.windowAlignment === 'none'
+            ? queue.firstQueuedAt + queue.config.intervalSeconds
+            : queue.windowEnd || queue.firstQueuedAt + queue.config.intervalSeconds
+    }
+
+    private isSummaryCardQueueDue(queue: SummaryCardQueue, now: number) {
+        return queue.items.size > 0 && now >= this.getSummaryCardQueueDueAt(queue) + queue.config.flushDelaySeconds
     }
 
     private async flushAllSummaryCardQueues() {
