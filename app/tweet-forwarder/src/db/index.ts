@@ -197,43 +197,25 @@ namespace DB {
             })
         }
 
-        async function getFullChainArticle(article: DBArticle, platform: Platform) {
-            let currentRefId = article.ref
-            let currentArticle = { ...article, platform } as unknown as ArticleWithId
-            const delegate = getDelegate(platform)
-
-            while (currentRefId) {
-                const foundArticle = await delegate.findUnique({
-                    where: {
-                        id: currentRefId,
-                    },
-                })
-                currentRefId = foundArticle?.ref || null
-                // We assume ref is also same platform
-                if (foundArticle) {
-                    const foundWithPlatform = { ...foundArticle, platform } as unknown as ArticleWithId
-                    currentArticle.ref = foundWithPlatform
-                    currentArticle = foundWithPlatform
-                }
-            }
-            return rootWithChain(article, platform)
-        }
-
         async function rootWithChain(article: DBArticle, platform: Platform) {
             const root = { ...article, platform } as unknown as ArticleWithId
             let current = root
             const delegate = getDelegate(platform)
+            const visitedIds = new Set<number>([Number(article.id)])
+            let depth = 0
+            const maxDepth = 100
 
             while (current.ref && typeof current.ref === 'number') {
-                // The ref field in DBArticle is generic Int?
-                // In transformed ArticleWithId, ref can be object.
-                // But initially it's just ID from DB.
-                // Wait, `article.ref` (DB) is number.
-                // `current.ref` (ArticleWithId) is generic.
-                // We need to look at `current.ref` as ID.
                 const refId = current.ref as unknown as number
+                // Corrupt imports can create cycles; truncate instead of blocking restore/query paths.
+                if (visitedIds.has(refId) || depth >= maxDepth) {
+                    current.ref = null
+                    break
+                }
                 const found = await delegate.findUnique({ where: { id: refId } })
                 if (found) {
+                    visitedIds.add(Number(found.id))
+                    depth += 1
                     const foundWithP = { ...found, platform } as unknown as ArticleWithId
                     current.ref = foundWithP
                     current = foundWithP
@@ -242,6 +224,10 @@ namespace DB {
                 }
             }
             return root
+        }
+
+        async function getFullChainArticle(article: DBArticle, platform: Platform) {
+            return rootWithChain(article, platform)
         }
 
         export async function getArticlesByName(u_id: string, platform: Platform, count = 10) {

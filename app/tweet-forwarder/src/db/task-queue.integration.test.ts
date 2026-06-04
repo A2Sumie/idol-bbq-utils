@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import DB from '@/db'
+import { Platform } from '@idol-bbq-utils/spider/types'
 import {
     createPrismaClient,
     prisma as activePrisma,
@@ -124,6 +125,32 @@ async function createAggregationSchema(prisma: PrismaClientInstance) {
     )
 }
 
+async function createArticleSchema(prisma: PrismaClientInstance) {
+    for (const table of ['twitter_article', 'instagram_article']) {
+        await prisma.$executeRawUnsafe(`
+            CREATE TABLE "${table}" (
+                "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                "a_id" TEXT NOT NULL,
+                "u_id" TEXT NOT NULL,
+                "username" TEXT NOT NULL,
+                "created_at" INTEGER NOT NULL,
+                "content" TEXT,
+                "translation" TEXT,
+                "translated_by" TEXT,
+                "url" TEXT NOT NULL,
+                "type" TEXT NOT NULL,
+                "ref" INTEGER,
+                "has_media" BOOLEAN NOT NULL,
+                "media" JSONB,
+                "extra" JSONB,
+                "u_avatar" TEXT
+            )
+        `)
+        await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX "${table}_a_id_key" ON "${table}"("a_id")`)
+        await prisma.$executeRawUnsafe(`CREATE INDEX "${table}_created_at_idx" ON "${table}"("created_at" DESC)`)
+    }
+}
+
 function outboundData(overrides: Partial<Parameters<typeof DB.OutboundMessage.claim>[0]> = {}) {
     return {
         idempotency_key: 'outbound-key',
@@ -152,6 +179,7 @@ beforeEach(async () => {
     await createTaskQueueSchema(testPrisma)
     await createOutboundMessageSchema(testPrisma)
     await createAggregationSchema(testPrisma)
+    await createArticleSchema(testPrisma)
 })
 
 afterEach(async () => {
@@ -577,4 +605,150 @@ test('AggregationWindow items upsert full restore identity while preserving queu
 
     await testPrisma.aggregation_windows.delete({ where: { id: window.id } })
     expect(await testPrisma.aggregation_items.count()).toBe(0)
+})
+
+test('Article getSingleArticle resolves same-platform reference chains on SQLite', async () => {
+    const source = await testPrisma.twitter_article.create({
+        data: {
+            a_id: 'source-post',
+            u_id: 'source-user',
+            username: 'source',
+            created_at: 1000,
+            content: 'source body',
+            translation: null,
+            translated_by: null,
+            url: 'https://x.com/source/status/source-post',
+            type: 'tweet',
+            ref: null,
+            has_media: false,
+            media: [],
+            extra: null,
+            u_avatar: null,
+        },
+    })
+    const main = await testPrisma.twitter_article.create({
+        data: {
+            a_id: 'main-post',
+            u_id: 'main-user',
+            username: 'main',
+            created_at: 1001,
+            content: 'main body',
+            translation: null,
+            translated_by: null,
+            url: 'https://x.com/main/status/main-post',
+            type: 'tweet',
+            ref: source.id,
+            has_media: false,
+            media: [],
+            extra: null,
+            u_avatar: null,
+        },
+    })
+
+    const article = await DB.Article.getSingleArticle(main.id, Platform.X)
+    expect(article).toMatchObject({
+        id: main.id,
+        platform: Platform.X,
+        ref: {
+            id: source.id,
+            platform: Platform.X,
+            a_id: 'source-post',
+        },
+    })
+})
+
+test('Article getSingleArticle breaks cyclic reference chains on SQLite', async () => {
+    const first = await testPrisma.twitter_article.create({
+        data: {
+            a_id: 'cycle-a',
+            u_id: 'cycle-user-a',
+            username: 'cycle-a',
+            created_at: 1000,
+            content: 'cycle a',
+            translation: null,
+            translated_by: null,
+            url: 'https://x.com/cycle/status/a',
+            type: 'tweet',
+            ref: null,
+            has_media: false,
+            media: [],
+            extra: null,
+            u_avatar: null,
+        },
+    })
+    const second = await testPrisma.twitter_article.create({
+        data: {
+            a_id: 'cycle-b',
+            u_id: 'cycle-user-b',
+            username: 'cycle-b',
+            created_at: 1001,
+            content: 'cycle b',
+            translation: null,
+            translated_by: null,
+            url: 'https://x.com/cycle/status/b',
+            type: 'tweet',
+            ref: first.id,
+            has_media: false,
+            media: [],
+            extra: null,
+            u_avatar: null,
+        },
+    })
+    await testPrisma.twitter_article.update({
+        where: { id: first.id },
+        data: { ref: second.id },
+    })
+
+    const article = await DB.Article.getSingleArticle(first.id, Platform.X)
+    const ref = article?.ref as any
+    expect(ref).toMatchObject({
+        id: second.id,
+        platform: Platform.X,
+    })
+    expect(ref.ref).toBeNull()
+})
+
+test('AggregationWindow item platform round-trips into Article restore lookup on SQLite', async () => {
+    const articleRow = await testPrisma.instagram_article.create({
+        data: {
+            a_id: 'ig-post',
+            u_id: 'ig-user',
+            username: 'instagram user',
+            created_at: 1000,
+            content: 'ig body',
+            translation: null,
+            translated_by: null,
+            url: 'https://www.instagram.com/p/ig-post/',
+            type: 'post',
+            ref: null,
+            has_media: true,
+            media: [{ type: 'photo', url: 'https://example.test/ig.jpg' }],
+            extra: null,
+            u_avatar: null,
+        },
+    })
+    const window = await DB.AggregationWindow.getOrCreateOpen({
+        idempotency_key: 'restore-platform-window',
+        route_key: 'route:target',
+        target_id: 'target',
+        mode: 'summary_card',
+        window_start: 1000,
+        window_end: 4600,
+    })
+
+    await DB.AggregationWindow.upsertItem({
+        window_id: window.id,
+        article_key: `${Platform.Instagram}:ig-post`,
+        article_row_id: articleRow.id,
+        platform: Platform.Instagram,
+        payload: { queuedAt: 1000 },
+    })
+
+    const [item] = await DB.AggregationWindow.listItems(window.id)
+    const restored = await DB.Article.getSingleArticle(item.article_row_id, Number(item.platform) as Platform)
+    expect(restored).toMatchObject({
+        id: articleRow.id,
+        platform: Platform.Instagram,
+        a_id: 'ig-post',
+    })
 })
