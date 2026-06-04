@@ -98,6 +98,59 @@ test('Instagram API JSON Parser', async () => {
     })
 })
 
+test('Instagram GraphQL friendly-name detection accepts current non-/graphql/query endpoints', () => {
+    const postData = 'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D'
+
+    expect(
+        InsApiJsonParser.graphQLFriendlyNameFromRequest(
+            'https://www.instagram.com/ajax/bulk-route-definitions/',
+            'POST',
+            postData,
+        ),
+    ).toBe('PolarisProfilePostsQuery')
+    expect(
+        InsApiJsonParser.graphQLFriendlyNameFromRequest(
+            'https://www.instagram.com/ajax/bulk-route-definitions/',
+            'GET',
+            postData,
+        ),
+    ).toBeNull()
+})
+
+test('Instagram grabPosts resolves after posts query without waiting for highlights query', async () => {
+    const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
+    const listeners = new Map<string, (data: any) => void>()
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(eventName, handler)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            if (listeners.get(eventName) === handler) {
+                listeners.delete(eventName)
+            }
+        },
+        goto: async () => {
+            listeners.get('response')?.({
+                url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
+                status: () => 200,
+                json: async () => posts_json,
+                request: () => ({
+                    method: () => 'POST',
+                    postData: () => 'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D',
+                }),
+            })
+        },
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+    } as any
+
+    const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/instagram/')
+
+    expect(posts.length).toBeGreaterThan(0)
+    expect(listeners.has('response')).toBeFalse()
+})
+
 test('Instagram parser drops generated media summaries while preserving real captions', () => {
     const posts = InsApiJsonParser.postsParser({
         data: {
@@ -190,6 +243,33 @@ test('Instagram stories drop accessibility summaries', async () => {
 
     expect(stories).toHaveLength(1)
     expect(stories[0]?.content).toBeNull()
+})
+
+test('Instagram stories return empty array when reels_media is missing', async () => {
+    const page = {
+        goto: async () => undefined,
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+        $$: async () => [
+            {
+                evaluate: async () =>
+                    JSON.stringify({
+                        xdt_api__v1__feed__reels_media: true,
+                        data: {
+                            user: {
+                                username: 'nananijigram22_7',
+                            },
+                        },
+                    }),
+            },
+        ],
+        $: async () => null,
+    } as any
+
+    const stories = await InsApiJsonParser.grabStories(page, 'https://www.instagram.com/stories/nananijigram22_7/')
+
+    expect(stories).toHaveLength(0)
 })
 
 test('Instagram profile status parser detects live broadcasts', () => {

@@ -1,6 +1,7 @@
 import { spiderRegistry } from '../src'
 import { readFileSync } from 'fs'
 import type { GenericFollows } from '../src/types'
+import { Platform } from '../src/types'
 import { TiktokApiJsonParser, TiktokSpider } from '../src/spiders/tiktok'
 import { test, expect } from 'bun:test'
 
@@ -67,23 +68,90 @@ test.skip('TikTok API JSON Parser', async () => {
 
 test('TikTok API JSON Parser tolerates missing bitrateInfo', () => {
     const posts = TiktokApiJsonParser.postsParser({
-        itemList: [{
-            id: '7351147085025500001',
-            createTime: 1710759600,
-            desc: 'Regression case',
-            author: {
-                uniqueId: 'cure_rinochi',
-                nickname: 'Cure Rinochi',
-                avatarLarger: 'https://example.com/avatar.jpg',
+        itemList: [
+            {
+                id: '7351147085025500001',
+                createTime: 1710759600,
+                desc: 'Regression case',
+                author: {
+                    uniqueId: 'cure_rinochi',
+                    nickname: 'Cure Rinochi',
+                    avatarLarger: 'https://example.com/avatar.jpg',
+                },
+                video: {
+                    cover: 'https://example.com/cover.jpg',
+                    originCover: 'https://example.com/origin-cover.jpg',
+                },
             },
-            video: {
-                cover: 'https://example.com/cover.jpg',
-                originCover: 'https://example.com/origin-cover.jpg',
-            },
-        }],
+        ],
     })
 
     expect(posts).toHaveLength(1)
     expect(posts[0]?.media?.map((item) => item.type)).toEqual(['video_thumbnail', 'video_thumbnail'])
     expect(posts[0]?.media?.some((item) => item.type === 'video')).toBeFalse()
+})
+
+test('TikTok API JSON Parser filters malformed post items', () => {
+    const posts = TiktokApiJsonParser.postsParser({
+        itemList: [
+            {
+                id: '7351147085025500001',
+                createTime: 1710759600,
+                desc: 'Valid post',
+                author: {
+                    uniqueId: 'cure_rinochi',
+                    nickname: 'Cure Rinochi',
+                },
+                video: {
+                    cover: 'https://example.com/cover.jpg',
+                },
+            },
+            {
+                createTime: 1710759601,
+                desc: 'Missing id',
+                author: {
+                    uniqueId: 'cure_rinochi',
+                    nickname: 'Cure Rinochi',
+                },
+            },
+            {
+                id: '7351147085025500002',
+                createTime: 1710759602,
+                desc: 'Missing unique id',
+                author: {
+                    nickname: 'Cure Rinochi',
+                },
+            },
+        ],
+    })
+
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.a_id).toBe('7351147085025500001')
+    expect(posts[0]?.u_id).toBe('cure_rinochi')
+    expect(posts[0]?.u_avatar).toBeNull()
+})
+
+test('TikTok follows parser reports TikTok platform identity', () => {
+    const follows = TiktokApiJsonParser.followsParser({
+        __DEFAULT_SCOPE__: {
+            'webapp.user-detail': {
+                userInfo: {
+                    user: {
+                        uniqueId: 'cure_rinochi',
+                        nickname: 'Cure Rinochi',
+                    },
+                    stats: {
+                        followerCount: 227000,
+                    },
+                },
+            },
+        },
+    })
+
+    expect(follows).toMatchObject({
+        platform: Platform.TikTok,
+        u_id: 'cure_rinochi',
+        username: 'Cure Rinochi',
+        followers: 227000,
+    })
 })

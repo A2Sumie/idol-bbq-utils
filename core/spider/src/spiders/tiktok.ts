@@ -49,8 +49,8 @@ class TiktokSpider extends BaseSpider {
         }
         const { id } = result
         const _url = `${this.BASE_URL}@${id}`
-        const cookieString = config.cookieString
-            || (page ? getCookieString(await page.browserContext().cookies()) : undefined)
+        const cookieString =
+            config.cookieString || (page ? getCookieString(await page.browserContext().cookies()) : undefined)
         const { task_type } = config
         if (task_type === 'article') {
             this.log?.info('Trying to grab posts.')
@@ -134,7 +134,9 @@ namespace TiktokApiJsonParser {
         })
         await checkLogin(page)
         await checkSomethingWrong(page)
-        await page.waitForSelector('script[id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]', { timeout: 5000 }).catch(() => null)
+        await page
+            .waitForSelector('script[id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]', { timeout: 5000 })
+            .catch(() => null)
         const browserContent = extractUniversalData(await page.content())
         if (browserContent) {
             return browserContent
@@ -168,17 +170,19 @@ namespace TiktokApiJsonParser {
                 return value
             }
             if (Array.isArray(value)) {
-                return value.find((item) => typeof item === 'string' && item.includes('aweme/v1/play'))
-                    || value.find((item) => typeof item === 'string')
-                    || null
+                return (
+                    value.find((item) => typeof item === 'string' && item.includes('aweme/v1/play')) ||
+                    value.find((item) => typeof item === 'string') ||
+                    null
+                )
             }
             return pickUrl(
-                value.UrlList
-                || value.url_list
-                || value.PlayAddr?.UrlList
-                || value.playAddr?.url_list
-                || value.Data
-                || value.src,
+                value.UrlList ||
+                    value.url_list ||
+                    value.PlayAddr?.UrlList ||
+                    value.playAddr?.url_list ||
+                    value.Data ||
+                    value.src,
             )
         }
 
@@ -217,7 +221,7 @@ namespace TiktokApiJsonParser {
             has_media: media.length > 0,
             media,
             extra: null,
-            u_avatar: author?.avatarLarger.replace('\\u0026', '&'),
+            u_avatar: author?.avatarLarger ? author.avatarLarger.replace('\\u0026', '&') : null,
         }
     }
 
@@ -226,19 +230,27 @@ namespace TiktokApiJsonParser {
         if (!items) {
             return []
         }
-        return items.map(postParser)
+        return items.map(postParser).filter((item: GenericArticle<Platform.TikTok>) => item.a_id && item.u_id)
     }
 
     export function followsParser(json: any): GenericFollows {
         if (!json) {
             throw new Error('Profile format may have changed')
         }
-        let user = json?.data?.user
+        const userInfo = JSONPath({
+            path: "$..['webapp.user-detail'].userInfo",
+            json,
+            resultType: 'value',
+        })[0]
+        const user =
+            userInfo?.user || json?.data?.userInfo?.user || json?.userInfo?.user || json?.data?.user || json?.user
+        const stats =
+            userInfo?.stats || json?.data?.userInfo?.stats || json?.userInfo?.stats || json?.data?.stats || json?.stats
         return {
-            platform: Platform.Instagram,
-            username: user?.full_name,
-            u_id: user?.username,
-            followers: user?.follower_count,
+            platform: Platform.TikTok,
+            username: user?.nickname || user?.full_name || user?.uniqueId || user?.username || '',
+            u_id: user?.uniqueId || user?.username || '',
+            followers: stats?.followerCount ?? user?.follower_count ?? 0,
         }
     }
 
@@ -334,7 +346,10 @@ namespace TiktokApiJsonParser {
         const query_obj = _build_web_query(sec_uid[0], Date.now(), device_id, random_hex7)
         // @ts-ignore
         const query = new URLSearchParams(query_obj)
-        const res = await HTTPClient.download_webpage(`${_API_BASE_URL}?${query.toString()}`, buildHeaders(url, cookieString))
+        const res = await HTTPClient.download_webpage(
+            `${_API_BASE_URL}?${query.toString()}`,
+            buildHeaders(url, cookieString),
+        )
         const json = await res.json()
         return postsParser(json)
     }

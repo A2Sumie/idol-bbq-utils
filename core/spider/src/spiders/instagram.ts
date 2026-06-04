@@ -142,6 +142,43 @@ namespace InsApiJsonParser {
     const PROFILE_USER_KEY = 'PolarisProfilePageContentQuery'
     const PROFILE_HIGHLIGHTS_KEY = 'PolarisProfileStoryHighlightsTrayContentQuery'
 
+    export function graphQLFriendlyNameFromRequest(
+        url: string,
+        method: string,
+        postData: string | null | undefined,
+    ): string | null {
+        if (method !== 'POST' || !postData) {
+            return null
+        }
+
+        const parseFriendlyName = (data: string) => {
+            try {
+                const friendlyName = new URLSearchParams(data).get(GRAPHQL_FORM_QUERY_KEY)
+                return friendlyName?.trim() || null
+            } catch {
+                return null
+            }
+        }
+        const decodePostData = (data: string) => {
+            try {
+                return decodeURIComponent(data)
+            } catch {
+                return data
+            }
+        }
+
+        const friendlyName = parseFriendlyName(postData) || parseFriendlyName(decodePostData(postData))
+        if (!friendlyName) {
+            return null
+        }
+
+        return url.includes('/graphql/query') ||
+            url.includes('/api/graphql') ||
+            postData.includes(GRAPHQL_FORM_QUERY_KEY)
+            ? friendlyName
+            : null
+    }
+
     async function checkLogin(page: Page) {
         const login_form = await page.waitForSelector('form[id="loginForm"]', { timeout: 1000 }).catch(() => null)
         if (login_form) {
@@ -179,21 +216,30 @@ namespace InsApiJsonParser {
 
     function mediaParser(edge: any): Array<GenericMediaInfo> {
         let arr = [] as Array<GenericMediaInfo>
+        const pickBestCandidateUrl = (candidates: any): string | null => {
+            if (!Array.isArray(candidates) || candidates.length === 0) {
+                return null
+            }
+            return [...candidates].sort((a: any, b: any) => (b?.width || 0) - (a?.width || 0))[0]?.url || null
+        }
+        const pushMedia = (type: GenericMediaInfo['type'], url: string | null) => {
+            if (!url) {
+                return
+            }
+            arr.push({
+                type,
+                url,
+            })
+        }
         // cover
         const cover_candidates = edge?.image_versions2?.candidates
         if (cover_candidates) {
-            arr.push({
-                type: 'photo',
-                url: cover_candidates.sort((a: any, b: any) => b.width - a.width)[0]?.url,
-            })
+            pushMedia('photo', pickBestCandidateUrl(cover_candidates))
         }
         // video
         const video_candidates = edge?.video_versions
         if (video_candidates) {
-            arr.push({
-                type: 'video',
-                url: video_candidates.sort((a: any, b: any) => b.width - a.width)[0]?.url,
-            })
+            pushMedia('video', pickBestCandidateUrl(video_candidates))
         }
         // carousel
         const carousel_media = edge?.carousel_media
@@ -203,23 +249,27 @@ namespace InsApiJsonParser {
                 arr.shift()
             }
             carousel_media.forEach((media: any) => {
-                arr.push({
-                    type: 'photo',
-                    url: media?.image_versions2?.candidates.sort((a: any, b: any) => b.width - a.width)[0]?.url,
-                })
+                pushMedia('photo', pickBestCandidateUrl(media?.image_versions2?.candidates))
             })
         }
-        return Array.from(new Set(arr)).map((m) => {
-            return {
-                ...m,
-                url: m.url.replace('\\u0026', '&'),
+        const dedup = new Map<string, GenericMediaInfo>()
+        for (const media of arr) {
+            if (!media.url) {
+                continue
             }
-        })
+            const normalizedUrl = media.url.replace('\\u0026', '&')
+            dedup.set(`${media.type}:${normalizedUrl}`, {
+                ...media,
+                url: normalizedUrl,
+            })
+        }
+        return Array.from(dedup.values())
     }
 
     function postParser(edge: any): GenericArticle<Platform.Instagram> {
         const node = edge.node
         const handle = fallbackUsername(node?.user?.username, node?.owner?.username)
+        const avatarUrl = node?.user?.hd_profile_pic_url_info?.url
         return {
             platform: Platform.Instagram,
             a_id: node?.code,
@@ -233,7 +283,7 @@ namespace InsApiJsonParser {
             has_media: true,
             media: mediaParser(node),
             extra: null,
-            u_avatar: node?.user?.hd_profile_pic_url_info?.url.replace('\\u0026', '&'),
+            u_avatar: avatarUrl ? avatarUrl.replace('\\u0026', '&') : null,
         }
     }
 
@@ -262,7 +312,7 @@ namespace InsApiJsonParser {
     function storyParser(item: any): GenericArticle<Platform.Instagram> {
         return {
             platform: Platform.Instagram,
-            a_id: item?.id.split('_')[0],
+            a_id: item?.id?.split('_')[0] || '',
             u_id: '',
             username: '',
             created_at: item?.taken_at,
@@ -328,11 +378,14 @@ namespace InsApiJsonParser {
         /(?:趁\s*(?<username>.*?)\s*的这条快拍|Watch this story by (?<username>.*?) on Instagram)/i
     async function storiesParser(json: any, page: Page): Promise<Array<GenericArticle<Platform.Instagram>>> {
         const reels_media = JSONPath({ path: '$..reels_media', json })[0]
+        if (!Array.isArray(reels_media) || reels_media.length === 0) {
+            return []
+        }
         const res = reels_media
             .map((i: any) => {
                 const ownerHandle = fallbackUsername(i.user?.username)
                 const ownerName = fallbackUsername(i.user?.full_name, ownerHandle)
-                const stories = i.items
+                const stories = (Array.isArray(i.items) ? i.items : [])
                     .map((item: any) => storyParser(item))
                     .map((item: any) => {
                         return {
@@ -369,28 +422,21 @@ namespace InsApiJsonParser {
             }
         } = {},
     ): Promise<Array<GenericArticle<Platform.Instagram>>> {
-        let reasonable_jsons: any = {
-            [PROFILE_POSTS_KEY]: {},
-            [PROFILE_HIGHLIGHTS_KEY]: {},
-        }
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
             const request = response.request()
-            if (/graphql\/query$/.test(url) && request.method() === 'POST') {
-                try {
-                    const postData = request.postData()
-                    if (postData?.includes(`${GRAPHQL_FORM_QUERY_KEY}=${PROFILE_POSTS_KEY}`)) {
-                        reasonable_jsons[PROFILE_POSTS_KEY] = await response.json()
-                    }
-                    if (postData?.includes(`${GRAPHQL_FORM_QUERY_KEY}=${PROFILE_HIGHLIGHTS_KEY}`)) {
-                        reasonable_jsons[PROFILE_HIGHLIGHTS_KEY] = await response.json()
-                    }
-                    if (Object.values(reasonable_jsons).every((e: any) => Object.keys(e).length > 0)) {
-                        done()
-                    }
-                } catch (e) {
-                    fail(e)
-                }
+            const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
+            if (friendlyName !== PROFILE_POSTS_KEY) {
+                return
+            }
+            if (response.status() >= 400) {
+                fail(new Error(`Error: ${response.status()}`))
+                return
+            }
+            try {
+                done(await response.json())
+            } catch (e) {
+                fail(e)
             }
         })
         if (config.viewport) {
@@ -409,7 +455,7 @@ namespace InsApiJsonParser {
         if (!data.success) {
             throw data.error
         }
-        const posts = postsParser(reasonable_jsons[PROFILE_POSTS_KEY])
+        const posts = postsParser(data.data)
         // const highlights = highlightsParser(reasonable_jsons[PROFILE_HIGHLIGHTS_KEY]).map((h) => {
         //     h.username = posts[0]?.username ?? ''
         //     h.u_avatar = posts[0]?.u_avatar ?? ''
@@ -471,22 +517,19 @@ namespace InsApiJsonParser {
     async function grabProfileUserPayload(page: Page, url: string) {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
-            if (url.includes('graphql/query') && response.request().method() === 'POST') {
-                const postData = response.request().postData()
-                if (postData?.includes(`${GRAPHQL_FORM_QUERY_KEY}=${PROFILE_USER_KEY}`)) {
-                    if (response.status() >= 400) {
-                        fail(new Error(`Error: ${response.status()}`))
-                        return
-                    }
-                    await response
-                        .json()
-                        .then((json) => {
-                            done(json)
-                        })
-                        .catch((e) => {
-                            fail(e)
-                        })
-                }
+            const request = response.request()
+            const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
+            if (friendlyName !== PROFILE_USER_KEY) {
+                return
+            }
+            if (response.status() >= 400) {
+                fail(new Error(`Error: ${response.status()}`))
+                return
+            }
+            try {
+                done(await response.json())
+            } catch (e) {
+                fail(e)
             }
         })
         await page.goto(url)
