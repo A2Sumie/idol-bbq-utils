@@ -50,6 +50,9 @@ The script:
 - refuses a dirty local worktree;
 - refuses an unpushed `HEAD` unless `SKIP_UPSTREAM_CHECK=1` is set;
 - builds from a local `git archive` in `/tmp/idol-bbq-utils-build-<commit>`, not from the remote tracked worktree;
+- uses the compose file from that build archive with `--project-directory`
+  pointing at the remote runtime repo, so service definitions come from the
+  deployed commit while relative runtime assets still resolve to host `assets/`;
 - recreates the compose service with `--no-start`;
 - forces `forwarder-new` to `restart=no`;
 - verifies `running=false` before returning success.

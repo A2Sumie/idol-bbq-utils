@@ -140,7 +140,6 @@ docker build \
     -t "$IMAGE_NAME" \
     -f app/tweet-forwarder/Dockerfile .
 image_id="$(docker image inspect "$IMAGE_NAME" --format '{{.Id}}')"
-cd "$repo"
 compose_override="$(mktemp "$BUILD_DIR/compose-stopped-override.XXXXXX.yaml")"
 cat > "$compose_override" <<OVERRIDE
 services:
@@ -150,8 +149,13 @@ services:
     environment:
       IDOL_BBQ_RUNTIME_MODE: "$DEPLOY_RUNTIME_MODE"
 OVERRIDE
+cd "$repo"
 IDOL_BBQ_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" IDOL_BBQ_RESTART_POLICY=no \
-    docker compose -f docker-compose.yaml -f "$compose_override" up --no-start --force-recreate --no-build "$COMPOSE_SERVICE"
+    docker compose \
+        --project-directory "$repo" \
+        -f "$BUILD_DIR/docker-compose.yaml" \
+        -f "$compose_override" \
+        up --no-start --force-recreate --no-build "$COMPOSE_SERVICE"
 docker update --restart=no "$CONTAINER_NAME" >/dev/null
 status="$(docker inspect "$CONTAINER_NAME" --format 'status={{.State.Status}} running={{.State.Running}} restart={{.HostConfig.RestartPolicy.Name}} image={{.Image}}')"
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
@@ -173,6 +177,8 @@ printf 'commit=%s\n' "$DEPLOY_COMMIT"
 printf 'image=%s\n' "$image_id"
 printf 'build_date=%s\n' "$build_date"
 printf 'build_dir=%s\n' "$BUILD_DIR"
+printf 'compose_file=%s\n' "$BUILD_DIR/docker-compose.yaml"
+printf 'compose_project_directory=%s\n' "$repo"
 REMOTE
 }
 

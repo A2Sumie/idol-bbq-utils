@@ -64,6 +64,17 @@ image_build_commit="$(docker image inspect "$container_image" --format '{{ index
 image_oci_revision="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
 image_created_label="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' 2>/dev/null || true)"
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
+binds_tmp="$(mktemp)"
+docker inspect "$CONTAINER_NAME" --format '{{ range .HostConfig.Binds }}{{ println . }}{{ end }}' > "$binds_tmp"
+mount_source() {
+    awk -v target="$1" -F ':' '$2 == target { print $1; found=1; exit } END { if (!found) print "" }' "$binds_tmp"
+}
+mount_exists() {
+    awk -v target="$1" -F ':' '$2 == target { found=1; exit } END { print found ? "true" : "false" }' "$binds_tmp"
+}
+mount_config_yaml="$(mount_source /app/config.yaml)"
+mount_data_db="$(mount_source /app/data.db)"
+mount_app_backups="$(mount_source /app/backups)"
 build_commit_file="$(docker run --rm --entrypoint cat "$container_image" /app/build-commit 2>/dev/null || true)"
 migration_names="$(docker run --rm --entrypoint sh "$container_image" -lc 'find /app/prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort')"
 migration_head="$(printf '%s\n' "$migration_names" | tail -1)"
@@ -214,6 +225,12 @@ printf 'image_build_commit=%s\n' "$image_build_commit"
 printf 'image_oci_revision=%s\n' "$image_oci_revision"
 printf 'image_created=%s\n' "$image_created_label"
 printf 'build_commit_file=%s\n' "$build_commit_file"
+printf 'mount_config_yaml_exists=%s\n' "$(mount_exists /app/config.yaml)"
+printf 'mount_config_yaml_source=%s\n' "$mount_config_yaml"
+printf 'mount_data_db_exists=%s\n' "$(mount_exists /app/data.db)"
+printf 'mount_data_db_source=%s\n' "$mount_data_db"
+printf 'mount_app_backups_exists=%s\n' "$(mount_exists /app/backups)"
+printf 'mount_app_backups_source=%s\n' "$mount_app_backups"
 printf 'expected_commit=%s\n' "${EXPECTED_COMMIT:-}"
 printf 'expected_runtime_mode=%s\n' "${EXPECTED_RUNTIME_MODE:-}"
 if [ -n "${EXPECTED_COMMIT:-}" ] && [ "$image_build_commit" = "$EXPECTED_COMMIT" ] && [ "$build_commit_file" = "$EXPECTED_COMMIT" ]; then
@@ -240,6 +257,7 @@ print(f'operational_crawlers={counts["operational_crawlers"]}')
 print(f'summary_card_routes={data["route_graph"]["summary_card_routes"]}')
 PY
 rm -f "$audit_tmp"
+rm -f "$binds_tmp"
 printf 'migration_head=%s\n' "$migration_head"
 cat "$db_status_tmp"
 rm -f "$migration_names_tmp" "$db_status_tmp"
