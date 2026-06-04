@@ -8,6 +8,7 @@ import { SpiderPools, SpiderTaskScheduler } from './managers/spider-manager'
 import { ForwarderPools, ForwarderTaskScheduler } from './managers/forwarder-manager'
 import { TaskManager } from './managers/task-manager'
 import { APIManager, type ApiRuntimeControl, type ApiRuntimeDeps, type ApiRuntimeMeta, type ApiRuntimeReloadResult } from './managers/api-manager'
+import { startMediaCacheCleanupJob, type MediaCacheCleanupJob } from './services/media-cache-service'
 
 interface RuntimeSnapshot {
     config: AppConfig
@@ -38,6 +39,7 @@ export class RuntimeController {
     private lastReloadedAt = Date.now()
     private reloadPromise: Promise<ApiRuntimeReloadResult> | null = null
     private shuttingDown = false
+    private mediaCacheCleanupJob?: MediaCacheCleanupJob
 
     constructor(configPath = './config.yaml', cacheRoot = CACHE_DIR_ROOT, parentLog: Logger = log) {
         this.configPath = configPath
@@ -47,6 +49,7 @@ export class RuntimeController {
 
     async init() {
         initializeCacheDirectories(this.cacheRoot)
+        this.mediaCacheCleanupJob = startMediaCacheCleanupJob(this.log)
         const config = parseConfigOrThrow(this.configPath)
         this.runtime = await this.createRuntime(config)
         this.startedAt = Date.now()
@@ -88,6 +91,9 @@ export class RuntimeController {
             await this.apiManager.drop()
             this.apiManager = undefined
         }
+
+        this.mediaCacheCleanupJob?.stop()
+        this.mediaCacheCleanupJob = undefined
 
         this.log.info('Cleanup completed')
     }

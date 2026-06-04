@@ -7,6 +7,7 @@ import path from 'path'
 import {
     buildVideoFingerprintBandKeys,
     buildShortVideoDedupCandidate,
+    cleanupMediaCache,
     checkShortVideoCrossPlatformDuplicate,
     checkVideoFingerprintDuplicate,
     isPersistentMediaPath,
@@ -59,8 +60,52 @@ test('persistMediaFile moves downloaded media into a stable hash store with side
 
     expect(fs.existsSync(stored.path)).toBe(true)
     expect(fs.existsSync(`${stored.path}.json`)).toBe(true)
+    createdPaths.add(stored.path)
+    createdPaths.add(`${stored.path}.json`)
     expect(isPersistentMediaPath(stored.path)).toBe(true)
     expect(stored.hash).toHaveLength(64)
+})
+
+test('cleanupMediaCache removes expired stored media and transient downloads', () => {
+    const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'media-cache-cleanup-test-'))
+    createdPaths.add(cacheRoot)
+
+    const oldStoreDir = path.join(cacheRoot, 'media', 'store', 'images', 'aa')
+    const freshStoreDir = path.join(cacheRoot, 'media', 'store', 'images', 'bb')
+    const oldDownloadDir = path.join(cacheRoot, 'media', 'yt-dlp')
+    fs.mkdirSync(oldStoreDir, { recursive: true })
+    fs.mkdirSync(freshStoreDir, { recursive: true })
+    fs.mkdirSync(oldDownloadDir, { recursive: true })
+
+    const oldStoreFile = path.join(oldStoreDir, 'old.jpg')
+    const oldStoreMeta = `${oldStoreFile}.json`
+    const freshStoreFile = path.join(freshStoreDir, 'fresh.jpg')
+    const oldDownloadFile = path.join(oldDownloadDir, 'stale.part')
+    fs.writeFileSync(oldStoreFile, 'old-store')
+    fs.writeFileSync(oldStoreMeta, '{}')
+    fs.writeFileSync(freshStoreFile, 'fresh-store')
+    fs.writeFileSync(oldDownloadFile, 'old-download')
+
+    const now = Date.now()
+    const oldDate = new Date(now - 2 * 60 * 60 * 1000)
+    fs.utimesSync(oldStoreFile, oldDate, oldDate)
+    fs.utimesSync(oldStoreMeta, oldDate, oldDate)
+    fs.utimesSync(oldDownloadFile, oldDate, oldDate)
+
+    const summary = cleanupMediaCache({
+        cacheRoot,
+        nowMs: now,
+        storeRetentionMs: 60 * 60 * 1000,
+        downloadRetentionMs: 60 * 60 * 1000,
+    })
+
+    expect(fs.existsSync(oldStoreFile)).toBe(false)
+    expect(fs.existsSync(oldStoreMeta)).toBe(false)
+    expect(fs.existsSync(oldDownloadFile)).toBe(false)
+    expect(fs.existsSync(freshStoreFile)).toBe(true)
+    expect(summary.storeFilesDeleted).toBe(2)
+    expect(summary.downloadFilesDeleted).toBe(1)
+    expect(summary.errors).toBe(0)
 })
 
 test('cross-platform short video dedup uses duration buckets for nijigram-like accounts', async () => {

@@ -20,6 +20,11 @@ const SHORT_VIDEO_TIME_BUCKET_SECONDS = 6 * 3600
 const VIDEO_FINGERPRINT_SAMPLE_RATIOS = [0.12, 0.3, 0.5, 0.7, 0.88]
 const VIDEO_FINGERPRINT_BAND_SIZE = 4
 const VIDEO_FINGERPRINT_MIN_BAND_MATCHES = 8
+const DEFAULT_MEDIA_STORE_RETENTION_DAYS = 7
+const DEFAULT_MEDIA_DOWNLOAD_RETENTION_HOURS = 24
+const DEFAULT_MEDIA_CLEANUP_INTERVAL_HOURS = 6
+const HOUR_MS = 60 * 60 * 1000
+const DAY_MS = 24 * HOUR_MS
 
 type MediaStoreArticleLike = Pick<Article, 'a_id' | 'platform' | 'u_id' | 'username' | 'created_at' | 'url' | 'type'>
 
@@ -62,6 +67,26 @@ interface VideoFingerprintCandidate {
     duration_seconds: number
     group: string
 }
+
+interface MediaCacheCleanupOptions {
+    cacheRoot?: string
+    nowMs?: number
+    storeRetentionMs?: number
+    downloadRetentionMs?: number
+}
+
+interface MediaCacheCleanupSummary {
+    storeFilesDeleted: number
+    downloadFilesDeleted: number
+    bytesDeleted: number
+    errors: number
+}
+
+interface MediaCacheCleanupJob {
+    stop: () => void
+}
+
+type MediaCacheCleanupLogger = Partial<Pick<Console, 'debug' | 'info' | 'warn' | 'error'>>
 
 function ensureDirectory(dirPath: string) {
     if (!fs.existsSync(dirPath)) {
@@ -464,11 +489,210 @@ function isPersistentMediaPath(filePath: string) {
     return resolved === root || resolved.startsWith(`${root}${path.sep}`)
 }
 
+function parsePositiveEnvNumber(name: string, fallback: number) {
+    const value = Number(process.env[name])
+    return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function resolveCleanupRoots(cacheRoot = CACHE_DIR_ROOT) {
+    const mediaRoot = path.join(cacheRoot, 'media')
+    return {
+        storeRoot: path.join(mediaRoot, 'store'),
+        downloadRoots: [
+            path.join(mediaRoot, 'plain'),
+            path.join(mediaRoot, 'gallery-dl'),
+            path.join(mediaRoot, 'yt-dlp'),
+        ],
+    }
+}
+
+function createCleanupSummary(): MediaCacheCleanupSummary {
+    return {
+        storeFilesDeleted: 0,
+        downloadFilesDeleted: 0,
+        bytesDeleted: 0,
+        errors: 0,
+    }
+}
+
+function statMtimeMs(filePath: string) {
+    try {
+        return fs.statSync(filePath).mtimeMs
+    } catch {
+        return 0
+    }
+}
+
+function deleteFile(filePath: string, summary: MediaCacheCleanupSummary, bucket: 'store' | 'download') {
+    try {
+        const stat = fs.statSync(filePath)
+        fs.unlinkSync(filePath)
+        summary.bytesDeleted += stat.size
+        if (bucket === 'store') {
+            summary.storeFilesDeleted += 1
+        } else {
+            summary.downloadFilesDeleted += 1
+        }
+    } catch {
+        summary.errors += 1
+    }
+}
+
+function cleanupEmptyDirectories(root: string) {
+    if (!fs.existsSync(root)) {
+        return
+    }
+
+    const visit = (dirPath: string) => {
+        let entries: Array<string>
+        try {
+            entries = fs.readdirSync(dirPath)
+        } catch {
+            return false
+        }
+
+        for (const entry of entries) {
+            const childPath = path.join(dirPath, entry)
+            try {
+                if (fs.statSync(childPath).isDirectory()) {
+                    visit(childPath)
+                }
+            } catch {}
+        }
+
+        if (dirPath !== root) {
+            try {
+                if (fs.readdirSync(dirPath).length === 0) {
+                    fs.rmdirSync(dirPath)
+                    return true
+                }
+            } catch {}
+        }
+        return false
+    }
+
+    visit(root)
+}
+
+function walkFiles(root: string, visit: (filePath: string) => void) {
+    if (!fs.existsSync(root)) {
+        return
+    }
+
+    const entries = fs.readdirSync(root, { withFileTypes: true })
+    for (const entry of entries) {
+        const filePath = path.join(root, entry.name)
+        if (entry.isDirectory()) {
+            walkFiles(filePath, visit)
+        } else if (entry.isFile()) {
+            visit(filePath)
+        }
+    }
+}
+
+function cleanupStoreFiles(root: string, cutoffMs: number, summary: MediaCacheCleanupSummary) {
+    const visitedSidecars = new Set<string>()
+
+    walkFiles(root, (filePath) => {
+        if (filePath.endsWith('.json')) {
+            return
+        }
+
+        const sidecarPath = `${filePath}.json`
+        const lastTouchedAt = Math.max(statMtimeMs(filePath), statMtimeMs(sidecarPath))
+        if (lastTouchedAt >= cutoffMs) {
+            return
+        }
+
+        deleteFile(filePath, summary, 'store')
+        if (fs.existsSync(sidecarPath)) {
+            visitedSidecars.add(sidecarPath)
+            deleteFile(sidecarPath, summary, 'store')
+        }
+    })
+
+    walkFiles(root, (filePath) => {
+        if (!filePath.endsWith('.json') || visitedSidecars.has(filePath)) {
+            return
+        }
+        const mediaPath = filePath.slice(0, -'.json'.length)
+        if (!fs.existsSync(mediaPath) && statMtimeMs(filePath) < cutoffMs) {
+            deleteFile(filePath, summary, 'store')
+        }
+    })
+}
+
+function cleanupDownloadFiles(root: string, cutoffMs: number, summary: MediaCacheCleanupSummary) {
+    walkFiles(root, (filePath) => {
+        if (statMtimeMs(filePath) < cutoffMs) {
+            deleteFile(filePath, summary, 'download')
+        }
+    })
+}
+
+function cleanupMediaCache(options: MediaCacheCleanupOptions = {}): MediaCacheCleanupSummary {
+    const nowMs = options.nowMs || Date.now()
+    const storeRetentionMs =
+        options.storeRetentionMs ?? parsePositiveEnvNumber('MEDIA_STORE_RETENTION_DAYS', DEFAULT_MEDIA_STORE_RETENTION_DAYS) * DAY_MS
+    const downloadRetentionMs =
+        options.downloadRetentionMs ??
+        parsePositiveEnvNumber('MEDIA_DOWNLOAD_RETENTION_HOURS', DEFAULT_MEDIA_DOWNLOAD_RETENTION_HOURS) * HOUR_MS
+    const { storeRoot, downloadRoots } = resolveCleanupRoots(options.cacheRoot)
+    const summary = createCleanupSummary()
+
+    cleanupStoreFiles(storeRoot, nowMs - storeRetentionMs, summary)
+    cleanupEmptyDirectories(storeRoot)
+
+    for (const downloadRoot of downloadRoots) {
+        cleanupDownloadFiles(downloadRoot, nowMs - downloadRetentionMs, summary)
+        cleanupEmptyDirectories(downloadRoot)
+    }
+
+    return summary
+}
+
+function startMediaCacheCleanupJob(log?: MediaCacheCleanupLogger): MediaCacheCleanupJob {
+    const intervalMs = parsePositiveEnvNumber('MEDIA_CLEANUP_INTERVAL_HOURS', DEFAULT_MEDIA_CLEANUP_INTERVAL_HOURS) * HOUR_MS
+    let stopped = false
+
+    const run = () => {
+        if (stopped) {
+            return
+        }
+        try {
+            const summary = cleanupMediaCache()
+            if (summary.storeFilesDeleted > 0 || summary.downloadFilesDeleted > 0 || summary.errors > 0) {
+                log?.info?.(
+                    `Media cache cleanup deleted ${summary.storeFilesDeleted} store file(s), ${summary.downloadFilesDeleted} download file(s), ${summary.bytesDeleted} byte(s); errors=${summary.errors}`,
+                )
+            } else {
+                log?.debug?.('Media cache cleanup found no expired files')
+            }
+        } catch (error) {
+            log?.warn?.(`Media cache cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+        }
+    }
+
+    const initialTimer = setTimeout(run, 10_000)
+    const intervalTimer = setInterval(run, intervalMs)
+    ;(initialTimer as any).unref?.()
+    ;(intervalTimer as any).unref?.()
+
+    return {
+        stop: () => {
+            stopped = true
+            clearTimeout(initialTimer)
+            clearInterval(intervalTimer)
+        },
+    }
+}
+
 export {
     buildArticleMarker,
     buildShortVideoDedupCandidate,
     buildVideoFingerprintBandKeys,
     buildVideoFingerprintCandidate,
+    cleanupMediaCache,
     checkVideoFingerprintDuplicate,
     checkExactCrossPlatformMediaDuplicate,
     checkExactCrossPlatformVideoDuplicate,
@@ -479,5 +703,13 @@ export {
     markShortVideoCrossPlatformSeen,
     markVideoFingerprintSeen,
     persistMediaFile,
+    startMediaCacheCleanupJob,
 }
-export type { ShortVideoDedupCandidate, StoredMediaMetadata, VideoFingerprintCandidate }
+export type {
+    MediaCacheCleanupJob,
+    MediaCacheCleanupOptions,
+    MediaCacheCleanupSummary,
+    ShortVideoDedupCandidate,
+    StoredMediaMetadata,
+    VideoFingerprintCandidate,
+}
