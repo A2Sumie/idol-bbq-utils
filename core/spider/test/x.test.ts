@@ -63,6 +63,35 @@ test.skip('spider', async () => {
     }
 })
 
+function buildXTimelineTweetResult(id: string, userId: string, text: string, replyToId?: string) {
+    return {
+        __typename: 'Tweet',
+        legacy: {
+            id_str: id,
+            full_text: text,
+            created_at: 'Tue Mar 11 20:55:07 +0000 2025',
+            entities: {
+                urls: [],
+                media: [],
+            },
+            ...(replyToId ? { in_reply_to_status_id_str: replyToId } : {}),
+        },
+        core: {
+            user_results: {
+                result: {
+                    core: {
+                        screen_name: userId,
+                        name: userId,
+                    },
+                    avatar: {
+                        image_url: `https://example.com/${userId}_normal.jpg`,
+                    },
+                },
+            },
+        },
+    }
+}
+
 test('X API JSON Parser', async () => {
     const x_json = JSON.parse(readFileSync('test/data/x/x.json', 'utf-8'))
     const x_result = JSON.parse(readFileSync('test/data/x/x-result.json', 'utf-8'))
@@ -75,6 +104,109 @@ test('X API JSON Parser', async () => {
     expect(x_response).toEqual(x_result)
     expect(x_replies_response).toEqual(x_replies_result)
     expect(x_follows_response).toEqual(x_follows_result)
+})
+
+test('X replies parser reads TimelineAddToModule conversations', async () => {
+    const json = {
+        data: {
+            user: {
+                result: {
+                    timeline_v2: {
+                        timeline: {
+                            instructions: [
+                                {
+                                    type: 'TimelineAddToModule',
+                                    moduleItems: [
+                                        {
+                                            entryId: 'profile-conversation-test-tweet-100',
+                                            item: {
+                                                itemContent: {
+                                                    tweet_results: {
+                                                        result: buildXTimelineTweetResult(
+                                                            '100',
+                                                            'parent_member',
+                                                            'parent text',
+                                                        ),
+                                                    },
+                                                },
+                                            },
+                                        },
+                                        {
+                                            entryId: 'profile-conversation-test-tweet-101',
+                                            item: {
+                                                itemContent: {
+                                                    tweet_results: {
+                                                        result: buildXTimelineTweetResult(
+                                                            '101',
+                                                            'reply_member',
+                                                            '@parent_member reply text',
+                                                            '100',
+                                                        ),
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    const replies = X.XApiJsonParser.tweetsRepliesParser(json)
+
+    expect(replies).toHaveLength(1)
+    expect(replies[0]?.a_id).toBe('101')
+    expect(replies[0]?.type).toBe(X.ArticleTypeEnum.CONVERSATION)
+    expect(replies[0]?.content).toBe('reply text')
+    expect((replies[0]?.ref as any)?.a_id).toBe('100')
+})
+
+test('X replies parser keeps direct reply timeline entries', async () => {
+    const json = {
+        data: {
+            user: {
+                result: {
+                    timeline_v2: {
+                        timeline: {
+                            instructions: [
+                                {
+                                    type: 'TimelineAddEntries',
+                                    entries: [
+                                        {
+                                            entryId: 'tweet-201',
+                                            content: {
+                                                itemContent: {
+                                                    tweet_results: {
+                                                        result: buildXTimelineTweetResult(
+                                                            '201',
+                                                            'reply_member',
+                                                            'direct reply',
+                                                            '200',
+                                                        ),
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    const replies = X.XApiJsonParser.tweetsRepliesParser(json)
+
+    expect(replies).toHaveLength(1)
+    expect(replies[0]?.a_id).toBe('201')
+    expect(replies[0]?.type).toBe(X.ArticleTypeEnum.CONVERSATION)
+    expect(replies[0]?.ref).toBe('200')
 })
 
 test('X unified list hydration honors configured concurrency', async () => {

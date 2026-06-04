@@ -1723,10 +1723,24 @@ namespace XApiJsonParser {
         }
     }
 
+    function collectTimelineEntries(json: any) {
+        return JSONPath({ path: "$..instructions[?(@.type === 'TimelineAddEntries')].entries", json })
+            .filter(Array.isArray)
+            .flat()
+    }
+
+    function collectTimelineModuleItemGroups(json: any) {
+        return JSONPath({ path: "$..instructions[?(@.type === 'TimelineAddToModule')]", json })
+            .map((instruction: any) => instruction?.moduleItems || instruction?.items || [])
+            .filter(Array.isArray)
+            .filter((items: any[]) => items.length > 0)
+    }
+
     function sanitizeTweetsJson(json: any) {
-        let tweets = JSONPath({ path: "$..instructions[?(@.type === 'TimelineAddEntries')].entries", json })[0]
+        let tweets = collectTimelineEntries(json)
+        const moduleItemGroups = collectTimelineModuleItemGroups(json)
         let pin_tweet = JSONPath({ path: "$..instructions[?(@.type === 'TimelinePinEntry')].entry", json })[0]
-        if (!tweets) {
+        if (tweets.length === 0 && moduleItemGroups.length === 0) {
             const instructionTypes = Array.from(
                 new Set(JSONPath({ path: '$..instructions[*].type', json }).filter(Boolean)),
             )
@@ -1739,6 +1753,54 @@ namespace XApiJsonParser {
             tweets.unshift(pin_tweet)
         }
         return tweets
+    }
+
+    function extractTweetResultFromTimelineItem(item: any) {
+        const result =
+            item?.content?.itemContent?.tweet_results?.result ||
+            item?.item?.itemContent?.tweet_results?.result ||
+            item?.itemContent?.tweet_results?.result
+        return result?.tweet || result || null
+    }
+
+    function getTweetResultLegacy(result: any) {
+        return result?.legacy || result?.tweet?.legacy
+    }
+
+    function getTweetResultId(result: any) {
+        return getTweetResultLegacy(result)?.id_str || null
+    }
+
+    function isReplyTweetResult(result: any) {
+        return Boolean(getTweetResultLegacy(result)?.in_reply_to_status_id_str)
+    }
+
+    function collectConversationResultGroups(json: any, entries: any[]) {
+        const entryGroups = entries
+            .filter((entry: { entryId?: string }) => entry.entryId?.startsWith('profile-conversation'))
+            .map((entry: { content?: { items?: any[] }; items?: any[] }) => entry.content?.items || entry.items || [])
+            .filter(Array.isArray)
+
+        return [...entryGroups, ...collectTimelineModuleItemGroups(json)]
+            .map((items: any[]) => items.map(extractTweetResultFromTimelineItem).filter(Boolean))
+            .filter((results: any[]) => results.length > 0)
+    }
+
+    function buildConversationArticle(results: any[]) {
+        return results
+            .map(tweetParser)
+            .filter((tweet): tweet is GenericArticle<Platform.X> => Boolean(tweet))
+            .reduce((acc: GenericArticle<Platform.X> | null, tweet) => {
+                if (acc) {
+                    tweet.ref = acc
+                    tweet.type = ArticleTypeEnum.CONVERSATION
+                }
+                // 去除回复中的@用户名
+                if (/^@\w+ /.test(tweet.content || '')) {
+                    tweet.content = tweet.content?.replace(/^@\w+ /, '') ?? null
+                }
+                return tweet
+            }, null)
     }
 
     // 时间转换辅助函数
@@ -1781,9 +1843,15 @@ namespace XApiJsonParser {
 
     function tweetParser(result: any): GenericArticle<Platform.X> | null {
         // TweetWithVisibilityResults --> result.tweet
-        const legacy = result.legacy || result.tweet?.legacy
+        const legacy = getTweetResultLegacy(result)
+        if (!legacy?.id_str || !legacy?.created_at) {
+            return null
+        }
         const userResult = (result.core || result.tweet?.core)?.user_results?.result
         const userLegacy = userResult?.core || userResult?.legacy
+        const quotedResult = result.quoted_status_result?.result
+        const retweetedResult = result.retweeted_status_result?.result || legacy?.retweeted_status_result?.result
+        const replyToId = legacy?.in_reply_to_status_id_str || null
         let content = legacy?.full_text
         for (const { url } of legacy?.entities?.media || []) {
             content = content.replace(url, '')
@@ -1798,12 +1866,18 @@ namespace XApiJsonParser {
             created_at: Math.floor(parseTwitterDate(legacy?.created_at) / 1000),
             content: legacy?.full_text,
             url: userLegacy?.screen_name ? `https://x.com/${userLegacy.screen_name}/status/${legacy?.id_str}` : '',
-            type: result.quoted_status_result?.result ? ArticleTypeEnum.QUOTED : ArticleTypeEnum.TWEET,
-            ref: result.quoted_status_result?.result
-                ? tweetParser(result.quoted_status_result.result)
-                : result.retweeted_status_result?.result
-                  ? tweetParser(result.retweeted_status_result.result)
-                  : null,
+            type: quotedResult
+                ? ArticleTypeEnum.QUOTED
+                : retweetedResult
+                  ? ArticleTypeEnum.RETWEET
+                  : replyToId
+                    ? ArticleTypeEnum.CONVERSATION
+                    : ArticleTypeEnum.TWEET,
+            ref: quotedResult
+                ? tweetParser(quotedResult)
+                : retweetedResult
+                  ? tweetParser(retweetedResult)
+                  : replyToId,
             media: mediaParser(legacy?.extended_entities?.media || legacy?.entities?.media),
             has_media: !!legacy?.extended_entities?.media || !!legacy?.entities?.media,
             extra: Card.cardParser(result.card?.legacy),
@@ -1812,19 +1886,16 @@ namespace XApiJsonParser {
                 userLegacy?.profile_image_url_https?.replace('_normal', ''),
         }
         // 处理转发类型
-        if (legacy?.retweeted_status_result) {
-            if (!legacy.retweeted_status_result.result) {
-                return null
-            }
+        if (retweetedResult) {
             tweet.type = ArticleTypeEnum.RETWEET
             tweet.content = ''
-            tweet.ref = tweetParser(legacy.retweeted_status_result.result)
+            tweet.ref = tweetParser(retweetedResult)
             // 转发类型推文media按照ref为准
             tweet.media = null
             tweet.has_media = false
             tweet.extra = null
         }
-        let urls = legacy.entities.urls || []
+        let urls = legacy.entities?.urls || []
         for (const u of urls) {
             if (u.expanded_url && !u.expanded_url.startsWith('https://x.com/')) {
                 tweet.content = tweet.content?.replace(u.url, u.expanded_url) ?? null
@@ -1832,7 +1903,7 @@ namespace XApiJsonParser {
                 tweet.content = tweet.content?.replace(u.url, '') ?? null
             }
         }
-        let media_urls = legacy.entities.media?.map((m: { url: string }) => m.url) || []
+        let media_urls = legacy.entities?.media?.map((m: { url: string }) => m.url) || []
         for (const url of media_urls) {
             tweet.content = tweet.content?.replace(url, '') ?? null
         }
@@ -1953,40 +2024,27 @@ namespace XApiJsonParser {
                 (t: { entryId: string }) =>
                     t.entryId.startsWith('tweet-') && !t.entryId.startsWith('profile-conversation'),
             )
-            .map((t: { content: any }) => t.content?.itemContent?.tweet_results?.result)
+            .map(extractTweetResultFromTimelineItem)
             .filter(Boolean)
         return tweets.map(tweetParser).filter(Boolean) as Array<GenericArticle<Platform.X>>
     }
 
     export function tweetsRepliesParser(json: any) {
         const tweets = sanitizeTweetsJson(json)
-        const conversations = tweets
-            .filter((t: { entryId: string }) => t.entryId.startsWith('profile-conversation'))
-            .map((t: { content: { items: any } }) => t.content.items)
-            .map((t: any[]) =>
-                t
-                    .map(
-                        (i) =>
-                            i.item?.itemContent?.tweet_results?.result?.tweet ||
-                            i.item?.itemContent?.tweet_results?.result,
-                    )
-                    .filter(Boolean),
-            )
-        return conversations
-            .map((c: any[]) => c.map(tweetParser))
-            .map((c: any[]) =>
-                c.reduce((acc, t) => {
-                    if (acc) {
-                        t.ref = acc
-                        t.type = ArticleTypeEnum.CONVERSATION
-                    }
-                    // 去除回复中的@用户名
-                    if (/^@\w+ /.test(t.content)) {
-                        t.content = t.content.replace(/^@\w+ /, '')
-                    }
-                    return t
-                }, null),
-            )
+        const conversationResultGroups = collectConversationResultGroups(json, tweets)
+        const groupedTweetIds = new Set(
+            conversationResultGroups.flatMap((group) => group.map(getTweetResultId).filter(Boolean)),
+        )
+        const conversationArticles = conversationResultGroups.map(buildConversationArticle).filter(Boolean)
+        const directReplyArticles = tweets
+            .filter((t: { entryId: string }) => t.entryId?.startsWith('tweet-'))
+            .map(extractTweetResultFromTimelineItem)
+            .filter(Boolean)
+            .filter((result: any) => isReplyTweetResult(result) && !groupedTweetIds.has(getTweetResultId(result)))
+            .map(tweetParser)
+            .filter(Boolean)
+
+        return [...conversationArticles, ...directReplyArticles] as Array<GenericArticle<Platform.X>>
     }
 
     export function oldFollowsParser(user: any): GenericFollows {
