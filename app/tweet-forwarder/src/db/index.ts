@@ -1030,6 +1030,12 @@ namespace DB {
     }
 
     export namespace AggregationWindow {
+        export const TERMINAL_STATUSES = new Set(['sent', 'completed', 'failed', 'cancelled'])
+
+        export function isTerminalStatus(status: string) {
+            return TERMINAL_STATUSES.has(status)
+        }
+
         export async function getOpen(route_key: string, target_id: string, mode: string) {
             return await prisma.aggregation_windows.findFirst({
                 where: {
@@ -1094,7 +1100,7 @@ namespace DB {
                     status,
                     payload_hash: meta?.payload_hash ?? undefined,
                     updated_at: now,
-                    finished_at: ['sent', 'completed', 'failed', 'cancelled'].includes(status) ? now : null,
+                    finished_at: isTerminalStatus(status) ? now : null,
                 },
             })
         }
@@ -1123,6 +1129,8 @@ namespace DB {
                     created_at: now,
                 },
                 update: {
+                    article_row_id: data.article_row_id,
+                    platform: String(data.platform),
                     payload: (data.payload as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                 },
             })

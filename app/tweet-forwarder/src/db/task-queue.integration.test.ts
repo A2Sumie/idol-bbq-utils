@@ -77,6 +77,53 @@ async function createOutboundMessageSchema(prisma: PrismaClientInstance) {
     )
 }
 
+async function createAggregationSchema(prisma: PrismaClientInstance) {
+    await prisma.$executeRawUnsafe('PRAGMA foreign_keys = ON')
+    await prisma.$executeRawUnsafe(`
+        CREATE TABLE "aggregation_windows" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "idempotency_key" TEXT NOT NULL,
+            "route_key" TEXT NOT NULL,
+            "target_id" TEXT NOT NULL,
+            "mode" TEXT NOT NULL,
+            "window_start" INTEGER NOT NULL,
+            "window_end" INTEGER NOT NULL,
+            "status" TEXT NOT NULL DEFAULT 'open',
+            "payload_hash" TEXT,
+            "created_at" INTEGER NOT NULL,
+            "updated_at" INTEGER NOT NULL,
+            "finished_at" INTEGER
+        )
+    `)
+    await prisma.$executeRawUnsafe(
+        'CREATE UNIQUE INDEX "aggregation_windows_idempotency_key_key" ON "aggregation_windows"("idempotency_key")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "aggregation_windows_route_key_mode_status_idx" ON "aggregation_windows"("route_key", "mode", "status")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "aggregation_windows_target_id_mode_status_idx" ON "aggregation_windows"("target_id", "mode", "status")',
+    )
+    await prisma.$executeRawUnsafe(`
+        CREATE TABLE "aggregation_items" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "window_id" INTEGER NOT NULL,
+            "article_key" TEXT NOT NULL,
+            "article_row_id" INTEGER NOT NULL,
+            "platform" TEXT NOT NULL,
+            "payload" JSONB,
+            "created_at" INTEGER NOT NULL,
+            CONSTRAINT "aggregation_items_window_id_fkey" FOREIGN KEY ("window_id") REFERENCES "aggregation_windows" ("id") ON DELETE CASCADE ON UPDATE NO ACTION
+        )
+    `)
+    await prisma.$executeRawUnsafe(
+        'CREATE UNIQUE INDEX "aggregation_items_window_id_article_key_key" ON "aggregation_items"("window_id", "article_key")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "aggregation_items_article_key_idx" ON "aggregation_items"("article_key")',
+    )
+}
+
 function outboundData(overrides: Partial<Parameters<typeof DB.OutboundMessage.claim>[0]> = {}) {
     return {
         idempotency_key: 'outbound-key',
@@ -104,6 +151,7 @@ beforeEach(async () => {
     setPrismaForTesting(testPrisma)
     await createTaskQueueSchema(testPrisma)
     await createOutboundMessageSchema(testPrisma)
+    await createAggregationSchema(testPrisma)
 })
 
 afterEach(async () => {
@@ -374,4 +422,159 @@ test('OutboundMessage suppresses terminal duplicates while recording payload dri
             payload_hash: 'payload-changed',
         },
     })
+})
+
+test('AggregationWindow creates idempotent open windows and lists oldest open windows on SQLite', async () => {
+    const first = await DB.AggregationWindow.getOrCreateOpen({
+        idempotency_key: 'summary-window-a',
+        route_key: 'route:target-a',
+        target_id: 'target-a',
+        mode: 'summary_card',
+        window_start: 1000,
+        window_end: 4600,
+    })
+    const same = await DB.AggregationWindow.getOrCreateOpen({
+        idempotency_key: 'summary-window-a',
+        route_key: 'route:target-a',
+        target_id: 'target-a',
+        mode: 'summary_card',
+        window_start: 2000,
+        window_end: 5600,
+    })
+    const second = await DB.AggregationWindow.getOrCreateOpen({
+        idempotency_key: 'summary-window-b',
+        route_key: 'route:target-b',
+        target_id: 'target-b',
+        mode: 'summary_card',
+        window_start: 2000,
+        window_end: 5600,
+    })
+    const realtime = await DB.AggregationWindow.getOrCreateOpen({
+        idempotency_key: 'realtime-window',
+        route_key: 'route:target-a',
+        target_id: 'target-a',
+        mode: 'realtime_media',
+        window_start: 3000,
+        window_end: 6600,
+    })
+
+    expect(same.id).toBe(first.id)
+    expect(same.window_start).toBe(1000)
+
+    await testPrisma.aggregation_windows.update({
+        where: { id: first.id },
+        data: { created_at: 300 },
+    })
+    await testPrisma.aggregation_windows.update({
+        where: { id: second.id },
+        data: { created_at: 100 },
+    })
+    await DB.AggregationWindow.updateStatus(realtime.id, 'completed', {
+        payload_hash: 'sent-realtime',
+    })
+
+    expect(await DB.AggregationWindow.getOpen('route:target-b', 'target-b', 'summary_card')).toMatchObject({
+        id: second.id,
+    })
+    expect((await DB.AggregationWindow.listOpen('summary_card')).map((window) => window.id)).toEqual([
+        second.id,
+        first.id,
+    ])
+    expect((await DB.AggregationWindow.listOpen()).map((window) => window.id)).toEqual([second.id, first.id])
+})
+
+test('AggregationWindow status updates use explicit terminal policy on SQLite', async () => {
+    const window = await DB.AggregationWindow.getOrCreateOpen({
+        idempotency_key: 'status-window',
+        route_key: 'route:target',
+        target_id: 'target',
+        mode: 'summary_card',
+        window_start: 1000,
+        window_end: 4600,
+    })
+
+    const completed = await DB.AggregationWindow.updateStatus(window.id, 'completed', {
+        payload_hash: 'hash-a',
+    })
+    expect(completed).toMatchObject({
+        status: 'completed',
+        payload_hash: 'hash-a',
+    })
+    expect(completed.finished_at).toBeNumber()
+
+    const reopened = await DB.AggregationWindow.updateStatus(window.id, 'open')
+    expect(reopened).toMatchObject({
+        status: 'open',
+        payload_hash: 'hash-a',
+        finished_at: null,
+    })
+
+    const sent = await DB.AggregationWindow.updateStatus(window.id, 'sent')
+    expect(sent.status).toBe('sent')
+    expect(sent.finished_at).toBeNumber()
+    expect(DB.AggregationWindow.isTerminalStatus('sent')).toBe(true)
+    expect(DB.AggregationWindow.isTerminalStatus('open')).toBe(false)
+})
+
+test('AggregationWindow items upsert full restore identity while preserving queue order on SQLite', async () => {
+    const window = await DB.AggregationWindow.getOrCreateOpen({
+        idempotency_key: 'items-window',
+        route_key: 'route:target',
+        target_id: 'target',
+        mode: 'summary_card',
+        window_start: 1000,
+        window_end: 4600,
+    })
+
+    const first = await DB.AggregationWindow.upsertItem({
+        window_id: window.id,
+        article_key: '1:article-a',
+        article_row_id: 10,
+        platform: 1,
+        payload: {
+            queuedAt: 1000,
+            title: 'old',
+        },
+    })
+    await DB.AggregationWindow.upsertItem({
+        window_id: window.id,
+        article_key: '1:article-b',
+        article_row_id: 20,
+        platform: 1,
+        payload: {
+            queuedAt: 1001,
+            title: 'middle',
+        },
+    })
+    const updated = await DB.AggregationWindow.upsertItem({
+        window_id: window.id,
+        article_key: '1:article-a',
+        article_row_id: 11,
+        platform: '2',
+        payload: {
+            queuedAt: 1002,
+            title: 'new',
+        },
+    })
+
+    expect(updated).toMatchObject({
+        id: first.id,
+        article_row_id: 11,
+        platform: '2',
+        payload: {
+            queuedAt: 1002,
+            title: 'new',
+        },
+        created_at: first.created_at,
+    })
+
+    const items = await DB.AggregationWindow.listItems(window.id)
+    expect(items.map((item) => item.article_key)).toEqual(['1:article-a', '1:article-b'])
+    expect(items[0]).toMatchObject({
+        article_row_id: 11,
+        platform: '2',
+    })
+
+    await testPrisma.aggregation_windows.delete({ where: { id: window.id } })
+    expect(await testPrisma.aggregation_items.count()).toBe(0)
 })
