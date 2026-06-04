@@ -29,11 +29,13 @@ HELP
     run git diff --check
     run bash -n \
         tools/deploy-forwarder-stopped.sh \
+        tools/forwarder-operator-contracts.sh \
         tools/forwarder-preflight.sh \
         tools/forwarder-remote-drift.sh \
         tools/forwarder-remote-converge.sh \
         tools/forwarder-green-gate.sh
     run sh -n app/tweet-forwarder/start.sh
+    run bash tools/forwarder-operator-contracts.sh
     run bun run audit:config -- --fail-on-diagnostics
     run bun test
     run bun --filter @idol-bbq-utils/tweet-forwarder build
