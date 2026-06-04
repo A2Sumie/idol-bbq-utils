@@ -40,12 +40,14 @@ HELP
 
     git rev-parse --is-inside-work-tree >/dev/null
 
-    local deploy preflight start dockerfile drill
+    local deploy preflight start dockerfile drill drift converge
     deploy="tools/deploy-forwarder-stopped.sh"
     preflight="tools/forwarder-preflight.sh"
     start="app/tweet-forwarder/start.sh"
     dockerfile="app/tweet-forwarder/Dockerfile"
     drill="tools/forwarder-db-backup-drill.sh"
+    drift="tools/forwarder-remote-drift.sh"
+    converge="tools/forwarder-remote-converge.sh"
 
     require_contains "$deploy" 'require_clean_local_worktree' \
         'local clean-worktree deploy guard'
@@ -112,6 +114,29 @@ HELP
         'backup drill sqlite quick_check'
     require_contains "$drill" 'prisma migrate status' \
         'backup drill migration status check'
+
+    require_contains "$drift" 'remote_head_source_files' \
+        'remote drift clean-source inventory'
+    require_contains "$drift" 'remote_head_differs_from_local_head' \
+        'remote drift clean changed-source relation'
+    require_contains "$drift" 'absent_on_remote_head' \
+        'remote drift local-only source relation'
+    require_contains "$drift" 'absent_in_local_head' \
+        'remote drift remote-only source relation'
+    require_contains "$drift" 'source_absent_as_desired' \
+        'remote drift deleted source idempotence relation'
+    require_contains "$converge" 'local_head_source' \
+        'remote convergence local HEAD source expansion'
+    require_contains "$converge" 'delete_remote_source_paths' \
+        'remote convergence remote-only source deletion'
+    require_contains "$converge" 'delete_source_paths' \
+        'remote convergence delete count visibility'
+    require_contains "$converge" 'no_action_source_paths' \
+        'remote convergence no-action count visibility'
+    require_contains "$converge" 'archive_source_paths' \
+        'remote convergence archive count visibility'
+    require_contains "$converge" 'import subprocess' \
+        'remote convergence local HEAD source scan import'
 
     python3 - "$dockerfile" <<'PY'
 import sys

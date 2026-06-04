@@ -66,13 +66,24 @@ require_pushed_head() {
 }
 
 build_plan() {
-    local drift_json="$1" candidate_file="$2" candidate_nul_file="$3" protected_file="$4" manual_file="$5"
+    local drift_json="$1" replace_file="$2" replace_nul_file="$3" delete_file="$4" delete_nul_file="$5" archive_nul_file="$6" protected_file="$7" manual_file="$8"
     tools/forwarder-remote-drift.sh --compare-local-head --json > "$drift_json"
-    python3 - "$drift_json" "$candidate_file" "$candidate_nul_file" "$protected_file" "$manual_file" "$MODE" <<'PY'
+    python3 - "$drift_json" "$replace_file" "$replace_nul_file" "$delete_file" "$delete_nul_file" "$archive_nul_file" "$protected_file" "$manual_file" "$MODE" <<'PY'
 import json
+import subprocess
 import sys
 
-drift_path, candidate_path, candidate_nul_path, protected_path, manual_path, mode = sys.argv[1:]
+(
+    drift_path,
+    replace_path,
+    replace_nul_path,
+    delete_path,
+    delete_nul_path,
+    archive_nul_path,
+    protected_path,
+    manual_path,
+    mode,
+) = sys.argv[1:]
 
 with open(drift_path, "r", encoding="utf-8") as handle:
     drift = json.load(handle)
@@ -84,16 +95,79 @@ protected_exact = {
     "assets/refactor.db-shm",
     "assets/refactor.db-wal",
 }
+source_prefixes = (
+    "app/tweet-forwarder/src/",
+    "app/tweet-forwarder/prisma/",
+    "app/tweet-forwarder/scripts/",
+    "core/",
+    "tools/",
+)
+source_exact = {
+    "package.json",
+    "bun.lock",
+    "tsconfig.json",
+    "docker-compose.yaml",
+    "app/tweet-forwarder/package.json",
+    "app/tweet-forwarder/Dockerfile",
+    "app/tweet-forwarder/start.sh",
+    "app/tweet-forwarder/update-media-tools.sh",
+}
 candidate_relations = {
     "matches_local_head",
     "differs_from_local_head",
     "local_equals_remote_head_worktree_differs",
     "no_worktree_hash",
+    "remote_head_differs_from_local_head",
+    "absent_on_remote_head",
 }
+delete_relations = {
+    "absent_in_local_head",
+}
+no_action_relations = {
+    "source_absent_as_desired",
+}
+
+
+def bucket(path):
+    if path.startswith("app/tweet-forwarder/prisma/"):
+        return "prisma"
+    if path.startswith("app/tweet-forwarder/src/db/"):
+        return "db"
+    if path.startswith("app/tweet-forwarder/src/managers/"):
+        return "managers"
+    if path.startswith("app/tweet-forwarder/src/middleware/forwarder/"):
+        return "forwarder-middleware"
+    if path.startswith("app/tweet-forwarder/src/services/"):
+        return "services"
+    if path.startswith("app/tweet-forwarder/src/types/"):
+        return "types"
+    if path.startswith("app/tweet-forwarder/src/"):
+        return "app-src"
+    if path.startswith("app/tweet-forwarder/scripts/"):
+        return "app-scripts"
+    if path.startswith("core/spider/"):
+        return "core-spider"
+    if path.startswith("core/"):
+        return "core"
+    if path.startswith("tools/"):
+        return "tools"
+    if path in source_exact:
+        return "repo-source"
+    if path.startswith("assets/backups/"):
+        return "runtime-backups"
+    if path.startswith("assets/"):
+        return "runtime-assets"
+    return "other"
 
 
 def unsafe_path(path):
     return path.startswith("/") or "\x00" in path or any(part == ".." for part in path.split("/"))
+
+
+def is_local_source_path(path):
+    if path.startswith("assets/"):
+        return False
+    return path in source_exact or path.startswith(source_prefixes)
 
 
 def is_runtime_path(row):
@@ -107,8 +181,11 @@ def is_runtime_path(row):
 
 
 candidates = []
+deletions = []
+no_actions = []
 protected = []
 manual = []
+candidate_paths = set()
 
 for row in drift["rows"]:
     path = row["path"]
@@ -124,18 +201,58 @@ for row in drift["rows"]:
     elif is_runtime_path(row):
         item["reason"] = "runtime_protected"
         protected.append(item)
+    elif row["relation"] in no_action_relations:
+        item["action"] = "already_matches_local_head"
+        no_actions.append(item)
+    elif row["relation"] in delete_relations and is_local_source_path(path):
+        item["action"] = "delete_remote_source"
+        deletions.append(item)
     elif row["relation"] in candidate_relations:
+        item["action"] = "replace_from_local_head"
         candidates.append(item)
+        candidate_paths.add(path)
     else:
         item["reason"] = "manual_review_required"
         manual.append(item)
 
-with open(candidate_path, "w", encoding="utf-8") as handle:
+local_head_source_paths = subprocess.check_output(
+    ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+    text=True,
+).splitlines()
+for path in local_head_source_paths:
+    if path in candidate_paths or not is_local_source_path(path) or unsafe_path(path):
+        continue
+    candidates.append(
+        {
+            "status": "HEAD",
+            "bucket": bucket(path),
+            "relation": "local_head_source",
+            "action": "replace_from_local_head",
+            "path": path,
+        }
+    )
+    candidate_paths.add(path)
+
+with open(replace_path, "w", encoding="utf-8") as handle:
     for item in candidates:
         handle.write(item["path"] + "\n")
-with open(candidate_nul_path, "wb") as handle:
+with open(replace_nul_path, "wb") as handle:
     for item in candidates:
         handle.write(item["path"].encode("utf-8", "surrogateescape") + b"\0")
+with open(delete_path, "w", encoding="utf-8") as handle:
+    for item in deletions:
+        handle.write(item["path"] + "\n")
+with open(delete_nul_path, "wb") as handle:
+    for item in deletions:
+        handle.write(item["path"].encode("utf-8", "surrogateescape") + b"\0")
+with open(archive_nul_path, "wb") as handle:
+    archived = set()
+    for item in [*candidates, *deletions]:
+        path = item["path"]
+        if path in archived:
+            continue
+        handle.write(path.encode("utf-8", "surrogateescape") + b"\0")
+        archived.add(path)
 with open(protected_path, "w", encoding="utf-8") as handle:
     for item in protected:
         handle.write(f'{item["status"]}\t{item["bucket"]}\t{item["relation"]}\t{item["reason"]}\t{item["path"]}\n')
@@ -143,8 +260,12 @@ with open(manual_path, "w", encoding="utf-8") as handle:
     for item in manual:
         handle.write(f'{item["status"]}\t{item["bucket"]}\t{item["relation"]}\t{item["reason"]}\t{item["path"]}\n')
 
-relations = drift.get("relations", {})
-buckets = drift.get("buckets", {})
+relations = dict(drift.get("relations", {}))
+buckets = dict(drift.get("buckets", {}))
+for item in candidates:
+    if item["relation"] == "local_head_source":
+        relations["local_head_source"] = relations.get("local_head_source", 0) + 1
+        buckets[item["bucket"]] = buckets.get(item["bucket"], 0) + 1
 print(f'mode={mode}')
 print(f'remote_repo={drift["remote_repo"]}')
 print(f'remote_head={drift["remote_head"]}')
@@ -154,7 +275,11 @@ print(f'expanded_untracked_files={str(drift["expanded_untracked_files"]).lower()
 print(f'total={drift["counts"]["total"]}')
 print(f'tracked={drift["counts"]["tracked"]}')
 print(f'untracked={drift["counts"]["untracked"]}')
+print(f'synthetic_source_drift={drift["counts"].get("synthetic_source_drift", 0)}')
 print(f'candidate_source_paths={len(candidates)}')
+print(f'delete_source_paths={len(deletions)}')
+print(f'no_action_source_paths={len(no_actions)}')
+print(f'archive_source_paths={len(set([item["path"] for item in [*candidates, *deletions]]))}')
 print(f'protected_runtime_paths={len(protected)}')
 print(f'manual_review_paths={len(manual)}')
 print("relations_begin")
@@ -166,8 +291,9 @@ for name, count in sorted(buckets.items()):
     print(f"{name}\t{count}")
 print("buckets_end")
 print("candidate_paths_begin")
-for item in candidates:
-    print(f'{item["status"]}\t{item["bucket"]}\t{item["relation"]}\t{item["path"]}')
+for item in [*candidates, *deletions]:
+    action = item.get("action", "review")
+    print(f'{item["status"]}\t{item["bucket"]}\t{item["relation"]}\t{action}\t{item["path"]}')
 print("candidate_paths_end")
 print("protected_paths_begin")
 for item in protected:
@@ -294,6 +420,55 @@ REMOTE
     trap - RETURN
 }
 
+delete_remote_source_paths() {
+    local delete_nul_file="$1"
+    local remote_path_file env_prefix
+
+    remote_path_file="$(remote_mktemp)"
+    ssh "${SSH_ARGS[@]}" "$REMOTE_HOST" "cat > $(printf '%q' "$remote_path_file")" < "$delete_nul_file"
+
+    REMOTE_PATH_FILE="$remote_path_file"
+    env_prefix="$(remote_env_prefix)"
+    ssh "${SSH_ARGS[@]}" "$REMOTE_HOST" "${env_prefix}python3 -" <<'REMOTE'
+import os
+
+repo = os.environ.get("REMOTE_REPO") or os.path.join(os.path.expanduser("~"), "idol-bbq-utils")
+path_file = os.environ["REMOTE_PATH_FILE"]
+
+with open(path_file, "rb") as handle:
+    paths = [item.decode("utf-8", "surrogateescape") for item in handle.read().split(b"\0") if item]
+
+protected_exact = {
+    "assets/config.yaml",
+    "assets/refactor.db",
+    "assets/refactor.db-shm",
+    "assets/refactor.db-wal",
+}
+
+
+def unsafe(path):
+    return (
+        path.startswith("/")
+        or "\x00" in path
+        or path.startswith("assets/")
+        or path in protected_exact
+        or any(part == ".." for part in path.split("/"))
+    )
+
+
+for path in paths:
+    if unsafe(path):
+        raise SystemExit(f"refusing protected or unsafe delete path: {path}")
+    full_path = os.path.join(repo, path)
+    if not os.path.lexists(full_path):
+        continue
+    if os.path.isdir(full_path) and not os.path.islink(full_path):
+        raise SystemExit(f"refusing to delete directory source path: {path}")
+    os.remove(full_path)
+REMOTE
+    remote_rm_f "$remote_path_file"
+}
+
 usage() {
     cat <<'HELP'
 Usage: tools/forwarder-remote-converge.sh [--dry-run|--archive-only|--apply --yes]
@@ -306,9 +481,10 @@ Modes:
   --dry-run       Print the plan only. This is the default and performs no
                   remote writes.
   --archive-only  Archive the remote source candidate files and stop.
-  --apply         Archive remote source candidates, then replace only those
-                  source paths with the current local HEAD. Requires --yes,
-                  a clean local worktree, and a pushed HEAD unless
+  --apply         Archive remote source candidates, replace source paths with
+                  the current local HEAD, and delete remote source paths absent
+                  from local HEAD. Requires --yes, a clean local worktree, and
+                  a pushed HEAD unless
                   SKIP_UPSTREAM_CHECK=1 is set.
 
 Environment:
@@ -348,19 +524,30 @@ main() {
 
     git rev-parse --is-inside-work-tree >/dev/null || die "must run inside a git worktree"
 
-    local expected_commit expected_short drift_json candidate_file candidate_nul_file protected_file manual_file candidate_count manual_count
+    local expected_commit expected_short drift_json replace_file replace_nul_file delete_file delete_nul_file archive_nul_file protected_file manual_file replace_count delete_count archive_count manual_count
     expected_commit="$(git rev-parse HEAD)"
     expected_short="$(git rev-parse --short=7 HEAD)"
     drift_json="$(mktemp)"
-    candidate_file="$(mktemp)"
-    candidate_nul_file="$(mktemp)"
+    replace_file="$(mktemp)"
+    replace_nul_file="$(mktemp)"
+    delete_file="$(mktemp)"
+    delete_nul_file="$(mktemp)"
+    archive_nul_file="$(mktemp)"
     protected_file="$(mktemp)"
     manual_file="$(mktemp)"
-    trap 'rm -f "${drift_json:-}" "${candidate_file:-}" "${candidate_nul_file:-}" "${protected_file:-}" "${manual_file:-}"' EXIT
+    trap 'rm -f "${drift_json:-}" "${replace_file:-}" "${replace_nul_file:-}" "${delete_file:-}" "${delete_nul_file:-}" "${archive_nul_file:-}" "${protected_file:-}" "${manual_file:-}"' EXIT
 
-    build_plan "$drift_json" "$candidate_file" "$candidate_nul_file" "$protected_file" "$manual_file"
+    build_plan "$drift_json" "$replace_file" "$replace_nul_file" "$delete_file" "$delete_nul_file" "$archive_nul_file" "$protected_file" "$manual_file"
 
-    candidate_count="$(wc -l < "$candidate_file" | tr -d ' ')"
+    replace_count="$(wc -l < "$replace_file" | tr -d ' ')"
+    delete_count="$(wc -l < "$delete_file" | tr -d ' ')"
+    archive_count="$(
+        python3 - "$archive_nul_file" <<'PY'
+import sys
+with open(sys.argv[1], "rb") as handle:
+    print(sum(1 for item in handle.read().split(b"\0") if item))
+PY
+    )"
     manual_count="$(wc -l < "$manual_file" | tr -d ' ')"
 
     if [ "$manual_count" != "0" ] && [ "$MODE" = "apply" ]; then
@@ -369,14 +556,15 @@ main() {
 
     case "$MODE" in
         dry-run)
-            printf 'would_archive_source_paths=%s\n' "$candidate_count"
+            printf 'would_archive_source_paths=%s\n' "$archive_count"
+            printf 'would_delete_remote_source_paths=%s\n' "$delete_count"
             printf 'would_replace_from_local_head=false\n'
             ;;
         archive-only)
-            if [ "$candidate_count" = "0" ]; then
+            if [ "$archive_count" = "0" ]; then
                 printf 'archive_skipped=no_candidate_paths\n'
             else
-                create_remote_archive "$candidate_nul_file" "$expected_commit" "$expected_short"
+                create_remote_archive "$archive_nul_file" "$expected_commit" "$expected_short"
             fi
             printf 'replace_from_local_head=false\n'
             ;;
@@ -386,15 +574,20 @@ main() {
             fi
             require_clean_local_worktree
             require_pushed_head
-            if [ "$candidate_count" = "0" ]; then
+            if [ "$archive_count" = "0" ]; then
                 printf 'archive_skipped=no_candidate_paths\n'
-                printf 'replace_from_local_head=skipped\n'
             else
-                create_remote_archive "$candidate_nul_file" "$expected_commit" "$expected_short"
-                apply_local_head "$candidate_file" "$expected_commit"
-                printf 'replace_from_local_head=true\n'
-                printf 'replaced_source_paths=%s\n' "$candidate_count"
+                create_remote_archive "$archive_nul_file" "$expected_commit" "$expected_short"
             fi
+            if [ "$delete_count" != "0" ]; then
+                delete_remote_source_paths "$delete_nul_file"
+            fi
+            if [ "$replace_count" != "0" ]; then
+                apply_local_head "$replace_file" "$expected_commit"
+            fi
+            printf 'replace_from_local_head=true\n'
+            printf 'replaced_source_paths=%s\n' "$replace_count"
+            printf 'deleted_remote_source_paths=%s\n' "$delete_count"
             ;;
         *)
             die "invalid mode: $MODE"

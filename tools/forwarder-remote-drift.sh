@@ -26,9 +26,11 @@ Prints a no-content inventory of the remote idol-bbq-utils dirty worktree.
 Only git status codes and paths are shown; file contents are never read.
 
 Options:
-  --compare-local-head  Expand untracked source files and compare remote
-                        worktree blob hashes against local HEAD. Runtime
-                        backup/config artifacts are classified without hashing.
+  --compare-local-head  Expand untracked source files, compare remote
+                        worktree blob hashes against local HEAD, and report
+                        clean remote source paths that differ from local HEAD.
+                        Runtime backup/config artifacts are classified without
+                        hashing.
   --json                With --compare-local-head, emit machine-readable counts
                         and rows without file contents or blob hashes.
 HELP
@@ -64,7 +66,10 @@ function bucket(path) {
     if (path ~ /^app\/tweet-forwarder\/src\/services\//) return "services"
     if (path ~ /^app\/tweet-forwarder\/src\/types\//) return "types"
     if (path ~ /^app\/tweet-forwarder\/src\//) return "app-src"
+    if (path ~ /^app\/tweet-forwarder\/scripts\//) return "app-scripts"
     if (path ~ /^core\/spider\//) return "core-spider"
+    if (path ~ /^core\//) return "core"
+    if (path ~ /^tools\//) return "tools"
     if (path ~ /^assets\/backups\//) return "runtime-backups"
     if (path ~ /^assets\//) return "runtime-assets"
     return "other"
@@ -172,13 +177,46 @@ def bucket(path):
         return "types"
     if path.startswith("app/tweet-forwarder/src/"):
         return "app-src"
+    if path.startswith("app/tweet-forwarder/scripts/"):
+        return "app-scripts"
     if path.startswith("core/spider/"):
         return "core-spider"
+    if path.startswith("core/"):
+        return "core"
+    if path.startswith("tools/"):
+        return "tools"
+    if path in SOURCE_EXACT:
+        return "repo-source"
     if path.startswith("assets/backups/"):
         return "runtime-backups"
     if path.startswith("assets/"):
         return "runtime-assets"
     return "other"
+
+
+SOURCE_PREFIXES = (
+    "app/tweet-forwarder/src/",
+    "app/tweet-forwarder/prisma/",
+    "app/tweet-forwarder/scripts/",
+    "core/",
+    "tools/",
+)
+SOURCE_EXACT = {
+    "package.json",
+    "bun.lock",
+    "tsconfig.json",
+    "docker-compose.yaml",
+    "app/tweet-forwarder/package.json",
+    "app/tweet-forwarder/Dockerfile",
+    "app/tweet-forwarder/start.sh",
+    "app/tweet-forwarder/update-media-tools.sh",
+}
+
+
+def is_source_path(path):
+    if path.startswith("assets/"):
+        return False
+    return path in SOURCE_EXACT or path.startswith(SOURCE_PREFIXES)
 
 
 repo = os.environ.get("REMOTE_REPO") or os.path.join(os.path.expanduser("~"), "idol-bbq-utils")
@@ -216,12 +254,24 @@ while i < len(entries):
         }
     )
 
+remote_head_source_files = {}
+raw_head = subprocess.check_output(
+    ["git", "ls-tree", "-r", "-z", "--format=%(objectname)%x09%(path)", "HEAD"]
+)
+for record in raw_head.split(b"\0"):
+    if not record:
+        continue
+    sha, path = record.decode("utf-8", "surrogateescape").split("\t", 1)
+    if is_source_path(path):
+        remote_head_source_files[path] = sha
+
 json.dump(
     {
         "remote_repo": repo,
         "remote_head": run(["git", "rev-parse", "HEAD"]),
         "remote_branch": run(["git", "rev-parse", "--abbrev-ref", "HEAD"]),
         "expanded_untracked_files": True,
+        "remote_head_source_files": remote_head_source_files,
         "rows": rows,
     },
     sys.stdout,
@@ -246,6 +296,63 @@ relation_counts = Counter()
 bucket_counts = Counter()
 tracked = 0
 untracked = 0
+synthetic = 0
+
+SOURCE_PREFIXES = (
+    "app/tweet-forwarder/src/",
+    "app/tweet-forwarder/prisma/",
+    "app/tweet-forwarder/scripts/",
+    "core/",
+    "tools/",
+)
+SOURCE_EXACT = {
+    "package.json",
+    "bun.lock",
+    "tsconfig.json",
+    "docker-compose.yaml",
+    "app/tweet-forwarder/package.json",
+    "app/tweet-forwarder/Dockerfile",
+    "app/tweet-forwarder/start.sh",
+    "app/tweet-forwarder/update-media-tools.sh",
+}
+
+
+def bucket(path):
+    if path.startswith("app/tweet-forwarder/prisma/"):
+        return "prisma"
+    if path.startswith("app/tweet-forwarder/src/db/"):
+        return "db"
+    if path.startswith("app/tweet-forwarder/src/managers/"):
+        return "managers"
+    if path.startswith("app/tweet-forwarder/src/middleware/forwarder/"):
+        return "forwarder-middleware"
+    if path.startswith("app/tweet-forwarder/src/services/"):
+        return "services"
+    if path.startswith("app/tweet-forwarder/src/types/"):
+        return "types"
+    if path.startswith("app/tweet-forwarder/src/"):
+        return "app-src"
+    if path.startswith("app/tweet-forwarder/scripts/"):
+        return "app-scripts"
+    if path.startswith("core/spider/"):
+        return "core-spider"
+    if path.startswith("core/"):
+        return "core"
+    if path.startswith("tools/"):
+        return "tools"
+    if path in SOURCE_EXACT:
+        return "repo-source"
+    if path.startswith("assets/backups/"):
+        return "runtime-backups"
+    if path.startswith("assets/"):
+        return "runtime-assets"
+    return "other"
+
+
+def is_source_path(path):
+    if path.startswith("assets/"):
+        return False
+    return path in SOURCE_EXACT or path.startswith(SOURCE_PREFIXES)
 
 def relation(row):
     path = row["path"]
@@ -253,6 +360,8 @@ def relation(row):
     if row["bucket"].startswith("runtime-"):
         return "runtime_artifact"
     if not expected_hash:
+        if not row["worktree_hash"]:
+            return "source_absent_as_desired"
         return "absent_in_local_head"
     if row["worktree_hash"] == expected_hash:
         return "matches_local_head"
@@ -263,6 +372,7 @@ def relation(row):
     return "differs_from_local_head"
 
 rows = []
+seen_paths = set()
 for row in remote["rows"]:
     item = {
         "status": row["status"],
@@ -271,12 +381,45 @@ for row in remote["rows"]:
     }
     item["relation"] = relation(row)
     rows.append(item)
+    seen_paths.add(item["path"])
     relation_counts[item["relation"]] += 1
     bucket_counts[item["bucket"]] += 1
     if item["status"] == "??":
         untracked += 1
     else:
         tracked += 1
+
+remote_head_source_files = remote.get("remote_head_source_files", {})
+local_source_files = {path: sha for path, sha in files.items() if is_source_path(path)}
+
+
+def add_synthetic(path, item_relation):
+    global synthetic
+    item = {
+        "status": "HEAD",
+        "bucket": bucket(path),
+        "path": path,
+        "relation": item_relation,
+    }
+    rows.append(item)
+    relation_counts[item_relation] += 1
+    bucket_counts[item["bucket"]] += 1
+    synthetic += 1
+
+
+for path, remote_head_hash in sorted(remote_head_source_files.items()):
+    if path in seen_paths:
+        continue
+    expected_hash = files.get(path, "")
+    if not expected_hash:
+        add_synthetic(path, "absent_in_local_head")
+    elif remote_head_hash != expected_hash:
+        add_synthetic(path, "remote_head_differs_from_local_head")
+
+for path in sorted(local_source_files):
+    if path in seen_paths or path in remote_head_source_files:
+        continue
+    add_synthetic(path, "absent_on_remote_head")
 
 summary = {
     "remote_repo": remote["remote_repo"],
@@ -287,7 +430,8 @@ summary = {
     "counts": {
         "tracked": tracked,
         "untracked": untracked,
-        "total": tracked + untracked,
+        "synthetic_source_drift": synthetic,
+        "total": tracked + untracked + synthetic,
     },
     "relations": dict(sorted(relation_counts.items())),
     "buckets": dict(sorted(bucket_counts.items())),
@@ -306,7 +450,8 @@ print(f'expected_commit={expected["expected_commit"]}')
 print('expanded_untracked_files=true')
 print(f'tracked={tracked}')
 print(f'untracked={untracked}')
-print(f'total={tracked + untracked}')
+print(f'synthetic_source_drift={synthetic}')
+print(f'total={tracked + untracked + synthetic}')
 print('relations_begin')
 for name, count in sorted(relation_counts.items()):
     print(f'{name}\t{count}')
