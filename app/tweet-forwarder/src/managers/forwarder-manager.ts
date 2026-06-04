@@ -2461,6 +2461,17 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         if (claimedItems.length === 0) {
+            if (queue.windowId) {
+                await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
+                    payload_hash: 'no-claimable-items',
+                }).catch((error) => {
+                    this.log?.warn(
+                        `Failed to cancel empty summary-card window ${queue.windowId} for ${queue.target.id}: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    )
+                })
+            }
             return
         }
 

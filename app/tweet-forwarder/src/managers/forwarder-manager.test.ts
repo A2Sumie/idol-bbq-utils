@@ -2520,6 +2520,98 @@ test('ForwarderPools drop does not visibly send a fresh summary-card queue', asy
     expect(target.sent).toHaveLength(0)
 })
 
+test('flushSummaryCardQueue cancels durable windows when no queued items are claimable', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-no-claimable-items',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-no-claimable-items',
+        [
+            {
+                id: 716,
+                a_id: 'summary-no-claimable-items',
+                platform: Platform.X,
+                username: 'claimed elsewhere',
+                u_id: 'claimed_elsewhere',
+                content: 'durable window should not stay open',
+                url: 'https://x.com/claimed_elsewhere/status/716',
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    const queueKey = Array.from((pools as any).summaryCardQueues.keys())[0]
+    const queue = (pools as any).summaryCardQueues.get(queueKey)
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    expect(windows.get(queue.windowId)?.status).toBe('open')
+
+    ;(pools as any).claimArticleChain = async () => false
+    await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+
+    expect(target.sent).toHaveLength(0)
+    expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
+    expect(windows.get(queue.windowId)?.status).toBe('cancelled')
+    expect(windows.get(queue.windowId)?.payload_hash).toBe('no-claimable-items')
+})
+
 test('summary-card queues are isolated by route for the same target', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
