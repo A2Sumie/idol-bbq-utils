@@ -28,6 +28,7 @@ namespace TaskScheduler {
         id: string
         status: TaskStatus
         data: any
+        meta?: Record<string, unknown>
     }
 
     export interface TaskCtx {

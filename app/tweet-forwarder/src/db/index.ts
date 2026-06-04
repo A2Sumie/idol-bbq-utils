@@ -580,13 +580,14 @@ namespace DB {
             }
         }
 
-        export async function getPending(now: number) {
+        export async function getPending(now: number, options?: { types?: Array<string> }) {
             return await prisma.task_queue.findMany({
                 where: {
                     status: STATUS.Pending,
                     execute_at: {
                         lte: now,
                     },
+                    ...(options?.types?.length ? { type: { in: options.types } } : {}),
                 },
                 orderBy: {
                     execute_at: 'asc',
@@ -594,13 +595,18 @@ namespace DB {
             })
         }
 
-        export async function recoverStaleProcessing(now: number, staleAfterSeconds: number) {
+        export async function recoverStaleProcessing(
+            now: number,
+            staleAfterSeconds: number,
+            options?: { types?: Array<string> },
+        ) {
             return await prisma.task_queue.updateMany({
                 where: {
                     status: STATUS.Processing,
                     updated_at: {
                         lte: now - staleAfterSeconds,
                     },
+                    ...(options?.types?.length ? { type: { in: options.types } } : {}),
                 },
                 data: {
                     status: STATUS.Pending,

@@ -17,20 +17,28 @@ afterEach(() => {
 
 test('TaskManager poll skips tasks that lose the pending claim race', async () => {
     const updatedStatuses: string[] = []
-    ;(DB.TaskQueue as any).recoverStaleProcessing = async () => ({ count: 0 })
-    ;(DB.TaskQueue as any).getPending = async () => [
-        {
-            id: 1,
-            type: 'aggregate_hourly',
-            payload: {
-                platform: Platform.X,
-                u_id: 'member_a',
-                start: 100,
-                end: 200,
-                target_ids: [],
+    const recoverCalls: any[] = []
+    const getPendingCalls: any[] = []
+    ;(DB.TaskQueue as any).recoverStaleProcessing = async (now: number, staleAfterSeconds: number, options?: unknown) => {
+        recoverCalls.push({ now, staleAfterSeconds, options })
+        return { count: 0 }
+    }
+    ;(DB.TaskQueue as any).getPending = async (now: number, options?: unknown) => {
+        getPendingCalls.push({ now, options })
+        return [
+            {
+                id: 1,
+                type: 'aggregate_hourly',
+                payload: {
+                    platform: Platform.X,
+                    u_id: 'member_a',
+                    start: 100,
+                    end: 200,
+                    target_ids: [],
+                },
             },
-        },
-    ]
+        ]
+    }
     ;(DB.TaskQueue as any).claimPending = async () => null
     ;(DB.TaskQueue as any).updateStatus = async (_id: number, status: string) => {
         updatedStatuses.push(status)
@@ -40,6 +48,8 @@ test('TaskManager poll skips tasks that lose the pending claim race', async () =
     await (manager as any).poll()
 
     expect(updatedStatuses).toEqual([])
+    expect(recoverCalls[0]?.options).toEqual({ types: ['aggregate_daily', 'aggregate_hourly'] })
+    expect(getPendingCalls[0]?.options).toEqual({ types: ['aggregate_daily', 'aggregate_hourly'] })
 })
 
 test('TaskManager aggregate sends are claimed through outbound messages', async () => {

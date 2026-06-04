@@ -23,6 +23,157 @@ test('SpiderTaskScheduler treats same crawler pending or running tasks as active
     expect((scheduler as any).hasActiveCrawlerTask('Instagram Live 抢抓 - 椎名桜月')).toBe(false)
 })
 
+test('SpiderPools marks linked manual crawler task completed after crawl handling finishes', async () => {
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const statusUpdates: any[] = []
+    const finishedEvents: any[] = []
+
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const emitter = new EventEmitter()
+        emitter.on(`spider:${TaskScheduler.TaskEvent.FINISHED}`, (payload) => finishedEvents.push(payload))
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', emitter)
+
+        await (pools as any).onTaskReceived({
+            taskId: 'manual-ok',
+            task: {
+                id: 'manual-ok',
+                status: TaskScheduler.TaskStatus.PENDING,
+                data: {
+                    name: 'crawler-ok',
+                    websites: ['https://unsupported.invalid/path'],
+                },
+                meta: {
+                    task_queue_id: 123,
+                },
+            },
+        })
+
+        expect(statusUpdates).toEqual([
+            {
+                id: 123,
+                status: DB.TaskQueue.STATUS.Processing,
+                meta: {
+                    result_summary: 'crawler crawler-ok running',
+                },
+            },
+            {
+                id: 123,
+                status: DB.TaskQueue.STATUS.Completed,
+                meta: {
+                    result_summary: 'crawler crawler-ok completed: 0 article(s), 0 follow(s)',
+                },
+            },
+        ])
+        expect(finishedEvents).toEqual([
+            {
+                taskId: 'manual-ok',
+                result: [],
+                immediate_notify: undefined,
+                crawlerName: 'crawler-ok',
+            },
+        ])
+    } finally {
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
+test('SpiderPools marks linked manual crawler task cancelled when targets are missing', async () => {
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const statusUpdates: any[] = []
+
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', new EventEmitter())
+
+        await (pools as any).onTaskReceived({
+            taskId: 'manual-cancel',
+            task: {
+                id: 'manual-cancel',
+                status: TaskScheduler.TaskStatus.PENDING,
+                data: {
+                    name: 'crawler-cancel',
+                },
+                meta: {
+                    task_queue_id: 124,
+                },
+            },
+        })
+
+        expect(statusUpdates).toEqual([
+            {
+                id: 124,
+                status: DB.TaskQueue.STATUS.Processing,
+                meta: {
+                    result_summary: 'crawler crawler-cancel running',
+                },
+            },
+            {
+                id: 124,
+                status: DB.TaskQueue.STATUS.Cancelled,
+                meta: {
+                    last_error: 'No websites or origin or paths found',
+                    result_summary: 'crawler crawler-cancel cancelled: no crawl targets',
+                },
+            },
+        ])
+    } finally {
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
+test('SpiderPools marks linked manual crawler task failed when crawl target handling errors', async () => {
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const statusUpdates: any[] = []
+
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', new EventEmitter())
+
+        await (pools as any).onTaskReceived({
+            taskId: 'manual-fail',
+            task: {
+                id: 'manual-fail',
+                status: TaskScheduler.TaskStatus.PENDING,
+                data: {
+                    name: 'crawler-fail',
+                    websites: ['not-a-url'],
+                },
+                meta: {
+                    task_queue_id: 125,
+                },
+            },
+        })
+
+        expect(statusUpdates[0]).toEqual({
+            id: 125,
+            status: DB.TaskQueue.STATUS.Processing,
+            meta: {
+                result_summary: 'crawler crawler-fail running',
+            },
+        })
+        expect(statusUpdates[1]).toMatchObject({
+            id: 125,
+            status: DB.TaskQueue.STATUS.Failed,
+            meta: {
+                result_summary: 'crawler crawler-fail failed: 1 error(s)',
+            },
+        })
+        expect(String(statusUpdates[1]?.meta?.last_error || '').length).toBeGreaterThan(0)
+    } finally {
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
 test('SpiderPools does not reuse existing article ids for x list immediate forward by default', async () => {
     const originalCheckExist = DB.Article.checkExist
     const originalTrySave = DB.Article.trySave

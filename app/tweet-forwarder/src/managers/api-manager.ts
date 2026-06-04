@@ -1074,31 +1074,38 @@ export class APIManager extends BaseCompatibleModel {
         }
 
         const now = Math.floor(Date.now() / 1000)
-        const queueTask = await DB.TaskQueue.add('manual_crawler_run', { crawler: crawler.name }, now, {
+        const taskId = `manual-${Math.random().toString(36).slice(2, 9)}`
+        const queueTask = await DB.TaskQueue.add('manual_crawler_run', { crawler: crawler.name, task_id: taskId }, now, {
             source_ref: crawler.name,
             action_type: 'crawl',
         })
-        const taskId = `manual-${Math.random().toString(36).slice(2, 9)}`
         const task: TaskScheduler.Task = {
             id: taskId,
             status: TaskScheduler.TaskStatus.PENDING,
             data: crawler,
+            meta: {
+                task_queue_id: queueTask.id,
+                task_queue_type: 'manual_crawler_run',
+            },
         }
         try {
-            this.deps.emitter.emit(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, {
+            const dispatched = this.deps.emitter.emit(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, {
                 taskId,
                 task,
             })
+            if (!dispatched) {
+                await DB.TaskQueue.updateStatus(queueTask.id, DB.TaskQueue.STATUS.Failed, {
+                    last_error: 'No spider dispatcher registered',
+                })
+                return new Response('Spider dispatcher unavailable', { status: 503 })
+            }
         } catch (error) {
             await DB.TaskQueue.updateStatus(queueTask.id, DB.TaskQueue.STATUS.Failed, {
                 last_error: error instanceof Error ? error.message : String(error),
             })
             throw error
         }
-        await DB.TaskQueue.updateStatus(queueTask.id, DB.TaskQueue.STATUS.Completed, {
-            result_summary: `crawler ${crawler.name} dispatched`,
-        })
-        return jsonResponse({ success: true, taskId, crawler: crawler.name })
+        return jsonResponse({ success: true, status: 'queued', taskId, taskQueueId: queueTask.id, crawler: crawler.name })
     }
 
     private async handleArticleSimulate(req: Request): Promise<Response> {

@@ -317,6 +317,54 @@ test('TaskQueue claim, stale recovery, filtering, and terminal status updates wo
     })
 })
 
+test('TaskQueue pending and stale recovery filters isolate worker task types on SQLite', async () => {
+    const aggregate = await DB.TaskQueue.add('aggregate_hourly', { value: 'aggregate' }, 100, {
+        source_ref: 'x:aggregate',
+        action_type: 'aggregate_hourly',
+    })
+    const manual = await DB.TaskQueue.add('manual_crawler_run', { crawler: 'crawler-a' }, 101, {
+        source_ref: 'crawler-a',
+        action_type: 'crawl',
+    })
+
+    const allPending = await DB.TaskQueue.getPending(150)
+    expect(allPending.map((task) => task.id)).toEqual([aggregate.id, manual.id])
+
+    const workerPending = await DB.TaskQueue.getPending(150, {
+        types: ['aggregate_daily', 'aggregate_hourly'],
+    })
+    expect(workerPending.map((task) => task.id)).toEqual([aggregate.id])
+
+    await DB.TaskQueue.claimPending(aggregate.id)
+    await DB.TaskQueue.claimPending(manual.id)
+    await testPrisma.task_queue.updateMany({
+        where: {
+            id: {
+                in: [aggregate.id, manual.id],
+            },
+        },
+        data: { updated_at: 1000 },
+    })
+
+    const recovered = await DB.TaskQueue.recoverStaleProcessing(1900, 30, {
+        types: ['aggregate_daily', 'aggregate_hourly'],
+    })
+    expect(recovered.count).toBe(1)
+
+    const rows = await testPrisma.task_queue.findMany({
+        where: {
+            id: {
+                in: [aggregate.id, manual.id],
+            },
+        },
+        orderBy: { id: 'asc' },
+    })
+    expect(rows.map((task) => ({ id: task.id, status: task.status }))).toEqual([
+        { id: aggregate.id, status: DB.TaskQueue.STATUS.Pending },
+        { id: manual.id, status: DB.TaskQueue.STATUS.Processing },
+    ])
+})
+
 test('ProcessorRun persists completed and failed audit rows on SQLite', async () => {
     const completed = await DB.ProcessorRun.create({
         processor_id: 'processor-a',

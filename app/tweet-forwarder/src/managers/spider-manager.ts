@@ -85,6 +85,27 @@ interface BrowserCookieSnapshot {
     httpOnly?: boolean
 }
 
+function toErrorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error)
+}
+
+function summarizeCrawlerTaskResult(crawlerName: string | undefined, result: Array<CrawlerTaskResult>) {
+    const articleCount = result
+        .filter((item) => item.task_type === 'article')
+        .reduce((count, item) => count + item.data.length, 0)
+    const followsCount = result
+        .filter((item) => item.task_type === 'follows')
+        .reduce((count, item) => count + item.data.length, 0)
+    return `crawler ${crawlerName || 'unknown'} completed: ${articleCount} article(s), ${followsCount} follow(s)`
+}
+
+function summarizeCrawlerErrors(errors: Array<unknown>) {
+    return errors
+        .slice(0, 3)
+        .map(toErrorMessage)
+        .join('; ')
+}
+
 /**
  * 根据cronjob dispatch任务
  * 根据结果查询数据库
@@ -358,6 +379,29 @@ class SpiderPools extends BaseCompatibleModel {
         this.emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
     }
 
+    private getLinkedTaskQueueId(task: TaskScheduler.Task) {
+        const value = task.meta?.task_queue_id
+        const id = typeof value === 'number' ? value : Number(value)
+        return Number.isSafeInteger(id) && id > 0 ? id : null
+    }
+
+    private async updateLinkedTaskQueue(
+        ctx: TaskScheduler.TaskCtx,
+        status: DB.TaskQueue.Status,
+        meta?: { last_error?: string | null; result_summary?: string | null },
+    ) {
+        const taskQueueId = this.getLinkedTaskQueueId(ctx.task)
+        if (!taskQueueId) {
+            return
+        }
+
+        try {
+            await DB.TaskQueue.updateStatus(taskQueueId, status, meta)
+        } catch (error) {
+            ctx.log?.warn(`Failed to update linked task_queue ${taskQueueId}: ${toErrorMessage(error)}`)
+        }
+    }
+
     // handle task received
     async onTaskReceived(ctx: TaskScheduler.TaskCtx) {
         const { taskId, task } = ctx
@@ -369,12 +413,19 @@ class SpiderPools extends BaseCompatibleModel {
             taskId,
             status: TaskScheduler.TaskStatus.RUNNING,
         })
+        await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Processing, {
+            result_summary: `crawler ${name || 'unknown'} running`,
+        })
         ctx.log?.debug(`Task received: ${JSON.stringify(task)}`)
         if (!websites && !origin && !paths) {
             ctx.log?.error(`No websites or origin or paths found`)
             this.emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
                 taskId,
                 status: TaskScheduler.TaskStatus.CANCELLED,
+            })
+            await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Cancelled, {
+                last_error: 'No websites or origin or paths found',
+                result_summary: `crawler ${name || 'unknown'} cancelled: no crawl targets`,
             })
             return
         }
@@ -396,6 +447,10 @@ class SpiderPools extends BaseCompatibleModel {
             this.emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
                 taskId,
                 status: TaskScheduler.TaskStatus.CANCELLED,
+            })
+            await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Cancelled, {
+                last_error: 'No websites found after sanitizing',
+                result_summary: `crawler ${name || 'unknown'} cancelled: no sanitized crawl targets`,
             })
             return
         }
@@ -599,7 +654,14 @@ class SpiderPools extends BaseCompatibleModel {
                 taskId,
                 status: TaskScheduler.TaskStatus.FAILED,
             })
+            await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Failed, {
+                last_error: summarizeCrawlerErrors(errors),
+                result_summary: `crawler ${name || 'unknown'} failed: ${errors.length} error(s)`,
+            })
         } else {
+            await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Completed, {
+                result_summary: summarizeCrawlerTaskResult(name, result),
+            })
             this.emitter.emit(`spider:${TaskScheduler.TaskEvent.FINISHED}`, {
                 taskId,
                 result,

@@ -320,6 +320,78 @@ test('APIManager marks manual crawler run task failed when dispatch throws', asy
     }
 })
 
+test('APIManager queues manual crawler run without marking it completed before crawl finishes', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const dispatched: any[] = []
+    const statusUpdates: any[] = []
+
+    ;(DB.TaskQueue as any).add = async (_type: string, payload: any) => {
+        return { id: 89, payload }
+    }
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            name: 'crawler-a',
+                            origin: 'https://x.com',
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    emitter: {
+                        emit: (_event: string, payload: any) => {
+                            dispatched.push(payload)
+                            return true
+                        },
+                    },
+                }) as any,
+        })
+
+        const response = await (manager as any).handleCrawlerRun(
+            new Request('http://localhost/api/actions/crawlers/run', {
+                method: 'POST',
+                body: JSON.stringify({ name: 'crawler-a' }),
+            }),
+        )
+        const payload = await response.json()
+
+        expect(payload).toMatchObject({
+            success: true,
+            status: 'queued',
+            crawler: 'crawler-a',
+            taskQueueId: 89,
+        })
+        expect(String(payload.taskId).startsWith('manual-')).toBe(true)
+        expect(statusUpdates).toEqual([])
+        expect(dispatched).toHaveLength(1)
+        expect(dispatched[0].task).toMatchObject({
+            id: payload.taskId,
+            status: 'pending',
+            data: {
+                name: 'crawler-a',
+            },
+            meta: {
+                task_queue_id: 89,
+                task_queue_type: 'manual_crawler_run',
+            },
+        })
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
 test('APIManager records failed processor runs when processor execution fails', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus

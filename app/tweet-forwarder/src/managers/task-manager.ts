@@ -80,6 +80,7 @@ export class TaskManager extends BaseCompatibleModel {
     private readonly taskRetryLimit = 5
     private readonly taskRetryBaseSeconds = 120
     private readonly taskRetryMaxSeconds = 3600
+    private readonly workerTaskTypes = ['aggregate_daily', 'aggregate_hourly']
 
     constructor(forwarderPools: ForwarderPools, options: { processors?: Processor[] } = {}, log?: Logger) {
         super()
@@ -106,11 +107,13 @@ export class TaskManager extends BaseCompatibleModel {
     private async poll() {
         const now = Math.floor(Date.now() / 1000)
         try {
-            const recovered = await DB.TaskQueue.recoverStaleProcessing(now, this.staleProcessingSeconds)
+            const recovered = await DB.TaskQueue.recoverStaleProcessing(now, this.staleProcessingSeconds, {
+                types: this.workerTaskTypes,
+            })
             if (recovered.count > 0) {
                 this.log?.warn(`Recovered ${recovered.count} stale processing task(s)`)
             }
-            const tasks = await DB.TaskQueue.getPending(now)
+            const tasks = await DB.TaskQueue.getPending(now, { types: this.workerTaskTypes })
             if (tasks.length > 0) {
                 this.log?.info(`Found ${tasks.length} pending tasks`)
             }
