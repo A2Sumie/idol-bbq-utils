@@ -2,7 +2,26 @@ import { expect, test } from 'bun:test'
 import EventEmitter from 'events'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
-import { SpiderPools } from './spider-manager'
+import { TaskScheduler } from '@/utils/base'
+import { SpiderPools, SpiderTaskScheduler } from './spider-manager'
+
+test('SpiderTaskScheduler treats same crawler pending or running tasks as active until completion', () => {
+    const scheduler = new SpiderTaskScheduler({ crawlers: [] }, new EventEmitter())
+
+    ;(scheduler as any).tasks.set('running-task', {
+        id: 'running-task',
+        status: TaskScheduler.TaskStatus.RUNNING,
+        data: { name: 'Instagram Live 抢抓 - 椎名桜月' },
+    })
+    expect((scheduler as any).hasActiveCrawlerTask('Instagram Live 抢抓 - 椎名桜月')).toBe(true)
+    expect((scheduler as any).hasActiveCrawlerTask('22/7-cast-成员统一列表')).toBe(false)
+
+    scheduler.updateTaskStatus({
+        taskId: 'running-task',
+        status: TaskScheduler.TaskStatus.COMPLETED,
+    })
+    expect((scheduler as any).hasActiveCrawlerTask('Instagram Live 抢抓 - 椎名桜月')).toBe(false)
+})
 
 test('SpiderPools reuses existing article ids for x list immediate forward', async () => {
     const originalCheckExist = DB.Article.checkExist

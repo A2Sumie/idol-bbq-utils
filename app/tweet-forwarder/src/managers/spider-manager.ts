@@ -115,6 +115,11 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             cron = normalizeCronSecond(cron)
             // 定时dispatch任务
             const job = new CronJob(cron, async () => {
+                if (this.hasActiveCrawlerTask(crawler.name)) {
+                    this.log?.warn(`Skipping crawler ${crawler.name}: previous task is still active.`)
+                    return
+                }
+
                 const taskId = `${Math.random().toString(36).substring(2, 9)}`
                 this.log?.info(`[${taskId}] Starting to dispatch task: ${crawler.name}`)
                 const task: TaskScheduler.Task = {
@@ -257,6 +262,15 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         this.taskEventBindings = []
         this.cronJobs = []
         this.log?.info('Spider Manager dropped')
+    }
+
+    private hasActiveCrawlerTask(crawlerName: string) {
+        return Array.from(this.tasks.values()).some((task) => {
+            if (task.data?.name !== crawlerName) {
+                return false
+            }
+            return task.status === TaskScheduler.TaskStatus.PENDING || task.status === TaskScheduler.TaskStatus.RUNNING
+        })
     }
 
     updateTaskStatus({ taskId, status }: { taskId: string; status: TaskScheduler.TaskStatus }) {
