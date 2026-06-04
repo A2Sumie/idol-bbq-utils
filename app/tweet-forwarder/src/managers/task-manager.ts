@@ -12,6 +12,10 @@ import { isPersistentMediaPath } from '@/services/media-cache-service'
 import { normalizeCronSecond } from '@/utils/cron'
 import { getForwarderProviderResult, PartialForwarderSendError } from '@/middleware/forwarder/base'
 import {
+    isOutboundFailedStatus,
+    isOutboundInProgressStatus,
+    isOutboundQueuedStatus,
+    isOutboundSuppressedCompletionStatus,
     payloadHash,
     providerCode,
     routeKey,
@@ -455,16 +459,16 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     private classifySuppressedOutbound(targetId: string, status: string): AggregateSendOutcome {
-        if (['sent', 'skipped', 'partial'].includes(status)) {
+        if (isOutboundSuppressedCompletionStatus(status)) {
             return { targetId, status: 'already_completed', retryable: false, outboundStatus: status }
         }
-        if (status === 'queued') {
+        if (isOutboundQueuedStatus(status)) {
             return { targetId, status: 'queued', retryable: false, outboundStatus: status }
         }
-        if (status === 'planned' || status === 'sending') {
+        if (isOutboundInProgressStatus(status)) {
             return { targetId, status: 'in_progress', retryable: true, outboundStatus: status }
         }
-        if (status === 'failed') {
+        if (isOutboundFailedStatus(status)) {
             return { targetId, status: 'failed', retryable: true, outboundStatus: status }
         }
         return {

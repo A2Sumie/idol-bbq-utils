@@ -31,6 +31,7 @@ import {
     articleKey,
     articleOutboundKey,
     hashValue,
+    isOutboundVisibleCompletionStatus,
     payloadHash,
     providerCode,
     routeKey,
@@ -1493,7 +1494,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             log?.debug(
                                 `[Trace] Outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping ${article.a_id} for ${target.id}`,
                             )
-                            if (['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)) {
+                            if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
                                 await DB.ForwardBy.save(article.id, platform, target.id, 'article')
                             }
                             hadNonErrorOutcome = true
@@ -2018,7 +2019,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 log?.debug(
                     `Summary realtime media outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible media send`,
                 )
-                return ['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)
+                return isOutboundVisibleCompletionStatus(outbound.record.status)
             }
 
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
@@ -2385,7 +2386,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 this.log?.debug(
                     `Summary-card outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible send`,
                 )
-                if (['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)) {
+                if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
                     this.summaryCardLastSentAt.set(
                         this.getSummaryCardQueueKey(
                             queue.routeKey,
@@ -3206,7 +3207,7 @@ class ForwarderPools extends BaseCompatibleModel {
             })
             if (!outbound.claimed) {
                 log?.debug(`Digest outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping send`)
-                if (['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)) {
+                if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
                     return claimedArticles.map((article) => article.id)
                 }
                 for (const article of claimedArticles) {

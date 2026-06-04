@@ -4,6 +4,11 @@ import { prisma, Prisma } from './client'
 import { getSubtractTime } from '@/utils/time'
 import type { Article } from '@idol-bbq-utils/render/types'
 import { normalizeWebsitePhotoArticles } from '@/utils/website-photo'
+import {
+    isOutboundFailedStatus,
+    isOutboundStaleRetryableStatus,
+    OUTBOUND_STATUS,
+} from '@/services/outbound-message-service'
 
 type ArticleWithId = Article & { id: number }
 
@@ -863,13 +868,11 @@ namespace DB {
                 const stale = existing.updated_at <= now - staleAfterSeconds
                 const failedAttempts = existing.attempt_count || 0
                 const failedRetryable =
-                    existing.status === 'failed' &&
+                    isOutboundFailedStatus(existing.status) &&
                     failedAttempts < FAILED_RETRY_LIMIT &&
                     existing.updated_at <= now - failedBackoffSeconds(failedAttempts)
                 const retryable =
-                    failedRetryable ||
-                    ((existing.status === 'planned' || existing.status === 'sending' || existing.status === 'queued') &&
-                        stale)
+                    failedRetryable || (isOutboundStaleRetryableStatus(existing.status) && stale)
                 if (!retryable) {
                     return { claimed: false, record: await recordSuppressedPayloadDrift(existing, data, now) }
                 }
@@ -883,7 +886,7 @@ namespace DB {
                         article_key: data.article_key || null,
                         synthetic_key: data.synthetic_key || null,
                         payload_hash: data.payload_hash,
-                        status: 'planned',
+                        status: OUTBOUND_STATUS.Planned,
                         provider_message_ids: Prisma.JsonNull,
                         segment_results: Prisma.JsonNull,
                         last_error: null,
@@ -901,7 +904,7 @@ namespace DB {
                         target_platform: data.target_platform || null,
                         article_key: data.article_key || null,
                         synthetic_key: data.synthetic_key || null,
-                        status: 'planned',
+                        status: OUTBOUND_STATUS.Planned,
                         created_at: now,
                         updated_at: now,
                     },
@@ -924,7 +927,7 @@ namespace DB {
             return await prisma.outbound_messages.update({
                 where: { idempotency_key },
                 data: {
-                    status: 'sending',
+                    status: OUTBOUND_STATUS.Sending,
                     attempt_count: { increment: 1 },
                     provider_message_ids: Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
@@ -940,7 +943,7 @@ namespace DB {
             return await prisma.outbound_messages.update({
                 where: { idempotency_key },
                 data: {
-                    status: 'queued',
+                    status: OUTBOUND_STATUS.Queued,
                     provider_message_ids: (details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     updated_at: now,
@@ -962,7 +965,7 @@ namespace DB {
             return await prisma.outbound_messages.update({
                 where: { idempotency_key },
                 data: {
-                    status: 'skipped',
+                    status: OUTBOUND_STATUS.Skipped,
                     provider_message_ids: payload as Prisma.InputJsonValue,
                     segment_results: Prisma.JsonNull,
                     updated_at: now,
@@ -977,7 +980,7 @@ namespace DB {
             return await prisma.outbound_messages.update({
                 where: { idempotency_key },
                 data: {
-                    status: 'sent',
+                    status: OUTBOUND_STATUS.Sent,
                     provider_message_ids: (providerResult as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     updated_at: now,
@@ -992,7 +995,7 @@ namespace DB {
             return await prisma.outbound_messages.update({
                 where: { idempotency_key },
                 data: {
-                    status: 'partial',
+                    status: OUTBOUND_STATUS.Partial,
                     provider_message_ids: Prisma.JsonNull,
                     segment_results: (providerResult as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                     last_error: error instanceof Error ? error.message : String(error),
@@ -1007,7 +1010,7 @@ namespace DB {
             return await prisma.outbound_messages.update({
                 where: { idempotency_key },
                 data: {
-                    status: 'failed',
+                    status: OUTBOUND_STATUS.Failed,
                     provider_message_ids: Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     last_error: error instanceof Error ? error.message : String(error),

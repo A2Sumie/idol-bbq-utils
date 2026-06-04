@@ -8,6 +8,59 @@ type MediaLike = {
     sourceUserId?: string
 }
 
+const OUTBOUND_STATUS = {
+    Planned: 'planned',
+    Sending: 'sending',
+    Queued: 'queued',
+    Skipped: 'skipped',
+    Sent: 'sent',
+    Partial: 'partial',
+    Failed: 'failed',
+    FailedAfterPartial: 'failed_after_partial',
+} as const
+
+type OutboundMessageStatus = (typeof OUTBOUND_STATUS)[keyof typeof OUTBOUND_STATUS]
+
+const OUTBOUND_STALE_RETRYABLE_STATUSES = new Set<string>([
+    OUTBOUND_STATUS.Planned,
+    OUTBOUND_STATUS.Sending,
+    OUTBOUND_STATUS.Queued,
+])
+const OUTBOUND_IN_PROGRESS_STATUSES = new Set<string>([OUTBOUND_STATUS.Planned, OUTBOUND_STATUS.Sending])
+const OUTBOUND_VISIBLE_COMPLETION_STATUSES = new Set<string>([
+    OUTBOUND_STATUS.Sent,
+    OUTBOUND_STATUS.Partial,
+    OUTBOUND_STATUS.FailedAfterPartial,
+])
+const OUTBOUND_SUPPRESSED_COMPLETION_STATUSES = new Set<string>([
+    ...OUTBOUND_VISIBLE_COMPLETION_STATUSES,
+    OUTBOUND_STATUS.Skipped,
+])
+
+function isOutboundFailedStatus(status: string | null | undefined) {
+    return status === OUTBOUND_STATUS.Failed
+}
+
+function isOutboundQueuedStatus(status: string | null | undefined) {
+    return status === OUTBOUND_STATUS.Queued
+}
+
+function isOutboundInProgressStatus(status: string | null | undefined) {
+    return OUTBOUND_IN_PROGRESS_STATUSES.has(String(status || ''))
+}
+
+function isOutboundStaleRetryableStatus(status: string | null | undefined) {
+    return OUTBOUND_STALE_RETRYABLE_STATUSES.has(String(status || ''))
+}
+
+function isOutboundVisibleCompletionStatus(status: string | null | undefined) {
+    return OUTBOUND_VISIBLE_COMPLETION_STATUSES.has(String(status || ''))
+}
+
+function isOutboundSuppressedCompletionStatus(status: string | null | undefined) {
+    return OUTBOUND_SUPPRESSED_COMPLETION_STATUSES.has(String(status || ''))
+}
+
 function stableSerialize(value: unknown): string {
     if (value === null || typeof value !== 'object') {
         return JSON.stringify(value)
@@ -144,6 +197,13 @@ export {
     articleOutboundKey,
     articleRowKey,
     hashValue,
+    isOutboundFailedStatus,
+    isOutboundInProgressStatus,
+    isOutboundQueuedStatus,
+    isOutboundStaleRetryableStatus,
+    isOutboundSuppressedCompletionStatus,
+    isOutboundVisibleCompletionStatus,
+    OUTBOUND_STATUS,
     payloadHash,
     providerCode,
     routeKey,
@@ -151,4 +211,5 @@ export {
     summarizeProviderResult,
     syntheticOutboundKey,
     targetRouteKey,
+    type OutboundMessageStatus,
 }
