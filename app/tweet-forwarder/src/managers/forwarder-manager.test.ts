@@ -17,6 +17,13 @@ import { normalizeCronSecond } from '@/utils/cron'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 
+function backdateSummaryCardQueues(pools: any, seconds: number) {
+    const now = Math.floor(Date.now() / 1000)
+    for (const queue of pools.summaryCardQueues.values()) {
+        queue.firstQueuedAt = now - seconds
+    }
+}
+
 test('resolveBatchTargetIds skips targets with bypass_batch enabled', () => {
     const targetIds = resolveBatchTargetIds(
         ['formatter-a', 'formatter-b'],
@@ -1776,9 +1783,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
             } as any,
         )
 
-        const queueKey = Array.from((pools as any).summaryCardLastSentAt.keys())[0]
-        expect(queueKey).toBeTruthy()
-        ;(pools as any).summaryCardLastSentAt.set(queueKey, Math.floor(Date.now() / 1000) - 1800)
+        backdateSummaryCardQueues(pools as any, 1800)
         await (pools as any).flushDueSummaryCardQueues()
     } finally {
         ;(DB.ForwardBy as any).checkExist = originalCheckExist
@@ -1813,6 +1818,97 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(packedArticles[1]?.extra?.data?.groups?.[0]?.avatars?.[0]?.url).toBe('https://example.com/avatar-2.jpg')
     expect(packedArticles[1]?.extra?.data?.groups?.[1]?.avatars?.[0]?.url).toBe('https://example.com/avatar-3.jpg')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
+})
+
+test('sendArticles does not flush a fresh summary-card queue from stale last sent time', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-stale-last-send',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+    ;(pools as any).summaryCardLastSentAt.set(target.id, Math.floor(Date.now() / 1000) - 7200)
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-fresh-after-idle',
+            [
+                {
+                    id: 710,
+                    a_id: 'summary-fresh-after-idle',
+                    platform: Platform.X,
+                    username: 'fresh member',
+                    u_id: 'fresh_member',
+                    content: 'fresh queue should wait',
+                    url: 'https://x.com/fresh_member/status/710',
+                    type: 'tweet',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+        await (pools as any).flushDueSummaryCardQueues()
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(0)
+    expect((pools as any).summaryCardQueues.get(target.id)?.items.size).toBe(1)
 })
 
 test('sendArticles folds idle-first summary-card item when it appears as a later reply reference', async () => {
@@ -1955,9 +2051,7 @@ test('sendArticles folds idle-first summary-card item when it appears as a later
             { render_type: 'text-card' } as any,
         )
 
-        const queueKey = Array.from((pools as any).summaryCardLastSentAt.keys())[0]
-        expect(queueKey).toBeTruthy()
-        ;(pools as any).summaryCardLastSentAt.set(queueKey, Math.floor(Date.now() / 1000) - 1800)
+        backdateSummaryCardQueues(pools as any, 1800)
         await (pools as any).flushDueSummaryCardQueues()
     } finally {
         ;(DB.ForwardBy as any).checkExist = originalCheckExist
@@ -2072,9 +2166,7 @@ test('sendArticles promotes queued summary-card hashtag items after a storm acti
             )
         }
 
-        const queueKey = Array.from((pools as any).summaryCardLastSentAt.keys())[0]
-        expect(queueKey).toBeTruthy()
-        ;(pools as any).summaryCardLastSentAt.set(queueKey, Math.floor(Date.now() / 1000) - 1800)
+        backdateSummaryCardQueues(pools as any, 1800)
         await (pools as any).flushDueSummaryCardQueues()
     } finally {
         ;(DB.ForwardBy as any).checkExist = originalCheckExist

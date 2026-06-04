@@ -1493,7 +1493,7 @@ class ForwarderPools extends BaseCompatibleModel {
             runtime_config,
             config: summaryConfig,
             items: new Map<number, SummaryCardQueueItem>(),
-            firstQueuedAt: lastSentAt || now,
+            firstQueuedAt: now,
             lastQueuedAt: now,
         }
 
@@ -1637,9 +1637,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private async flushDueSummaryCardQueues() {
         const now = Math.floor(Date.now() / 1000)
         for (const [queueKey, queue] of Array.from(this.summaryCardQueues.entries())) {
-            const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
-            const anchor = lastSentAt || queue.firstQueuedAt
-            if (queue.items.size > 0 && now - anchor >= queue.config.intervalSeconds) {
+            if (queue.items.size > 0 && now - queue.firstQueuedAt >= queue.config.intervalSeconds) {
                 await this.flushSummaryCardQueue(queueKey, 'interval')
             }
         }
