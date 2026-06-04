@@ -1159,6 +1159,9 @@ export class APIManager extends BaseCompatibleModel {
         )
 
         try {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Processing, {
+                result_summary: `simulating ${article.a_id}`,
+            })
             const existing = await DB.Article.checkExist(article)
             if (existing) {
                 await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Failed, {
@@ -1238,6 +1241,9 @@ export class APIManager extends BaseCompatibleModel {
         })
 
         try {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Processing, {
+                result_summary: `reprocessing ${article.a_id}`,
+            })
             const processorDef = this.resolveProcessorDefinition(body.processorId)
             const processor = await this.createProcessor(processorDef)
             await this.translateArticleChain(article, processor, body.force === true)
@@ -1304,6 +1310,9 @@ export class APIManager extends BaseCompatibleModel {
         })
 
         try {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Processing, {
+                result_summary: `resending ${article.a_id}`,
+            })
             await this.deps.forwarderPools.resendArticle(article as any, body.crawlerName)
             await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Completed, {
                 result_summary: `resent ${article.a_id}`,
@@ -1345,6 +1354,9 @@ export class APIManager extends BaseCompatibleModel {
         let processorInput: { sourceType: string; sourceRef: string; text: string } | null = null
 
         try {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Processing, {
+                result_summary: `${action} running`,
+            })
             const processor = await this.createProcessor(processorDef)
             const input = await this.buildProcessorInput(body)
             processorInput = {

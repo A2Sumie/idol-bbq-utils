@@ -449,12 +449,19 @@ test('APIManager records failed processor runs when processor execution fails', 
             },
         })
         expect(processorRuns[0]?.error).toContain('Unknown processor provider')
-        expect(statusUpdates).toHaveLength(1)
+        expect(statusUpdates).toHaveLength(2)
         expect(statusUpdates[0]).toMatchObject({
+            id: 77,
+            status: DB.TaskQueue.STATUS.Processing,
+            meta: {
+                result_summary: 'extract running',
+            },
+        })
+        expect(statusUpdates[1]).toMatchObject({
             id: 77,
             status: DB.TaskQueue.STATUS.Failed,
         })
-        expect(statusUpdates[0]?.meta?.last_error).toContain('Unknown processor provider')
+        expect(statusUpdates[1]?.meta?.last_error).toContain('Unknown processor provider')
     } finally {
         ;(DB.TaskQueue as any).add = originalTaskAdd
         ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
@@ -468,6 +475,7 @@ test('APIManager resend infers website crawler platform from websites config', a
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
 
     const resendCalls: any[] = []
+    const statusUpdates: any[] = []
 
     ;(DB.Article as any).getSingleArticle = async () =>
         ({
@@ -476,7 +484,9 @@ test('APIManager resend infers website crawler platform from websites config', a
             platform: Platform.Website,
         }) as any
     ;(DB.TaskQueue as any).add = async () => ({ id: 991 })
-    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
 
     try {
         const manager = new APIManager({
@@ -526,6 +536,22 @@ test('APIManager resend infers website crawler platform from websites config', a
             platform: Platform.Website,
         })
         expect(resendCalls[0][1]).toBe('22/7官网FC抓取 - 日间轮询')
+        expect(statusUpdates).toEqual([
+            {
+                id: 991,
+                status: DB.TaskQueue.STATUS.Processing,
+                meta: {
+                    result_summary: 'resending 11230',
+                },
+            },
+            {
+                id: 991,
+                status: DB.TaskQueue.STATUS.Completed,
+                meta: {
+                    result_summary: 'resent 11230',
+                },
+            },
+        ])
     } finally {
         ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
         ;(DB.TaskQueue as any).add = originalTaskAdd
