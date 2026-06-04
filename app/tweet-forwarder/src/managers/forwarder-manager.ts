@@ -1727,9 +1727,6 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
                         if (sendResult.status === 'blocked') {
                             await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
-                            if (claimed && !options?.forceSend) {
-                                await this.releaseArticleChain(article, platform, target.id)
-                            }
                             await DB.TargetHealth.mark({
                                 target_id: target.id,
                                 provider: target.NAME,

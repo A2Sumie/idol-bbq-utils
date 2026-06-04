@@ -1178,6 +1178,72 @@ test('sendArticles does not poison outbound state when ForwardBy claim loses a r
     expect((DB.OutboundMessage as any).__records.get(outboundKey)).toBeUndefined()
 })
 
+test('sendArticles keeps ForwardBy for terminal blocked target sends', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = {
+        id: 'target-blocked-send',
+        NAME: 'recording',
+        getEffectiveConfig: (runtimeConfig?: any) => runtimeConfig || {},
+        check_blocked: async () => false,
+        send: async () => ({
+            status: 'blocked',
+            reason: 'target_middleware_block',
+        }),
+    }
+    const article = {
+        id: 204,
+        a_id: 'blocked-send-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+    }
+
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'blocked target payload',
+            mediaFiles: [],
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'blocked-send-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: undefined,
+            },
+        ],
+        {
+            render_type: 'text',
+        } as any,
+    )
+
+    const outboundKey = articleOutboundKey('target-blocked-send', article as any)
+    const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
+    expect(outboundRecord?.status).toBe('skipped')
+    expect(outboundRecord?.provider_message_ids?.reason).toBe('target_middleware_block')
+    expect(await DB.ForwardBy.checkExist(article.id, article.platform, target.id, 'article')).not.toBeNull()
+})
+
 test('sendArticles skips delivery when render service marks a cross-platform duplicate', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
