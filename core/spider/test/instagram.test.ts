@@ -205,6 +205,85 @@ test('Instagram parser drops generated media summaries while preserving real cap
     expect(posts[1]?.content).toBe('May be we can still use this phrase as a real caption')
 })
 
+test('Instagram parser marks video covers as thumbnails', () => {
+    const posts = InsApiJsonParser.postsParser({
+        data: {
+            user: {
+                edge_owner_to_timeline_media: {
+                    edges: [
+                        {
+                            node: {
+                                code: 'VIDEOPOST',
+                                taken_at: 1773845200,
+                                caption: { text: 'video caption' },
+                                user: {
+                                    username: 'ig_user',
+                                    full_name: 'IG User',
+                                },
+                                image_versions2: {
+                                    candidates: [{ width: 720, url: 'https://example.com/video-cover.jpg' }],
+                                },
+                                video_versions: [{ width: 720, url: 'https://example.com/video.mp4' }],
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    })
+
+    expect(posts[0]?.media).toEqual([
+        { type: 'video_thumbnail', url: 'https://example.com/video-cover.jpg' },
+        { type: 'video', url: 'https://example.com/video.mp4' },
+    ])
+})
+
+test('Instagram parser preserves videos inside carousel media', () => {
+    const posts = InsApiJsonParser.postsParser({
+        data: {
+            user: {
+                edge_owner_to_timeline_media: {
+                    edges: [
+                        {
+                            node: {
+                                code: 'CAROUSELVIDEO',
+                                taken_at: 1773845200,
+                                caption: { text: 'carousel caption' },
+                                user: {
+                                    username: 'ig_user',
+                                    full_name: 'IG User',
+                                },
+                                image_versions2: {
+                                    candidates: [{ width: 720, url: 'https://example.com/top-cover.jpg' }],
+                                },
+                                carousel_media: [
+                                    {
+                                        image_versions2: {
+                                            candidates: [{ width: 720, url: 'https://example.com/photo.jpg' }],
+                                        },
+                                    },
+                                    {
+                                        image_versions2: {
+                                            candidates: [{ width: 720, url: 'https://example.com/carousel-cover.jpg' }],
+                                        },
+                                        video_versions: [{ width: 720, url: 'https://example.com/carousel-video.mp4' }],
+                                    },
+                                ],
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    })
+
+    expect(posts[0]?.media).toEqual([
+        { type: 'photo', url: 'https://example.com/photo.jpg' },
+        { type: 'video_thumbnail', url: 'https://example.com/carousel-cover.jpg' },
+        { type: 'video', url: 'https://example.com/carousel-video.mp4' },
+    ])
+})
+
 test('Instagram stories drop accessibility summaries', async () => {
     const page = {
         goto: async () => undefined,

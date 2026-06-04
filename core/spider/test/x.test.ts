@@ -2,9 +2,12 @@ import puppeteer from 'puppeteer-core'
 import { Spider, X } from '@/.'
 import { parseNetscapeCookieToPuppeteerCookie, UserAgent } from '@/utils'
 import { readFileSync } from 'fs'
+import { join } from 'path'
 import { createLogger, winston, format } from '@idol-bbq-utils/log'
 import { test, expect } from 'bun:test'
 import type { GenericFollows } from '@/types'
+
+const dataPath = (...parts: Array<string>) => join(import.meta.dir, 'data', ...parts)
 
 test('X Spider', async () => {
     const url = 'https://x.com/X'
@@ -93,11 +96,11 @@ function buildXTimelineTweetResult(id: string, userId: string, text: string, rep
 }
 
 test('X API JSON Parser', async () => {
-    const x_json = JSON.parse(readFileSync('test/data/x/x.json', 'utf-8'))
-    const x_result = JSON.parse(readFileSync('test/data/x/x-result.json', 'utf-8'))
-    const x_replies_result = JSON.parse(readFileSync('test/data/x/x-replies-result.json', 'utf-8'))
-    const x_follows = JSON.parse(readFileSync('test/data/x/x-follows.json', 'utf-8'))
-    const x_follows_result = JSON.parse(readFileSync('test/data/x/x-follows-result.json', 'utf-8'))
+    const x_json = JSON.parse(readFileSync(dataPath('x', 'x.json'), 'utf-8'))
+    const x_result = JSON.parse(readFileSync(dataPath('x', 'x-result.json'), 'utf-8'))
+    const x_replies_result = JSON.parse(readFileSync(dataPath('x', 'x-replies-result.json'), 'utf-8'))
+    const x_follows = JSON.parse(readFileSync(dataPath('x', 'x-follows.json'), 'utf-8'))
+    const x_follows_result = JSON.parse(readFileSync(dataPath('x', 'x-follows-result.json'), 'utf-8'))
     const x_response = X.XApiJsonParser.tweetsArticleParser(x_json)
     const x_replies_response = X.XApiJsonParser.tweetsRepliesParser(x_json)
     const x_follows_response = X.XApiJsonParser.tweetsFollowsParser(x_follows)

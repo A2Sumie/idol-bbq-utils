@@ -31,7 +31,7 @@ test('TikTok Spider URL Extraction', () => {
 /**
  * require network access & headless browser
  */
-test('TikTok Spider Integration', async () => {
+test.skip('TikTok Spider Integration', async () => {
     const url = 'https://www.tiktok.com/@tiktok'
     const plugin = spiderRegistry.findByUrl(url)
 

@@ -231,25 +231,33 @@ namespace InsApiJsonParser {
                 url,
             })
         }
+        const pushNodeMedia = (node: any) => {
+            const imageUrl = pickBestCandidateUrl(node?.image_versions2?.candidates)
+            const videoUrl = pickBestCandidateUrl(node?.video_versions)
+            if (videoUrl) {
+                pushMedia('video_thumbnail', imageUrl)
+                pushMedia('video', videoUrl)
+                return
+            }
+            pushMedia('photo', imageUrl)
+        }
         // cover
         const cover_candidates = edge?.image_versions2?.candidates
         if (cover_candidates) {
-            pushMedia('photo', pickBestCandidateUrl(cover_candidates))
+            pushNodeMedia(edge)
         }
         // video
         const video_candidates = edge?.video_versions
-        if (video_candidates) {
+        if (video_candidates && !arr.some((item) => item.type === 'video')) {
             pushMedia('video', pickBestCandidateUrl(video_candidates))
         }
         // carousel
         const carousel_media = edge?.carousel_media
         if (carousel_media) {
-            // if carousel exists, we do not need the cover
-            if (arr.length > 0) {
-                arr.shift()
-            }
+            // If carousel exists, the top-level cover/video is only a preview for the carousel.
+            arr = []
             carousel_media.forEach((media: any) => {
-                pushMedia('photo', pickBestCandidateUrl(media?.image_versions2?.candidates))
+                pushNodeMedia(media)
             })
         }
         const dedup = new Map<string, GenericMediaInfo>()

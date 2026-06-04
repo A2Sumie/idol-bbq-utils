@@ -41,7 +41,7 @@ describe('playground', () => {
         // }
         return
     }),
-        test('grab articles', async () => {
+        test.skip('grab articles', async () => {
             const url = 'https://x.com/i/lists/1966417359020912858'
             const spider = Spider.getSpider(url)
             if (spider) {
@@ -71,7 +71,7 @@ describe('playground', () => {
                 }
             }
         }),
-        test('grab follows', async () => {
+        test.skip('grab follows', async () => {
             const url = 'https://x.com/i/lists/1966417359020912858'
             const spider = Spider.getSpider(url)
             if (spider) {
