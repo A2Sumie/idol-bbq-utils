@@ -440,6 +440,33 @@ namespace DB {
     }
 
     export namespace TaskQueue {
+        export function shouldReviveExistingTaskOnAdd(existing: { status: string }) {
+            return existing.status === 'failed'
+        }
+
+        function requeueFailedTaskData(
+            payload: any,
+            execute_at: number,
+            now: number,
+            meta?: {
+                source_ref?: string
+                action_type?: string
+                idempotency_key?: string
+            },
+        ) {
+            return {
+                payload,
+                execute_at,
+                updated_at: now,
+                status: 'pending',
+                finished_at: null,
+                last_error: null,
+                result_summary: 'requeued failed idempotent task',
+                source_ref: meta?.source_ref,
+                action_type: meta?.action_type,
+            }
+        }
+
         export async function add(
             type: string,
             payload: any,
@@ -461,6 +488,12 @@ namespace DB {
                     },
                 })
                 if (existing) {
+                    if (shouldReviveExistingTaskOnAdd(existing)) {
+                        return await prisma.task_queue.update({
+                            where: { id: existing.id },
+                            data: requeueFailedTaskData(payload, execute_at, now, meta),
+                        })
+                    }
                     return existing
                 }
             }
@@ -484,7 +517,7 @@ namespace DB {
                     error instanceof Prisma.PrismaClientKnownRequestError &&
                     error.code === 'P2002'
                 ) {
-                    return await prisma.task_queue.findUniqueOrThrow({
+                    const existingRecord = await prisma.task_queue.findUniqueOrThrow({
                         where: {
                             type_idempotency_key: {
                                 type,
@@ -492,6 +525,13 @@ namespace DB {
                             },
                         },
                     })
+                    if (shouldReviveExistingTaskOnAdd(existingRecord)) {
+                        return await prisma.task_queue.update({
+                            where: { id: existingRecord.id },
+                            data: requeueFailedTaskData(payload, execute_at, now, meta),
+                        })
+                    }
+                    return existingRecord
                 }
                 throw error
             }
