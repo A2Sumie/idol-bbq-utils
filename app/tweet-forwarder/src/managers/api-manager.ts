@@ -32,6 +32,7 @@ import {
 } from '@/services/quick-config-service'
 import { getCookiesRoot } from '@/utils/directories'
 import { pRetry } from '@idol-bbq-utils/utils'
+import { buildConfigAudit } from '@/services/config-audit-service'
 import { buildRouteGraph } from '@/services/route-graph-service'
 import { buildRuntimeManifest } from '@/services/runtime-manifest-service'
 import { redactSecrets } from '@/services/redaction-service'
@@ -344,6 +345,7 @@ export class APIManager extends BaseCompatibleModel {
 
         if (req.method === 'GET' && url.pathname === '/api/config') return this.handleConfigGet()
         if (req.method === 'GET' && url.pathname === '/api/config/redacted') return this.handleConfigRedacted()
+        if (req.method === 'GET' && url.pathname === '/api/config/audit') return this.handleConfigAudit()
         if (req.method === 'GET' && url.pathname === '/api/config/quick') return this.handleQuickConfigGet()
         if (req.method === 'POST' && url.pathname === '/api/config/quick/update')
             return this.handleQuickConfigUpdate(req)
@@ -805,6 +807,10 @@ export class APIManager extends BaseCompatibleModel {
 
     private async handleConfigRedacted(): Promise<Response> {
         return jsonResponse(redactSecrets(this.config))
+    }
+
+    private async handleConfigAudit(): Promise<Response> {
+        return jsonResponse(buildConfigAudit(this.config))
     }
 
     private async handleRuntimeStatus(): Promise<Response> {

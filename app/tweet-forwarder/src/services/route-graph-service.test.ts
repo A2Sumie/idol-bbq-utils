@@ -125,3 +125,30 @@ test('buildRouteGraph diagnoses fixed-window summary-card policy mismatches', ()
     expect(graph.diagnostics.some((item) => item.code === 'summary_card_native_first_disabled')).toBe(true)
     expect(graph.diagnostics.some((item) => item.code === 'summary_card_empty_realtime_text_non_qq')).toBe(true)
 })
+
+test('buildRouteGraph treats live relay crawlers without formatter as operational crawlers', () => {
+    const graph = buildRouteGraph({
+        crawlers: [
+            {
+                id: 'ig-live-satsuki',
+                name: 'Instagram Live relay',
+                cfg_crawler: {
+                    live_relay: {
+                        enabled: true,
+                    },
+                },
+            },
+        ],
+    } as any)
+
+    expect(graph.counts.routes).toBe(0)
+    expect(graph.counts.operational_crawlers).toBe(1)
+    expect(graph.operational_crawlers).toEqual([
+        {
+            crawler_id: 'ig-live-satsuki',
+            crawler_name: 'Instagram Live relay',
+            kind: 'instagram_live_relay',
+        },
+    ])
+    expect(graph.diagnostics).toEqual([])
+})

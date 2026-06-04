@@ -36,6 +36,12 @@ type RouteGraphDiagnostic = {
     route_key?: string
 }
 
+type RouteGraphOperationalCrawler = {
+    crawler_id: string
+    crawler_name: string
+    kind: 'instagram_live_relay'
+}
+
 function nodeId(value: { id?: string; name?: string } | undefined, fallback: string) {
     return String(value?.id || value?.name || fallback).trim()
 }
@@ -92,6 +98,12 @@ function dedupContract(mode: RouteModeFlags, formatter: any) {
         contracts.push('media')
     }
     return Array.from(new Set(contracts))
+}
+
+function resolveOperationalCrawlerKind(crawler: any): RouteGraphOperationalCrawler['kind'] | null {
+    const liveRelay = crawler?.cfg_crawler?.live_relay
+    const liveRelayEnabled = liveRelay === true || (typeof liveRelay === 'object' && liveRelay?.enabled !== false)
+    return liveRelayEnabled ? 'instagram_live_relay' : null
 }
 
 function addSummaryCardDiagnostics(
@@ -159,6 +171,7 @@ function addSummaryCardDiagnostics(
 function buildRouteGraph(config: AppConfig) {
     const diagnostics: RouteGraphDiagnostic[] = []
     const routes: RouteGraphRoute[] = []
+    const operationalCrawlers: RouteGraphOperationalCrawler[] = []
     const crawlers = config.crawlers || []
     const formatters = config.formatters || []
     const targets = config.forward_targets || []
@@ -180,6 +193,15 @@ function buildRouteGraph(config: AppConfig) {
         const formatterIds = Array.from(new Set([...directFormatterIds, ...processorFormatterIds]))
 
         if (formatterIds.length === 0) {
+            const operationalKind = resolveOperationalCrawlerKind(crawler)
+            if (operationalKind) {
+                operationalCrawlers.push({
+                    crawler_id: crawlerId,
+                    crawler_name: crawlerName,
+                    kind: operationalKind,
+                })
+                continue
+            }
             diagnostics.push({
                 severity: 'warn',
                 code: 'crawler_without_formatter',
@@ -271,12 +293,14 @@ function buildRouteGraph(config: AppConfig) {
             formatters: formatters.length,
             targets: targets.length,
             routes: routes.length,
+            operational_crawlers: operationalCrawlers.length,
             errors: diagnostics.filter((item) => item.severity === 'error').length,
             warnings: diagnostics.filter((item) => item.severity === 'warn').length,
         },
         routes,
+        operational_crawlers: operationalCrawlers,
         diagnostics,
     }
 }
 
-export { buildRouteGraph, type RouteGraphDiagnostic, type RouteGraphRoute }
+export { buildRouteGraph, type RouteGraphDiagnostic, type RouteGraphOperationalCrawler, type RouteGraphRoute }

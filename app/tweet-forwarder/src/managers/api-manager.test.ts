@@ -136,3 +136,83 @@ test('APIManager returns redacted config for audit endpoints', async () => {
     expect(config.crawlers[0].cfg_crawler.cookie_file).toBe('[redacted]')
     expect(config.forward_targets[0].cfg_platform.group_id).toBe('123')
 })
+
+test('APIManager returns no-secret config audit for route policy checks', async () => {
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+                crawlers: [
+                    {
+                        id: 'crawler-x',
+                        name: 'crawler x',
+                    },
+                ],
+                formatters: [
+                    {
+                        id: 'formatter-a',
+                        name: 'formatter a',
+                    },
+                ],
+                forward_targets: [
+                    {
+                        id: 'qq-1',
+                        platform: 'qq',
+                        cfg_platform: {
+                            url: 'http://127.0.0.1:3001',
+                            token: 'bot-token',
+                            group_id: '123',
+                            summary_card: {
+                                enabled: true,
+                                interval_seconds: 7200,
+                                send_first_native: true,
+                                media_realtime: true,
+                                media_duplicate_limit: 2,
+                                flush_on_threshold: false,
+                                align_to_hour: true,
+                                flush_delay_seconds: 300,
+                            },
+                        },
+                    },
+                ],
+                connections: {
+                    'crawler-formatter': {
+                        'crawler-x': ['formatter-a'],
+                    },
+                    'formatter-target': {
+                        'formatter-a': ['qq-1'],
+                    },
+                },
+            }) as any,
+        getDeps: () => ({}),
+    })
+
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/config/audit', {
+            headers: {
+                Authorization: 'Bearer test-secret',
+            },
+        }),
+        {
+            timeout: () => undefined,
+        },
+        'test-secret',
+    )
+    expect(response.status).toBe(200)
+    const audit = await response.json()
+    const serialized = JSON.stringify(audit)
+    expect(audit.secret_fields.paths).toContain('api.secret')
+    expect(audit.secret_fields.paths).toContain('forward_targets[0].cfg_platform.token')
+    expect(audit.route_graph.summary_card_routes[0].policy.summary_card).toMatchObject({
+        interval_seconds: 7200,
+        send_first_native: true,
+        media_realtime: true,
+        flush_on_threshold: false,
+        window_alignment: 'hour',
+    })
+    expect(audit.policy_hash).toMatch(/^[a-f0-9]{64}$/)
+    expect(serialized).not.toContain('test-secret')
+    expect(serialized).not.toContain('bot-token')
+})
