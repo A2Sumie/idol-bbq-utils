@@ -1099,6 +1099,85 @@ test('ForwarderPools force resend bypasses block checks but still applies text t
     expect(cleanupCalled).toBe(true)
 })
 
+test('sendArticles does not poison outbound state when ForwardBy claim loses a race', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder({} as any, 'target-claim-race')
+    const article = {
+        id: 203,
+        a_id: 'claim-race-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+    }
+
+    let cleanupCalled = false
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'claim race payload',
+            mediaFiles: [],
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+        }),
+        cleanup: () => {
+            cleanupCalled = true
+        },
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    const originalClaim = DB.ForwardBy.claim
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    ;(DB.ForwardBy as any).claim = async () => false
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'claim-race-task',
+            [article],
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text',
+            } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+        ;(DB.ForwardBy as any).claim = originalClaim
+    }
+
+    expect(target.sent).toHaveLength(0)
+    expect(cleanupCalled).toBe(true)
+    const outboundKey = articleOutboundKey('target-claim-race', article as any)
+    expect((DB.OutboundMessage as any).__records.get(outboundKey)).toBeUndefined()
+})
+
 test('sendArticles skips delivery when render service marks a cross-platform duplicate', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

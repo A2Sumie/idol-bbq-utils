@@ -1660,6 +1660,17 @@ class ForwarderPools extends BaseCompatibleModel {
                                 ...renderResult.originalMediaFiles,
                             ],
                         })
+
+                        let claimed = true
+                        if (!options?.forceSend) {
+                            claimed = await this.claimArticleChain(article, platform, target.id)
+                            if (!claimed) {
+                                log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
+                                hadNonErrorOutcome = true
+                                return
+                            }
+                        }
+
                         const outbound = await DB.OutboundMessage.claim({
                             idempotency_key: outboundIdempotencyKey,
                             route_key: routeKeyForTarget,
@@ -1675,26 +1686,11 @@ class ForwarderPools extends BaseCompatibleModel {
                             )
                             if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
                                 await DB.ForwardBy.save(article.id, platform, target.id, 'article')
+                            } else if (claimed && !options?.forceSend) {
+                                await this.releaseArticleChain(article, platform, target.id)
                             }
                             hadNonErrorOutcome = true
                             return
-                        }
-
-                        let claimed = true
-                        if (!options?.forceSend) {
-                            claimed = await this.claimArticleChain(article, platform, target.id)
-                            if (!claimed) {
-                                log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
-                                await DB.OutboundMessage.markSkipped(
-                                    outboundIdempotencyKey,
-                                    'forward_by_already_claimed',
-                                    {
-                                        skipped: 'forward_by_already_claimed',
-                                    },
-                                )
-                                hadNonErrorOutcome = true
-                                return
-                            }
                         }
 
                         await DB.OutboundMessage.markSending(outboundIdempotencyKey)
