@@ -324,7 +324,12 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         })
     }
 
-    updateTaskStatus({ taskId, status }: { taskId: string; status: TaskScheduler.TaskStatus }) {
+    updateTaskStatus(payload: unknown) {
+        if (!TaskScheduler.isTaskStatusPayload(payload)) {
+            this.log?.warn('Ignoring malformed spider status payload')
+            return
+        }
+        const { taskId, status } = payload
         const task = this.tasks.get(taskId)
         if (task) {
             task.status = status
@@ -340,7 +345,12 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
     }
 
-    finishTask({ taskId, result, immediate_notify }: TaskResult) {
+    finishTask(payload: unknown) {
+        if (!TaskScheduler.isTaskFinishedPayload<CrawlerTaskResult>(payload)) {
+            this.log?.warn('Ignoring malformed spider finished payload')
+            return
+        }
+        const { taskId, result, immediate_notify } = payload
         this.emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
             taskId,
             status: TaskScheduler.TaskStatus.COMPLETED,
@@ -363,7 +373,7 @@ class SpiderPools extends BaseCompatibleModel {
      * BaseSpider._VALID_URL.source
      */
     private spiders: Map<string, BaseSpider> = new Map()
-    private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
+    private dispatchListener: (payload: unknown) => Promise<void>
     // private workers:
     constructor(cacheRoot: string, emitter: EventEmitter, log?: Logger) {
         super()
@@ -402,7 +412,12 @@ class SpiderPools extends BaseCompatibleModel {
         }
     }
 
-    private async onDispatchReceived(ctx: TaskScheduler.TaskCtx) {
+    private async onDispatchReceived(payload: unknown) {
+        if (!TaskScheduler.isTaskCtx(payload)) {
+            this.log?.warn('Ignoring malformed spider dispatch payload')
+            return
+        }
+        const ctx = payload
         try {
             await this.onTaskReceived(ctx)
         } catch (error) {

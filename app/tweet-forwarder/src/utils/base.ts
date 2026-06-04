@@ -7,6 +7,10 @@ interface Droppable {
     drop(...args: any[]): Promise<void>
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null
+}
+
 abstract class BaseCompatibleModel implements Droppable {
     abstract NAME: string
     protected abstract log?: Logger
@@ -37,11 +41,49 @@ namespace TaskScheduler {
         log?: Logger
     }
 
+    export interface TaskStatusPayload {
+        taskId: string
+        status: TaskStatus
+    }
+
+    export interface TaskFinishedPayload<T = unknown> {
+        taskId: string
+        result: Array<T>
+        immediate_notify?: boolean
+        crawlerName?: string
+    }
+
     export enum TaskEvent {
         DISPATCH = 'task:dispatch',
         UPDATE_STATUS = 'task:update-status',
         FINISHED = 'task:finished',
     }
+
+    export function isTaskStatus(value: unknown): value is TaskStatus {
+        return Object.values(TaskStatus).includes(value as TaskStatus)
+    }
+
+    export function isTask(value: unknown): value is Task {
+        return (
+            isRecord(value) &&
+            typeof value.id === 'string' &&
+            isTaskStatus(value.status) &&
+            Object.prototype.hasOwnProperty.call(value, 'data')
+        )
+    }
+
+    export function isTaskCtx(value: unknown): value is TaskCtx {
+        return isRecord(value) && typeof value.taskId === 'string' && isTask(value.task)
+    }
+
+    export function isTaskStatusPayload(value: unknown): value is TaskStatusPayload {
+        return isRecord(value) && typeof value.taskId === 'string' && isTaskStatus(value.status)
+    }
+
+    export function isTaskFinishedPayload<T = unknown>(value: unknown): value is TaskFinishedPayload<T> {
+        return isRecord(value) && typeof value.taskId === 'string' && Array.isArray(value.result)
+    }
+
     export abstract class TaskScheduler extends BaseCompatibleModel {
         protected emitter: EventEmitter
         protected tasks: Map<string, Task> = new Map()

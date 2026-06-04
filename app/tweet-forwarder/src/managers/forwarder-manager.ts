@@ -326,7 +326,7 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         'cfg_forwarder' | 'forwarders' | 'connections' | 'crawlers' | 'formatters' | 'forward_targets'
     >
     private taskEventBindings: Array<{ eventName: string; listener: (...args: any[]) => void }> = []
-    private spiderFinishedListener: (payload: TaskResult) => void
+    private spiderFinishedListener: (payload: unknown) => void
 
     constructor(
         props: Pick<
@@ -467,7 +467,12 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
     }
 
-    private onSpiderTaskFinished({ taskId, result, crawlerName }: TaskResult) {
+    private onSpiderTaskFinished(payload: unknown) {
+        if (!TaskScheduler.isTaskFinishedPayload<CrawlerTaskResult>(payload)) {
+            this.log?.warn('Ignoring malformed spider finished payload')
+            return
+        }
+        const { taskId, result, crawlerName } = payload
         if (!crawlerName || result.length === 0) {
             return
         }
@@ -551,7 +556,12 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         this.log?.info('Manager dropped')
     }
 
-    updateTaskStatus({ taskId, status }: { taskId: string; status: TaskScheduler.TaskStatus }) {
+    updateTaskStatus(payload: unknown) {
+        if (!TaskScheduler.isTaskStatusPayload(payload)) {
+            this.log?.warn('Ignoring malformed forwarder status payload')
+            return
+        }
+        const { taskId, status } = payload
         const task = this.tasks.get(taskId)
         if (task) {
             task.status = status
@@ -566,7 +576,12 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
             this.tasks.delete(taskId)
         }
     }
-    finishTask({ taskId, result, immediate_notify }: TaskResult) {
+    finishTask(payload: unknown) {
+        if (!TaskScheduler.isTaskFinishedPayload<CrawlerTaskResult>(payload)) {
+            this.log?.warn('Ignoring malformed forwarder finished payload')
+            return
+        }
+        const { taskId, result, immediate_notify } = payload
         this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
             taskId,
             status: TaskScheduler.TaskStatus.COMPLETED,
@@ -644,7 +659,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private summaryCardQueues = new Map<string, SummaryCardQueue>()
     private summaryCardLastSentAt = new Map<string, number>()
     private summaryCardFlushTimer?: ReturnType<typeof setInterval>
-    private dispatchListener: (ctx: TaskScheduler.TaskCtx) => Promise<void>
+    private dispatchListener: (payload: unknown) => Promise<void>
 
     // private workers:
     constructor(
@@ -810,7 +825,12 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private async onDispatchReceived(ctx: TaskScheduler.TaskCtx) {
+    private async onDispatchReceived(payload: unknown) {
+        if (!TaskScheduler.isTaskCtx(payload)) {
+            this.log?.warn('Ignoring malformed forwarder dispatch payload')
+            return
+        }
+        const ctx = payload
         try {
             await this.onTaskReceived(ctx)
         } catch (error) {

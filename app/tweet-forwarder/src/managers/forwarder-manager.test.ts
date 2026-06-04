@@ -563,6 +563,60 @@ test('ForwarderTaskScheduler registers immediate tasks before dispatch status ev
     }
 })
 
+test('ForwarderTaskScheduler ignores malformed spider finished payloads', () => {
+    const emitter = new EventEmitter()
+    const dispatched: any[] = []
+    emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => dispatched.push(payload))
+    const scheduler = new ForwarderTaskScheduler(
+        {
+            cfg_forwarder: {} as any,
+            forwarders: [],
+            connections: {
+                'crawler-formatter': {},
+                'crawler-processor': {},
+                'processor-formatter': {},
+                'formatter-target': {},
+            } as any,
+            crawlers: [],
+            formatters: [],
+            forward_targets: [],
+        },
+        emitter,
+    )
+
+    ;(scheduler as any).onSpiderTaskFinished(undefined)
+    ;(scheduler as any).onSpiderTaskFinished({ taskId: 'spider-bad', crawlerName: 'bad', result: null })
+
+    expect(dispatched).toEqual([])
+})
+
+test('ForwarderPools ignores malformed dispatch payloads without status side effects', async () => {
+    const emitter = new EventEmitter()
+    const statusEvents: any[] = []
+    emitter.on(`forwarder:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, (payload) => statusEvents.push(payload))
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {
+                'crawler-formatter': {},
+                'crawler-processor': {},
+                'processor-formatter': {},
+                'formatter-target': {},
+            } as any,
+            formatters: [],
+            cfg_forwarder: {} as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        emitter,
+    )
+
+    await (pools as any).dispatchListener(undefined)
+
+    expect(statusEvents).toEqual([])
+})
+
 test('ForwarderPools dispatch listener catches unexpected async failures', async () => {
     const emitter = new EventEmitter()
     const statusEvents: any[] = []

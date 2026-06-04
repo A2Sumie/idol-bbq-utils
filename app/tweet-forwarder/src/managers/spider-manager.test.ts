@@ -23,6 +23,17 @@ test('SpiderTaskScheduler treats same crawler pending or running tasks as active
     expect((scheduler as any).hasActiveCrawlerTask('Instagram Live 抢抓 - 椎名桜月')).toBe(false)
 })
 
+test('SpiderPools ignores malformed dispatch payloads without status side effects', async () => {
+    const emitter = new EventEmitter()
+    const statusEvents: any[] = []
+    emitter.on(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, (payload) => statusEvents.push(payload))
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', emitter)
+
+    await (pools as any).dispatchListener(undefined)
+
+    expect(statusEvents).toEqual([])
+})
+
 test('SpiderPools dispatch listener catches unexpected async failures and fails linked task', async () => {
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
     const statusUpdates: any[] = []
