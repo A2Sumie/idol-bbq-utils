@@ -6,11 +6,13 @@ import { TaskManager } from './task-manager'
 const originalTaskQueue = { ...DB.TaskQueue }
 const originalOutboundMessage = { ...DB.OutboundMessage }
 const originalTargetHealth = { ...DB.TargetHealth }
+const originalArticle = { ...DB.Article }
 
 afterEach(() => {
     Object.assign(DB.TaskQueue, originalTaskQueue)
     Object.assign(DB.OutboundMessage, originalOutboundMessage)
     Object.assign(DB.TargetHealth, originalTargetHealth)
+    Object.assign(DB.Article, originalArticle)
 })
 
 test('TaskManager poll skips tasks that lose the pending claim race', async () => {
@@ -81,7 +83,7 @@ test('TaskManager aggregate sends are claimed through outbound messages', async 
     }
 
     const manager = new TaskManager({ getTarget: () => forwarder } as any)
-    await (manager as any).sendAggregateToTarget(
+    const outcome = await (manager as any).sendAggregateToTarget(
         'aggregate_hourly',
         'target-a',
         {
@@ -95,7 +97,139 @@ test('TaskManager aggregate sends are claimed through outbound messages', async 
     )
 
     expect(statuses).toEqual(['claim:aggregate_hourly', 'sending', 'sent'])
+    expect(outcome).toMatchObject({ targetId: 'target-a', status: 'sent', retryable: false })
     expect(sentPayloads).toHaveLength(1)
     expect(sentPayloads[0]?.props?.forceSend).toBeTrue()
     expect(health[0]?.last_send_status).toBe('sent')
+})
+
+test('TaskManager retries aggregate tasks when target delivery fails', async () => {
+    const retryCalls: any[] = []
+    const statusUpdates: any[] = []
+    const outboundStatuses: string[] = []
+    const health: any[] = []
+    const task = {
+        id: 42,
+        type: 'aggregate_daily',
+        payload: {
+            platform: Platform.X,
+            u_id: 'member_retry',
+            start: 100,
+            end: 200,
+            target_ids: ['target-a'],
+        },
+        result_summary: null,
+    }
+    const forwarder = {
+        id: 'target-a',
+        NAME: 'recording',
+        send: async () => {
+            throw new Error('transport down')
+        },
+    }
+
+    ;(DB.Article as any).getArticlesByTimeRange = async () => [
+        {
+            id: 1,
+            a_id: 'article-1',
+            created_at: 150,
+            content: 'hello',
+            has_media: false,
+            media: [],
+        },
+    ]
+    ;(DB.TaskQueue as any).recoverStaleProcessing = async () => ({ count: 0 })
+    ;(DB.TaskQueue as any).getPending = async () => [task]
+    ;(DB.TaskQueue as any).claimPending = async () => ({ ...task, status: 'processing' })
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+    ;(DB.TaskQueue as any).retryLater = async (id: number, executeAt: number, meta?: unknown) => {
+        retryCalls.push({ id, executeAt, meta })
+    }
+    ;(DB.OutboundMessage as any).claim = async (data: any) => {
+        outboundStatuses.push(`claim:${data.task_kind}`)
+        return { claimed: true, record: { id: 1, ...data, status: 'planned' } }
+    }
+    ;(DB.OutboundMessage as any).markSending = async () => {
+        outboundStatuses.push('sending')
+    }
+    ;(DB.OutboundMessage as any).markFailed = async () => {
+        outboundStatuses.push('failed')
+    }
+    ;(DB.TargetHealth as any).mark = async (data: any) => {
+        health.push(data)
+    }
+
+    const manager = new TaskManager({ getTarget: () => forwarder } as any)
+    await (manager as any).poll()
+
+    expect(outboundStatuses).toEqual(['claim:aggregate_daily', 'sending', 'failed'])
+    expect(retryCalls).toHaveLength(1)
+    expect(retryCalls[0]?.id).toBe(42)
+    expect(retryCalls[0]?.meta?.last_error).toContain('retryable target failure')
+    expect(retryCalls[0]?.meta?.result_summary).toContain('retry_attempts=1/5')
+    expect(retryCalls[0]?.meta?.result_summary).toContain('failed=1')
+    expect(statusUpdates).toEqual([])
+    expect(health[0]?.last_send_status).toBe('failed')
+})
+
+test('TaskManager marks aggregate tasks failed after delivery retries are exhausted', async () => {
+    const retryCalls: any[] = []
+    const statusUpdates: any[] = []
+    const task = {
+        id: 43,
+        type: 'aggregate_daily',
+        payload: {
+            platform: Platform.X,
+            u_id: 'member_retry',
+            start: 100,
+            end: 200,
+            target_ids: ['target-a'],
+        },
+        result_summary: 'retry_attempts=5/5 aggregate_daily targets=1 failed=1 failed_targets=target-a:failed',
+    }
+    const forwarder = {
+        id: 'target-a',
+        NAME: 'recording',
+        send: async () => {
+            throw new Error('transport down')
+        },
+    }
+
+    ;(DB.Article as any).getArticlesByTimeRange = async () => [
+        {
+            id: 1,
+            a_id: 'article-1',
+            created_at: 150,
+            content: 'hello',
+            has_media: false,
+            media: [],
+        },
+    ]
+    ;(DB.TaskQueue as any).recoverStaleProcessing = async () => ({ count: 0 })
+    ;(DB.TaskQueue as any).getPending = async () => [task]
+    ;(DB.TaskQueue as any).claimPending = async () => ({ ...task, status: 'processing' })
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+    ;(DB.TaskQueue as any).retryLater = async (id: number, executeAt: number, meta?: unknown) => {
+        retryCalls.push({ id, executeAt, meta })
+    }
+    ;(DB.OutboundMessage as any).claim = async (data: any) => {
+        return { claimed: true, record: { id: 1, ...data, status: 'planned' } }
+    }
+    ;(DB.OutboundMessage as any).markSending = async () => undefined
+    ;(DB.OutboundMessage as any).markFailed = async () => undefined
+    ;(DB.TargetHealth as any).mark = async () => undefined
+
+    const manager = new TaskManager({ getTarget: () => forwarder } as any)
+    await (manager as any).poll()
+
+    expect(retryCalls).toEqual([])
+    expect(statusUpdates).toHaveLength(1)
+    expect(statusUpdates[0]).toMatchObject({ id: 43, status: 'failed' })
+    expect(statusUpdates[0]?.meta?.last_error).toContain('retryable target failure')
+    expect(statusUpdates[0]?.meta?.result_summary).toContain('retry_exhausted attempts=5/5')
+    expect(statusUpdates[0]?.meta?.result_summary).toContain('failed=1')
 })

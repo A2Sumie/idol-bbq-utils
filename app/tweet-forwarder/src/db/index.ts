@@ -567,6 +567,25 @@ namespace DB {
             })
         }
 
+        export async function retryLater(
+            id: number,
+            execute_at: number,
+            meta?: { last_error?: string | null; result_summary?: string | null },
+        ) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.task_queue.update({
+                where: { id },
+                data: {
+                    status: 'pending',
+                    execute_at,
+                    updated_at: now,
+                    finished_at: null,
+                    last_error: meta?.last_error ?? undefined,
+                    result_summary: meta?.result_summary ?? undefined,
+                },
+            })
+        }
+
         export async function list(limit = 50, status?: string): Promise<Array<DBTaskQueue>> {
             return await prisma.task_queue.findMany({
                 where: status ? { status } : undefined,

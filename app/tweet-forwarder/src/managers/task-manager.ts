@@ -32,6 +32,40 @@ interface AggregatePayload {
     prompt?: string
 }
 
+type AggregateSendStatus =
+    | 'sent'
+    | 'queued'
+    | 'blocked'
+    | 'partial'
+    | 'already_completed'
+    | 'in_progress'
+    | 'missing_target'
+    | 'failed'
+
+interface AggregateSendOutcome {
+    targetId: string
+    status: AggregateSendStatus
+    retryable: boolean
+    outboundStatus?: string
+    error?: string
+}
+
+class TaskDeliveryError extends Error {
+    readonly retryable: boolean
+    readonly resultSummary?: string
+
+    constructor(message: string, options: { retryable: boolean; resultSummary?: string }) {
+        super(message)
+        this.name = 'TaskDeliveryError'
+        this.retryable = options.retryable
+        this.resultSummary = options.resultSummary
+    }
+}
+
+function toErrorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error)
+}
+
 export class TaskManager extends BaseCompatibleModel {
     NAME = 'TaskManager'
     log?: Logger
@@ -39,6 +73,9 @@ export class TaskManager extends BaseCompatibleModel {
     private pollingJob: CronJob
     private processors: Processor[]
     private readonly staleProcessingSeconds = 30 * 60
+    private readonly taskRetryLimit = 5
+    private readonly taskRetryBaseSeconds = 120
+    private readonly taskRetryMaxSeconds = 3600
 
     constructor(forwarderPools: ForwarderPools, options: { processors?: Processor[] } = {}, log?: Logger) {
         super()
@@ -80,20 +117,49 @@ export class TaskManager extends BaseCompatibleModel {
                     continue
                 }
                 try {
+                    let resultSummary: string | undefined
                     if (claimedTask.type === 'aggregate_daily') {
                         // Cast payload safely
                         const payload = claimedTask.payload as unknown as AggregatePayload
-                        await this.handleDailyAggregation(payload)
+                        resultSummary = await this.handleDailyAggregation(payload)
                     } else if (claimedTask.type === 'aggregate_hourly') {
                         const payload = claimedTask.payload as unknown as AggregatePayload
-                        await this.handleHourlyAggregation(payload)
+                        resultSummary = await this.handleHourlyAggregation(payload)
                     } else {
                         throw new Error(`Unsupported task type: ${claimedTask.type}`)
                     }
-                    await DB.TaskQueue.updateStatus(claimedTask.id, 'completed')
+                    await DB.TaskQueue.updateStatus(
+                        claimedTask.id,
+                        'completed',
+                        resultSummary ? { result_summary: resultSummary } : undefined,
+                    )
                 } catch (e) {
-                    this.log?.error(`Task ${claimedTask.id} failed: ${e}`)
-                    await DB.TaskQueue.updateStatus(claimedTask.id, 'failed')
+                    const errorMessage = toErrorMessage(e)
+                    if (e instanceof TaskDeliveryError && e.retryable) {
+                        const nextAttempt = this.getTaskRetryAttempts(claimedTask) + 1
+                        if (nextAttempt <= this.taskRetryLimit) {
+                            const retryAt = Math.floor(Date.now() / 1000) + this.taskRetryDelaySeconds(nextAttempt)
+                            this.log?.warn(
+                                `Task ${claimedTask.id} will retry after delivery failure (${nextAttempt}/${this.taskRetryLimit}): ${errorMessage}`,
+                            )
+                            await DB.TaskQueue.retryLater(claimedTask.id, retryAt, {
+                                last_error: errorMessage,
+                                result_summary: this.formatTaskRetrySummary(nextAttempt, e.resultSummary),
+                            })
+                            continue
+                        }
+                    }
+
+                    this.log?.error(`Task ${claimedTask.id} failed: ${errorMessage}`)
+                    await DB.TaskQueue.updateStatus(claimedTask.id, 'failed', {
+                        last_error: errorMessage,
+                        result_summary:
+                            e instanceof TaskDeliveryError && e.retryable
+                                ? this.formatTaskRetryExhaustedSummary(claimedTask, e.resultSummary)
+                                : e instanceof TaskDeliveryError
+                                  ? e.resultSummary
+                                  : undefined,
+                    })
                 }
             }
         } catch (e) {
@@ -101,14 +167,14 @@ export class TaskManager extends BaseCompatibleModel {
         }
     }
 
-    private async handleHourlyAggregation(payload: AggregatePayload) {
+    private async handleHourlyAggregation(payload: AggregatePayload): Promise<string | undefined> {
         const { platform, u_id, start, end, bot_id, target_ids } = payload
         this.log?.info(`Processing HOURLY batch for ${u_id} on ${platform}`)
 
         const articles = await DB.Article.getArticlesByTimeRange(u_id, platform, start, end)
         if (articles.length === 0) {
             this.log?.info(`No articles found for hourly batch.`)
-            return
+            return 'aggregate_hourly no_articles'
         }
 
         // 1. Text Summary
@@ -173,36 +239,31 @@ export class TaskManager extends BaseCompatibleModel {
         }
 
         // 4. Send
-        const idsToSend = target_ids && target_ids.length > 0 ? target_ids : bot_id ? [bot_id] : []
-        if (idsToSend.length === 0) {
-            this.log?.warn(`No target IDs provided for hourly batch of ${u_id}`)
-        }
-
-        for (const targetId of idsToSend) {
-            await this.sendAggregateToTarget(
+        try {
+            return await this.sendAggregateToTargets(
                 'aggregate_hourly',
-                targetId,
                 payload,
+                target_ids && target_ids.length > 0 ? target_ids : bot_id ? [bot_id] : [],
                 `Hourly Batch for ${u_id}`,
                 mediaFiles,
             )
-        }
-
-        // Cleanup
-        if (mediaFiles.length > 0) {
-            setTimeout(() => {
-                mediaFiles.forEach((f) => {
-                    try {
-                        if (!isPersistentMediaPath(f.path)) {
-                            fs.unlinkSync(f.path)
-                        }
-                    } catch (e) {}
-                })
-            }, 60000) // Delayed cleanup 1 minute
+        } finally {
+            // Cleanup
+            if (mediaFiles.length > 0) {
+                setTimeout(() => {
+                    mediaFiles.forEach((f) => {
+                        try {
+                            if (!isPersistentMediaPath(f.path)) {
+                                fs.unlinkSync(f.path)
+                            }
+                        } catch (e) {}
+                    })
+                }, 60000) // Delayed cleanup 1 minute
+            }
         }
     }
 
-    private async handleDailyAggregation(payload: AggregatePayload) {
+    private async handleDailyAggregation(payload: AggregatePayload): Promise<string | undefined> {
         const { platform, u_id, start, end, bot_id, target_ids, processorConfig, processorId, prompt } = payload
 
         this.log?.info(
@@ -212,7 +273,7 @@ export class TaskManager extends BaseCompatibleModel {
         const articles = await DB.Article.getArticlesByTimeRange(u_id, platform, start, end)
         if (articles.length === 0) {
             this.log?.info(`No articles found for aggregation.`)
-            return
+            return 'aggregate_daily no_articles'
         }
 
         const reversedArticles = articles.reverse() // created_at asc usually better for chronological summary
@@ -255,30 +316,163 @@ export class TaskManager extends BaseCompatibleModel {
         let mediaFiles: { path: string; media_type: 'photo' }[] = []
         const fs = await import('fs')
 
-        const idsToSend = target_ids && target_ids.length > 0 ? target_ids : bot_id ? [bot_id] : []
-        if (idsToSend.length === 0) {
-            this.log?.warn(`No target IDs provided for daily aggregation of ${u_id}`)
-        }
-
-        for (const targetId of idsToSend) {
-            await this.sendAggregateToTarget(
+        try {
+            return await this.sendAggregateToTargets(
                 'aggregate_daily',
-                targetId,
                 payload,
+                target_ids && target_ids.length > 0 ? target_ids : bot_id ? [bot_id] : [],
                 `Daily Report for ${u_id}:\n\n${summary}`,
                 mediaFiles,
             )
+        } finally {
+            // Cleanup
+            if (mediaFiles.length > 0) {
+                mediaFiles.forEach((f) => {
+                    try {
+                        if (!isPersistentMediaPath(f.path)) {
+                            fs.unlinkSync(f.path)
+                        }
+                    } catch (e) {}
+                })
+            }
+        }
+    }
+
+    private async sendAggregateToTargets(
+        taskKind: 'aggregate_hourly' | 'aggregate_daily',
+        payload: AggregatePayload,
+        targetIds: string[],
+        text: string,
+        mediaFiles: Array<{ path: string; media_type: 'photo' | 'video' }>,
+    ) {
+        if (targetIds.length === 0) {
+            const message = `No target IDs provided for ${taskKind} of ${payload.u_id}`
+            this.log?.warn(message)
+            throw new TaskDeliveryError(message, {
+                retryable: false,
+                resultSummary: `${taskKind} targets=0`,
+            })
         }
 
-        // Cleanup
-        if (mediaFiles.length > 0) {
-            mediaFiles.forEach((f) => {
-                try {
-                    if (!isPersistentMediaPath(f.path)) {
-                        fs.unlinkSync(f.path)
-                    }
-                } catch (e) {}
-            })
+        const outcomes: AggregateSendOutcome[] = []
+        for (const targetId of targetIds) {
+            outcomes.push(await this.sendAggregateToTarget(taskKind, targetId, payload, text, mediaFiles))
+        }
+
+        return this.finalizeAggregateOutcomes(taskKind, payload, outcomes)
+    }
+
+    private finalizeAggregateOutcomes(
+        taskKind: 'aggregate_hourly' | 'aggregate_daily',
+        payload: AggregatePayload,
+        outcomes: AggregateSendOutcome[],
+    ) {
+        const resultSummary = this.formatAggregateOutcomeSummary(taskKind, outcomes)
+        const retryableFailures = outcomes.filter((outcome) => outcome.retryable)
+        if (retryableFailures.length > 0) {
+            const failureDetails = this.formatAggregateFailureDetails(retryableFailures)
+            throw new TaskDeliveryError(
+                `${taskKind} for ${payload.u_id} has ${retryableFailures.length} retryable target failure(s)${
+                    failureDetails ? `: ${failureDetails}` : ''
+                }`,
+                {
+                    retryable: true,
+                    resultSummary,
+                },
+            )
+        }
+
+        const completedTarget = outcomes.some((outcome) => this.isCompletedAggregateOutcome(outcome))
+        const failedTargets = outcomes.filter((outcome) => !this.isCompletedAggregateOutcome(outcome))
+        if (!completedTarget && failedTargets.length > 0) {
+            const failureDetails = this.formatAggregateFailureDetails(failedTargets)
+            throw new TaskDeliveryError(
+                `${taskKind} for ${payload.u_id} has no completed target delivery${
+                    failureDetails ? `: ${failureDetails}` : ''
+                }`,
+                {
+                    retryable: false,
+                    resultSummary,
+                },
+            )
+        }
+
+        return resultSummary
+    }
+
+    private isCompletedAggregateOutcome(outcome: AggregateSendOutcome) {
+        return ['sent', 'queued', 'blocked', 'partial', 'already_completed'].includes(outcome.status)
+    }
+
+    private formatAggregateOutcomeSummary(
+        taskKind: 'aggregate_hourly' | 'aggregate_daily',
+        outcomes: AggregateSendOutcome[],
+    ) {
+        const counts = outcomes.reduce<Record<string, number>>((acc, outcome) => {
+            acc[outcome.status] = (acc[outcome.status] || 0) + 1
+            return acc
+        }, {})
+        const countPart = Object.entries(counts)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([status, count]) => `${status}=${count}`)
+            .join(' ')
+        const failedTargets = outcomes
+            .filter((outcome) => !this.isCompletedAggregateOutcome(outcome))
+            .map((outcome) => `${outcome.targetId}:${outcome.status}`)
+            .join(',')
+        return `${taskKind} targets=${outcomes.length}${countPart ? ` ${countPart}` : ''}${
+            failedTargets ? ` failed_targets=${failedTargets}` : ''
+        }`
+    }
+
+    private formatAggregateFailureDetails(outcomes: AggregateSendOutcome[]) {
+        return outcomes
+            .map((outcome) => `${outcome.targetId}:${outcome.status}${outcome.error ? `:${outcome.error}` : ''}`)
+            .join(';')
+    }
+
+    private getTaskRetryAttempts(task: { result_summary?: string | null }) {
+        const match = /retry_attempts=(\d+)/.exec(task.result_summary || '')
+        if (!match) {
+            return 0
+        }
+        const parsed = Number.parseInt(match[1] || '0', 10)
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
+    }
+
+    private taskRetryDelaySeconds(attempt: number) {
+        const exponent = Math.max(0, Math.min(attempt - 1, 6))
+        return Math.min(this.taskRetryMaxSeconds, this.taskRetryBaseSeconds * 2 ** exponent)
+    }
+
+    private formatTaskRetrySummary(attempt: number, resultSummary?: string) {
+        return `retry_attempts=${attempt}/${this.taskRetryLimit}${resultSummary ? ` ${resultSummary}` : ''}`
+    }
+
+    private formatTaskRetryExhaustedSummary(task: { result_summary?: string | null }, resultSummary?: string) {
+        const attempts = Math.max(this.getTaskRetryAttempts(task), this.taskRetryLimit)
+        return `retry_exhausted attempts=${attempts}/${this.taskRetryLimit}${resultSummary ? ` ${resultSummary}` : ''}`
+    }
+
+    private classifySuppressedOutbound(targetId: string, status: string): AggregateSendOutcome {
+        if (['sent', 'skipped', 'partial'].includes(status)) {
+            return { targetId, status: 'already_completed', retryable: false, outboundStatus: status }
+        }
+        if (status === 'queued') {
+            return { targetId, status: 'queued', retryable: false, outboundStatus: status }
+        }
+        if (status === 'planned' || status === 'sending') {
+            return { targetId, status: 'in_progress', retryable: true, outboundStatus: status }
+        }
+        if (status === 'failed') {
+            return { targetId, status: 'failed', retryable: true, outboundStatus: status }
+        }
+        return {
+            targetId,
+            status: 'failed',
+            retryable: true,
+            outboundStatus: status,
+            error: `Unexpected suppressed outbound status: ${status}`,
         }
     }
 
@@ -288,11 +482,11 @@ export class TaskManager extends BaseCompatibleModel {
         payload: AggregatePayload,
         text: string,
         mediaFiles: Array<{ path: string; media_type: 'photo' | 'video' }>,
-    ) {
+    ): Promise<AggregateSendOutcome> {
         const forwarder = this.forwarderPools.getTarget(targetId)
         if (!forwarder) {
             this.log?.warn(`Target ${targetId} not found for ${taskKind}`)
-            return
+            return { targetId, status: 'missing_target', retryable: false, error: 'target not found' }
         }
 
         const routeKeyValue = targetRouteKey(
@@ -330,10 +524,11 @@ export class TaskManager extends BaseCompatibleModel {
                 payload_hash: outboundPayloadHash,
             })
             if (!outbound.claimed) {
+                const status = String(outbound.record.status)
                 this.log?.debug(
-                    `${taskKind} outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping ${targetId}`,
+                    `${taskKind} outbound ${outboundIdempotencyKey} already ${status}; skipping ${targetId}`,
                 )
-                return
+                return this.classifySuppressedOutbound(targetId, status)
             }
 
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
@@ -351,7 +546,7 @@ export class TaskManager extends BaseCompatibleModel {
                     last_send_status: 'queued',
                     details: sendResult,
                 })
-                return
+                return { targetId, status: 'queued', retryable: false }
             }
             if (sendResult.status === 'blocked') {
                 await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
@@ -362,7 +557,7 @@ export class TaskManager extends BaseCompatibleModel {
                     last_send_status: 'blocked',
                     details: sendResult,
                 })
-                return
+                return { targetId, status: 'blocked', retryable: false }
             }
 
             const providerResult = getForwarderProviderResult(sendResult)
@@ -375,6 +570,7 @@ export class TaskManager extends BaseCompatibleModel {
                 last_provider_code: providerCode(providerResult),
                 details: summarizeProviderResult(providerResult),
             })
+            return { targetId, status: 'sent', retryable: false }
         } catch (error) {
             this.log?.error(`Failed to send ${taskKind} for ${payload.u_id} to ${targetId}: ${error}`)
             if (error instanceof PartialForwarderSendError) {
@@ -392,7 +588,7 @@ export class TaskManager extends BaseCompatibleModel {
                     disabled_reason: error.message,
                     details: summarizeProviderResult(error.partialResults),
                 }).catch(() => undefined)
-                return
+                return { targetId, status: 'partial', retryable: false, error: error.message }
             }
             await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
             await DB.TargetHealth.mark({
@@ -400,12 +596,13 @@ export class TaskManager extends BaseCompatibleModel {
                 provider: forwarder.NAME,
                 status: 'error',
                 last_send_status: 'failed',
-                disabled_reason: error instanceof Error ? error.message : String(error),
+                disabled_reason: toErrorMessage(error),
                 details: {
                     route_key: routeKeyValue,
                     task_kind: taskKind,
                 },
             }).catch(() => undefined)
+            return { targetId, status: 'failed', retryable: true, error: toErrorMessage(error) }
         }
     }
 }
