@@ -40,10 +40,11 @@ HELP
 
     git rev-parse --is-inside-work-tree >/dev/null
 
-    local deploy preflight start
+    local deploy preflight start dockerfile
     deploy="tools/deploy-forwarder-stopped.sh"
     preflight="tools/forwarder-preflight.sh"
     start="app/tweet-forwarder/start.sh"
+    dockerfile="app/tweet-forwarder/Dockerfile"
 
     require_contains "$deploy" 'require_clean_local_worktree' \
         'local clean-worktree deploy guard'
@@ -93,6 +94,40 @@ HELP
         'startup sqlite backup manifest field'
     require_contains "$start" 'sqlite_backup_api' \
         'startup sqlite backup manifest method'
+
+    python3 - "$dockerfile" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    lines = handle.readlines()
+
+
+def find(needle):
+    for index, line in enumerate(lines, start=1):
+        if needle in line:
+            return index
+    raise SystemExit(f"forwarder-operator-contracts: missing Dockerfile invariant: {needle}")
+
+
+chown_line = find("chown -R bun:bun /app/")
+build_arg_line = find("ARG BUILD_COMMIT=unknown")
+label_line = find('LABEL moe.n2nj.idol-bbq.build-commit="${BUILD_COMMIT}"')
+build_file_line = find("/app/build-commit")
+
+if build_arg_line < chown_line:
+    raise SystemExit(
+        "forwarder-operator-contracts: BUILD_COMMIT arg must stay after heavy runner layers"
+    )
+if label_line < chown_line:
+    raise SystemExit(
+        "forwarder-operator-contracts: build labels must stay after heavy runner layers"
+    )
+if build_file_line < chown_line:
+    raise SystemExit(
+        "forwarder-operator-contracts: build metadata files must stay after heavy runner layers"
+    )
+PY
 
     printf 'operator_contracts_ok=true\n'
 }

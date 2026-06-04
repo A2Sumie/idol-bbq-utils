@@ -1,6 +1,4 @@
 ARG CHROME_VERSION=142.0.7444.175-1
-ARG BUILD_COMMIT=unknown
-ARG BUILD_DATE=unknown
 
 FROM oven/bun:1.2.8-slim AS base
 FROM base AS builder
@@ -28,11 +26,6 @@ RUN bun build app/tweet-forwarder/scripts/config-audit.ts --outdir=./app/tweet-f
 FROM base AS runner
 
 ARG CHROME_VERSION
-ARG BUILD_COMMIT
-ARG BUILD_DATE
-LABEL org.opencontainers.image.revision="${BUILD_COMMIT}"
-LABEL org.opencontainers.image.created="${BUILD_DATE}"
-LABEL moe.n2nj.idol-bbq.build-commit="${BUILD_COMMIT}"
 RUN apt-get update \
     && apt-get install -y wget gnupg curl unzip ffmpeg xvfb dbus-x11 python3 python3-venv \
     # Required for Chrome
@@ -68,14 +61,20 @@ COPY --from=builder /app/app/tweet-forwarder/prisma/client /app/prisma/client
 # Copy startup script
 COPY app/tweet-forwarder/start.sh /app/start.sh
 
-RUN printf '%s\n' "$BUILD_COMMIT" > /app/build-commit \
-    && printf '%s\n' "$BUILD_DATE" > /app/build-date
-
 RUN mkdir -p /tmp/tweet-forwarder \
     && chown -R bun:bun /tmp/tweet-forwarder
 
 RUN chown -R bun:bun /app/ \
     && chmod +x /app/start.sh
+
+ARG BUILD_COMMIT=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.revision="${BUILD_COMMIT}"
+LABEL org.opencontainers.image.created="${BUILD_DATE}"
+LABEL moe.n2nj.idol-bbq.build-commit="${BUILD_COMMIT}"
+RUN printf '%s\n' "$BUILD_COMMIT" > /app/build-commit \
+    && printf '%s\n' "$BUILD_DATE" > /app/build-date \
+    && chown bun:bun /app/build-commit /app/build-date
 
 USER bun
 
