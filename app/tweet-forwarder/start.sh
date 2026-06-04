@@ -45,12 +45,14 @@ trap terminate INT TERM
 
 sqlite_quick_check() {
     db_path="$1"
-    python3 - "$db_path" <<'PY'
+python3 - "$db_path" <<'PY'
 import sqlite3
 import sys
+from urllib.request import pathname2url
 
 db_path = sys.argv[1]
-connection = sqlite3.connect(db_path)
+db_uri = "file:" + pathname2url(db_path) + "?mode=ro"
+connection = sqlite3.connect(db_uri, uri=True)
 try:
     result = connection.execute("PRAGMA quick_check").fetchone()
 finally:

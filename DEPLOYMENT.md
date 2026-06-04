@@ -106,8 +106,8 @@ To verify changes:
     STRICT_COMMIT=1 bun run preflight:forwarder
     ```
     Add `STRICT_MIGRATIONS=1` when validating readiness for an intentional
-    online start; it fails if the production DB has pending, failed, or
-    image/DB-drifted Prisma migrations.
+    online start; it fails if the production DB fails SQLite `quick_check` or
+    has pending, failed, or image/DB-drifted Prisma migrations.
 2.  **Stopped state**:
     ```bash
     ssh 3020e 'docker inspect forwarder-new --format "status={{.State.Status}} running={{.State.Running}} restart={{.HostConfig.RestartPolicy.Name}} image={{.Image}}"'

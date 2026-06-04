@@ -90,13 +90,33 @@ python3 - "$db_path" "$migration_names_tmp" "$backup_dir" "$backup_count" "$late
 import os
 import sqlite3
 import sys
+from urllib.request import pathname2url
 
 db_path, migrations_file, backup_dir, backup_count, latest_backup = sys.argv[1:6]
 with open(migrations_file, "r", encoding="utf-8") as handle:
     migration_names = [line.strip() for line in handle if line.strip()]
 
 def emit(key, value):
-    print(f"{key}={value}")
+    text = str(value).replace("\n", "\\n")
+    print(f"{key}={text}")
+
+def open_readonly_sqlite(path):
+    uri = "file:" + pathname2url(path) + "?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+def emit_db_error(reason):
+    emit("db_quick_check_ok", "false")
+    emit("db_quick_check", reason)
+    emit("db_prisma_migrations_table", "false")
+    emit("db_applied_migration_count", 0)
+    emit("db_applied_migration_head", "")
+    emit("db_failed_migration_count", 0)
+    emit("db_rolled_back_migration_count", 0)
+    emit("db_unknown_migration_count", 0)
+    emit("db_unknown_migrations", "")
+    emit("db_pending_migration_count", len(migration_names))
+    emit("db_pending_migrations", ",".join(migration_names))
+    emit("migration_status", "db_error")
 
 emit("db_path", db_path)
 emit("db_exists", str(os.path.isfile(db_path)).lower())
@@ -107,6 +127,8 @@ emit("db_latest_backup", latest_backup)
 
 if not os.path.isfile(db_path):
     emit("db_size", 0)
+    emit("db_quick_check_ok", "false")
+    emit("db_quick_check", "missing_db")
     emit("db_prisma_migrations_table", "false")
     emit("db_applied_migration_count", 0)
     emit("db_applied_migration_head", "")
@@ -120,8 +142,19 @@ if not os.path.isfile(db_path):
     raise SystemExit(0)
 
 emit("db_size", os.path.getsize(db_path))
-connection = sqlite3.connect(db_path)
 try:
+    connection = open_readonly_sqlite(db_path)
+except Exception as exc:
+    emit_db_error(f"open_error:{exc.__class__.__name__}:{exc}")
+    raise SystemExit(0)
+
+quick_check_ok = False
+try:
+    quick_row = connection.execute("PRAGMA quick_check").fetchone()
+    quick_check = quick_row[0] if quick_row else "no result"
+    quick_check_ok = quick_check == "ok"
+    emit("db_quick_check_ok", str(quick_check_ok).lower())
+    emit("db_quick_check", quick_check)
     row = connection.execute(
         "select name from sqlite_master where type='table' and name='_prisma_migrations'"
     ).fetchone()
@@ -138,6 +171,9 @@ try:
         applied = [name for name, finished_at, rolled_back_at in rows if finished_at and not rolled_back_at]
         failed = sum(1 for _name, finished_at, rolled_back_at in rows if not finished_at and not rolled_back_at)
         rolled_back = sum(1 for _name, _finished_at, rolled_back_at in rows if rolled_back_at)
+except Exception as exc:
+    emit_db_error(f"query_error:{exc.__class__.__name__}:{exc}")
+    raise SystemExit(0)
 finally:
     connection.close()
 
@@ -153,7 +189,9 @@ emit("db_unknown_migration_count", len(unknown))
 emit("db_unknown_migrations", ",".join(unknown))
 emit("db_pending_migration_count", len(pending))
 emit("db_pending_migrations", ",".join(pending))
-if failed:
+if not quick_check_ok:
+    status = "db_error"
+elif failed:
     status = "failed"
 elif unknown:
     status = "drift"
