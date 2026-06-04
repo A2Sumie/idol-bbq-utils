@@ -37,6 +37,7 @@ import {
     markVideoFingerprintSeen,
     persistMediaFile,
 } from './media-cache-service'
+import { execFileSync } from 'child_process'
 
 export interface RenderedMediaFile {
     path: string
@@ -527,6 +528,99 @@ export class RenderService {
         return null
     }
 
+    private videoThumbnailGroupKey(file: RenderedMediaFile, article: Article) {
+        return file.sourceArticleId || article.a_id || file.sourceUrl || file.path
+    }
+
+    private generateSingleVideoThumbnail(video: RenderedMediaFile, article: Article): RenderedMediaFile | null {
+        try {
+            const outputPath = path.join(
+                path.dirname(video.path),
+                `${path.basename(video.path, path.extname(video.path))}-thumbnail.jpg`,
+            )
+            const seekSeconds =
+                typeof video.duration_seconds === 'number' && video.duration_seconds > 0
+                    ? Math.max(0, Math.min(1, video.duration_seconds - 0.1))
+                    : 0.5
+            execFileSync(
+                process.env.FFMPEG_PATH || 'ffmpeg',
+                [
+                    '-y',
+                    '-v',
+                    'error',
+                    '-ss',
+                    seekSeconds.toFixed(3),
+                    '-i',
+                    video.path,
+                    '-frames:v',
+                    '1',
+                    '-q:v',
+                    '2',
+                    outputPath,
+                ],
+                { stdio: 'ignore', timeout: 15_000 },
+            )
+            const persisted = persistMediaFile(outputPath, {
+                article: article as any,
+                media_type: 'video_thumbnail',
+                source_url: video.sourceUrl,
+            })
+            const dimensions = this.mediaFileDimensions(persisted.path)
+            return {
+                path: persisted.path,
+                media_type: 'video_thumbnail',
+                sourceArticleId: video.sourceArticleId || article.a_id || undefined,
+                sourceUserId: video.sourceUserId || article.u_id || undefined,
+                sourceUrl: video.sourceUrl,
+                ...(dimensions || {}),
+                content_hash: persisted.hash,
+                size_bytes: persisted.size_bytes,
+                duration_seconds: persisted.duration_seconds,
+                persistent: true,
+            }
+        } catch (error) {
+            this.log?.warn(`Failed to extract a single video thumbnail for ${article.a_id}: ${error}`)
+            return null
+        }
+    }
+
+    private normalizeVideoThumbnailsForSend(files: Array<RenderedMediaFile>, article: Article) {
+        const result: Array<RenderedMediaFile> = []
+        const thumbnailGroups = new Set<string>()
+        const videosByGroup = new Map<string, RenderedMediaFile>()
+
+        for (const file of files) {
+            const groupKey = this.videoThumbnailGroupKey(file, article)
+            if (file.media_type === 'video') {
+                videosByGroup.set(groupKey, file)
+                result.push(file)
+                continue
+            }
+            if (file.media_type === 'video_thumbnail') {
+                if (thumbnailGroups.has(groupKey)) {
+                    continue
+                }
+                thumbnailGroups.add(groupKey)
+                result.push(file)
+                continue
+            }
+            result.push(file)
+        }
+
+        for (const [groupKey, video] of videosByGroup) {
+            if (thumbnailGroups.has(groupKey)) {
+                continue
+            }
+            const generated = this.generateSingleVideoThumbnail(video, article)
+            if (generated) {
+                thumbnailGroups.add(groupKey)
+                result.push(generated)
+            }
+        }
+
+        return result
+    }
+
     private async handleMedia(
         taskId: string,
         article: Article,
@@ -747,7 +841,10 @@ export class RenderService {
 
                 if (new_files.length > 0) {
                     // Filter defined
-                    const validFiles = new_files.filter((i): i is RenderedMediaFile => i !== undefined)
+                    const validFiles = this.normalizeVideoThumbnailsForSend(
+                        new_files.filter((i): i is RenderedMediaFile => i !== undefined),
+                        currentArticle,
+                    )
                     this.log?.debug(`Downloaded media files: ${validFiles.map((f) => f.path).join(', ')}`)
                     maybe_media_files = maybe_media_files.concat(validFiles)
                 }

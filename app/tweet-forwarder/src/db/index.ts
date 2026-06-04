@@ -18,6 +18,10 @@ type DBArticle =
 type DBFollows = Prisma.crawler_followsGetPayload<{}>
 type DBTaskQueue = Prisma.task_queueGetPayload<{}>
 type DBProcessorRun = Prisma.processor_runsGetPayload<{}>
+type DBOutboundMessage = Prisma.outbound_messagesGetPayload<{}>
+type DBAggregationWindow = Prisma.aggregation_windowsGetPayload<{}>
+type DBAggregationItem = Prisma.aggregation_itemsGetPayload<{}>
+type DBTargetHealth = Prisma.target_healthGetPayload<{}>
 
 interface ArticleQueryParams {
     platform?: Platform
@@ -98,7 +102,7 @@ namespace DB {
 
             const delegate = getDelegate(article.platform)
             // Remove platform from data as it's not in the model anymore (implied by table)
-            // But we need to keep other keys. 
+            // But we need to keep other keys.
             // The model expects: a_id, u_id, username, created_at, content...
             // It does NOT have 'platform' column.
             const { platform, ...rest } = article
@@ -227,7 +231,6 @@ namespace DB {
             return root
         }
 
-
         export async function getArticlesByName(u_id: string, platform: Platform, count = 10) {
             const delegate = getDelegate(platform)
             const res = await delegate.findMany({
@@ -251,12 +254,12 @@ namespace DB {
                     u_id: u_id,
                     created_at: {
                         gte: start,
-                        lte: end
-                    }
+                        lte: end,
+                    },
                 },
                 orderBy: {
                     created_at: 'asc', // Ascending for aggregation? Or Desc?
-                }
+                },
             })
             // No need for full chain probably if just for summary, but safer to get it
             const articles = await Promise.all(res.map(async ({ id }: any) => getSingleArticle(id, platform)))
@@ -413,7 +416,12 @@ namespace DB {
             }
         }
 
-        export async function deleteRecord(ref_id: number, platform: string | number, bot_id: string, task_type: string) {
+        export async function deleteRecord(
+            ref_id: number,
+            platform: string | number,
+            bot_id: string,
+            task_type: string,
+        ) {
             let exist_one = await checkExist(ref_id, platform, bot_id, task_type)
             if (!exist_one) {
                 return
@@ -439,21 +447,54 @@ namespace DB {
             meta?: {
                 source_ref?: string
                 action_type?: string
+                idempotency_key?: string
             },
         ) {
             const now = Math.floor(Date.now() / 1000)
-            return await prisma.task_queue.create({
-                data: {
-                    type,
-                    payload,
-                    execute_at,
-                    created_at: now,
-                    updated_at: now,
-                    status: 'pending',
-                    source_ref: meta?.source_ref,
-                    action_type: meta?.action_type,
-                },
-            })
+            if (meta?.idempotency_key) {
+                const existing = await prisma.task_queue.findUnique({
+                    where: {
+                        type_idempotency_key: {
+                            type,
+                            idempotency_key: meta.idempotency_key,
+                        },
+                    },
+                })
+                if (existing) {
+                    return existing
+                }
+            }
+            try {
+                return await prisma.task_queue.create({
+                    data: {
+                        type,
+                        payload,
+                        execute_at,
+                        created_at: now,
+                        updated_at: now,
+                        status: 'pending',
+                        source_ref: meta?.source_ref,
+                        action_type: meta?.action_type,
+                        idempotency_key: meta?.idempotency_key,
+                    },
+                })
+            } catch (error) {
+                if (
+                    meta?.idempotency_key &&
+                    error instanceof Prisma.PrismaClientKnownRequestError &&
+                    error.code === 'P2002'
+                ) {
+                    return await prisma.task_queue.findUniqueOrThrow({
+                        where: {
+                            type_idempotency_key: {
+                                type,
+                                idempotency_key: meta.idempotency_key,
+                            },
+                        },
+                    })
+                }
+                throw error
+            }
         }
 
         export async function getPending(now: number) {
@@ -461,7 +502,7 @@ namespace DB {
                 where: {
                     status: 'pending',
                     execute_at: {
-                        lte: now
+                        lte: now,
                     },
                 },
                 orderBy: {
@@ -560,9 +601,9 @@ namespace DB {
                 where: {
                     platform_hash: {
                         platform,
-                        hash
-                    }
-                }
+                        hash,
+                    },
+                },
             })
         }
 
@@ -571,20 +612,307 @@ namespace DB {
                 where: {
                     platform_hash: {
                         platform,
-                        hash
-                    }
+                        hash,
+                    },
                 },
                 create: {
                     platform,
                     hash,
                     a_id,
-                    created_at: Math.floor(Date.now() / 1000)
+                    created_at: Math.floor(Date.now() / 1000),
                 },
-                update: {} // No op if exists
+                update: {}, // No op if exists
+            })
+        }
+    }
+
+    export namespace OutboundMessage {
+        export async function claim(
+            data: {
+                idempotency_key: string
+                route_key: string
+                target_id: string
+                target_platform?: string | null
+                task_kind: string
+                article_key?: string | null
+                synthetic_key?: string | null
+                payload_hash: string
+            },
+            staleAfterSeconds = 30 * 60,
+        ): Promise<{ claimed: boolean; record: DBOutboundMessage }> {
+            const now = Math.floor(Date.now() / 1000)
+            const existing = await prisma.outbound_messages.findUnique({
+                where: { idempotency_key: data.idempotency_key },
+            })
+            if (existing) {
+                const stale = existing.updated_at <= now - staleAfterSeconds
+                const retryable =
+                    existing.status === 'failed' ||
+                    ((existing.status === 'planned' || existing.status === 'sending') && stale)
+                if (!retryable) {
+                    return { claimed: false, record: existing }
+                }
+                const record = await prisma.outbound_messages.update({
+                    where: { idempotency_key: data.idempotency_key },
+                    data: {
+                        route_key: data.route_key,
+                        target_id: data.target_id,
+                        target_platform: data.target_platform || null,
+                        task_kind: data.task_kind,
+                        article_key: data.article_key || null,
+                        synthetic_key: data.synthetic_key || null,
+                        payload_hash: data.payload_hash,
+                        status: 'planned',
+                        last_error: null,
+                        updated_at: now,
+                        finished_at: null,
+                    },
+                })
+                return { claimed: true, record }
+            }
+
+            try {
+                const record = await prisma.outbound_messages.create({
+                    data: {
+                        ...data,
+                        target_platform: data.target_platform || null,
+                        article_key: data.article_key || null,
+                        synthetic_key: data.synthetic_key || null,
+                        status: 'planned',
+                        created_at: now,
+                        updated_at: now,
+                    },
+                })
+                return { claimed: true, record }
+            } catch (error) {
+                if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                    const record = await prisma.outbound_messages.findUniqueOrThrow({
+                        where: { idempotency_key: data.idempotency_key },
+                    })
+                    return { claimed: false, record }
+                }
+                throw error
+            }
+        }
+
+        export async function markSending(idempotency_key: string) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.outbound_messages.update({
+                where: { idempotency_key },
+                data: {
+                    status: 'sending',
+                    attempt_count: { increment: 1 },
+                    updated_at: now,
+                    last_error: null,
+                },
+            })
+        }
+
+        export async function markSent(idempotency_key: string, providerResult?: unknown) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.outbound_messages.update({
+                where: { idempotency_key },
+                data: {
+                    status: 'sent',
+                    provider_message_ids: (providerResult as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    updated_at: now,
+                    finished_at: now,
+                    last_error: null,
+                },
+            })
+        }
+
+        export async function markPartial(idempotency_key: string, providerResult: unknown, error: unknown) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.outbound_messages.update({
+                where: { idempotency_key },
+                data: {
+                    status: 'partial',
+                    segment_results: (providerResult as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    last_error: error instanceof Error ? error.message : String(error),
+                    updated_at: now,
+                    finished_at: now,
+                },
+            })
+        }
+
+        export async function markFailed(idempotency_key: string, error: unknown) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.outbound_messages.update({
+                where: { idempotency_key },
+                data: {
+                    status: 'failed',
+                    last_error: error instanceof Error ? error.message : String(error),
+                    updated_at: now,
+                    finished_at: now,
+                },
+            })
+        }
+
+        export async function list(limit = 50, status?: string): Promise<Array<DBOutboundMessage>> {
+            return await prisma.outbound_messages.findMany({
+                where: status ? { status } : undefined,
+                orderBy: { updated_at: 'desc' },
+                take: Math.max(1, Math.min(limit, 200)),
+            })
+        }
+    }
+
+    export namespace AggregationWindow {
+        export async function getOpen(route_key: string, target_id: string, mode: string) {
+            return await prisma.aggregation_windows.findFirst({
+                where: {
+                    route_key,
+                    target_id,
+                    mode,
+                    status: 'open',
+                },
+                orderBy: { created_at: 'asc' },
+            })
+        }
+
+        export async function getOrCreateOpen(data: {
+            idempotency_key: string
+            route_key: string
+            target_id: string
+            mode: string
+            window_start: number
+            window_end: number
+        }): Promise<DBAggregationWindow> {
+            const existing = await getOpen(data.route_key, data.target_id, data.mode)
+            if (existing) {
+                return existing
+            }
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.aggregation_windows.upsert({
+                where: { idempotency_key: data.idempotency_key },
+                create: {
+                    ...data,
+                    status: 'open',
+                    created_at: now,
+                    updated_at: now,
+                },
+                update: {
+                    status: 'open',
+                    updated_at: now,
+                },
+            })
+        }
+
+        export async function listOpen(mode?: string): Promise<Array<DBAggregationWindow>> {
+            return await prisma.aggregation_windows.findMany({
+                where: {
+                    status: 'open',
+                    ...(mode ? { mode } : {}),
+                },
+                orderBy: { created_at: 'asc' },
+            })
+        }
+
+        export async function updateStatus(id: number, status: string, meta?: { payload_hash?: string | null }) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.aggregation_windows.update({
+                where: { id },
+                data: {
+                    status,
+                    payload_hash: meta?.payload_hash ?? undefined,
+                    updated_at: now,
+                    finished_at: ['sent', 'completed', 'failed', 'cancelled'].includes(status) ? now : null,
+                },
+            })
+        }
+
+        export async function upsertItem(data: {
+            window_id: number
+            article_key: string
+            article_row_id: number
+            platform: string | number
+            payload?: unknown
+        }): Promise<DBAggregationItem> {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.aggregation_items.upsert({
+                where: {
+                    window_id_article_key: {
+                        window_id: data.window_id,
+                        article_key: data.article_key,
+                    },
+                },
+                create: {
+                    window_id: data.window_id,
+                    article_key: data.article_key,
+                    article_row_id: data.article_row_id,
+                    platform: String(data.platform),
+                    payload: (data.payload as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    created_at: now,
+                },
+                update: {
+                    payload: (data.payload as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                },
+            })
+        }
+
+        export async function listItems(window_id: number): Promise<Array<DBAggregationItem>> {
+            return await prisma.aggregation_items.findMany({
+                where: { window_id },
+                orderBy: { created_at: 'asc' },
+            })
+        }
+    }
+
+    export namespace TargetHealth {
+        export async function mark(data: {
+            target_id: string
+            provider: string
+            status: string
+            last_send_status?: string | null
+            last_provider_code?: string | null
+            disabled_reason?: string | null
+            details?: unknown
+        }): Promise<DBTargetHealth> {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.target_health.upsert({
+                where: { target_id: data.target_id },
+                create: {
+                    target_id: data.target_id,
+                    provider: data.provider,
+                    status: data.status,
+                    last_send_status: data.last_send_status || null,
+                    last_provider_code: data.last_provider_code || null,
+                    disabled_reason: data.disabled_reason || null,
+                    details: (data.details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    checked_at: now,
+                    updated_at: now,
+                },
+                update: {
+                    provider: data.provider,
+                    status: data.status,
+                    last_send_status: data.last_send_status || null,
+                    last_provider_code: data.last_provider_code || null,
+                    disabled_reason: data.disabled_reason || null,
+                    details: (data.details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    checked_at: now,
+                    updated_at: now,
+                },
+            })
+        }
+
+        export async function list(): Promise<Array<DBTargetHealth>> {
+            return await prisma.target_health.findMany({
+                orderBy: { updated_at: 'desc' },
             })
         }
     }
 }
 
 export default DB
-export type { Article, ArticleWithId, DBFollows, DBProcessorRun, DBTaskQueue }
+export type {
+    Article,
+    ArticleWithId,
+    DBAggregationItem,
+    DBAggregationWindow,
+    DBFollows,
+    DBOutboundMessage,
+    DBProcessorRun,
+    DBTargetHealth,
+    DBTaskQueue,
+}

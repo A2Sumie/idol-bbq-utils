@@ -7,7 +7,7 @@ import type { AppConfig } from '@/types'
 import { Platform, type MediaType, type TaskType } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import type { Article, ArticleWithId, DBFollows } from '@/db'
-import { BaseForwarder } from '@/middleware/forwarder/base'
+import { BaseForwarder, PartialForwarderSendError } from '@/middleware/forwarder/base'
 import { type Media, type MediaTool, MediaToolEnum } from '@/types/media'
 import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } from '@/types/forwarder'
 import { getForwarder } from '@/middleware/forwarder'
@@ -22,12 +22,31 @@ import {
     normalizeWebsitePhotoArticles,
 } from '@/utils/website-photo'
 import { normalizeCronSecond } from '@/utils/cron'
+import {
+    articleKey,
+    articleOutboundKey,
+    hashValue,
+    payloadHash,
+    providerCode,
+    routeKey,
+    summarizeProviderResult,
+    syntheticOutboundKey,
+    targetRouteKey,
+} from '@/services/outbound-message-service'
 
 type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
 type ForwarderTemplate = NonNullable<AppConfig['forwarders']>[number]
 type ArticleForwarderDispatch = {
     article: ArticleWithId
     to: Array<ForwardTargetInstanceWithRuntimeConfig>
+}
+type ForwardingPath = {
+    routeKey: string
+    formatterId?: string
+    formatterConfig: Forwarder['cfg_forwarder']
+    targets: Array<ForwardTargetInstanceWithRuntimeConfig>
+    source: 'graph' | 'inline'
+    formatterName: string
 }
 type TagDigestEvent = {
     timestamp: number
@@ -42,12 +61,20 @@ type TagDigestGroup = {
     tag: string
     articles: Array<ArticleWithId>
 }
+type SummaryCardWindowAlignment = 'none' | 'hour' | 'interval'
 type ResolvedSummaryCardConfig = {
     intervalSeconds: number
     threshold: number
     maxItems: number
     includeOriginalMedia: boolean
     sendFirstImmediately: boolean
+    sendFirstNative: boolean
+    mediaRealtime: boolean
+    mediaRealtimeText: 'none' | 'basic' | 'rendered'
+    flushOnThreshold: boolean
+    flushDelaySeconds: number
+    windowAlignment: SummaryCardWindowAlignment
+    mediaDuplicateLimit: number | null
 }
 type SummaryCardQueueItem = {
     article: ArticleWithId
@@ -57,18 +84,23 @@ type SummaryCardQueueItem = {
     digestTags: Array<string>
 }
 type SummaryCardQueue = {
+    routeKey: string
+    windowId?: number
     target: BaseForwarder
     runtime_config?: ForwardTargetPlatformCommonConfig
     config: ResolvedSummaryCardConfig
     items: Map<number, SummaryCardQueueItem>
     firstQueuedAt: number
     lastQueuedAt: number
+    windowStart?: number
+    windowEnd?: number
 }
 type SummaryCardGroup = {
     kind: 'storm' | 'thread'
     label: string
     items: SummaryCardQueueItem[]
 }
+type SummaryCardMediaUsage = Map<string, number>
 
 const DEFAULT_TAG_DIGEST_THRESHOLD = 3
 const DEFAULT_TAG_DIGEST_MIN_AUTHORS = 2
@@ -144,6 +176,16 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         3,
         Math.min(Math.floor(Number(objectConfig.max_items || DEFAULT_SUMMARY_CARD_MAX_ITEMS)), 30),
     )
+    const duplicateLimit = Math.floor(Number((objectConfig as any).media_duplicate_limit || 0))
+    const windowAlignment: SummaryCardWindowAlignment =
+        (objectConfig as any).align_to_interval === true
+            ? 'interval'
+            : (objectConfig as any).align_to_hour === true
+              ? 'hour'
+              : 'none'
+    const mediaRealtimeText = ['basic', 'rendered'].includes(String((objectConfig as any).media_realtime_text))
+        ? ((objectConfig as any).media_realtime_text as 'basic' | 'rendered')
+        : 'none'
 
     return {
         intervalSeconds,
@@ -151,6 +193,13 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         maxItems,
         includeOriginalMedia: objectConfig.include_original_media === true,
         sendFirstImmediately: objectConfig.send_first_immediately !== false,
+        sendFirstNative: (objectConfig as any).send_first_native === true,
+        mediaRealtime: (objectConfig as any).media_realtime === true,
+        mediaRealtimeText,
+        flushOnThreshold: (objectConfig as any).flush_on_threshold !== false,
+        flushDelaySeconds: Math.max(0, Math.floor(Number((objectConfig as any).flush_delay_seconds || 0))),
+        windowAlignment,
+        mediaDuplicateLimit: Number.isFinite(duplicateLimit) && duplicateLimit > 0 ? duplicateLimit : null,
     }
 }
 
@@ -245,6 +294,10 @@ function resolveBatchAggregationConfig(
         cron,
         windowSeconds,
     }
+}
+
+function buildTaskQueueIdempotencyKey(type: string, payload: unknown) {
+    return hashValue({ type, payload })
 }
 
 function resolveMatchingForwarderTemplate(
@@ -438,6 +491,17 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                                     target_ids: targetIds,
                                 },
                                 end,
+                                {
+                                    source_ref: `${info.platform}:${info.u_id}`,
+                                    action_type: 'aggregate_hourly',
+                                    idempotency_key: buildTaskQueueIdempotencyKey('aggregate_hourly', {
+                                        platform: info.platform,
+                                        u_id: info.u_id,
+                                        start,
+                                        end,
+                                        target_ids: targetIds,
+                                    }),
+                                },
                             )
                         }
                     })
@@ -565,12 +629,6 @@ type ForwardTargetInstanceWithRuntimeConfig = {
     forwarder: BaseForwarder
     runtime_config?: ForwardTargetPlatformCommonConfig
 }
-interface ForwardingPath {
-    formatterConfig: Forwarder['cfg_forwarder']
-    targets: Array<ForwardTargetInstanceWithRuntimeConfig>
-    source: 'graph' | 'inline'
-    formatterName: string
-}
 class ForwarderPools extends BaseCompatibleModel {
     NAME = 'ForwarderPools'
     log?: Logger
@@ -694,6 +752,89 @@ class ForwarderPools extends BaseCompatibleModel {
                 this.forward_to.set(id, forwarder)
             }),
         )
+        await this.restoreSummaryCardQueues().catch((error) => {
+            this.log?.warn(
+                `Failed to restore summary-card queues: ${error instanceof Error ? error.message : String(error)}`,
+            )
+        })
+    }
+
+    private async restoreSummaryCardQueues() {
+        const windows = await DB.AggregationWindow.listOpen('summary_card')
+        let restoredCount = 0
+        for (const window of windows) {
+            const target = this.forward_to.get(window.target_id)
+            if (!target) {
+                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                    payload_hash: 'missing-target',
+                }).catch(() => undefined)
+                continue
+            }
+
+            const items = await DB.AggregationWindow.listItems(window.id)
+            const queueItems = new Map<number, SummaryCardQueueItem>()
+            let runtime_config: ForwardTargetPlatformCommonConfig | undefined
+            let persistedConfig: ResolvedSummaryCardConfig | undefined
+            for (const item of items) {
+                const article = await DB.Article.getSingleArticle(
+                    item.article_row_id,
+                    Number(item.platform) as Platform,
+                )
+                if (!article) {
+                    continue
+                }
+                const payload = (item.payload || {}) as any
+                runtime_config = runtime_config || payload.runtime_config || undefined
+                persistedConfig = persistedConfig || payload.summaryConfig || undefined
+                queueItems.set(article.id, {
+                    article: cloneDeep(article),
+                    queuedAt: Number(payload.queuedAt || item.created_at),
+                    cardSourceMediaFiles: Array.isArray(payload.cardSourceMediaFiles)
+                        ? payload.cardSourceMediaFiles
+                        : [],
+                    originalMediaFiles: Array.isArray(payload.originalMediaFiles) ? payload.originalMediaFiles : [],
+                    digestTags: Array.isArray(payload.digestTags) ? payload.digestTags : [],
+                })
+            }
+
+            if (queueItems.size === 0) {
+                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                    payload_hash: 'empty-window',
+                }).catch(() => undefined)
+                continue
+            }
+
+            const config = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config)) || persistedConfig
+            if (!config) {
+                await DB.AggregationWindow.updateStatus(window.id, 'cancelled', {
+                    payload_hash: 'summary-card-disabled',
+                }).catch(() => undefined)
+                continue
+            }
+
+            const firstQueuedAt = Number(
+                window.window_start || Math.min(...Array.from(queueItems.values()).map((item) => item.queuedAt)),
+            )
+            const lastQueuedAt = Math.max(...Array.from(queueItems.values()).map((item) => item.queuedAt))
+            const windowStart = Number(window.window_start || firstQueuedAt)
+            const windowEnd = Number(window.window_end || firstQueuedAt + config.intervalSeconds)
+            this.summaryCardQueues.set(this.getSummaryCardQueueKey(target.id, runtime_config, config), {
+                routeKey: window.route_key,
+                windowId: window.id,
+                target,
+                runtime_config,
+                config,
+                items: queueItems,
+                firstQueuedAt,
+                lastQueuedAt,
+                windowStart,
+                windowEnd,
+            })
+            restoredCount += 1
+        }
+        if (restoredCount > 0) {
+            this.log?.info(`Restored ${restoredCount} summary-card queue(s) from durable aggregation windows`)
+        }
     }
 
     // handle task received
@@ -849,14 +990,6 @@ class ForwarderPools extends BaseCompatibleModel {
             .update(`article:${websites.join(',')}`)
             .digest('hex')
 
-        // Define a unified path structure
-        interface ForwardingPath {
-            formatterConfig: Forwarder['cfg_forwarder']
-            targets: Array<ForwardTargetInstanceWithRuntimeConfig>
-            source: 'graph' | 'inline'
-            formatterName: string
-        }
-
         for (const website of websites) {
             // 单次爬虫任务
             const url = new URL(website)
@@ -895,6 +1028,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     path.targets,
                     path.formatterConfig,
                     article_ids_by_url?.[url.href],
+                    path.routeKey,
                 )
             }
         }
@@ -943,6 +1077,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 path.targets,
                 path.formatterConfig,
                 { forceSend: true },
+                { routeKey: path.routeKey },
             )
         }
     }
@@ -953,6 +1088,7 @@ class ForwarderPools extends BaseCompatibleModel {
         forwarders: Array<ForwardTargetInstanceWithRuntimeConfig>,
         cfg_forwarder: Forwarder['cfg_forwarder'],
         articleIds?: Array<number>,
+        routeKeyValue?: string,
     ) {
         const { u_id, platform } = spiderRegistry.extractBasicInfo(url) ?? {}
         if (!platform) {
@@ -982,7 +1118,9 @@ class ForwarderPools extends BaseCompatibleModel {
 
         articles = await this.normalizeForwardingArticles(articles)
         ctx.log?.info(`[Trace] Found ${articles.length} articles for ${url}`)
-        await this.sendArticles(ctx.log, ctx.taskId, articles, forwarders, cfg_forwarder)
+        await this.sendArticles(ctx.log, ctx.taskId, articles, forwarders, cfg_forwarder, undefined, {
+            routeKey: routeKeyValue,
+        })
     }
 
     private async normalizeForwardingArticles(articles: Array<ArticleWithId>) {
@@ -1066,6 +1204,12 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
 
                 allPaths.push({
+                    routeKey: routeKey({
+                        source: 'graph',
+                        crawlerId: options?.crawlerId || crawlerName,
+                        formatterId,
+                    }),
+                    formatterId,
                     formatterConfig: {
                         ...cfg_forwarder,
                         render_type: formatterConfig.render_type,
@@ -1095,6 +1239,12 @@ class ForwarderPools extends BaseCompatibleModel {
 
         if (inlineTargets.length > 0) {
             allPaths.push({
+                routeKey: routeKey({
+                    source: options?.forwarderId ? 'inline' : 'manual',
+                    crawlerId: options?.crawlerId || crawlerName,
+                    formatterId: options?.forwarderId || 'inline',
+                }),
+                formatterId: options?.forwarderId || 'inline',
                 formatterConfig: cfg_forwarder,
                 targets: inlineTargets,
                 source: 'inline',
@@ -1182,6 +1332,9 @@ class ForwarderPools extends BaseCompatibleModel {
         options?: {
             forceSend?: boolean
         },
+        context?: {
+            routeKey?: string
+        },
     ) {
         let articles_forwarders = [] as Array<ArticleForwarderDispatch>
         for (const article of articles) {
@@ -1217,7 +1370,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         log?.info(`[Trace] Ready to send ${articles_forwarders.length} articles`)
-        articles_forwarders = await this.applyDispatchDigests(log, articles_forwarders, options)
+        articles_forwarders = await this.applyDispatchDigests(log, articles_forwarders, options, context)
         if (articles_forwarders.length === 0) {
             log?.debug(`[Trace] No articles remain after digest handling`)
             return
@@ -1254,6 +1407,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 mediaConfig: cfg_forwarder?.media,
                 deduplication: options?.forceSend ? false : cfg_forwarder?.deduplication,
             })
+            renderResult.mediaFiles ||= []
+            renderResult.cardMediaFiles ||= []
+            renderResult.originalMediaFiles ||= []
 
             if (renderResult.shouldSkipSend) {
                 log?.info(`Skipping article ${article.a_id}: ${renderResult.skipReason || 'deduplicated media'}`)
@@ -1272,6 +1428,11 @@ class ForwarderPools extends BaseCompatibleModel {
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     try {
+                        const routeKeyForTarget = targetRouteKey(
+                            context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
+                            target.id,
+                        )
+
                         if (!options?.forceSend) {
                             const TWO_HOURS_SECONDS = 3600 * 2
                             const now = dayjs().unix()
@@ -1320,6 +1481,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 renderResult,
                                 target,
                                 runtime_config,
+                                routeKeyForTarget,
                             )
                             if (queuedForSummary) {
                                 hadNonErrorOutcome = true
@@ -1335,17 +1497,56 @@ class ForwarderPools extends BaseCompatibleModel {
                             runtime_config,
                         )
 
+                        const outboundIdempotencyKey = articleOutboundKey(target.id, article, {
+                            forceKey: options?.forceSend ? taskId : undefined,
+                        })
+                        const outboundPayloadHash = payloadHash({
+                            routeKey: routeKeyForTarget,
+                            targetId: target.id,
+                            taskKind: options?.forceSend ? 'manual_article' : 'article',
+                            text,
+                            articleKeys: [articleKey(article)],
+                            media: [
+                                ...renderResult.mediaFiles,
+                                ...renderResult.cardMediaFiles,
+                                ...renderResult.originalMediaFiles,
+                            ],
+                        })
+                        const outbound = await DB.OutboundMessage.claim({
+                            idempotency_key: outboundIdempotencyKey,
+                            route_key: routeKeyForTarget,
+                            target_id: target.id,
+                            target_platform: target.NAME,
+                            task_kind: options?.forceSend ? 'manual_article' : 'article',
+                            article_key: articleKey(article),
+                            payload_hash: outboundPayloadHash,
+                        })
+                        if (!outbound.claimed) {
+                            log?.debug(
+                                `[Trace] Outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping ${article.a_id} for ${target.id}`,
+                            )
+                            if (['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)) {
+                                await DB.ForwardBy.save(article.id, platform, target.id, 'article')
+                            }
+                            hadNonErrorOutcome = true
+                            return
+                        }
+
                         let claimed = true
                         if (!options?.forceSend) {
                             claimed = await this.claimArticleChain(article, platform, target.id)
                             if (!claimed) {
                                 log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
+                                await DB.OutboundMessage.markSent(outboundIdempotencyKey, {
+                                    skipped: 'forward_by_already_claimed',
+                                })
                                 hadNonErrorOutcome = true
                                 return
                             }
                         }
 
-                        await target.send(text, {
+                        await DB.OutboundMessage.markSending(outboundIdempotencyKey)
+                        const providerResult = await target.send(text, {
                             media: renderResult.mediaFiles,
                             cardMedia: renderResult.cardMediaFiles,
                             contentMedia: renderResult.originalMediaFiles,
@@ -1354,6 +1555,18 @@ class ForwarderPools extends BaseCompatibleModel {
                             article: cloned_article,
                             forceSend: options?.forceSend,
                         })
+                        await DB.OutboundMessage.markSent(
+                            outboundIdempotencyKey,
+                            summarizeProviderResult(providerResult),
+                        )
+                        await DB.TargetHealth.mark({
+                            target_id: target.id,
+                            provider: target.NAME,
+                            status: 'ok',
+                            last_send_status: 'sent',
+                            last_provider_code: providerCode(providerResult),
+                            details: summarizeProviderResult(providerResult),
+                        })
                         if (options?.forceSend) {
                             await DB.ForwardBy.save(article.id, platform, target.id, 'article')
                         }
@@ -1361,6 +1574,45 @@ class ForwarderPools extends BaseCompatibleModel {
                         hadNonErrorOutcome = true
                     } catch (error) {
                         log?.error(`Error while sending to ${target.id}: ${error}`)
+                        const partialError = error instanceof PartialForwarderSendError ? error : null
+                        const routeKeyForTarget = targetRouteKey(
+                            context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
+                            target.id,
+                        )
+                        const outboundIdempotencyKey = articleOutboundKey(target.id, article, {
+                            forceKey: options?.forceSend ? taskId : undefined,
+                        })
+                        if (partialError) {
+                            await DB.OutboundMessage.markPartial(
+                                outboundIdempotencyKey,
+                                summarizeProviderResult(partialError.partialResults),
+                                partialError,
+                            )
+                            await DB.TargetHealth.mark({
+                                target_id: target.id,
+                                provider: target.NAME,
+                                status: 'degraded',
+                                last_send_status: 'partial',
+                                last_provider_code: providerCode(partialError.partialResults),
+                                disabled_reason: partialError.message,
+                                details: summarizeProviderResult(partialError.partialResults),
+                            })
+                            error_for_all = false
+                            hadNonErrorOutcome = true
+                            return
+                        }
+                        await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+                        await DB.TargetHealth.mark({
+                            target_id: target.id,
+                            provider: target.NAME,
+                            status: 'error',
+                            last_send_status: 'failed',
+                            disabled_reason: error instanceof Error ? error.message : String(error),
+                            details: {
+                                route_key: routeKeyForTarget,
+                                article_key: articleKey(article),
+                            },
+                        })
                         if (!options?.forceSend) {
                             await this.releaseArticleChain(article, platform, target.id)
                         }
@@ -1436,12 +1688,76 @@ class ForwarderPools extends BaseCompatibleModel {
         })
     }
 
+    private buildSummaryCardWindowKey(
+        routeKeyValue: string,
+        targetId: string,
+        windowStart: number,
+        intervalSeconds: number,
+    ) {
+        return syntheticOutboundKey(targetId, 'summary_window', `${routeKeyValue}:${windowStart}:${intervalSeconds}`)
+    }
+
+    private resolveSummaryCardWindowStart(firstQueuedAt: number, config: ResolvedSummaryCardConfig) {
+        if (config.windowAlignment === 'hour') {
+            return dayjs.unix(firstQueuedAt).startOf('hour').unix()
+        }
+        if (config.windowAlignment === 'interval') {
+            const dayStart = dayjs.unix(firstQueuedAt).startOf('day').unix()
+            const offset = Math.max(0, firstQueuedAt - dayStart)
+            return dayStart + Math.floor(offset / config.intervalSeconds) * config.intervalSeconds
+        }
+        return firstQueuedAt
+    }
+
+    private async getOrCreateSummaryCardWindow(
+        routeKeyValue: string,
+        target: BaseForwarder,
+        config: ResolvedSummaryCardConfig,
+        firstQueuedAt: number,
+    ) {
+        const windowStart = this.resolveSummaryCardWindowStart(firstQueuedAt, config)
+        return await DB.AggregationWindow.getOrCreateOpen({
+            idempotency_key: this.buildSummaryCardWindowKey(
+                routeKeyValue,
+                target.id,
+                windowStart,
+                config.intervalSeconds,
+            ),
+            route_key: routeKeyValue,
+            target_id: target.id,
+            mode: 'summary_card',
+            window_start: windowStart,
+            window_end: windowStart + config.intervalSeconds,
+        })
+    }
+
+    private async persistSummaryCardItem(queue: SummaryCardQueue, item: SummaryCardQueueItem) {
+        if (!queue.windowId) {
+            return
+        }
+        await DB.AggregationWindow.upsertItem({
+            window_id: queue.windowId,
+            article_key: articleKey(item.article),
+            article_row_id: item.article.id,
+            platform: item.article.platform,
+            payload: {
+                queuedAt: item.queuedAt,
+                cardSourceMediaFiles: item.cardSourceMediaFiles,
+                originalMediaFiles: item.originalMediaFiles,
+                digestTags: item.digestTags,
+                runtime_config: queue.runtime_config || null,
+                summaryConfig: queue.config,
+            },
+        })
+    }
+
     private async maybeQueueSummaryCardArticle(
         log: Logger | undefined,
         article: ArticleWithId,
         renderResult: RenderResult,
         target: BaseForwarder,
         runtime_config?: ForwardTargetPlatformCommonConfig,
+        routeKeyValue?: string,
     ) {
         const effectiveConfig = target.getEffectiveConfig(runtime_config)
         const summaryConfig = resolveSummaryCardConfig(effectiveConfig)
@@ -1461,6 +1777,8 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const now = Math.floor(Date.now() / 1000)
+        const summaryRouteKey =
+            routeKeyValue || targetRouteKey(routeKey({ source: 'system', crawlerId: 'unknown' }), target.id)
         const queueKey = this.getSummaryCardQueueKey(target.id, runtime_config, summaryConfig)
         const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
         const existingQueue = this.summaryCardQueues.get(queueKey)
@@ -1480,7 +1798,18 @@ class ForwarderPools extends BaseCompatibleModel {
             summaryConfig.sendFirstImmediately &&
             this.canSendSummaryCardNow(queueKey, summaryConfig, now)
         ) {
-            const sent = await this.sendImmediateSummaryCardItem(target, runtime_config, summaryConfig, item)
+            if (summaryConfig.sendFirstNative) {
+                this.summaryCardLastSentAt.set(queueKey, now)
+                log?.debug(`Sending idle-first summary-card item ${article.a_id} natively for ${target.id}.`)
+                return false
+            }
+            const sent = await this.sendImmediateSummaryCardItem(
+                target,
+                runtime_config,
+                summaryConfig,
+                item,
+                summaryRouteKey,
+            )
             if (!sent) {
                 await this.releaseArticleChain(item.article, item.article.platform, target.id)
             }
@@ -1488,26 +1817,58 @@ class ForwarderPools extends BaseCompatibleModel {
             return true
         }
 
+        if (summaryConfig.mediaRealtime) {
+            await this.sendSummaryCardRealtimeMedia(
+                log,
+                article,
+                target,
+                runtime_config,
+                summaryRouteKey,
+                summaryConfig,
+                renderResult,
+            )
+        }
+
         const queue = existingQueue || {
+            routeKey: summaryRouteKey,
             target,
             runtime_config,
             config: summaryConfig,
             items: new Map<number, SummaryCardQueueItem>(),
             firstQueuedAt: now,
             lastQueuedAt: now,
+            windowStart: this.resolveSummaryCardWindowStart(now, summaryConfig),
+            windowEnd: this.resolveSummaryCardWindowStart(now, summaryConfig) + summaryConfig.intervalSeconds,
         }
 
+        if (!queue.windowId) {
+            const window = await this.getOrCreateSummaryCardWindow(
+                summaryRouteKey,
+                target,
+                summaryConfig,
+                queue.firstQueuedAt,
+            )
+            queue.windowId = window.id
+            queue.routeKey = window.route_key
+            queue.windowStart = Number(window.window_start || queue.windowStart || queue.firstQueuedAt)
+            queue.windowEnd = Number(window.window_end || queue.windowEnd || queue.firstQueuedAt + summaryConfig.intervalSeconds)
+        }
         queue.target = target
         queue.runtime_config = runtime_config
         queue.config = summaryConfig
         queue.lastQueuedAt = now
         queue.items.set(article.id, item)
+        await this.persistSummaryCardItem(queue, item)
         this.summaryCardQueues.set(queueKey, queue)
         log?.debug(
             `Queued summary-card item ${article.a_id} for ${target.id}: ${queue.items.size}/${summaryConfig.threshold}`,
         )
 
-        if (queue.items.size >= summaryConfig.threshold && this.canFlushSummaryCardThreshold(queueKey, queue, now)) {
+        if (
+            summaryConfig.flushOnThreshold &&
+            queue.items.size >= summaryConfig.threshold &&
+            this.canFlushSummaryCardThreshold(queueKey, queue, now)
+        ) {
             await this.flushSummaryCardQueue(queueKey, 'threshold')
         }
         return true
@@ -1550,6 +1911,135 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         return true
+    }
+
+    private buildSummaryCardRealtimeMediaText(
+        article: ArticleWithId,
+        renderResult: RenderResult,
+        config: ResolvedSummaryCardConfig,
+    ) {
+        if (config.mediaRealtimeText === 'rendered') {
+            return renderResult.text || ''
+        }
+        if (config.mediaRealtimeText !== 'basic') {
+            return ''
+        }
+
+        const headline = extractArticleHeadline(article as any, 160).trim()
+        const header = formatArticleHeaderLine(article as any).trim()
+        return uniquePreserveOrder([header, headline, article.url || '']).join('\n')
+    }
+
+    private buildRenderedMediaIdentity(file: RenderResult['originalMediaFiles'][number]) {
+        return file.content_hash || file.sourceUrl || file.path
+    }
+
+    private buildRenderedMediaIdentityKeys(file: RenderResult['originalMediaFiles'][number]) {
+        return uniquePreserveOrder([file.content_hash, file.sourceUrl, file.path].filter(Boolean))
+    }
+
+    private buildRenderedMediaIdentityList(mediaFiles: Array<RenderResult['originalMediaFiles'][number]>) {
+        return mediaFiles.map((file) => this.buildRenderedMediaIdentity(file)).filter(Boolean)
+    }
+
+    private async sendSummaryCardRealtimeMedia(
+        log: Logger | undefined,
+        article: ArticleWithId,
+        target: BaseForwarder,
+        runtime_config: ForwardTargetPlatformCommonConfig | undefined,
+        routeKeyValue: string,
+        config: ResolvedSummaryCardConfig,
+        renderResult: RenderResult,
+    ) {
+        const mediaFiles = [...renderResult.originalMediaFiles]
+        if (mediaFiles.length === 0) {
+            return true
+        }
+
+        const text = this.buildSummaryCardRealtimeMediaText(article, renderResult, config)
+        const mediaIdentities = this.buildRenderedMediaIdentityList(mediaFiles)
+        const syntheticKey = `${routeKeyValue}:${articleKey(article)}:${hashValue(mediaIdentities)}`
+        const outboundIdempotencyKey = syntheticOutboundKey(target.id, 'summary_realtime_media', syntheticKey)
+        const outboundPayloadHash = payloadHash({
+            routeKey: routeKeyValue,
+            targetId: target.id,
+            taskKind: 'summary_realtime_media',
+            text,
+            articleKeys: [articleKey(article)],
+            media: mediaFiles,
+        })
+
+        try {
+            const outbound = await DB.OutboundMessage.claim({
+                idempotency_key: outboundIdempotencyKey,
+                route_key: routeKeyValue,
+                target_id: target.id,
+                target_platform: target.NAME,
+                task_kind: 'summary_realtime_media',
+                article_key: articleKey(article),
+                synthetic_key: syntheticKey,
+                payload_hash: outboundPayloadHash,
+            })
+            if (!outbound.claimed) {
+                log?.debug(
+                    `Summary realtime media outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible media send`,
+                )
+                return ['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)
+            }
+
+            await DB.OutboundMessage.markSending(outboundIdempotencyKey)
+            const providerResult = await target.send(text, {
+                media: mediaFiles,
+                contentMedia: mediaFiles,
+                timestamp: article.created_at,
+                runtime_config,
+                article: cloneDeep(article),
+                forceSend: true,
+            })
+            await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
+            await DB.TargetHealth.mark({
+                target_id: target.id,
+                provider: target.NAME,
+                status: 'ok',
+                last_send_status: 'sent',
+                last_provider_code: providerCode(providerResult),
+                details: summarizeProviderResult(providerResult),
+            })
+            return true
+        } catch (error) {
+            log?.error(`Failed to send summary realtime media for ${article.a_id} to ${target.id}: ${error}`)
+            if (error instanceof PartialForwarderSendError) {
+                await DB.OutboundMessage.markPartial(
+                    outboundIdempotencyKey,
+                    summarizeProviderResult(error.partialResults),
+                    error,
+                ).catch(() => undefined)
+                await DB.TargetHealth.mark({
+                    target_id: target.id,
+                    provider: target.NAME,
+                    status: 'degraded',
+                    last_send_status: 'partial',
+                    last_provider_code: providerCode(error.partialResults),
+                    disabled_reason: error.message,
+                    details: summarizeProviderResult(error.partialResults),
+                }).catch(() => undefined)
+                return true
+            }
+            await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+            await DB.TargetHealth.mark({
+                target_id: target.id,
+                provider: target.NAME,
+                status: 'error',
+                last_send_status: 'failed',
+                disabled_reason: error instanceof Error ? error.message : String(error),
+                details: {
+                    route_key: routeKeyValue,
+                    task_kind: 'summary_realtime_media',
+                    article_key: articleKey(article),
+                },
+            }).catch(() => undefined)
+            return false
+        }
     }
 
     private hasPendingSummaryCardTagStormCandidate(
@@ -1614,6 +2104,7 @@ class ForwarderPools extends BaseCompatibleModel {
         runtime_config: ForwardTargetPlatformCommonConfig | undefined,
         config: ResolvedSummaryCardConfig,
         item: SummaryCardQueueItem,
+        routeKeyValue: string,
     ) {
         const claimed = await this.claimArticleChain(item.article, item.article.platform, target.id)
         if (!claimed) {
@@ -1622,12 +2113,15 @@ class ForwarderPools extends BaseCompatibleModel {
 
         return this.sendSummaryCardBatch(
             {
+                routeKey: routeKeyValue,
                 target,
                 runtime_config,
                 config,
                 items: new Map([[item.article.id, item]]),
                 firstQueuedAt: item.queuedAt,
                 lastQueuedAt: item.queuedAt,
+                windowStart: this.resolveSummaryCardWindowStart(item.queuedAt, config),
+                windowEnd: this.resolveSummaryCardWindowStart(item.queuedAt, config) + config.intervalSeconds,
             },
             [{ kind: 'thread', label: this.getArticleThreadKey(item.article), items: [item] }],
             'idle-first',
@@ -1637,7 +2131,11 @@ class ForwarderPools extends BaseCompatibleModel {
     private async flushDueSummaryCardQueues() {
         const now = Math.floor(Date.now() / 1000)
         for (const [queueKey, queue] of Array.from(this.summaryCardQueues.entries())) {
-            if (queue.items.size > 0 && now - queue.firstQueuedAt >= queue.config.intervalSeconds) {
+            const dueAt =
+                queue.config.windowAlignment === 'none'
+                    ? queue.firstQueuedAt + queue.config.intervalSeconds
+                    : queue.windowEnd || queue.firstQueuedAt + queue.config.intervalSeconds
+            if (queue.items.size > 0 && now >= dueAt + queue.config.flushDelaySeconds) {
                 await this.flushSummaryCardQueue(queueKey, 'interval')
             }
         }
@@ -1730,19 +2228,20 @@ class ForwarderPools extends BaseCompatibleModel {
         const content = await this.buildSummaryCardBatchContent(queue, groups)
         const hasStorm = groups.some((group) => group.kind === 'storm')
         const totalArticles = allItems.length
+        const mediaUsage: SummaryCardMediaUsage = new Map()
         const title =
             hasStorm && groups.length === 1
                 ? `话题聚合 ${groups[0]?.label || ''}`.trim()
-                : `聚合 ${this.formatSummaryCardRange(allItems.map((item) => item.article))}`
+                : `聚合 ${this.formatSummaryCardRangeForQueue(queue, allItems.map((item) => item.article))}`
         const now = Math.floor(Date.now() / 1000)
-        const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems)
+        const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems, queue.config, mediaUsage)
         const summaryArticle = this.buildSyntheticSummaryArticle(
             title,
             content,
             allItems[0]?.article,
             now,
             embeddedMedia,
-            await this.buildSummaryCardRenderMeta(queue, groups),
+            await this.buildSummaryCardRenderMeta(queue, groups, mediaUsage),
         )
         const cardResult = await this.renderService.process(summaryArticle, {
             taskId: `summary-card-${queue.target.id}-${now}`,
@@ -1750,11 +2249,31 @@ class ForwarderPools extends BaseCompatibleModel {
             deduplication: false,
         })
         const originalMediaFiles = queue.config.includeOriginalMedia
-            ? allItems.flatMap((item) => item.originalMediaFiles)
+            ? this.filterSummaryCardRenderedFiles(
+                  allItems.flatMap((item) => item.originalMediaFiles),
+                  queue.config,
+                  mediaUsage,
+              )
             : []
         const mediaFiles = [...cardResult.cardMediaFiles, ...originalMediaFiles]
         const hasRenderedCard = cardResult.cardMediaFiles.length > 0
         const sendText = title
+        const articleKeys = allItems.map((item) => articleKey(item.article)).sort((a, b) => a.localeCompare(b))
+        const syntheticKey = `${queue.routeKey}:${queue.windowId || 'immediate'}:${articleKeys.join('|')}`
+        const outboundIdempotencyKey = syntheticOutboundKey(queue.target.id, 'summary_card', syntheticKey)
+        const outboundPayloadHash = payloadHash({
+            routeKey: queue.routeKey,
+            targetId: queue.target.id,
+            taskKind: 'summary_card',
+            text: sendText,
+            articleKeys,
+            media: mediaFiles,
+            extra: {
+                reason,
+                windowId: queue.windowId || null,
+                groupCount: groups.length,
+            },
+        })
         if (!hasRenderedCard) {
             this.log?.warn(
                 `Message pack card render produced no card media; sending compact title fallback to ${queue.target.id}`,
@@ -1762,7 +2281,36 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         try {
-            await queue.target.send(sendText, {
+            const outbound = await DB.OutboundMessage.claim({
+                idempotency_key: outboundIdempotencyKey,
+                route_key: queue.routeKey,
+                target_id: queue.target.id,
+                target_platform: queue.target.NAME,
+                task_kind: 'summary_card',
+                synthetic_key: syntheticKey,
+                payload_hash: outboundPayloadHash,
+            })
+            if (!outbound.claimed) {
+                this.log?.debug(
+                    `Summary-card outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible send`,
+                )
+                if (['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)) {
+                    this.summaryCardLastSentAt.set(
+                        this.getSummaryCardQueueKey(queue.target.id, queue.runtime_config, queue.config),
+                        now,
+                    )
+                    if (queue.windowId) {
+                        await DB.AggregationWindow.updateStatus(queue.windowId, 'completed', {
+                            payload_hash: outboundPayloadHash,
+                        }).catch(() => undefined)
+                    }
+                    return true
+                }
+                return false
+            }
+
+            await DB.OutboundMessage.markSending(outboundIdempotencyKey)
+            const providerResult = await queue.target.send(sendText, {
                 media: mediaFiles,
                 cardMedia: cardResult.cardMediaFiles,
                 contentMedia: originalMediaFiles,
@@ -1771,6 +2319,20 @@ class ForwarderPools extends BaseCompatibleModel {
                 article: summaryArticle,
                 forceSend: true,
             })
+            await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
+            await DB.TargetHealth.mark({
+                target_id: queue.target.id,
+                provider: queue.target.NAME,
+                status: 'ok',
+                last_send_status: 'sent',
+                last_provider_code: providerCode(providerResult),
+                details: summarizeProviderResult(providerResult),
+            })
+            if (queue.windowId) {
+                await DB.AggregationWindow.updateStatus(queue.windowId, 'completed', {
+                    payload_hash: outboundPayloadHash,
+                }).catch(() => undefined)
+            }
             this.summaryCardLastSentAt.set(
                 this.getSummaryCardQueueKey(queue.target.id, queue.runtime_config, queue.config),
                 now,
@@ -1781,6 +2343,46 @@ class ForwarderPools extends BaseCompatibleModel {
             return true
         } catch (error) {
             this.log?.error(`Failed to send message pack card to ${queue.target.id}: ${error}`)
+            if (error instanceof PartialForwarderSendError) {
+                await DB.OutboundMessage.markPartial(
+                    outboundIdempotencyKey,
+                    summarizeProviderResult(error.partialResults),
+                    error,
+                ).catch(() => undefined)
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'degraded',
+                    last_send_status: 'partial',
+                    last_provider_code: providerCode(error.partialResults),
+                    disabled_reason: error.message,
+                    details: summarizeProviderResult(error.partialResults),
+                }).catch(() => undefined)
+                if (queue.windowId) {
+                    await DB.AggregationWindow.updateStatus(queue.windowId, 'completed', {
+                        payload_hash: outboundPayloadHash,
+                    }).catch(() => undefined)
+                }
+                return true
+            }
+            await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+            await DB.TargetHealth.mark({
+                target_id: queue.target.id,
+                provider: queue.target.NAME,
+                status: 'error',
+                last_send_status: 'failed',
+                disabled_reason: error instanceof Error ? error.message : String(error),
+                details: {
+                    route_key: queue.routeKey,
+                    task_kind: 'summary_card',
+                    article_keys: articleKeys,
+                },
+            }).catch(() => undefined)
+            if (queue.windowId) {
+                await DB.AggregationWindow.updateStatus(queue.windowId, 'failed', {
+                    payload_hash: outboundPayloadHash,
+                }).catch(() => undefined)
+            }
             return false
         } finally {
             this.renderService.cleanup(cardResult.mediaFiles)
@@ -1800,13 +2402,17 @@ class ForwarderPools extends BaseCompatibleModel {
                 const sectionTitle =
                     group.kind === 'storm'
                         ? `【${index + 1}. 话题串】${group.label}`
-                        : `【${index + 1}. 消息串】${this.formatSummaryCardRange(group.items.map((item) => item.article))}`
+                        : `【${index + 1}. 消息串】${this.formatSummaryCardRangeForQueue(
+                              queue,
+                              group.items.map((item) => item.article),
+                          )}`
                 return [sectionTitle, await this.buildSummaryCardContent(queue, group.kind, group.items)].join('\n')
             }),
         )
 
         return [
-            `【聚合】${this.formatSummaryCardRange(
+            `【聚合】${this.formatSummaryCardRangeForQueue(
+                queue,
                 allItems.map((item) => item.article),
                 { spaced: true },
             )}`,
@@ -1845,58 +2451,60 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private async buildSummaryCardRenderMeta(queue: SummaryCardQueue, groups: SummaryCardGroup[]) {
+    private async buildSummaryCardRenderMeta(
+        queue: SummaryCardQueue,
+        groups: SummaryCardGroup[],
+        mediaUsage?: SummaryCardMediaUsage,
+    ) {
         const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
         const allItems = sortedGroups.flatMap((group) => group.items)
+        const groupMetas: Array<Record<string, unknown>> = []
+        for (const [index, group] of sortedGroups.entries()) {
+            const shown = group.items.slice(0, queue.config.maxItems)
+            const tags =
+                group.kind === 'storm' ? uniquePreserveOrder(group.items.flatMap((item) => item.digestTags)) : []
+            const title =
+                group.kind === 'storm'
+                    ? `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}话题串 ${group.label}`.trim()
+                    : `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}消息串 ${this.formatSummaryCardRangeForQueue(
+                          queue,
+                          group.items.map((item) => item.article),
+                      )}`.trim()
+            const avatars = this.collectSummaryCardGroupAvatars(group.items)
+            const itemMetas: Array<Record<string, unknown>> = []
+            for (const [itemIndex, item] of shown.entries()) {
+                const nonStormTags =
+                    group.kind === 'storm'
+                        ? extractArticleHashtags(item.article).filter(
+                              (tag) =>
+                                  !tags.some(
+                                      (stormTag) => normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag),
+                                  ),
+                          )
+                        : []
+                const media = this.buildSummaryCardItemMedia(item, 4, queue.config, mediaUsage)
+                itemMetas.push({
+                    index: itemIndex + 1,
+                    text: await this.buildSummaryCardItemText(queue, item.article, nonStormTags),
+                    avatar: this.buildSummaryCardAvatar(item.article),
+                    media,
+                    mediaLabel: media.length > 0 ? `#${itemIndex + 1} 图集` : undefined,
+                })
+            }
+            groupMetas.push({
+                kind: group.kind,
+                label: group.label,
+                title,
+                range: this.formatSummaryCardRangeForQueue(queue, group.items.map((item) => item.article)),
+                omitted: Math.max(0, group.items.length - shown.length),
+                avatars,
+                items: itemMetas,
+            })
+        }
         return {
             total: allItems.length,
-            range: this.formatSummaryCardRange(allItems.map((item) => item.article)),
-            groups: await Promise.all(
-                sortedGroups.map(async (group, index) => {
-                    const shown = group.items.slice(0, queue.config.maxItems)
-                    const tags =
-                        group.kind === 'storm'
-                            ? uniquePreserveOrder(group.items.flatMap((item) => item.digestTags))
-                            : []
-                    const title =
-                        group.kind === 'storm'
-                            ? `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}话题串 ${group.label}`.trim()
-                            : `${sortedGroups.length > 1 ? `${index + 1}. ` : ''}消息串 ${this.formatSummaryCardRange(
-                                  group.items.map((item) => item.article),
-                              )}`.trim()
-                    const avatars = this.collectSummaryCardGroupAvatars(group.items)
-                    return {
-                        kind: group.kind,
-                        label: group.label,
-                        title,
-                        range: this.formatSummaryCardRange(group.items.map((item) => item.article)),
-                        omitted: Math.max(0, group.items.length - shown.length),
-                        avatars,
-                        items: await Promise.all(
-                            shown.map(async (item, itemIndex) => {
-                                const nonStormTags =
-                                    group.kind === 'storm'
-                                        ? extractArticleHashtags(item.article).filter(
-                                              (tag) =>
-                                                  !tags.some(
-                                                      (stormTag) =>
-                                                          normalizeHashtagKey(stormTag) === normalizeHashtagKey(tag),
-                                                  ),
-                                          )
-                                        : []
-                                const media = this.buildSummaryCardItemMedia(item)
-                                return {
-                                    index: itemIndex + 1,
-                                    text: await this.buildSummaryCardItemText(queue, item.article, nonStormTags),
-                                    avatar: this.buildSummaryCardAvatar(item.article),
-                                    media,
-                                    mediaLabel: media.length > 0 ? `#${itemIndex + 1} 图集` : undefined,
-                                }
-                            }),
-                        ),
-                    }
-                }),
-            ),
+            range: this.formatSummaryCardRangeForQueue(queue, allItems.map((item) => item.article)),
+            groups: groupMetas,
         }
     }
 
@@ -1932,9 +2540,63 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private buildSummaryCardEmbeddedMedia(items: SummaryCardQueueItem[]): NonNullable<Article['media']> {
+    private shouldUseSummaryCardMediaKeys(
+        keys: string[],
+        config?: ResolvedSummaryCardConfig,
+        mediaUsage?: SummaryCardMediaUsage,
+    ) {
+        const normalizedKeys = uniquePreserveOrder(keys.filter(Boolean))
+        if (normalizedKeys.length === 0) {
+            return true
+        }
+        if (!config?.mediaDuplicateLimit || !mediaUsage) {
+            return true
+        }
+        if (normalizedKeys.some((key) => (mediaUsage.get(key) || 0) >= config.mediaDuplicateLimit!)) {
+            return false
+        }
+        for (const key of normalizedKeys) {
+            mediaUsage.set(key, (mediaUsage.get(key) || 0) + 1)
+        }
+        return true
+    }
+
+    private filterSummaryCardRenderedFiles(
+        files: Array<RenderResult['originalMediaFiles'][number]>,
+        config?: ResolvedSummaryCardConfig,
+        mediaUsage?: SummaryCardMediaUsage,
+        options: { renderableOnly?: boolean } = {},
+    ) {
+        const seen = new Set<string>()
+        return files.filter((file) => {
+            if (options.renderableOnly && file.media_type !== 'photo' && file.media_type !== 'video_thumbnail') {
+                return false
+            }
+            const keys = this.buildRenderedMediaIdentityKeys(file)
+            if (options.renderableOnly && keys.length > 0) {
+                if (keys.some((key) => seen.has(key))) {
+                    return false
+                }
+                for (const key of keys) {
+                    seen.add(key)
+                }
+            }
+            return this.shouldUseSummaryCardMediaKeys(keys, config, mediaUsage)
+        })
+    }
+
+    private buildSummaryCardEmbeddedMedia(
+        items: SummaryCardQueueItem[],
+        config?: ResolvedSummaryCardConfig,
+        mediaUsage?: SummaryCardMediaUsage,
+    ): NonNullable<Article['media']> {
         const fromRenderedFiles = this.renderService.buildCardMediaFromRenderedFiles(
-            items.flatMap((item) => item.cardSourceMediaFiles),
+            this.filterSummaryCardRenderedFiles(
+                items.flatMap((item) => item.cardSourceMediaFiles),
+                config,
+                mediaUsage,
+                { renderableOnly: true },
+            ),
             DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA,
         )
         if (fromRenderedFiles.length > 0) {
@@ -1944,10 +2606,17 @@ class ForwarderPools extends BaseCompatibleModel {
         return this.collectSummaryArticleMedia(
             items.map((item) => item.article),
             DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA,
+            config,
+            mediaUsage,
         )
     }
 
-    private collectSummaryArticleMedia(articles: ArticleWithId[], maxItems: number): NonNullable<Article['media']> {
+    private collectSummaryArticleMedia(
+        articles: ArticleWithId[],
+        maxItems: number,
+        config?: ResolvedSummaryCardConfig,
+        mediaUsage?: SummaryCardMediaUsage,
+    ): NonNullable<Article['media']> {
         const result: NonNullable<Article['media']> = []
         const seen = new Set<string>()
         const visit = (article?: ArticleWithId | Article | null) => {
@@ -1961,11 +2630,16 @@ class ForwarderPools extends BaseCompatibleModel {
                 if (media.type !== 'photo' && media.type !== 'video_thumbnail') {
                     continue
                 }
-                const key = media.url || JSON.stringify(media)
-                if (seen.has(key)) {
+                const keys = uniquePreserveOrder([media.url, JSON.stringify(media)].filter(Boolean))
+                if (keys.some((key) => seen.has(key))) {
                     continue
                 }
-                seen.add(key)
+                if (!this.shouldUseSummaryCardMediaKeys(keys, config, mediaUsage)) {
+                    continue
+                }
+                for (const key of keys) {
+                    seen.add(key)
+                }
                 result.push(cloneDeep(media))
             }
             if (article.ref && typeof article.ref === 'object') {
@@ -1979,15 +2653,20 @@ class ForwarderPools extends BaseCompatibleModel {
         return result
     }
 
-    private buildSummaryCardItemMedia(item: SummaryCardQueueItem, maxItems: number = 4): NonNullable<Article['media']> {
+    private buildSummaryCardItemMedia(
+        item: SummaryCardQueueItem,
+        maxItems: number = 4,
+        config?: ResolvedSummaryCardConfig,
+        mediaUsage?: SummaryCardMediaUsage,
+    ): NonNullable<Article['media']> {
         const fromRenderedFiles = this.renderService.buildCardMediaFromRenderedFiles(
-            item.cardSourceMediaFiles,
+            this.filterSummaryCardRenderedFiles(item.cardSourceMediaFiles, config, mediaUsage, { renderableOnly: true }),
             maxItems,
         )
         if (fromRenderedFiles.length > 0) {
             return fromRenderedFiles
         }
-        return this.collectSummaryArticleMedia([item.article], maxItems)
+        return this.collectSummaryArticleMedia([item.article], maxItems, config, mediaUsage)
     }
 
     private countSummaryCardItemMedia(item: SummaryCardQueueItem) {
@@ -2075,7 +2754,10 @@ class ForwarderPools extends BaseCompatibleModel {
             }
             return [
                 `【话题聚合】${tags.join(' ')} / ${items.length} 条`,
-                `范围: ${this.formatSummaryCardTimeRange(items.map((item) => item.article))}`,
+                `范围: ${this.formatSummaryCardTimeRangeForQueue(
+                    queue,
+                    items.map((item) => item.article),
+                )}`,
                 ...lines,
             ].join('\n\n')
         }
@@ -2099,7 +2781,8 @@ class ForwarderPools extends BaseCompatibleModel {
             lines.push(`另有 ${omitted} 条更新已合并`)
         }
         return [
-            `【聚合】${this.formatSummaryCardRange(
+            `【聚合】${this.formatSummaryCardRangeForQueue(
+                queue,
                 items.map((item) => item.article),
                 { spaced: true },
             )}`,
@@ -2117,10 +2800,33 @@ class ForwarderPools extends BaseCompatibleModel {
         return start === end ? start : `${start}-${end}`
     }
 
+    private formatSummaryCardWindowTimeRange(queue: SummaryCardQueue) {
+        if (queue.config.windowAlignment === 'none' || !queue.windowStart || !queue.windowEnd) {
+            return null
+        }
+        const start = dayjs.unix(queue.windowStart).format('HHmm')
+        const end = dayjs.unix(queue.windowEnd).format('HHmm')
+        return start === end ? start : `${start}～${end}`
+    }
+
+    private formatSummaryCardTimeRangeForQueue(queue: SummaryCardQueue, articles: ArticleWithId[]) {
+        return this.formatSummaryCardWindowTimeRange(queue) || this.formatSummaryCardTimeRange(articles)
+    }
+
     private formatSummaryCardRange(articles: ArticleWithId[], options: { spaced?: boolean } = {}) {
         const count = articles.length
         const countLabel = options.spaced ? `${count} 条` : `${count}条`
         return `${countLabel} / ${this.formatSummaryCardTimeRange(articles)}`
+    }
+
+    private formatSummaryCardRangeForQueue(
+        queue: SummaryCardQueue,
+        articles: ArticleWithId[],
+        options: { spaced?: boolean } = {},
+    ) {
+        const count = articles.length
+        const countLabel = options.spaced ? `${count} 条` : `${count}条`
+        return `${countLabel} / ${this.formatSummaryCardTimeRangeForQueue(queue, articles)}`
     }
 
     private getArticleThreadRoot(article?: ArticleWithId | Article | null): ArticleWithId | Article | null {
@@ -2236,6 +2942,7 @@ class ForwarderPools extends BaseCompatibleModel {
         log: Logger | undefined,
         articlesForwarders: Array<ArticleForwarderDispatch>,
         options?: { forceSend?: boolean },
+        context?: { routeKey?: string },
     ) {
         if (options?.forceSend) {
             return articlesForwarders
@@ -2246,6 +2953,7 @@ class ForwarderPools extends BaseCompatibleModel {
             {
                 target: BaseForwarder
                 runtime_config?: ForwardTargetPlatformCommonConfig
+                routeKey: string
                 articles: Array<ArticleWithId>
             }
         >()
@@ -2266,6 +2974,10 @@ class ForwarderPools extends BaseCompatibleModel {
                 const existing = byTarget.get(target.id) || {
                     target,
                     runtime_config,
+                    routeKey: targetRouteKey(
+                        context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
+                        target.id,
+                    ),
                     articles: [],
                 }
                 existing.articles.push(article)
@@ -2319,6 +3031,7 @@ class ForwarderPools extends BaseCompatibleModel {
         group: {
             target: BaseForwarder
             runtime_config?: ForwardTargetPlatformCommonConfig
+            routeKey: string
             articles: Array<ArticleWithId>
         },
         articles: Array<ArticleWithId>,
@@ -2342,10 +3055,54 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const digestText = this.buildDispatchDigestText(targetId, claimedArticles, config, options)
+        const articleKeys = claimedArticles.map((article) => articleKey(article)).sort((a, b) => a.localeCompare(b))
+        const taskKind = options?.tag ? 'tag_digest' : 'digest'
+        const syntheticKey = `${group.routeKey}:${options?.tag || 'all'}:${articleKeys.join('|')}`
+        const outboundIdempotencyKey = syntheticOutboundKey(targetId, taskKind, syntheticKey)
+        const outboundPayloadHash = payloadHash({
+            routeKey: group.routeKey,
+            targetId,
+            taskKind,
+            text: digestText,
+            articleKeys,
+            extra: {
+                tag: options?.tag || null,
+            },
+        })
         try {
-            await group.target.send(digestText, {
+            const outbound = await DB.OutboundMessage.claim({
+                idempotency_key: outboundIdempotencyKey,
+                route_key: group.routeKey,
+                target_id: targetId,
+                target_platform: group.target.NAME,
+                task_kind: taskKind,
+                synthetic_key: syntheticKey,
+                payload_hash: outboundPayloadHash,
+            })
+            if (!outbound.claimed) {
+                log?.debug(`Digest outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping send`)
+                if (['sent', 'partial', 'failed_after_partial'].includes(outbound.record.status)) {
+                    return claimedArticles.map((article) => article.id)
+                }
+                for (const article of claimedArticles) {
+                    await this.releaseArticleChain(article, article.platform, targetId)
+                }
+                return []
+            }
+
+            await DB.OutboundMessage.markSending(outboundIdempotencyKey)
+            const providerResult = await group.target.send(digestText, {
                 timestamp: Math.floor(Date.now() / 1000),
                 runtime_config: group.runtime_config,
+            })
+            await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
+            await DB.TargetHealth.mark({
+                target_id: targetId,
+                provider: group.target.NAME,
+                status: 'ok',
+                last_send_status: 'sent',
+                last_provider_code: providerCode(providerResult),
+                details: summarizeProviderResult(providerResult),
             })
             log?.info(
                 `Sent ${options?.tag ? `${options.tag} tag ` : ''}digest for ${claimedArticles.length} articles to ${targetId}`,
@@ -2353,6 +3110,36 @@ class ForwarderPools extends BaseCompatibleModel {
             return claimedArticles.map((article) => article.id)
         } catch (error) {
             log?.error(`Failed to send digest to ${targetId}: ${error}`)
+            if (error instanceof PartialForwarderSendError) {
+                await DB.OutboundMessage.markPartial(
+                    outboundIdempotencyKey,
+                    summarizeProviderResult(error.partialResults),
+                    error,
+                ).catch(() => undefined)
+                await DB.TargetHealth.mark({
+                    target_id: targetId,
+                    provider: group.target.NAME,
+                    status: 'degraded',
+                    last_send_status: 'partial',
+                    last_provider_code: providerCode(error.partialResults),
+                    disabled_reason: error.message,
+                    details: summarizeProviderResult(error.partialResults),
+                }).catch(() => undefined)
+                return claimedArticles.map((article) => article.id)
+            }
+            await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+            await DB.TargetHealth.mark({
+                target_id: targetId,
+                provider: group.target.NAME,
+                status: 'error',
+                last_send_status: 'failed',
+                disabled_reason: error instanceof Error ? error.message : String(error),
+                details: {
+                    route_key: group.routeKey,
+                    task_kind: taskKind,
+                    article_keys: articleKeys,
+                },
+            }).catch(() => undefined)
             for (const article of claimedArticles) {
                 await this.releaseArticleChain(article, article.platform, targetId)
             }

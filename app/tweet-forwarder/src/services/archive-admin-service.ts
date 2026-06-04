@@ -281,7 +281,9 @@ function splitEnvPaths(value?: string) {
 }
 
 function isTruthyFlag(value: unknown) {
-    const normalized = String(value || '').trim().toLowerCase()
+    const normalized = String(value || '')
+        .trim()
+        .toLowerCase()
     return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
 }
 
@@ -323,7 +325,10 @@ function resolveWinRemotePath() {
             path.resolve(root, '..', 'windows-remote-executor', 'bin', 'win-remote'),
         ]),
     ]
-    return uniqueStrings(candidates).find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) || null
+    return (
+        uniqueStrings(candidates).find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) ||
+        null
+    )
 }
 
 function normalizeUrlPrefix(value: string) {
@@ -339,19 +344,23 @@ function parseRequestHeaders(rawValue?: string) {
         rawValue,
         process.env.STREAMSERV_REMOTE_ARCHIVE_HEADER,
         process.env.WAF_BYPASS_HEADER,
-        'x-bypass-waf: N2NJ_SUPER_SECRET_PASS_2026_7684',
     ])
 
     return values
-        .flatMap((value) => value.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean))
+        .flatMap((value) =>
+            value
+                .split(/\r?\n/)
+                .map((entry) => entry.trim())
+                .filter(Boolean),
+        )
         .filter((entry) => entry.includes(':'))
 }
 
 function resolveRemoteArchiveHttpConfig(): RemoteArchiveHttpConfig | null {
     const baseUrl = normalizeUrlPrefix(
-        process.env.STREAMSERV_REMOTE_ARCHIVE_BASE_URL
-        || process.env.STREAMSERV_REMOTE_ARCHIVE_URL
-        || 'http://100.119.106.8:22781/archive-admin/',
+        process.env.STREAMSERV_REMOTE_ARCHIVE_BASE_URL ||
+            process.env.STREAMSERV_REMOTE_ARCHIVE_URL ||
+            'http://100.119.106.8:22781/archive-admin/',
     )
     if (!baseUrl) {
         return null
@@ -372,12 +381,16 @@ function resolveRemoteArchiveHttpConfig(): RemoteArchiveHttpConfig | null {
 }
 
 function resolveRemoteArchiveConfig(): RemoteArchiveConfig | null {
-    const disabled = String(process.env.STREAMSERV_ENABLE_REMOTE_ARCHIVES || '').trim().toLowerCase()
+    const disabled = String(process.env.STREAMSERV_ENABLE_REMOTE_ARCHIVES || '')
+        .trim()
+        .toLowerCase()
     if (disabled === '0' || disabled === 'false' || disabled === 'no' || disabled === 'off') {
         return null
     }
 
-    const preferredMode = String(process.env.STREAMSERV_REMOTE_ARCHIVE_MODE || '').trim().toLowerCase()
+    const preferredMode = String(process.env.STREAMSERV_REMOTE_ARCHIVE_MODE || '')
+        .trim()
+        .toLowerCase()
     const httpConfig = resolveRemoteArchiveHttpConfig()
     if (httpConfig && preferredMode !== 'win-remote') {
         return httpConfig
@@ -397,7 +410,11 @@ function resolveRemoteArchiveConfig(): RemoteArchiveConfig | null {
     }
 }
 
-function runRemoteCurl(remote: RemoteArchiveHttpConfig, extraArgs: Array<string>, options?: { encoding?: BufferEncoding }) {
+function runRemoteCurl(
+    remote: RemoteArchiveHttpConfig,
+    extraArgs: Array<string>,
+    options?: { encoding?: BufferEncoding },
+) {
     const args = ['-fsSL', '--retry', '2', '--connect-timeout', '5', '--max-time', '300']
     for (const header of remote.requestHeaders) {
         args.push('-H', header)
@@ -410,22 +427,19 @@ function runRemoteCurl(remote: RemoteArchiveHttpConfig, extraArgs: Array<string>
 }
 
 function runWinRemoteExec(remote: RemoteArchiveWinRemoteConfig, script: string) {
-    return execFileSync(
-        remote.winRemotePath,
-        ['exec', remote.target, '--stdin'],
-        {
-            input: script,
-            encoding: 'utf8',
-            stdio: ['pipe', 'pipe', 'pipe'],
-        },
-    )
+    return execFileSync(remote.winRemotePath, ['exec', remote.target, '--stdin'], {
+        input: script,
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+    })
 }
 
 function tryParseRemoteJson<T>(remote: RemoteArchiveConfig, source: string): T | null {
     try {
-        const output = remote.mode === 'http'
-            ? String(runRemoteCurl(remote, [source], { encoding: 'utf8' })).trim()
-            : runWinRemoteExec(remote, source).trim()
+        const output =
+            remote.mode === 'http'
+                ? String(runRemoteCurl(remote, [source], { encoding: 'utf8' })).trim()
+                : runWinRemoteExec(remote, source).trim()
         if (!output) {
             return null
         }
@@ -470,10 +484,7 @@ function resolveCacheRootCandidates() {
         ...splitEnvPaths(process.env.STREAMSERV_CACHE_ROOTS),
         ...splitEnvPaths(process.env.STREAMSERV_CACHE_DIR),
         path.join(CACHE_DIR_ROOT, 'media'),
-        ...streamServDirs.flatMap((dir) => [
-            path.join(dir, 'D:/StreamServ/cache'),
-            path.join(dir, 'cache'),
-        ]),
+        ...streamServDirs.flatMap((dir) => [path.join(dir, 'D:/StreamServ/cache'), path.join(dir, 'cache')]),
     ]
     return existingDirectories(candidates)
 }
@@ -490,7 +501,9 @@ function choosePrimaryRelayMedia(sessionDir: string) {
     const entries = fs
         .readdirSync(sessionDir)
         .map((name) => path.join(sessionDir, name))
-        .filter((filePath) => fs.existsSync(filePath) && fs.statSync(filePath).isFile() && isSupportedMediaFile(filePath))
+        .filter(
+            (filePath) => fs.existsSync(filePath) && fs.statSync(filePath).isFile() && isSupportedMediaFile(filePath),
+        )
         .sort((left, right) => {
             const leftBase = path.basename(left).toLowerCase()
             const rightBase = path.basename(right).toLowerCase()
@@ -557,7 +570,9 @@ function walkRecordingFiles(dirPath: string, depth: number, maxDepth: number, co
 }
 
 function shouldIncludeCacheArchives() {
-    const raw = String(process.env.STREAMSERV_INCLUDE_CACHE_ARCHIVES || '').trim().toLowerCase()
+    const raw = String(process.env.STREAMSERV_INCLUDE_CACHE_ARCHIVES || '')
+        .trim()
+        .toLowerCase()
     return raw === '1' || raw === 'true' || raw === 'yes'
 }
 
@@ -590,7 +605,12 @@ function createArchiveItemFromManifest(filePath: string) {
 
     const mediaPath = path.resolve(String(payload.mediaPath || payload.localPath || ''))
     const containerPath = path.resolve(String(payload.containerPath || path.dirname(mediaPath)))
-    if (!mediaPath || !fs.existsSync(mediaPath) || !fs.statSync(mediaPath).isFile() || !isSupportedMediaFile(mediaPath)) {
+    if (
+        !mediaPath ||
+        !fs.existsSync(mediaPath) ||
+        !fs.statSync(mediaPath).isFile() ||
+        !isSupportedMediaFile(mediaPath)
+    ) {
         return null
     }
 
@@ -600,7 +620,9 @@ function createArchiveItemFromManifest(filePath: string) {
     const title = sanitizeSegment(String(payload.title || path.basename(mediaPath, path.extname(mediaPath))), fileName)
 
     return {
-        id: String(payload.id || createArchiveId((payload.kind || 'recording') as ArchiveKind, containerPath, mediaPath)),
+        id: String(
+            payload.id || createArchiveId((payload.kind || 'recording') as ArchiveKind, containerPath, mediaPath),
+        ),
         kind: (payload.kind || 'recording') as ArchiveKind,
         title,
         fileName,
@@ -631,12 +653,14 @@ function createRemoteArchiveItemFromManifest(
 
     const mediaRelativePath = String(payload.mediaRelativePath || '').trim()
     const manifestRelativePath = String(payload.manifestRelativePath || '').trim()
-    const mediaUrl = remote.mode === 'http' && mediaRelativePath
-        ? new URL(mediaRelativePath.replace(/^\/+/, ''), remote.filesBaseUrl).toString()
-        : null
-    const manifestUrl = remote.mode === 'http' && manifestRelativePath
-        ? new URL(manifestRelativePath.replace(/^\/+/, ''), remote.filesBaseUrl).toString()
-        : null
+    const mediaUrl =
+        remote.mode === 'http' && mediaRelativePath
+            ? new URL(mediaRelativePath.replace(/^\/+/, ''), remote.filesBaseUrl).toString()
+            : null
+    const manifestUrl =
+        remote.mode === 'http' && manifestRelativePath
+            ? new URL(manifestRelativePath.replace(/^\/+/, ''), remote.filesBaseUrl).toString()
+            : null
     if (remote.mode === 'http' && !mediaUrl) {
         return null
     }
@@ -644,7 +668,10 @@ function createRemoteArchiveItemFromManifest(
     return {
         id: String(payload.id || hashText(`${payload.kind || 'recording'}\n${containerPath}\n${mediaPath}`)),
         kind: (payload.kind || 'recording') as ArchiveKind,
-        title: sanitizeSegment(String(payload.title || path.basename(mediaPath, path.extname(mediaPath))), path.basename(mediaPath)),
+        title: sanitizeSegment(
+            String(payload.title || path.basename(mediaPath, path.extname(mediaPath))),
+            path.basename(mediaPath),
+        ),
         fileName: String(payload.fileName || path.basename(mediaPath)),
         fileExtension: String(payload.fileExtension || normalizeExtension(mediaPath)),
         mediaPath,
@@ -686,7 +713,9 @@ function scanRemoteArchiveManifestRoot() {
         >(remote, remote.indexUrl)
         const records = Array.isArray(raw) ? raw : normalizeJsonArray(raw?.items)
         return records
-            .map((payload) => createRemoteArchiveItemFromManifest(payload, remote, String(payload.manifestPath || '').trim()))
+            .map((payload) =>
+                createRemoteArchiveItemFromManifest(payload, remote, String(payload.manifestPath || '').trim()),
+            )
             .filter((item): item is ResolvedArchiveItem => Boolean(item))
     }
 
@@ -697,9 +726,9 @@ function scanRemoteArchiveManifestRoot() {
         '$records = @()',
         "Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ieq 'archive-entry.json' -or $_.Name -like '*.archive.json' } | ForEach-Object {",
         '  try {',
-        "    $payload = Get-Content -Path $_.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop",
+        '    $payload = Get-Content -Path $_.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop',
         '    if ($null -ne $payload -and $payload.visible -ne $false) {',
-        "      $records += [pscustomobject]@{ manifestPath = $_.FullName; payload = $payload }",
+        '      $records += [pscustomobject]@{ manifestPath = $_.FullName; payload = $payload }',
         '    }',
         '  } catch { }',
         '}',
@@ -707,7 +736,8 @@ function scanRemoteArchiveManifestRoot() {
     ].join('\n')
 
     const raw = tryParseRemoteJson<
-        Array<{ manifestPath?: string; payload?: RemoteArchiveManifestRecord }> | { manifestPath?: string; payload?: RemoteArchiveManifestRecord }
+        | Array<{ manifestPath?: string; payload?: RemoteArchiveManifestRecord }>
+        | { manifestPath?: string; payload?: RemoteArchiveManifestRecord }
     >(remote, script)
     return normalizeJsonArray(raw)
         .map((entry) =>
@@ -898,15 +928,18 @@ function getResolvedArchives(force = false) {
     const archiveRoots = resolveArchiveRootCandidates()
     const manifestScans = archiveRoots.map((rootDir) => scanArchiveManifestRoot(rootDir))
     const manifestCount = manifestScans.reduce((sum, scan) => sum + scan.manifestCount, 0)
-    const archiveItems = manifestCount > 0
-        ? manifestScans.flatMap((scan) => scan.items)
-        : archiveRoots.flatMap((rootDir) => scanArchiveRoot(rootDir))
+    const archiveItems =
+        manifestCount > 0
+            ? manifestScans.flatMap((scan) => scan.items)
+            : archiveRoots.flatMap((rootDir) => scanArchiveRoot(rootDir))
     const remoteArchiveItems = scanRemoteArchiveManifestRoot()
 
     const items = [
         ...archiveItems,
         ...remoteArchiveItems,
-        ...(shouldIncludeCacheArchives() ? resolveCacheRootCandidates().flatMap((rootDir) => scanCacheRoot(rootDir)) : []),
+        ...(shouldIncludeCacheArchives()
+            ? resolveCacheRootCandidates().flatMap((rootDir) => scanCacheRoot(rootDir))
+            : []),
     ]
         .filter((item, index, arr) => arr.findIndex((entry) => entry.id === item.id) === index)
         .sort((left, right) => new Date(right.modifiedAt).getTime() - new Date(left.modifiedAt).getTime())
@@ -976,7 +1009,9 @@ function probeMediaDetails(filePath: string) {
             streams?: Array<{ codec_type?: string; avg_frame_rate?: string; r_frame_rate?: string }>
         }>(output)
         const duration = Number(payload?.format?.duration || 0)
-        const videoStream = (payload?.streams || []).find((stream) => String(stream.codec_type || '').toLowerCase() === 'video')
+        const videoStream = (payload?.streams || []).find(
+            (stream) => String(stream.codec_type || '').toLowerCase() === 'video',
+        )
         const frameRate = parseFrameRate(videoStream?.avg_frame_rate) || parseFrameRate(videoStream?.r_frame_rate)
         return {
             durationSeconds: Number.isFinite(duration) && duration > 0 ? duration : null,
@@ -1024,7 +1059,8 @@ function resolveAdminUploadTarget(config: AppConfig) {
         (entry) => String(entry.platform) === ForwardTargetPlatformEnum.Bilibili,
     ) as ForwardTarget<ForwardTargetPlatformEnum.Bilibili> | undefined
 
-    const platformConfig = (target?.cfg_platform || {}) as ForwardTarget<ForwardTargetPlatformEnum.Bilibili>['cfg_platform']
+    const platformConfig = (target?.cfg_platform ||
+        {}) as ForwardTarget<ForwardTargetPlatformEnum.Bilibili>['cfg_platform']
     const uploadConfig = resolveVideoUploadConfig({
         enabled: true,
         ...(platformConfig.video_upload || {}),
@@ -1141,7 +1177,9 @@ function parseNetscapeCookieFile(cookiePath: string) {
 
 function buildCookieDocumentFromNetscape(cookiePath: string) {
     const cookies = parseNetscapeCookieFile(cookiePath).filter((cookie) => {
-        const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase()
+        const domain = String(cookie.domain || '')
+            .replace(/^\./, '')
+            .toLowerCase()
         return domain.endsWith('bilibili.com') || domain.endsWith('hdslb.com') || domain.endsWith('bilivideo.com')
     })
 
@@ -1200,13 +1238,17 @@ async function loadCookieDocument(
         try {
             await runBrowserCookieSync(uploadTarget.uploadConfig, log)
         } catch (error) {
-            log?.warn(`Archive upload browser cookie sync failed: ${error instanceof Error ? error.message : String(error)}`)
+            log?.warn(
+                `Archive upload browser cookie sync failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
         }
     }
 
     if (uploadTarget.uploadConfig.cookie_file && fs.existsSync(uploadTarget.uploadConfig.cookie_file)) {
         return {
-            document: normalizeBiliupCookieDocument(JSON.parse(fs.readFileSync(uploadTarget.uploadConfig.cookie_file, 'utf8'))),
+            document: normalizeBiliupCookieDocument(
+                JSON.parse(fs.readFileSync(uploadTarget.uploadConfig.cookie_file, 'utf8')),
+            ),
             sourcePath: uploadTarget.uploadConfig.cookie_file,
         }
     }
@@ -1291,7 +1333,12 @@ function ensureWaveformImage(item: ResolvedArchiveItem, config: AppConfig) {
     return cachePath
 }
 
-function buildFrameTimes(durationSeconds: number | null, count: number, trimStartSeconds: number, trimEndSeconds: number) {
+function buildFrameTimes(
+    durationSeconds: number | null,
+    count: number,
+    trimStartSeconds: number,
+    trimEndSeconds: number,
+) {
     const safeCount = Math.max(1, Math.min(12, Math.floor(count || DEFAULT_FRAME_COUNT)))
     if (!durationSeconds || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
         return Array.from({ length: safeCount }, (_, index) => 2 + index * 4)
@@ -1325,12 +1372,7 @@ function normalizeExplicitFrameTimes(times: Array<number>, durationSeconds: numb
     ).sort((left, right) => left - right)
 }
 
-function collectKeyFrameTimes(
-    filePath: string,
-    rangeStartSeconds: number,
-    rangeEndSeconds: number,
-    limit = 160,
-) {
+function collectKeyFrameTimes(filePath: string, rangeStartSeconds: number, rangeEndSeconds: number, limit = 160) {
     const safeStart = Math.max(0, Number(rangeStartSeconds || 0))
     const safeEnd = Math.max(safeStart, Number(rangeEndSeconds || safeStart))
     const span = Math.max(0.25, safeEnd - safeStart)
@@ -1370,12 +1412,7 @@ function collectKeyFrameTimes(
             new Set(
                 (payload?.frames || [])
                     .map((frame) =>
-                        Number(
-                            frame.best_effort_timestamp_time
-                            || frame.pkt_pts_time
-                            || frame.pkt_dts_time
-                            || 0,
-                        ),
+                        Number(frame.best_effort_timestamp_time || frame.pkt_pts_time || frame.pkt_dts_time || 0),
                     )
                     .filter((time) => Number.isFinite(time) && time >= safeStart && time <= safeEnd)
                     .map((time) => Number(time.toFixed(6))),
@@ -1388,11 +1425,7 @@ function collectKeyFrameTimes(
     }
 }
 
-function captureFrameDataUrl(
-    filePath: string,
-    ffmpegPath: string,
-    timeSeconds: number,
-) {
+function captureFrameDataUrl(filePath: string, ffmpegPath: string, timeSeconds: number) {
     const output = execFileSync(
         ffmpegPath,
         [
@@ -1438,26 +1471,21 @@ function generateFramePreviews(
     const mediaPath = getArchiveAccessPath(item)
     const mediaDetails = probeMediaDetails(mediaPath)
     const explicitTimes = normalizeExplicitFrameTimes(options.times || [], mediaDetails.durationSeconds)
-    const times = explicitTimes.length > 0
-        ? explicitTimes
-        : buildFrameTimes(
-            mediaDetails.durationSeconds,
-            options.count,
-            options.trimStartSeconds,
-            options.trimEndSeconds,
-        )
+    const times =
+        explicitTimes.length > 0
+            ? explicitTimes
+            : buildFrameTimes(
+                  mediaDetails.durationSeconds,
+                  options.count,
+                  options.trimStartSeconds,
+                  options.trimEndSeconds,
+              )
     const keyframeRangeStart = clampTimeSeconds(
-        Number(
-            options.keyframeRangeStartSeconds
-            ?? (times.length ? times[0] : 0),
-        ),
+        Number(options.keyframeRangeStartSeconds ?? (times.length ? times[0] : 0)),
         mediaDetails.durationSeconds,
     )
     const keyframeRangeEnd = clampTimeSeconds(
-        Number(
-            options.keyframeRangeEndSeconds
-            ?? (times.length ? times[times.length - 1] : keyframeRangeStart),
-        ),
+        Number(options.keyframeRangeEndSeconds ?? (times.length ? times[times.length - 1] : keyframeRangeStart)),
         mediaDetails.durationSeconds,
     )
 
@@ -1467,33 +1495,17 @@ function generateFramePreviews(
             dataUrl: captureFrameDataUrl(mediaPath, ffmpegPath, timeSeconds),
         })),
         frameRate: mediaDetails.frameRate,
-        anchorTimeSeconds: options.anchorTimeSeconds ?? (times[Math.floor(times.length / 2)] ?? null),
+        anchorTimeSeconds: options.anchorTimeSeconds ?? times[Math.floor(times.length / 2)] ?? null,
         keyFrameTimes: options.includeKeyframes
             ? collectKeyFrameTimes(mediaPath, keyframeRangeStart, keyframeRangeEnd)
             : [],
     }
 }
 
-function extractFrameToPath(
-    filePath: string,
-    ffmpegPath: string,
-    timeSeconds: number,
-    outputPath: string,
-) {
+function extractFrameToPath(filePath: string, ffmpegPath: string, timeSeconds: number, outputPath: string) {
     execFileSync(
         ffmpegPath,
-        [
-            '-y',
-            '-ss',
-            `${Math.max(0, timeSeconds)}`,
-            '-i',
-            filePath,
-            '-frames:v',
-            '1',
-            '-q:v',
-            '2',
-            outputPath,
-        ],
+        ['-y', '-ss', `${Math.max(0, timeSeconds)}`, '-i', filePath, '-frames:v', '1', '-q:v', '2', outputPath],
         {
             stdio: ['ignore', 'ignore', 'pipe'],
         },
@@ -1516,9 +1528,10 @@ function trimArchiveMedia(
     durationSeconds: number | null,
 ) {
     const start = Math.max(0, trimStartSeconds)
-    const end = durationSeconds && durationSeconds > 0
-        ? Math.max(start + 1, durationSeconds - Math.max(0, trimEndSeconds))
-        : null
+    const end =
+        durationSeconds && durationSeconds > 0
+            ? Math.max(start + 1, durationSeconds - Math.max(0, trimEndSeconds))
+            : null
 
     if (start <= 0 && (!end || !durationSeconds || end >= durationSeconds)) {
         return {
@@ -1550,7 +1563,7 @@ function trimArchiveMedia(
                 trimmed: true,
             }
         }
-    } catch { }
+    } catch {}
 
     const reencodePath = path.join(outputDir, 'trimmed.mp4')
     const reencodeArgs = ['-y']
@@ -1561,7 +1574,19 @@ function trimArchiveMedia(
     if (end && Number.isFinite(end)) {
         reencodeArgs.push('-to', `${end}`)
     }
-    reencodeArgs.push('-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-b:a', '192k', reencodePath)
+    reencodeArgs.push(
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '20',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '192k',
+        reencodePath,
+    )
     execFileSync(ffmpegPath, reencodeArgs, {
         stdio: ['ignore', 'ignore', 'pipe'],
     })
@@ -1622,7 +1647,10 @@ function extractSubmitIdentifiers(rawOutput: string) {
     }
 
     const submitResult = (payload.submit_result || payload) as Record<string, unknown>
-    const nested = typeof submitResult.data === 'object' && submitResult.data ? (submitResult.data as Record<string, unknown>) : null
+    const nested =
+        typeof submitResult.data === 'object' && submitResult.data
+            ? (submitResult.data as Record<string, unknown>)
+            : null
     for (const candidate of [submitResult, nested].filter(Boolean) as Array<Record<string, unknown>>) {
         const aid = String(candidate.aid || candidate.avid || '').trim()
         const bvid = String(candidate.bvid || candidate.bv_id || '').trim()
@@ -1723,7 +1751,11 @@ async function runArchiveBiliupUpload(
                 resolve()
                 return
             }
-            reject(new Error(stderrChunks.join('').trim() || stdoutChunks.join('').trim() || `biliup exited with code ${code}`))
+            reject(
+                new Error(
+                    stderrChunks.join('').trim() || stdoutChunks.join('').trim() || `biliup exited with code ${code}`,
+                ),
+            )
         })
     })
 
@@ -1732,19 +1764,15 @@ async function runArchiveBiliupUpload(
 
 function listArchives(config: AppConfig, options?: { limit?: number; query?: string }) {
     const limit = Math.max(1, Math.min(300, Math.floor(options?.limit || DEFAULT_ARCHIVE_LIST_LIMIT)))
-    const query = String(options?.query || '').trim().toLowerCase()
+    const query = String(options?.query || '')
+        .trim()
+        .toLowerCase()
     const items = getResolvedArchives()
         .filter((item) => {
             if (!query) {
                 return true
             }
-            return [
-                item.title,
-                item.fileName,
-                item.localPath,
-                item.session?.page_url,
-                item.session?.source,
-            ]
+            return [item.title, item.fileName, item.localPath, item.session?.page_url, item.session?.source]
                 .filter(Boolean)
                 .some((value) => String(value).toLowerCase().includes(query))
         })
@@ -1772,19 +1800,20 @@ function getArchiveDetail(config: AppConfig, archiveId: string): ArchiveDetail {
 
 function getArchiveDownloadFile(archiveId: string) {
     const item = findArchiveOrThrow(archiveId)
-    const contentType = item.fileExtension === '.mp4'
-        ? 'video/mp4'
-        : item.fileExtension === '.mkv'
-            ? 'video/x-matroska'
-            : item.fileExtension === '.webm'
+    const contentType =
+        item.fileExtension === '.mp4'
+            ? 'video/mp4'
+            : item.fileExtension === '.mkv'
+              ? 'video/x-matroska'
+              : item.fileExtension === '.webm'
                 ? 'video/webm'
                 : item.fileExtension === '.mp3'
-                    ? 'audio/mpeg'
-                    : item.fileExtension === '.m4a'
-                        ? 'audio/mp4'
-                        : item.fileExtension === '.wav'
-                            ? 'audio/wav'
-                            : 'video/mp2t'
+                  ? 'audio/mpeg'
+                  : item.fileExtension === '.m4a'
+                    ? 'audio/mp4'
+                    : item.fileExtension === '.wav'
+                      ? 'audio/wav'
+                      : 'video/mp2t'
     return {
         filePath: getArchiveAccessPath(item),
         fileName: item.fileName,
@@ -1812,20 +1841,16 @@ function getArchiveFramePreviews(
     },
 ) {
     const item = findArchiveOrThrow(archiveId)
-    return generateFramePreviews(
-        item,
-        config,
-        {
-            count: Math.floor(options?.count || DEFAULT_FRAME_COUNT),
-            trimStartSeconds: Math.max(0, Number(options?.trimStartSeconds || 0)),
-            trimEndSeconds: Math.max(0, Number(options?.trimEndSeconds || 0)),
-            times: options?.times,
-            anchorTimeSeconds: options?.anchorTimeSeconds ?? null,
-            includeKeyframes: Boolean(options?.includeKeyframes),
-            keyframeRangeStartSeconds: options?.keyframeRangeStartSeconds ?? null,
-            keyframeRangeEndSeconds: options?.keyframeRangeEndSeconds ?? null,
-        },
-    )
+    return generateFramePreviews(item, config, {
+        count: Math.floor(options?.count || DEFAULT_FRAME_COUNT),
+        trimStartSeconds: Math.max(0, Number(options?.trimStartSeconds || 0)),
+        trimEndSeconds: Math.max(0, Number(options?.trimEndSeconds || 0)),
+        times: options?.times,
+        anchorTimeSeconds: options?.anchorTimeSeconds ?? null,
+        includeKeyframes: Boolean(options?.includeKeyframes),
+        keyframeRangeStartSeconds: options?.keyframeRangeStartSeconds ?? null,
+        keyframeRangeEndSeconds: options?.keyframeRangeEndSeconds ?? null,
+    })
 }
 
 async function uploadArchiveToBilibili(
@@ -1858,7 +1883,11 @@ async function uploadArchiveToBilibili(
     }
 
     const workDir = createUploadWorkspace(title)
-    const cookie = await loadCookieDocument(config, String(payload.cookieSourcePath || defaults.cookieSourcePath || ''), log)
+    const cookie = await loadCookieDocument(
+        config,
+        String(payload.cookieSourcePath || defaults.cookieSourcePath || ''),
+        log,
+    )
     const cookieFilePath = path.join(workDir, 'cookies.json')
     fs.writeFileSync(cookieFilePath, JSON.stringify(cookie.document, null, 2), 'utf8')
 

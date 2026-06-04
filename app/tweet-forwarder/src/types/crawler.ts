@@ -122,6 +122,18 @@ interface CrawlerConfig extends CommonCfgConfig {
      * Website crawler: Puppeteer resource types to abort, e.g. image/font/media/stylesheet.
      */
     block_resource_types?: Array<string>
+    /**
+     * Dangerous backfill-only option. When enabled, an X list crawl that finds no new rows may dispatch
+     * already-persisted article ids, bounded by age and count. Defaults to disabled.
+     */
+    reuse_existing_for_immediate_forward?:
+        | boolean
+        | {
+              enabled?: boolean
+              max_age_seconds?: number
+              max_items?: number
+              reason?: string
+          }
 }
 
 interface Crawler {

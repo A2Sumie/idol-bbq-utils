@@ -428,6 +428,73 @@ describe('RenderService text-compact', () => {
 })
 
 describe('RenderService text-card', () => {
+    test('keeps only one thumbnail per video and generates one when missing', () => {
+        const service = new RenderService()
+        const article = {
+            id: 1,
+            a_id: 'video-thumbnail-normalize',
+            u_id: 'member',
+            username: 'member',
+            created_at: 1710000000,
+            content: null,
+            translation: null,
+            translated_by: null,
+            url: 'https://example.com/video',
+            type: 'post',
+            ref: null,
+            has_media: true,
+            media: [],
+            extra: null,
+            u_avatar: null,
+            platform: Platform.Instagram,
+        } as any
+
+        const normalizedExisting = (service as any).normalizeVideoThumbnailsForSend(
+            [
+                {
+                    path: '/tmp/video.mp4',
+                    media_type: 'video',
+                    sourceArticleId: 'video-thumbnail-normalize',
+                    sourceUrl: 'https://example.com/video.mp4',
+                },
+                {
+                    path: '/tmp/thumb-1.jpg',
+                    media_type: 'video_thumbnail',
+                    sourceArticleId: 'video-thumbnail-normalize',
+                    sourceUrl: 'https://example.com/video.mp4',
+                },
+                {
+                    path: '/tmp/thumb-2.jpg',
+                    media_type: 'video_thumbnail',
+                    sourceArticleId: 'video-thumbnail-normalize',
+                    sourceUrl: 'https://example.com/video.mp4',
+                },
+            ],
+            article,
+        )
+        expect(normalizedExisting.filter((item: any) => item.media_type === 'video_thumbnail')).toHaveLength(1)
+        expect(normalizedExisting.map((item: any) => item.path)).toEqual(['/tmp/video.mp4', '/tmp/thumb-1.jpg'])
+
+        ;(service as any).generateSingleVideoThumbnail = () => ({
+            path: '/tmp/generated-thumb.jpg',
+            media_type: 'video_thumbnail',
+            sourceArticleId: 'video-thumbnail-normalize',
+            sourceUrl: 'https://example.com/video.mp4',
+        })
+        const normalizedGenerated = (service as any).normalizeVideoThumbnailsForSend(
+            [
+                {
+                    path: '/tmp/video-no-thumb.mp4',
+                    media_type: 'video',
+                    sourceArticleId: 'video-thumbnail-normalize',
+                    sourceUrl: 'https://example.com/video.mp4',
+                },
+            ],
+            article,
+        )
+        expect(normalizedGenerated.map((item: any) => item.media_type)).toEqual(['video', 'video_thumbnail'])
+    })
+
     test('turns downloaded media files into embeddable card media', () => {
         const service = new RenderService()
         const tempDir = mkdtempSync(path.join(os.tmpdir(), 'render-card-embed-media-'))

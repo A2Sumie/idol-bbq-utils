@@ -56,6 +56,20 @@ export interface SendProps {
     forceSend?: boolean
 }
 
+class PartialForwarderSendError extends Error {
+    readonly partialResults: unknown[]
+    readonly failedSegment: string
+    readonly originalError: unknown
+
+    constructor(message: string, partialResults: unknown[], failedSegment: string, originalError: unknown) {
+        super(message)
+        this.name = 'PartialForwarderSendError'
+        this.partialResults = partialResults
+        this.failedSegment = failedSegment
+        this.originalError = originalError
+    }
+}
+
 abstract class BaseForwarder extends BaseCompatibleModel {
     static _PLATFORM = ForwardTargetPlatformEnum.None
     log?: Logger
@@ -106,9 +120,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         return 1000
     }
 
-    public getEffectiveConfig(
-        runtime_config?: ForwardTargetPlatformCommonConfig,
-    ): ForwardTargetPlatformCommonConfig {
+    public getEffectiveConfig(runtime_config?: ForwardTargetPlatformCommonConfig): ForwardTargetPlatformCommonConfig {
         return {
             ...this.config,
             ...runtime_config,
@@ -177,8 +189,9 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             return
         }
 
-        await this.sendPrepared(chunks, props)
+        const result = await this.sendPrepared(chunks, props)
         this.blockRuleMiddleware.commitPending(context)
+        return result
     }
 
     protected async sendPrepared(texts: string[], props?: SendProps): Promise<any> {
@@ -200,8 +213,11 @@ abstract class BaseForwarder extends BaseCompatibleModel {
 
         this.lastSentTime = Date.now()
 
-        await pRetry(() => this.realSend(normalizedTexts, props), {
+        return await pRetry(() => this.realSend(normalizedTexts, props), {
             retries: RETRY_LIMIT,
+            shouldRetry(error) {
+                return !(error.originalError instanceof PartialForwarderSendError)
+            },
             onFailedAttempt(e) {
                 _log?.error(`send texts failed, retrying...: ${e.originalError.message}`)
             },
@@ -488,4 +504,4 @@ abstract class Forwarder extends BaseForwarder {
     }
 }
 
-export { BaseForwarder, Forwarder }
+export { BaseForwarder, Forwarder, PartialForwarderSendError }

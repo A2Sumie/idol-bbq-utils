@@ -28,6 +28,10 @@ import { BrowserSessionPool } from '@/services/browser-session-pool'
 import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
 import { normalizeCronSecond } from '@/utils/cron'
 
+function buildTaskQueueIdempotencyKey(type: string, payload: unknown) {
+    return crypto.createHash('sha256').update(JSON.stringify({ type, payload })).digest('hex')
+}
+
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
@@ -42,6 +46,20 @@ function lookupConnectionValues<T>(map: Record<string, T> | undefined, keys: Arr
         }
     }
     return undefined
+}
+
+function resolveExistingArticleReusePolicy(cfg_crawler: Crawler['cfg_crawler'] | undefined) {
+    const raw = cfg_crawler?.reuse_existing_for_immediate_forward
+    const enabled = raw === true || (typeof raw === 'object' && raw?.enabled === true)
+    if (!enabled) {
+        return null
+    }
+    const objectConfig = typeof raw === 'object' && raw ? raw : {}
+    return {
+        maxAgeSeconds: Math.max(1, Math.floor(Number(objectConfig.max_age_seconds || 5 * 60))),
+        maxItems: Math.max(1, Math.min(Math.floor(Number(objectConfig.max_items || 5)), 20)),
+        reason: objectConfig.reason || 'explicit backfill',
+    }
 }
 
 interface TaskResult {
@@ -143,8 +161,9 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                     const now = dayjs()
                     const start = now.startOf('day').unix()
                     const end = now.endOf('day').unix()
-                    const targetIds =
-                        crawler.cfg_crawler?.aggregation?.target_ids || this.resolveAggregationTargetIds(crawler)
+                    const targetIds = sortUnique(
+                        crawler.cfg_crawler?.aggregation?.target_ids || this.resolveAggregationTargetIds(crawler),
+                    )
 
                     const websites = crawler.websites || []
                     const paths = crawler.paths || []
@@ -192,6 +211,17 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                                     prompt: crawler.cfg_crawler?.aggregation?.prompt,
                                 },
                                 now.unix(),
+                                {
+                                    source_ref: `${platform}:${u_id}`,
+                                    action_type: 'aggregate_daily',
+                                    idempotency_key: buildTaskQueueIdempotencyKey('aggregate_daily', {
+                                        platform,
+                                        u_id,
+                                        start,
+                                        end,
+                                        target_ids: targetIds,
+                                    }),
+                                },
                             )
                             this.log?.info(`Scheduled aggregation task for ${platform} ${u_id}`)
                         }
@@ -875,25 +905,33 @@ class SpiderPools extends BaseCompatibleModel {
             },
         )
         await this.maybeSyncInstagramLiveRelay(ctx, url, page, cookieString, requestHeaders)
-        const reuseExistingArticleIdsForImmediateForward = spiderRegistry.findByUrl(url.href)?.id === 'x-list'
+        const existingArticleReusePolicy =
+            spiderRegistry.findByUrl(url.href)?.id === 'x-list' ? resolveExistingArticleReusePolicy(cfg_crawler) : null
         let new_articles: Array<Article> = []
         let dispatch_article_ids: Array<number> = []
         let saved_articles_count = 0
+        const now = Math.floor(Date.now() / 1000)
         for (const article of articles) {
             const isExist = await DB.Article.checkExist(article)
             if (!isExist) {
                 new_articles.push(article)
                 continue
             }
-            if (reuseExistingArticleIdsForImmediateForward) {
+            if (
+                existingArticleReusePolicy &&
+                now - Number(isExist.created_at || 0) <= existingArticleReusePolicy.maxAgeSeconds
+            ) {
                 dispatch_article_ids.push(isExist.id)
             }
         }
         if (new_articles.length === 0) {
             if (dispatch_article_ids.length > 0) {
-                const dedupedDispatchIds = Array.from(new Set(dispatch_article_ids))
+                const dedupedDispatchIds = Array.from(new Set(dispatch_article_ids)).slice(
+                    0,
+                    existingArticleReusePolicy?.maxItems || 0,
+                )
                 ctx.log?.info(
-                    `[${url.href}] No new articles found, reusing ${dedupedDispatchIds.length} existing article ids for immediate forward.`,
+                    `[${url.href}] No new articles found, explicitly reusing ${dedupedDispatchIds.length} existing article ids for immediate forward (${existingArticleReusePolicy?.reason}).`,
                 )
                 return dedupedDispatchIds
             }

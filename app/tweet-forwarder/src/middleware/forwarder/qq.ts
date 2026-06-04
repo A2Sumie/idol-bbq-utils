@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { chunk } from 'lodash'
-import { Forwarder, type SendProps } from './base'
+import { Forwarder, PartialForwarderSendError, type SendProps } from './base'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 
 class QQForwarder extends Forwarder {
@@ -59,14 +59,29 @@ class QQForwarder extends Forwarder {
             _log?.debug(`videos: ${videos}`)
         }
 
-
-
         const MAX_PICS = 10
         const picChunks = chunk(pics, MAX_PICS)
         const textChunks = texts.length > 0 ? texts : []
         const n = Math.max(picChunks.length, textChunks.length)
 
         const _res = []
+        const sendSegment = async (segments: Parameters<QQForwarder['sendWithPayload']>[0], label: string) => {
+            try {
+                const res = await this.sendWithPayload(segments)
+                _res.push(res)
+                return res
+            } catch (error) {
+                if (_res.length > 0) {
+                    throw new PartialForwarderSendError(
+                        `QQ partial send failed at ${label} after ${_res.length} visible segment(s)`,
+                        _res,
+                        label,
+                        error,
+                    )
+                }
+                throw error
+            }
+        }
 
         for (let i = 0; i < n; i++) {
             const text = textChunks[i]
@@ -82,36 +97,34 @@ class QQForwarder extends Forwarder {
             }
 
             if (segments.length > 0) {
-                const res = await this.sendWithPayload(segments as any)
-                _res.push(res)
+                await sendSegment(segments as any, `message:${i + 1}/${n}`)
             }
         }
 
-        const maybe_video_res = videos.length !== 0 && (await this.sendWithPayload(videos))
-        maybe_video_res && _res.push(maybe_video_res)
+        videos.length !== 0 && (await sendSegment(videos, 'video'))
         return _res
     }
 
     async sendWithPayload(
         arr_of_segments: Array<
             | {
-                type: 'text'
-                data: {
-                    text: string
-                }
-            }
+                  type: 'text'
+                  data: {
+                      text: string
+                  }
+              }
             | {
-                type: 'image'
-                data: {
-                    file: string
-                }
-            }
+                  type: 'image'
+                  data: {
+                      file: string
+                  }
+              }
             | {
-                type: 'video'
-                data: {
-                    file: string
-                }
-            }
+                  type: 'video'
+                  data: {
+                      file: string
+                  }
+              }
         >,
     ) {
         const headers: Record<string, string> = {

@@ -154,6 +154,14 @@ interface ForwardTargetPlatformCommonConfig {
               max_items?: number
               include_original_media?: boolean
               send_first_immediately?: boolean
+              send_first_native?: boolean
+              media_realtime?: boolean
+              media_realtime_text?: 'none' | 'basic' | 'rendered'
+              flush_on_threshold?: boolean
+              flush_delay_seconds?: number
+              align_to_hour?: boolean
+              align_to_interval?: boolean
+              media_duplicate_limit?: number
           }
     /**
      * Collapse the text body of referenced/replied-to articles that were already forwarded to this target.

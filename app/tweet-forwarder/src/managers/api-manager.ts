@@ -32,6 +32,9 @@ import {
 } from '@/services/quick-config-service'
 import { getCookiesRoot } from '@/utils/directories'
 import { pRetry } from '@idol-bbq-utils/utils'
+import { buildRouteGraph } from '@/services/route-graph-service'
+import { buildRuntimeManifest } from '@/services/runtime-manifest-service'
+import { redactSecrets } from '@/services/redaction-service'
 
 interface ApiConfig {
     port?: number
@@ -51,6 +54,7 @@ export interface ApiRuntimeMeta {
     startedAt: string
     lastReloadedAt: string
     reloading: boolean
+    manifest?: unknown
 }
 
 export interface ApiRuntimeReloadResult {
@@ -115,7 +119,9 @@ function resolvePlatformFromOrigin(origin?: string | null): Platform | null {
     return Platform.Website
 }
 
-function resolveCrawlerPlatform(crawler?: { origin?: string | null; websites?: Array<string> | null } | null): Platform | null {
+function resolveCrawlerPlatform(
+    crawler?: { origin?: string | null; websites?: Array<string> | null } | null,
+): Platform | null {
     return resolvePlatformFromOrigin(crawler?.origin) || resolvePlatformFromOrigin(crawler?.websites?.[0])
 }
 
@@ -124,7 +130,7 @@ function flattenArticleChain(article: Article & { id: number }) {
     let current: (Article & { id: number }) | null = article
     while (current && typeof current === 'object') {
         chain.push(current)
-        current = typeof current.ref === 'object' ? ((current.ref as any) || null) : null
+        current = typeof current.ref === 'object' ? (current.ref as any) || null : null
     }
     return chain
 }
@@ -141,12 +147,15 @@ function selectProcessorResult(value: any, resultKey?: string | null) {
     if (!resultKey) {
         return value
     }
-    return resultKey.split('.').filter(Boolean).reduce((current, key) => {
-        if (current && typeof current === 'object' && key in current) {
-            return current[key]
-        }
-        return undefined
-    }, value)
+    return resultKey
+        .split('.')
+        .filter(Boolean)
+        .reduce((current, key) => {
+            if (current && typeof current === 'object' && key in current) {
+                return current[key]
+            }
+            return undefined
+        }, value)
 }
 
 function latestLogFile() {
@@ -248,7 +257,9 @@ function serializeCookiesToNetscape(cookies: Array<NetscapeCookieLike>) {
         const includeSubdomains = domain.startsWith('.') ? 'TRUE' : 'FALSE'
         const expiry = cookie.expires && cookie.expires > 0 ? Math.floor(cookie.expires) : 0
         const domainField = cookie.httpOnly ? `#HttpOnly_${domain}` : domain
-        lines.push([domainField, includeSubdomains, pathValue, secure, String(expiry), name, cookie.value || ''].join('\t'))
+        lines.push(
+            [domainField, includeSubdomains, pathValue, secure, String(expiry), name, cookie.value || ''].join('\t'),
+        )
     }
 
     return `${lines.join('\n')}\n`
@@ -332,19 +343,26 @@ export class APIManager extends BaseCompatibleModel {
         }
 
         if (req.method === 'GET' && url.pathname === '/api/config') return this.handleConfigGet()
+        if (req.method === 'GET' && url.pathname === '/api/config/redacted') return this.handleConfigRedacted()
         if (req.method === 'GET' && url.pathname === '/api/config/quick') return this.handleQuickConfigGet()
-        if (req.method === 'POST' && url.pathname === '/api/config/quick/update') return this.handleQuickConfigUpdate(req)
-        if (req.method === 'POST' && url.pathname === '/api/config/quick/migrate') return this.handleQuickConfigMigrate()
+        if (req.method === 'POST' && url.pathname === '/api/config/quick/update')
+            return this.handleQuickConfigUpdate(req)
+        if (req.method === 'POST' && url.pathname === '/api/config/quick/migrate')
+            return this.handleQuickConfigMigrate()
         if (req.method === 'GET' && url.pathname === '/api/config/crawlers') return this.handleConfigList()
         if (req.method === 'POST' && url.pathname === '/api/config/update') return this.handleConfigUpdate(req)
         if (req.method === 'POST' && url.pathname === '/api/runtime/reload') return this.handleRuntimeReload()
         if (req.method === 'POST' && url.pathname === '/api/server/restart') return this.handleServerRestart()
 
         if (req.method === 'GET' && url.pathname === '/api/runtime/status') return this.handleRuntimeStatus()
+        if (req.method === 'GET' && url.pathname === '/api/runtime/manifest') return this.handleRuntimeManifest()
+        if (req.method === 'GET' && url.pathname === '/api/routes') return this.handleRouteGraph()
         if (req.method === 'GET' && url.pathname === '/api/runtime/logs') return this.handleRuntimeLogs(url)
         if (req.method === 'GET' && url.pathname === '/api/articles') return this.handleArticleList(url)
         if (req.method === 'GET' && url.pathname.startsWith('/api/articles/')) return this.handleArticleView(url)
         if (req.method === 'GET' && url.pathname === '/api/tasks') return this.handleTasks(url)
+        if (req.method === 'GET' && url.pathname === '/api/outbound-messages') return this.handleOutboundMessages(url)
+        if (req.method === 'GET' && url.pathname === '/api/target-health') return this.handleTargetHealth()
         if (req.method === 'GET' && url.pathname === '/api/processor-runs') return this.handleProcessorRuns(url)
 
         if (req.method === 'GET' && url.pathname === '/api/archives') return this.handleArchiveList(url)
@@ -370,9 +388,12 @@ export class APIManager extends BaseCompatibleModel {
         }
 
         if (req.method === 'POST' && url.pathname === '/api/actions/crawlers/run') return this.handleCrawlerRun(req)
-        if (req.method === 'POST' && url.pathname === '/api/actions/articles/simulate') return this.handleArticleSimulate(req)
-        if (req.method === 'POST' && url.pathname === '/api/actions/articles/reprocess') return this.handleArticleReprocess(req)
-        if (req.method === 'POST' && url.pathname === '/api/actions/articles/resend') return this.handleArticleResend(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/articles/simulate')
+            return this.handleArticleSimulate(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/articles/reprocess')
+            return this.handleArticleReprocess(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/articles/resend')
+            return this.handleArticleResend(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/processors/run') return this.handleProcessorRun(req)
 
         return new Response(`Not Found: ${req.method} ${url.pathname}`, { status: 404 })
@@ -387,10 +408,10 @@ export class APIManager extends BaseCompatibleModel {
         const allowOrigin = allowedOrigins.includes('*')
             ? '*'
             : allowedOrigins.includes(requestOrigin)
-                ? requestOrigin
-                : !requestOrigin
-                    ? allowedOrigins[0] || DEFAULT_CIC_ORIGIN
-                    : ''
+              ? requestOrigin
+              : !requestOrigin
+                ? allowedOrigins[0] || DEFAULT_CIC_ORIGIN
+                : ''
         const headers = new Headers({
             'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
             'Access-Control-Allow-Headers': 'Authorization, Content-Type',
@@ -522,16 +543,18 @@ export class APIManager extends BaseCompatibleModel {
             }
 
             const files = fs.readdirSync(cookiesDir)
-            const cookieFiles = files.filter((file) => file.endsWith('.txt')).map((file) => {
-                const filePath = path.join(cookiesDir, file)
-                const stats = fs.statSync(filePath)
-                return {
-                    name: file.replace('.txt', ''),
-                    filename: file,
-                    lastModified: stats.mtime.toISOString(),
-                    size: stats.size,
-                }
-            })
+            const cookieFiles = files
+                .filter((file) => file.endsWith('.txt'))
+                .map((file) => {
+                    const filePath = path.join(cookiesDir, file)
+                    const stats = fs.statSync(filePath)
+                    return {
+                        name: file.replace('.txt', ''),
+                        filename: file,
+                        lastModified: stats.mtime.toISOString(),
+                        size: stats.size,
+                    }
+                })
 
             return jsonResponse(cookieFiles)
         } catch (error) {
@@ -656,7 +679,10 @@ export class APIManager extends BaseCompatibleModel {
                 ...configWithoutConnections,
                 pipelines,
             }
-            const saveResult = await this.saveConfigAndReload(nextConfig, 'Pipeline configuration saved and hot reloaded.')
+            const saveResult = await this.saveConfigAndReload(
+                nextConfig,
+                'Pipeline configuration saved and hot reloaded.',
+            )
             const payload = (await saveResult.json()) as Record<string, unknown>
             return jsonResponse({
                 ...payload,
@@ -664,9 +690,12 @@ export class APIManager extends BaseCompatibleModel {
             })
         } catch (error) {
             this.log?.error('Quick config update error:', error)
-            return new Response(`Failed to update quick config: ${error instanceof Error ? error.message : String(error)}`, {
-                status: 400,
-            })
+            return new Response(
+                `Failed to update quick config: ${error instanceof Error ? error.message : String(error)}`,
+                {
+                    status: 400,
+                },
+            )
         }
     }
 
@@ -677,7 +706,10 @@ export class APIManager extends BaseCompatibleModel {
                 ...configWithoutConnections,
                 pipelines: exportPipelineConfigs(this.config),
             }
-            const saveResult = await this.saveConfigAndReload(nextConfig, 'Configuration migrated to pipelines and hot reloaded.')
+            const saveResult = await this.saveConfigAndReload(
+                nextConfig,
+                'Configuration migrated to pipelines and hot reloaded.',
+            )
             const payload = (await saveResult.json()) as Record<string, unknown>
             return jsonResponse({
                 ...payload,
@@ -685,13 +717,19 @@ export class APIManager extends BaseCompatibleModel {
             })
         } catch (error) {
             this.log?.error('Quick config migration error:', error)
-            return new Response(`Failed to migrate quick config: ${error instanceof Error ? error.message : String(error)}`, {
-                status: 500,
-            })
+            return new Response(
+                `Failed to migrate quick config: ${error instanceof Error ? error.message : String(error)}`,
+                {
+                    status: 500,
+                },
+            )
         }
     }
 
-    private async saveConfigAndReload(config: AppConfig, message = 'Configuration saved and hot reloaded.'): Promise<Response> {
+    private async saveConfigAndReload(
+        config: AppConfig,
+        message = 'Configuration saved and hot reloaded.',
+    ): Promise<Response> {
         const configPath = path.join(process.cwd(), 'config.yaml')
         const previousConfigText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null
         if (fs.existsSync(configPath)) {
@@ -765,6 +803,10 @@ export class APIManager extends BaseCompatibleModel {
         return jsonResponse(this.config)
     }
 
+    private async handleConfigRedacted(): Promise<Response> {
+        return jsonResponse(redactSecrets(this.config))
+    }
+
     private async handleRuntimeStatus(): Promise<Response> {
         const tasks = await DB.TaskQueue.list(50)
         const runtime = this.runtime.getRuntimeMeta?.()
@@ -780,6 +822,17 @@ export class APIManager extends BaseCompatibleModel {
             latest_tasks: tasks.slice(0, 10),
             runtime,
         })
+    }
+
+    private async handleRuntimeManifest(): Promise<Response> {
+        const runtime = this.runtime.getRuntimeMeta?.()
+        return jsonResponse(
+            runtime?.manifest || buildRuntimeManifest(runtime?.configPath || 'config.yaml', this.config),
+        )
+    }
+
+    private async handleRouteGraph(): Promise<Response> {
+        return jsonResponse(buildRouteGraph(this.config))
     }
 
     private async handleRuntimeLogs(url: URL): Promise<Response> {
@@ -838,6 +891,16 @@ export class APIManager extends BaseCompatibleModel {
         const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '100'), 200))
         const status = url.searchParams.get('status') || undefined
         return jsonResponse(await DB.TaskQueue.list(limit, status))
+    }
+
+    private async handleOutboundMessages(url: URL): Promise<Response> {
+        const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '100'), 200))
+        const status = url.searchParams.get('status') || undefined
+        return jsonResponse(await DB.OutboundMessage.list(limit, status))
+    }
+
+    private async handleTargetHealth(): Promise<Response> {
+        return jsonResponse(await DB.TargetHealth.list())
     }
 
     private async handleProcessorRuns(url: URL): Promise<Response> {
@@ -911,7 +974,9 @@ export class APIManager extends BaseCompatibleModel {
                 .map((entry) => Number(entry.trim()))
                 .filter((value) => Number.isFinite(value))
             const includeKeyframes = ['1', 'true', 'yes', 'on'].includes(
-                String(url.searchParams.get('includeKeyframes') || '').trim().toLowerCase(),
+                String(url.searchParams.get('includeKeyframes') || '')
+                    .trim()
+                    .toLowerCase(),
             )
             const anchorTimeSeconds = url.searchParams.get('anchorTimeSeconds')
             const keyframeRangeStartSeconds = url.searchParams.get('keyframeRangeStartSeconds')
@@ -924,7 +989,8 @@ export class APIManager extends BaseCompatibleModel {
                     times,
                     anchorTimeSeconds: anchorTimeSeconds === null ? null : Number(anchorTimeSeconds),
                     includeKeyframes,
-                    keyframeRangeStartSeconds: keyframeRangeStartSeconds === null ? null : Number(keyframeRangeStartSeconds),
+                    keyframeRangeStartSeconds:
+                        keyframeRangeStartSeconds === null ? null : Number(keyframeRangeStartSeconds),
                     keyframeRangeEndSeconds: keyframeRangeEndSeconds === null ? null : Number(keyframeRangeEndSeconds),
                 }),
             })
@@ -936,7 +1002,7 @@ export class APIManager extends BaseCompatibleModel {
 
     private async handleArchiveUpload(archiveId: string, req: Request): Promise<Response> {
         try {
-            const body = await req.json() as any
+            const body = (await req.json()) as any
             const result = await uploadArchiveToBilibili(this.config, decodeURIComponent(archiveId), body, this.log)
             return jsonResponse(result)
         } catch (error) {
@@ -959,12 +1025,10 @@ export class APIManager extends BaseCompatibleModel {
         }
 
         const now = Math.floor(Date.now() / 1000)
-        const queueTask = await DB.TaskQueue.add(
-            'manual_crawler_run',
-            { crawler: crawler.name },
-            now,
-            { source_ref: crawler.name, action_type: 'crawl' },
-        )
+        const queueTask = await DB.TaskQueue.add('manual_crawler_run', { crawler: crawler.name }, now, {
+            source_ref: crawler.name,
+            action_type: 'crawl',
+        })
         const taskId = `manual-${Math.random().toString(36).slice(2, 9)}`
         const task: TaskScheduler.Task = {
             id: taskId,
@@ -998,9 +1062,7 @@ export class APIManager extends BaseCompatibleModel {
             processorId?: string
         }
 
-        const crawler = body.crawlerName
-            ? this.config.crawlers?.find((item) => item.name === body.crawlerName)
-            : null
+        const crawler = body.crawlerName ? this.config.crawlers?.find((item) => item.name === body.crawlerName) : null
         const platform =
             resolvePlatform(body.platform) ||
             resolvePlatformFromOrigin(body.url) ||
@@ -1101,15 +1163,10 @@ export class APIManager extends BaseCompatibleModel {
             return new Response('Article not found', { status: 404 })
         }
 
-        const task = await DB.TaskQueue.add(
-            'article_reprocess',
-            body,
-            Math.floor(Date.now() / 1000),
-            {
-                source_ref: `${platform}:${article.a_id}`,
-                action_type: 'reprocess',
-            },
-        )
+        const task = await DB.TaskQueue.add('article_reprocess', body, Math.floor(Date.now() / 1000), {
+            source_ref: `${platform}:${article.a_id}`,
+            action_type: 'reprocess',
+        })
 
         try {
             const processorDef = this.resolveProcessorDefinition(body.processorId)
@@ -1169,15 +1226,10 @@ export class APIManager extends BaseCompatibleModel {
             )
         }
 
-        const task = await DB.TaskQueue.add(
-            'article_resend',
-            body,
-            Math.floor(Date.now() / 1000),
-            {
-                source_ref: `${platform}:${article.a_id}`,
-                action_type: 'resend',
-            },
-        )
+        const task = await DB.TaskQueue.add('article_resend', body, Math.floor(Date.now() / 1000), {
+            source_ref: `${platform}:${article.a_id}`,
+            action_type: 'resend',
+        })
 
         try {
             await this.deps.forwarderPools.resendArticle(article as any, body.crawlerName)
@@ -1210,15 +1262,10 @@ export class APIManager extends BaseCompatibleModel {
         }
         const processorDef = this.resolveProcessorDefinition(body.processorId)
         const action = body.action || processorDef.cfg_processor?.action || 'extract'
-        const task = await DB.TaskQueue.add(
-            'processor_run',
-            body,
-            Math.floor(Date.now() / 1000),
-            {
-                source_ref: body.a_id || body.u_id || body.id?.toString() || null || undefined,
-                action_type: action,
-            },
-        )
+        const task = await DB.TaskQueue.add('processor_run', body, Math.floor(Date.now() / 1000), {
+            source_ref: body.a_id || body.u_id || body.id?.toString() || null || undefined,
+            action_type: action,
+        })
 
         try {
             const processor = await this.createProcessor(processorDef)
@@ -1229,10 +1276,7 @@ export class APIManager extends BaseCompatibleModel {
 
             const rawResult = await processor.process(input.text)
             const parsed = tryParseJson(rawResult)
-            const selected = selectProcessorResult(
-                parsed,
-                body.resultKey || processorDef.cfg_processor?.result_key,
-            )
+            const selected = selectProcessorResult(parsed, body.resultKey || processorDef.cfg_processor?.result_key)
             const scheduleResults =
                 action === 'plan'
                     ? await this.writeSchedulesFromPlan(
@@ -1335,9 +1379,7 @@ export class APIManager extends BaseCompatibleModel {
             .map((article) => {
                 const extraContent = typeof article.extra?.content === 'string' ? article.extra.content.trim() : ''
                 const mediaUrls = Array.isArray(article.media)
-                    ? article.media
-                          .map((media) => media?.url?.trim())
-                          .filter((url): url is string => Boolean(url))
+                    ? article.media.map((media) => media?.url?.trim()).filter((url): url is string => Boolean(url))
                     : []
                 return [
                     `[${dayjs.unix(article.created_at).format('YYYY-MM-DD HH:mm:ss')}]`,
@@ -1418,7 +1460,9 @@ export class APIManager extends BaseCompatibleModel {
             u_id: normalizedUid,
             username,
             created_at,
-            content: body.content?.trim() || `[simulated] ${username} @ ${dayjs.unix(created_at).format('YYYY-MM-DD HH:mm:ss')}`,
+            content:
+                body.content?.trim() ||
+                `[simulated] ${username} @ ${dayjs.unix(created_at).format('YYYY-MM-DD HH:mm:ss')}`,
             url,
             type: defaultArticleType(platform),
             ref: null,

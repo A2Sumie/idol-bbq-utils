@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, test } from 'bun:test'
 import EventEmitter from 'events'
 import {
     ForwarderPools,
@@ -10,12 +10,185 @@ import {
 } from './forwarder-manager'
 import { TaskScheduler } from '@/utils/base'
 import { fileURLToPath } from 'url'
-import { Forwarder } from '@/middleware/forwarder/base'
+import { Forwarder, PartialForwarderSendError } from '@/middleware/forwarder/base'
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { normalizeCronSecond } from '@/utils/cron'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
+
+const originalOutboundMessage = { ...DB.OutboundMessage }
+const originalAggregationWindow = { ...DB.AggregationWindow }
+const originalTargetHealth = { ...DB.TargetHealth }
+const originalForwardBy = { ...DB.ForwardBy }
+
+beforeEach(() => {
+    const outboundRecords = new Map<string, any>()
+    const targetHealth = new Map<string, any>()
+    const aggregationWindows = new Map<number, any>()
+    const aggregationItems = new Map<string, any>()
+    const forwardByRecords = new Map<string, any>()
+    let nextWindowId = 1
+    let nextItemId = 1
+
+    const forwardByKey = (refId: number, platform: string | number, botId: string, taskType: string) =>
+        `${platform}:${refId}:${botId}:${taskType}`
+
+    ;(DB.ForwardBy as any).checkExist = async (
+        refId: number,
+        platform: string | number,
+        botId: string,
+        taskType: string,
+    ) => forwardByRecords.get(forwardByKey(refId, platform, botId, taskType)) || null
+    ;(DB.ForwardBy as any).save = async (refId: number, platform: string | number, botId: string, taskType: string) => {
+        const record = { ref_id: refId, platform, bot_id: botId, task_type: taskType }
+        forwardByRecords.set(forwardByKey(refId, platform, botId, taskType), record)
+        return record
+    }
+    ;(DB.ForwardBy as any).claim = async (
+        refId: number,
+        platform: string | number,
+        botId: string,
+        taskType: string,
+    ) => {
+        const key = forwardByKey(refId, platform, botId, taskType)
+        if (forwardByRecords.has(key)) {
+            return false
+        }
+        forwardByRecords.set(key, { ref_id: refId, platform, bot_id: botId, task_type: taskType })
+        return true
+    }
+    ;(DB.ForwardBy as any).deleteRecord = async (
+        refId: number,
+        platform: string | number,
+        botId: string,
+        taskType: string,
+    ) => {
+        forwardByRecords.delete(forwardByKey(refId, platform, botId, taskType))
+    }
+    ;(DB.OutboundMessage as any).claim = async (data: any) => {
+        const existing = outboundRecords.get(data.idempotency_key)
+        if (existing && existing.status !== 'failed') {
+            return { claimed: false, record: existing }
+        }
+        const now = Math.floor(Date.now() / 1000)
+        const record = {
+            id: existing?.id || outboundRecords.size + 1,
+            ...existing,
+            ...data,
+            status: 'planned',
+            created_at: existing?.created_at || now,
+            updated_at: now,
+            attempt_count: existing?.attempt_count || 0,
+        }
+        outboundRecords.set(data.idempotency_key, record)
+        return { claimed: true, record }
+    }
+    ;(DB.OutboundMessage as any).markSending = async (idempotencyKey: string) => {
+        const record = outboundRecords.get(idempotencyKey)
+        Object.assign(record, {
+            status: 'sending',
+            attempt_count: (record?.attempt_count || 0) + 1,
+        })
+        return record
+    }
+    ;(DB.OutboundMessage as any).markSent = async (idempotencyKey: string, providerResult?: unknown) => {
+        const record = outboundRecords.get(idempotencyKey)
+        Object.assign(record, { status: 'sent', provider_message_ids: providerResult ?? null })
+        return record
+    }
+    ;(DB.OutboundMessage as any).markPartial = async (
+        idempotencyKey: string,
+        providerResult: unknown,
+        error: unknown,
+    ) => {
+        const record = outboundRecords.get(idempotencyKey)
+        Object.assign(record, {
+            status: 'partial',
+            segment_results: providerResult,
+            last_error: error instanceof Error ? error.message : String(error),
+        })
+        return record
+    }
+    ;(DB.OutboundMessage as any).markFailed = async (idempotencyKey: string, error: unknown) => {
+        const record = outboundRecords.get(idempotencyKey)
+        if (record) {
+            Object.assign(record, {
+                status: 'failed',
+                last_error: error instanceof Error ? error.message : String(error),
+            })
+        }
+        return record
+    }
+    ;(DB.OutboundMessage as any).list = async () => Array.from(outboundRecords.values())
+    ;(DB.TargetHealth as any).mark = async (data: any) => {
+        const record = {
+            id: targetHealth.size + 1,
+            ...targetHealth.get(data.target_id),
+            ...data,
+        }
+        targetHealth.set(data.target_id, record)
+        return record
+    }
+    ;(DB.TargetHealth as any).list = async () => Array.from(targetHealth.values())
+    ;(DB.AggregationWindow as any).getOrCreateOpen = async (data: any) => {
+        const existing =
+            Array.from(aggregationWindows.values()).find(
+                (window) =>
+                    window.route_key === data.route_key &&
+                    window.target_id === data.target_id &&
+                    window.mode === data.mode &&
+                    window.status === 'open',
+            ) ||
+            Array.from(aggregationWindows.values()).find((window) => window.idempotency_key === data.idempotency_key)
+        if (existing) {
+            return existing
+        }
+        const window = {
+            id: nextWindowId++,
+            ...data,
+            status: 'open',
+            created_at: Math.floor(Date.now() / 1000),
+            updated_at: Math.floor(Date.now() / 1000),
+            finished_at: null,
+            payload_hash: null,
+        }
+        aggregationWindows.set(window.id, window)
+        return window
+    }
+    ;(DB.AggregationWindow as any).listOpen = async (mode?: string) =>
+        Array.from(aggregationWindows.values()).filter(
+            (window) => window.status === 'open' && (!mode || window.mode === mode),
+        )
+    ;(DB.AggregationWindow as any).updateStatus = async (id: number, status: string, meta?: any) => {
+        const window = aggregationWindows.get(id)
+        if (window) {
+            Object.assign(window, { status, payload_hash: meta?.payload_hash ?? window.payload_hash })
+        }
+        return window
+    }
+    ;(DB.AggregationWindow as any).upsertItem = async (data: any) => {
+        const key = `${data.window_id}:${data.article_key}`
+        const existing = aggregationItems.get(key)
+        const item = {
+            id: existing?.id || nextItemId++,
+            ...existing,
+            ...data,
+            created_at: existing?.created_at || Math.floor(Date.now() / 1000),
+        }
+        aggregationItems.set(key, item)
+        return item
+    }
+    ;(DB.AggregationWindow as any).listItems = async (windowId: number) =>
+        Array.from(aggregationItems.values()).filter((item) => item.window_id === windowId)
+})
+
+afterEach(() => {
+    Object.assign(DB.OutboundMessage, originalOutboundMessage)
+    Object.assign(DB.AggregationWindow, originalAggregationWindow)
+    Object.assign(DB.TargetHealth, originalTargetHealth)
+    Object.assign(DB.ForwardBy, originalForwardBy)
+})
 
 function backdateSummaryCardQueues(pools: any, seconds: number) {
     const now = Math.floor(Date.now() / 1000)
@@ -100,6 +273,13 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         maxItems: 14,
         includeOriginalMedia: false,
         sendFirstImmediately: true,
+        sendFirstNative: false,
+        mediaRealtime: false,
+        mediaRealtimeText: 'none',
+        flushOnThreshold: true,
+        flushDelaySeconds: 0,
+        windowAlignment: 'none',
+        mediaDuplicateLimit: null,
     })
     expect(
         resolveSummaryCardConfig({
@@ -110,6 +290,13 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
                 max_items: 6,
                 include_original_media: true,
                 send_first_immediately: false,
+                send_first_native: true,
+                media_realtime: true,
+                media_realtime_text: 'basic',
+                flush_on_threshold: false,
+                flush_delay_seconds: 300,
+                align_to_interval: true,
+                media_duplicate_limit: 2,
             },
         } as any),
     ).toEqual({
@@ -118,6 +305,13 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         maxItems: 6,
         includeOriginalMedia: true,
         sendFirstImmediately: false,
+        sendFirstNative: true,
+        mediaRealtime: true,
+        mediaRealtimeText: 'basic',
+        flushOnThreshold: false,
+        flushDelaySeconds: 300,
+        windowAlignment: 'interval',
+        mediaDuplicateLimit: 2,
     })
     expect(resolveSummaryCardConfig({ summary_card: { enabled: false } } as any)).toBeNull()
 })
@@ -126,6 +320,34 @@ test('normalizeCronSecond pins five-field cron jobs to the default forty-fifth s
     expect(normalizeCronSecond('*/4 * * * *')).toBe('45 */4 * * * *')
     expect(normalizeCronSecond('10-59/30 * * * * *')).toBe('10-59/30 * * * * *')
     expect(normalizeCronSecond(' 7,27,47 * * * * ')).toBe('45 7,27,47 * * * *')
+})
+
+test('Forwarder does not retry after a partial visible send', async () => {
+    class PartialRecordingForwarder extends Forwarder {
+        NAME = 'partial-recording'
+        attempts = 0
+
+        protected async realSend(): Promise<any> {
+            this.attempts += 1
+            throw new PartialForwarderSendError(
+                'partial visible send',
+                [{ ok: true }],
+                'message:2/2',
+                new Error('tail failed'),
+            )
+        }
+    }
+
+    const forwarder = new PartialRecordingForwarder({} as any, 'partial-visible-test')
+    let caught: unknown
+    try {
+        await forwarder.send('hello', { forceSend: true })
+    } catch (error) {
+        caught = error
+    }
+
+    expect(forwarder.attempts).toBe(1)
+    expect(caught).toBeInstanceOf(PartialForwarderSendError)
 })
 
 test('buildAutoBoundForwarderTaskData keeps crawler identity and merges media config from matching template', () => {
@@ -2577,4 +2799,457 @@ test('sendArticles keeps summary-card fallback compact when card rendering fails
             alt: 'media-only-11',
         },
     ])
+})
+
+test('sendArticles sends summary-card media immediately while keeping text queued', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 2,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                flush_on_threshold: false,
+                align_to_hour: true,
+                flush_delay_seconds: 300,
+            },
+        } as any,
+        'target-summary-card-realtime-media',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content || '',
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-${article.id}.jpg`,
+                },
+            ],
+            mediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-${article.id}.jpg`,
+                },
+            ],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        for (const id of [810, 811]) {
+            await (pools as any).sendArticles(
+                undefined,
+                `summary-realtime-media-${id}`,
+                [
+                    {
+                        id,
+                        a_id: `summary-realtime-media-${id}`,
+                        platform: Platform.X,
+                        username: 'media member',
+                        u_id: 'media_member',
+                        content: `summary text ${id}`,
+                        url: `https://x.com/media_member/status/${id}`,
+                        type: 'tweet',
+                        created_at: now + id,
+                        ref: null,
+                        has_media: true,
+                        media: [{ type: 'photo', url: `https://example.com/realtime-${id}.jpg` }],
+                        extra: null,
+                        u_avatar: null,
+                    },
+                ],
+                [{ forwarder: target, runtime_config: undefined }],
+                { render_type: 'text-card' } as any,
+            )
+        }
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(2)
+    expect(target.sent[0]?.texts).toEqual([''])
+    expect(target.sent[0]?.props?.forceSend).toBeTrue()
+    expect(target.sent[0]?.props?.media?.[0]?.path).toBe('/tmp/realtime-810.jpg')
+    expect((pools as any).summaryCardQueues.get(target.id)?.items.size).toBe(2)
+})
+
+test('summary-card aligned windows wait for the configured five-minute delay', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                flush_on_threshold: false,
+                align_to_interval: true,
+                flush_delay_seconds: 300,
+            },
+        } as any,
+        'target-summary-card-delayed-window',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-delayed.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-delayed.png' }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-delayed-window',
+            [
+                {
+                    id: 820,
+                    a_id: 'summary-delayed-window',
+                    platform: Platform.X,
+                    username: 'window member',
+                    u_id: 'window_member',
+                    content: 'delayed window text',
+                    url: 'https://x.com/window_member/status/820',
+                    type: 'tweet',
+                    created_at: now,
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        const queue = (pools as any).summaryCardQueues.get(target.id)
+        queue.windowStart = now - 2100
+        queue.windowEnd = now - 299
+        await (pools as any).flushDueSummaryCardQueues()
+        expect(target.sent).toHaveLength(0)
+
+        queue.windowEnd = Math.floor(Date.now() / 1000) - 301
+        await (pools as any).flushDueSummaryCardQueues()
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toMatch(/\d{4}～\d{4}/)
+    expect(packedArticles[0]?.content).toMatch(/【聚合】1 条 \/ \d{4}～\d{4}/)
+})
+
+test('idle-first summary-card items can fall back to native article send', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: true,
+                send_first_native: true,
+            },
+        } as any,
+        'target-summary-card-native-first',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-native-first',
+            [
+                {
+                    id: 830,
+                    a_id: 'summary-native-first',
+                    platform: Platform.X,
+                    username: 'native member',
+                    u_id: 'native_member',
+                    content: 'native first text',
+                    url: 'https://x.com/native_member/status/830',
+                    type: 'tweet',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toBe('native first text')
+    expect(target.sent[0]?.texts[0]).not.toContain('聚合')
+    expect((pools as any).summaryCardQueues.get(target.id)).toBeUndefined()
+})
+
+test('summary-card media duplicate budget omits the third visible occurrence', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_duplicate_limit: 2,
+            },
+        } as any,
+        'target-summary-card-media-duplicate-limit',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-dup.png' }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-dup.png' }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [
+                    {
+                        media_type: 'photo',
+                        path: `/tmp/duplicate-${article.id}.jpg`,
+                        sourceArticleId: article.a_id,
+                        sourceUrl: 'https://example.com/same-media.jpg',
+                        content_hash: 'same-media-hash',
+                    },
+                ],
+                mediaFiles: [
+                    {
+                        media_type: 'photo',
+                        path: `/tmp/duplicate-${article.id}.jpg`,
+                        sourceArticleId: article.a_id,
+                        sourceUrl: 'https://example.com/same-media.jpg',
+                        content_hash: 'same-media-hash',
+                    },
+                ],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: (files: Array<any>) =>
+            files.map((file) => ({
+                type: 'photo',
+                url: `data:image/png;base64,${Buffer.from(file.sourceArticleId || file.path).toString('base64')}`,
+                alt: file.sourceArticleId,
+            })),
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-media-duplicate-limit',
+            [0, 1, 2].map((index) => ({
+                id: 840 + index,
+                a_id: `summary-media-duplicate-${index}`,
+                platform: Platform.X,
+                username: `duplicate member ${index}`,
+                u_id: `duplicate_member_${index}`,
+                content: `duplicate text ${index}`,
+                url: `https://x.com/duplicate_member/status/${index}`,
+                type: 'tweet',
+                created_at: now + index,
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: 'https://example.com/same-media.jpg' }],
+                extra: null,
+                u_avatar: null,
+            })),
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        await (pools as any).flushAllSummaryCardQueues()
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(packedArticles[0]?.media).toHaveLength(1)
+    const itemMediaCounts = packedArticles[0]?.extra?.data?.groups.flatMap((group: any) =>
+        group.items.map((item: any) => item.media.length),
+    )
+    expect(itemMediaCounts).toEqual([1, 0, 0])
 })

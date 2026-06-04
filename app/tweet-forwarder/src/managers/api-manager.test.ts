@@ -97,3 +97,42 @@ test('APIManager resend infers website crawler platform from websites config', a
         ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
     }
 })
+
+test('APIManager returns redacted config for audit endpoints', async () => {
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+                forward_targets: [
+                    {
+                        id: 'qq-1',
+                        platform: 'qq',
+                        cfg_platform: {
+                            url: 'http://127.0.0.1:3001',
+                            token: 'bot-token',
+                            group_id: '123',
+                        },
+                    },
+                ],
+                crawlers: [
+                    {
+                        name: 'x-list',
+                        cfg_crawler: {
+                            cookie_file: '/tmp/cookies.txt',
+                        },
+                    },
+                ],
+            }) as any,
+        getDeps: () => ({}),
+    })
+
+    const response = await (manager as any).handleConfigRedacted()
+    expect(response.status).toBe(200)
+    const config = await response.json()
+    expect(config.api.secret).toBe('[redacted]')
+    expect(config.forward_targets[0].cfg_platform.token).toBe('[redacted]')
+    expect(config.crawlers[0].cfg_crawler.cookie_file).toBe('[redacted]')
+    expect(config.forward_targets[0].cfg_platform.group_id).toBe('123')
+})

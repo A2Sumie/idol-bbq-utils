@@ -7,8 +7,16 @@ import type { AppConfig } from './types'
 import { SpiderPools, SpiderTaskScheduler } from './managers/spider-manager'
 import { ForwarderPools, ForwarderTaskScheduler } from './managers/forwarder-manager'
 import { TaskManager } from './managers/task-manager'
-import { APIManager, type ApiRuntimeControl, type ApiRuntimeDeps, type ApiRuntimeMeta, type ApiRuntimeReloadResult } from './managers/api-manager'
+import {
+    APIManager,
+    type ApiRuntimeControl,
+    type ApiRuntimeDeps,
+    type ApiRuntimeMeta,
+    type ApiRuntimeReloadResult,
+} from './managers/api-manager'
 import { startMediaCacheCleanupJob, type MediaCacheCleanupJob } from './services/media-cache-service'
+import { buildRouteGraph } from './services/route-graph-service'
+import { buildRuntimeManifest } from './services/runtime-manifest-service'
 
 interface RuntimeSnapshot {
     config: AppConfig
@@ -18,6 +26,7 @@ interface RuntimeSnapshot {
     spiderPools?: SpiderPools
     forwarderPools?: ForwarderPools
     createdAt: number
+    manifest: ReturnType<typeof buildRuntimeManifest>
 }
 
 function parseConfigOrThrow(configPath: string) {
@@ -105,6 +114,7 @@ export class RuntimeController {
             startedAt: new Date(this.startedAt).toISOString(),
             lastReloadedAt: new Date(this.lastReloadedAt).toISOString(),
             reloading: this.reloadPromise !== null,
+            manifest: this.runtime?.manifest || buildRuntimeManifest(this.configPath, this.runtime?.config),
         }
     }
 
@@ -141,7 +151,9 @@ export class RuntimeController {
         try {
             this.runtime = await this.createRuntime(targetConfig)
         } catch (error) {
-            this.log.error(`Reload failed, attempting rollback: ${error instanceof Error ? error.message : String(error)}`)
+            this.log.error(
+                `Reload failed, attempting rollback: ${error instanceof Error ? error.message : String(error)}`,
+            )
             try {
                 this.runtime = await this.createRuntime(previousConfig)
                 this.log.warn('Runtime rollback completed')
@@ -173,19 +185,21 @@ export class RuntimeController {
         const compatibleModels: Array<BaseCompatibleModel> = []
         const emitter = new EventEmitter()
 
-        const {
-            crawlers,
-            cfg_crawler,
-            forward_targets,
-            cfg_forward_target,
-            forwarders,
-            cfg_forwarder,
-            formatters,
-        } = config
+        const { crawlers, cfg_crawler, forward_targets, cfg_forward_target, forwarders, cfg_forwarder, formatters } =
+            config
 
         this.log.info(
             `[Trace] Config loaded. Connections keys: ${config.connections ? Object.keys(config.connections).join(',') : 'UNDEFINED'}`,
         )
+        const routeGraph = buildRouteGraph(config)
+        if (routeGraph.diagnostics.length > 0) {
+            this.log.warn(
+                `Route graph diagnostics: ${routeGraph.counts.errors} error(s), ${routeGraph.counts.warnings} warning(s)`,
+            )
+            for (const diagnostic of routeGraph.diagnostics.slice(0, 20)) {
+                this.log.warn(`[route:${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}`)
+            }
+        }
 
         let spiderPools: SpiderPools | undefined
         if (crawlers && crawlers.length > 0) {
@@ -263,6 +277,7 @@ export class RuntimeController {
             spiderPools,
             forwarderPools,
             createdAt: Date.now(),
+            manifest: buildRuntimeManifest(this.configPath, config),
         }
     }
 
