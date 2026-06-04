@@ -19,6 +19,7 @@ import { buildRouteGraph } from './services/route-graph-service'
 import { buildRuntimeManifest } from './services/runtime-manifest-service'
 
 interface RuntimeSnapshot {
+    mode: RuntimeMode
     config: AppConfig
     emitter: EventEmitter
     taskSchedulers: Array<TaskScheduler.TaskScheduler>
@@ -27,6 +28,19 @@ interface RuntimeSnapshot {
     forwarderPools?: ForwarderPools
     createdAt: number
     manifest: ReturnType<typeof buildRuntimeManifest>
+}
+
+export type RuntimeMode = 'online' | 'api-only' | 'offline'
+
+export function resolveRuntimeMode(env: Record<string, string | undefined> = process.env): RuntimeMode {
+    const raw = String(env.IDOL_BBQ_RUNTIME_MODE || 'online')
+        .trim()
+        .toLowerCase()
+        .replace(/_/g, '-')
+    if (raw === 'online' || raw === 'api-only' || raw === 'offline') {
+        return raw
+    }
+    throw new Error(`Invalid IDOL_BBQ_RUNTIME_MODE: ${raw || '(empty)'}`)
 }
 
 function parseConfigOrThrow(configPath: string) {
@@ -41,6 +55,7 @@ export class RuntimeController {
     private readonly configPath: string
     private readonly cacheRoot: string
     private readonly log: Logger
+    private readonly runtimeMode: RuntimeMode
     private runtime?: RuntimeSnapshot
     private apiManager?: APIManager
     private reloadSequence = 0
@@ -50,15 +65,32 @@ export class RuntimeController {
     private shuttingDown = false
     private mediaCacheCleanupJob?: MediaCacheCleanupJob
 
-    constructor(configPath = './config.yaml', cacheRoot = CACHE_DIR_ROOT, parentLog: Logger = log) {
+    constructor(
+        configPath = './config.yaml',
+        cacheRoot = CACHE_DIR_ROOT,
+        parentLog: Logger = log,
+        options: { runtimeMode?: RuntimeMode } = {},
+    ) {
         this.configPath = configPath
         this.cacheRoot = cacheRoot
+        this.runtimeMode = options.runtimeMode || resolveRuntimeMode()
         this.log = parentLog.child({ subservice: 'RuntimeController' })
     }
 
     async init() {
+        if (this.runtimeMode === 'offline') {
+            this.startedAt = Date.now()
+            this.lastReloadedAt = this.startedAt
+            this.log.warn('Runtime mode offline: config parsing, migrations, API, schedulers, and senders are disabled')
+            return
+        }
+
         initializeCacheDirectories(this.cacheRoot)
-        this.mediaCacheCleanupJob = startMediaCacheCleanupJob(this.log)
+        if (this.runtimeMode === 'online') {
+            this.mediaCacheCleanupJob = startMediaCacheCleanupJob(this.log)
+        } else {
+            this.log.warn('Runtime mode api-only: media cache cleanup and all dispatch/send workers are disabled')
+        }
         const config = parseConfigOrThrow(this.configPath)
         this.runtime = await this.createRuntime(config)
         this.startedAt = Date.now()
@@ -111,6 +143,7 @@ export class RuntimeController {
         return {
             generation: this.reloadSequence,
             configPath: this.configPath,
+            mode: this.runtimeMode,
             startedAt: new Date(this.startedAt).toISOString(),
             lastReloadedAt: new Date(this.lastReloadedAt).toISOString(),
             reloading: this.reloadPromise !== null,
@@ -136,6 +169,9 @@ export class RuntimeController {
     }
 
     private async performReload(nextConfig?: AppConfig, reason = 'manual'): Promise<ApiRuntimeReloadResult> {
+        if (this.runtimeMode === 'offline') {
+            throw new Error('Runtime reload is disabled in offline mode')
+        }
         const previousRuntime = this.runtime
         if (!previousRuntime) {
             throw new Error('Runtime has not been initialized')
@@ -198,6 +234,19 @@ export class RuntimeController {
             )
             for (const diagnostic of routeGraph.diagnostics.slice(0, 20)) {
                 this.log.warn(`[route:${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.message}`)
+            }
+        }
+
+        if (this.runtimeMode === 'api-only') {
+            this.log.warn('Runtime mode api-only: route graph loaded without crawler/forwarder schedulers or senders')
+            return {
+                mode: this.runtimeMode,
+                config,
+                emitter,
+                taskSchedulers,
+                compatibleModels,
+                createdAt: Date.now(),
+                manifest: buildRuntimeManifest(this.configPath, config),
             }
         }
 
@@ -270,6 +319,7 @@ export class RuntimeController {
         }
 
         return {
+            mode: this.runtimeMode,
             config,
             emitter,
             taskSchedulers,

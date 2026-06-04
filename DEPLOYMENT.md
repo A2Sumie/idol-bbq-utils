@@ -57,6 +57,19 @@ Do not use `docker compose up -d --build` as the default remediation deploy path
 ### 3. Production Start
 Production start is a separate deliberate operation after stopped deploy verification, migration review, and an explicit user request.
 
+The compose file defaults to `IDOL_BBQ_RUNTIME_MODE=offline` and `restart=no`. A
+plain `docker compose up -d` must not activate crawlers, migrations, or senders.
+For an intentional production start, set the runtime mode explicitly:
+
+```bash
+IDOL_BBQ_RUNTIME_MODE=online IDOL_BBQ_RESTART_POLICY=always docker compose up -d spider
+```
+
+`IDOL_BBQ_RUNTIME_MODE=api-only` starts only the API surface and does not create
+crawler schedulers, forwarder schedulers, task queue polling, or sender pools.
+Startup migrations run automatically only in `online` mode unless
+`IDOL_BBQ_RUN_MIGRATIONS=1` is set.
+
 ## Feature Configuration
 ### Batch Sending & Deduplication
 - **Media Deduplication**: Enabled by default. Duplicates are checked via SHA-256 hash against `media_hashes` table.

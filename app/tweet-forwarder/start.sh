@@ -10,7 +10,12 @@ export BROWSER_PROFILE_DIR="${BROWSER_PROFILE_DIR:-/app/assets/cookies/browser-p
 
 XVFB_PID=""
 APP_PID=""
+HOLD_PID=""
 cleanup() {
+    if [ -n "$HOLD_PID" ]; then
+        kill "$HOLD_PID" >/dev/null 2>&1 || true
+        wait "$HOLD_PID" >/dev/null 2>&1 || true
+    fi
     if [ -n "$APP_PID" ]; then
         kill "$APP_PID" >/dev/null 2>&1 || true
         wait "$APP_PID" >/dev/null 2>&1 || true
@@ -21,11 +26,40 @@ cleanup() {
     fi
 }
 
-trap cleanup EXIT INT TERM
+terminate() {
+    cleanup
+    exit 0
+}
+
+trap cleanup EXIT
+trap terminate INT TERM
+
+runtime_mode="${IDOL_BBQ_RUNTIME_MODE:-offline}"
+runtime_mode="$(printf '%s' "$runtime_mode" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+case "$runtime_mode" in
+    online | api-only | offline)
+        ;;
+    *)
+        echo "Invalid IDOL_BBQ_RUNTIME_MODE: $runtime_mode (expected online, api-only, or offline)" >&2
+        exit 64
+        ;;
+esac
+export IDOL_BBQ_RUNTIME_MODE="$runtime_mode"
 
 mkdir -p /tmp/tweet-forwarder /tmp/tweet-forwarder/logs /tmp/tweet-forwarder/media "$BROWSER_PROFILE_DIR"
 
-if [ "${ENABLE_XVFB:-1}" != "0" ] && command -v Xvfb >/dev/null 2>&1 && [ -z "${DISPLAY:-}" ]; then
+if [ "$runtime_mode" = "offline" ]; then
+    echo "IDOL_BBQ_RUNTIME_MODE=offline: skipping media refresh, database migration, and application startup."
+    echo "Container is intentionally idle; set IDOL_BBQ_RUNTIME_MODE=online for production."
+    while :; do
+        sleep 3600 &
+        HOLD_PID=$!
+        wait "$HOLD_PID" || true
+        HOLD_PID=""
+    done
+fi
+
+if [ "$runtime_mode" = "online" ] && [ "${ENABLE_XVFB:-1}" != "0" ] && command -v Xvfb >/dev/null 2>&1 && [ -z "${DISPLAY:-}" ]; then
     export DISPLAY="${XVFB_DISPLAY:-:99}"
     XVFB_DISPLAY_NUM="$(printf '%s' "$DISPLAY" | sed 's/^://')"
     XVFB_LOCK_FILE="/tmp/.X${XVFB_DISPLAY_NUM}-lock"
@@ -44,16 +78,40 @@ if [ "${ENABLE_XVFB:-1}" != "0" ] && command -v Xvfb >/dev/null 2>&1 && [ -z "${
     sleep 1
 fi
 
-echo "Refreshing media tools..."
-if ! /app/tools/update-media-tools.sh; then
-    echo "Media tools refresh failed, continuing with bundled versions." >&2
+refresh_media_tools="${IDOL_BBQ_REFRESH_MEDIA_TOOLS:-auto}"
+if [ "$refresh_media_tools" = "auto" ]; then
+    if [ "$runtime_mode" = "online" ]; then
+        refresh_media_tools="1"
+    else
+        refresh_media_tools="0"
+    fi
+fi
+if [ "$refresh_media_tools" = "1" ]; then
+    echo "Refreshing media tools..."
+    if ! /app/tools/update-media-tools.sh; then
+        echo "Media tools refresh failed, continuing with bundled versions." >&2
+    fi
+else
+    echo "Skipping media tools refresh for runtime mode: $runtime_mode"
 fi
 
-echo "Migrating database..."
-# Use the installed prisma CLI
-bunx prisma migrate deploy
+run_migrations="${IDOL_BBQ_RUN_MIGRATIONS:-auto}"
+if [ "$run_migrations" = "auto" ]; then
+    if [ "$runtime_mode" = "online" ]; then
+        run_migrations="1"
+    else
+        run_migrations="0"
+    fi
+fi
+if [ "$run_migrations" = "1" ]; then
+    echo "Migrating database..."
+    # Use the installed prisma CLI
+    bunx prisma migrate deploy
+else
+    echo "Skipping database migration for runtime mode: $runtime_mode"
+fi
 
-echo "Starting application..."
+echo "Starting application in runtime mode: $runtime_mode"
 bun /app/bin.js &
 APP_PID=$!
 wait "$APP_PID"

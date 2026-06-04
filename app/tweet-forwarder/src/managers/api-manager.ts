@@ -52,6 +52,7 @@ export interface ApiRuntimeDeps {
 export interface ApiRuntimeMeta {
     generation: number
     configPath: string
+    mode?: string
     startedAt: string
     lastReloadedAt: string
     reloading: boolean

@@ -33,6 +33,7 @@ HELP
         tools/forwarder-remote-drift.sh \
         tools/forwarder-remote-converge.sh \
         tools/forwarder-green-gate.sh
+    run sh -n app/tweet-forwarder/start.sh
     run bun run audit:config -- --fail-on-diagnostics
     run bun test
     run bun --filter @idol-bbq-utils/tweet-forwarder build

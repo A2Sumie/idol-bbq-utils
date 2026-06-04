@@ -12,13 +12,15 @@ services:
     container_name: 'forwarder-new'
     # 直接使用主机的网络，完美解决访问主机 127.0.0.1 的问题
     network_mode: 'host'
-    # 失败时自动重启
-    restart: 'always'
+    # Default to no restart/offline so a plain compose up cannot activate production.
+    restart: '${IDOL_BBQ_RESTART_POLICY:-no}'
     environment:
       # 设置时区为东京时间，您可以根据需要修改
       - TZ=Asia/Tokyo
       # 设置日志级别
       - LOG_LEVEL=info
+      # Set IDOL_BBQ_RUNTIME_MODE=online explicitly when production start is intended.
+      - IDOL_BBQ_RUNTIME_MODE=${IDOL_BBQ_RUNTIME_MODE:-offline}
       # TV 存档上传单独走天津风 biliup cookies，不影响其他 bilibili 任务
       - ARCHIVE_UPLOAD_COOKIE_SOURCE=/app/assets/cookies/biliup.tianjinfeng.cookies.json
     volumes:
