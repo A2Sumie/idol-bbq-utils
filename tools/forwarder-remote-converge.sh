@@ -265,7 +265,11 @@ REMOTE
 apply_local_head() {
     local candidate_file="$1" expected_commit="$2"
     local desired_tar remote_tar env_prefix
-    mapfile -t candidate_paths < "$candidate_file"
+    local candidate_paths=()
+    local candidate_path
+    while IFS= read -r candidate_path || [ -n "$candidate_path" ]; do
+        candidate_paths+=("$candidate_path")
+    done < "$candidate_file"
     if [ "${#candidate_paths[@]}" -eq 0 ]; then
         return
     fi
