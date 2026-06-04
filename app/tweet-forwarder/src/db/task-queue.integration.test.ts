@@ -202,7 +202,7 @@ test('TaskQueue add revives failed idempotent tasks without duplicating pending 
         idempotency_key: 'same-window',
     })
 
-    await DB.TaskQueue.updateStatus(first.id, 'failed', {
+    await DB.TaskQueue.updateStatus(first.id, DB.TaskQueue.STATUS.Failed, {
         last_error: 'transport down',
         result_summary: 'failed once',
     })
@@ -268,7 +268,7 @@ test('TaskQueue claim, stale recovery, filtering, and terminal status updates wo
     expect(recovered.count).toBe(1)
     expect(await DB.TaskQueue.countsByStatus()).toEqual({ pending: 2 })
 
-    await DB.TaskQueue.updateStatus(due.id, 'completed', {
+    await DB.TaskQueue.updateStatus(due.id, DB.TaskQueue.STATUS.Completed, {
         result_summary: 'done',
     })
     const completed = await DB.TaskQueue.list(10, {

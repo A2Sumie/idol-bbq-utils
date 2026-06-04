@@ -134,7 +134,7 @@ export class TaskManager extends BaseCompatibleModel {
                     }
                     await DB.TaskQueue.updateStatus(
                         claimedTask.id,
-                        'completed',
+                        DB.TaskQueue.STATUS.Completed,
                         resultSummary ? { result_summary: resultSummary } : undefined,
                     )
                 } catch (e) {
@@ -155,7 +155,7 @@ export class TaskManager extends BaseCompatibleModel {
                     }
 
                     this.log?.error(`Task ${claimedTask.id} failed: ${errorMessage}`)
-                    await DB.TaskQueue.updateStatus(claimedTask.id, 'failed', {
+                    await DB.TaskQueue.updateStatus(claimedTask.id, DB.TaskQueue.STATUS.Failed, {
                         last_error: errorMessage,
                         result_summary:
                             e instanceof TaskDeliveryError && e.retryable

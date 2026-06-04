@@ -2,9 +2,14 @@ import { expect, test } from 'bun:test'
 import DB from '@/db'
 
 test('TaskQueue idempotent add only revives failed existing tasks', () => {
-    expect(DB.TaskQueue.shouldReviveExistingTaskOnAdd({ status: 'failed' })).toBeTrue()
+    expect(DB.TaskQueue.shouldReviveExistingTaskOnAdd({ status: DB.TaskQueue.STATUS.Failed })).toBeTrue()
 
-    for (const status of ['pending', 'processing', 'completed', 'cancelled']) {
+    for (const status of [
+        DB.TaskQueue.STATUS.Pending,
+        DB.TaskQueue.STATUS.Processing,
+        DB.TaskQueue.STATUS.Completed,
+        DB.TaskQueue.STATUS.Cancelled,
+    ]) {
         expect(DB.TaskQueue.shouldReviveExistingTaskOnAdd({ status })).toBeFalse()
     }
 })
@@ -35,11 +40,11 @@ test('TaskQueue requeue data clears terminal failure fields while preserving res
 })
 
 test('TaskQueue terminal status policy is explicit', () => {
-    for (const status of ['completed', 'failed', 'cancelled']) {
+    for (const status of [DB.TaskQueue.STATUS.Completed, DB.TaskQueue.STATUS.Failed, DB.TaskQueue.STATUS.Cancelled]) {
         expect(DB.TaskQueue.isTerminalStatus(status)).toBeTrue()
     }
 
-    for (const status of ['pending', 'processing', 'queued', 'retrying']) {
+    for (const status of [DB.TaskQueue.STATUS.Pending, DB.TaskQueue.STATUS.Processing, 'queued', 'retrying']) {
         expect(DB.TaskQueue.isTerminalStatus(status)).toBeFalse()
     }
 })

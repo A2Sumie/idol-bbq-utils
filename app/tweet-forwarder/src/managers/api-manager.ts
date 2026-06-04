@@ -1090,12 +1090,12 @@ export class APIManager extends BaseCompatibleModel {
                 task,
             })
         } catch (error) {
-            await DB.TaskQueue.updateStatus(queueTask.id, 'failed', {
+            await DB.TaskQueue.updateStatus(queueTask.id, DB.TaskQueue.STATUS.Failed, {
                 last_error: error instanceof Error ? error.message : String(error),
             })
             throw error
         }
-        await DB.TaskQueue.updateStatus(queueTask.id, 'completed', {
+        await DB.TaskQueue.updateStatus(queueTask.id, DB.TaskQueue.STATUS.Completed, {
             result_summary: `crawler ${crawler.name} dispatched`,
         })
         return jsonResponse({ success: true, taskId, crawler: crawler.name })
@@ -1154,7 +1154,7 @@ export class APIManager extends BaseCompatibleModel {
         try {
             const existing = await DB.Article.checkExist(article)
             if (existing) {
-                await DB.TaskQueue.updateStatus(task.id, 'failed', {
+                await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Failed, {
                     last_error: `Article already exists: ${article.a_id}`,
                 })
                 return new Response(`Article already exists: ${article.a_id}`, { status: 409 })
@@ -1185,7 +1185,7 @@ export class APIManager extends BaseCompatibleModel {
                 forwarded = true
             }
 
-            await DB.TaskQueue.updateStatus(task.id, 'completed', {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Completed, {
                 result_summary: `simulated ${article.a_id}`,
             })
 
@@ -1198,7 +1198,7 @@ export class APIManager extends BaseCompatibleModel {
                 article: savedArticle,
             })
         } catch (error) {
-            await DB.TaskQueue.updateStatus(task.id, 'failed', {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Failed, {
                 last_error: error instanceof Error ? error.message : String(error),
             })
             throw error
@@ -1235,7 +1235,7 @@ export class APIManager extends BaseCompatibleModel {
             const processor = await this.createProcessor(processorDef)
             await this.translateArticleChain(article, processor, body.force === true)
             const updated = await DB.Article.getSingleArticle(article.id, article.platform)
-            await DB.TaskQueue.updateStatus(task.id, 'completed', {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Completed, {
                 result_summary: `reprocessed ${article.a_id}`,
             })
             return jsonResponse({
@@ -1243,7 +1243,7 @@ export class APIManager extends BaseCompatibleModel {
                 article: updated,
             })
         } catch (error) {
-            await DB.TaskQueue.updateStatus(task.id, 'failed', {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Failed, {
                 last_error: error instanceof Error ? error.message : String(error),
             })
             throw error
@@ -1298,12 +1298,12 @@ export class APIManager extends BaseCompatibleModel {
 
         try {
             await this.deps.forwarderPools.resendArticle(article as any, body.crawlerName)
-            await DB.TaskQueue.updateStatus(task.id, 'completed', {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Completed, {
                 result_summary: `resent ${article.a_id}`,
             })
             return jsonResponse({ success: true, articleId: article.id, crawlerName: body.crawlerName })
         } catch (error) {
-            await DB.TaskQueue.updateStatus(task.id, 'failed', {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Failed, {
                 last_error: error instanceof Error ? error.message : String(error),
             })
             throw error
@@ -1373,7 +1373,7 @@ export class APIManager extends BaseCompatibleModel {
                 },
             })
 
-            await DB.TaskQueue.updateStatus(task.id, 'completed', {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Completed, {
                 result_summary: `${action} completed`,
             })
 
@@ -1388,7 +1388,7 @@ export class APIManager extends BaseCompatibleModel {
                 },
             })
         } catch (error) {
-            await DB.TaskQueue.updateStatus(task.id, 'failed', {
+            await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Failed, {
                 last_error: error instanceof Error ? error.message : String(error),
             })
             throw error

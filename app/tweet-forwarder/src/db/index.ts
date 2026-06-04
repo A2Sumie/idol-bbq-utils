@@ -439,10 +439,20 @@ namespace DB {
     }
 
     export namespace TaskQueue {
-        export const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+        export const STATUS = {
+            Pending: 'pending',
+            Processing: 'processing',
+            Completed: 'completed',
+            Failed: 'failed',
+            Cancelled: 'cancelled',
+        } as const
+
+        export type Status = (typeof STATUS)[keyof typeof STATUS]
+
+        export const TERMINAL_STATUSES = new Set<string>([STATUS.Completed, STATUS.Failed, STATUS.Cancelled])
 
         export function shouldReviveExistingTaskOnAdd(existing: { status: string }) {
-            return existing.status === 'failed'
+            return existing.status === STATUS.Failed
         }
 
         export function clampListLimit(limit = 50) {
@@ -491,7 +501,7 @@ namespace DB {
                 payload,
                 execute_at,
                 updated_at: now,
-                status: 'pending',
+                status: STATUS.Pending,
                 finished_at: null,
                 last_error: null,
                 result_summary: 'requeued failed idempotent task',
@@ -538,7 +548,7 @@ namespace DB {
                         execute_at,
                         created_at: now,
                         updated_at: now,
-                        status: 'pending',
+                        status: STATUS.Pending,
                         source_ref: meta?.source_ref,
                         action_type: meta?.action_type,
                         idempotency_key: meta?.idempotency_key,
@@ -573,7 +583,7 @@ namespace DB {
         export async function getPending(now: number) {
             return await prisma.task_queue.findMany({
                 where: {
-                    status: 'pending',
+                    status: STATUS.Pending,
                     execute_at: {
                         lte: now,
                     },
@@ -587,13 +597,13 @@ namespace DB {
         export async function recoverStaleProcessing(now: number, staleAfterSeconds: number) {
             return await prisma.task_queue.updateMany({
                 where: {
-                    status: 'processing',
+                    status: STATUS.Processing,
                     updated_at: {
                         lte: now - staleAfterSeconds,
                     },
                 },
                 data: {
-                    status: 'pending',
+                    status: STATUS.Pending,
                     updated_at: now,
                     last_error: 'Recovered stale processing task after runtime interruption',
                 },
@@ -605,10 +615,10 @@ namespace DB {
             const updated = await prisma.task_queue.updateMany({
                 where: {
                     id,
-                    status: 'pending',
+                    status: STATUS.Pending,
                 },
                 data: {
-                    status: 'processing',
+                    status: STATUS.Processing,
                     updated_at: now,
                     finished_at: null,
                     last_error: null,
@@ -624,7 +634,7 @@ namespace DB {
 
         export async function updateStatus(
             id: number,
-            status: string,
+            status: Status,
             meta?: { last_error?: string | null; result_summary?: string | null },
         ) {
             const now = Math.floor(Date.now() / 1000)
@@ -649,7 +659,7 @@ namespace DB {
             return await prisma.task_queue.update({
                 where: { id },
                 data: {
-                    status: 'pending',
+                    status: STATUS.Pending,
                     execute_at,
                     updated_at: now,
                     finished_at: null,
