@@ -5,6 +5,9 @@
 - **Path**: `~/idol-bbq-utils`
 - **Runtime database**: SQLite mounted as `./assets/refactor.db:/app/data.db`
 - **Runtime config**: host-mounted `./assets/config.yaml:/app/config.yaml`
+- **Migration backups**: default container path `/tmp/tweet-forwarder/logs/db-migrations`
+  (host path with the current compose volume). The checked-in compose file also
+  maps `./assets/backups:/app/backups` for explicit backup-dir overrides.
 
 ## Standard Workflow
 
@@ -67,8 +70,27 @@ IDOL_BBQ_RUNTIME_MODE=online IDOL_BBQ_RESTART_POLICY=always docker compose up -d
 
 `IDOL_BBQ_RUNTIME_MODE=api-only` starts only the API surface and does not create
 crawler schedulers, forwarder schedulers, task queue polling, or sender pools.
-Startup migrations run automatically only in `online` mode unless
-`IDOL_BBQ_RUN_MIGRATIONS=1` is set.
+High-risk action endpoints return `503` in non-`online` modes before enqueueing
+or sending.
+
+Startup migrations run automatically only in `online` mode. Before `prisma
+migrate deploy`, startup now:
+
+- refuses a missing DB by default (`IDOL_BBQ_REQUIRE_EXISTING_DB_FOR_MIGRATION=1`);
+- creates an atomic migration lock;
+- runs SQLite `PRAGMA quick_check`;
+- creates a consistent SQLite backup snapshot, then copies `-wal`/`-shm` sidecars
+  when present for forensic context;
+- writes a small backup manifest with the build commit and migration head;
+- runs another quick check after migration.
+
+The default backup directory is `/tmp/tweet-forwarder/logs/db-migrations`.
+Override with `IDOL_BBQ_DB_BACKUP_DIR=/app/backups/db-migrations` only after
+confirming the host `assets/backups` mount is present and writable by the
+container user. Running migrations in `api-only` or `offline` is refused even
+when `IDOL_BBQ_RUN_MIGRATIONS=1` is set, unless
+`IDOL_BBQ_ALLOW_NON_ONLINE_MIGRATIONS=1` is also set for a deliberate maintenance
+migration.
 
 ## Feature Configuration
 ### Batch Sending & Deduplication
@@ -83,6 +105,9 @@ To verify changes:
     ```bash
     STRICT_COMMIT=1 bun run preflight:forwarder
     ```
+    Add `STRICT_MIGRATIONS=1` when validating readiness for an intentional
+    online start; it fails if the production DB has pending, failed, or
+    image/DB-drifted Prisma migrations.
 2.  **Stopped state**:
     ```bash
     ssh 3020e 'docker inspect forwarder-new --format "status={{.State.Status}} running={{.State.Running}} restart={{.HostConfig.RestartPolicy.Name}} image={{.Image}}"'

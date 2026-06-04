@@ -37,3 +37,5 @@ services:
       - '/tmp/tweet-forwarder/media:/tmp/tweet-forwarder/media'
       # 6. 挂载 Instagram live relay 缓存目录
       - '/tmp/tweet-forwarder/instagram-live:/tmp/tweet-forwarder/instagram-live'
+      # 7. 挂载数据库迁移/运行时备份目录
+      - './assets/backups:/app/backups'

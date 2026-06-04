@@ -7,6 +7,7 @@ IMAGE_NAME="${IMAGE_NAME:-idol-bbq-utils-spider:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
 EXPECTED_COMMIT="${EXPECTED_COMMIT:-$(git rev-parse HEAD 2>/dev/null || true)}"
 EXPECTED_RUNTIME_MODE="${EXPECTED_RUNTIME_MODE:-offline}"
+STRICT_MIGRATIONS="${STRICT_MIGRATIONS:-0}"
 STRICT_COMMIT="${STRICT_COMMIT:-0}"
 
 if [ -n "${SSH_OPTS:-}" ]; then
@@ -18,7 +19,7 @@ fi
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE STRICT_COMMIT; do
+    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE STRICT_MIGRATIONS STRICT_COMMIT; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -42,6 +43,7 @@ Environment:
   CONTAINER_NAME=forwarder-new
   EXPECTED_COMMIT=<local HEAD>
   EXPECTED_RUNTIME_MODE=offline
+  STRICT_MIGRATIONS=0      # set 1 to fail when DB migrations are pending/failed
   STRICT_COMMIT=0         # set 1 to fail when image commit != expected commit
 HELP
         return
@@ -63,7 +65,8 @@ image_oci_revision="$(docker image inspect "$container_image" --format '{{ index
 image_created_label="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' 2>/dev/null || true)"
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
 build_commit_file="$(docker run --rm --entrypoint cat "$container_image" /app/build-commit 2>/dev/null || true)"
-migration_head="$(docker run --rm --entrypoint sh "$container_image" -lc 'find /app/prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort | tail -1')"
+migration_names="$(docker run --rm --entrypoint sh "$container_image" -lc 'find /app/prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort')"
+migration_head="$(printf '%s\n' "$migration_names" | tail -1)"
 
 audit_json="$(docker run --rm --entrypoint bun -v "$config_path:/app/config.yaml:ro" "$container_image" /app/tools/config-audit.js --config /app/config.yaml --fail-on-diagnostics)"
 audit_tmp="$(mktemp)"
@@ -72,6 +75,97 @@ printf '%s\n' "$audit_json" > "$audit_tmp"
 cd "$repo"
 remote_dirty_tracked="$(git status --porcelain=v1 --untracked-files=no | wc -l | tr -d ' ')"
 remote_dirty_untracked="$(git status --porcelain=v1 --untracked-files=normal | awk '$1 == "??" { count += 1 } END { print count + 0 }')"
+db_path="$repo/assets/refactor.db"
+backup_dir="/tmp/tweet-forwarder/logs/db-migrations"
+backup_count=0
+latest_backup=""
+if [ -d "$backup_dir" ]; then
+    backup_count="$(find "$backup_dir" -maxdepth 1 -type f -name 'refactor.db.*' ! -name '*.manifest' ! -name '*-wal' ! -name '*-shm' | wc -l | tr -d ' ')"
+    latest_backup="$(find "$backup_dir" -maxdepth 1 -type f -name 'refactor.db.*' ! -name '*.manifest' ! -name '*-wal' ! -name '*-shm' -printf '%T@ %p\n' | sort -nr | awk 'NR == 1 { $1=""; sub(/^ /, ""); print }')"
+fi
+migration_names_tmp="$(mktemp)"
+printf '%s\n' "$migration_names" > "$migration_names_tmp"
+db_status_tmp="$(mktemp)"
+python3 - "$db_path" "$migration_names_tmp" "$backup_dir" "$backup_count" "$latest_backup" > "$db_status_tmp" <<'PY'
+import os
+import sqlite3
+import sys
+
+db_path, migrations_file, backup_dir, backup_count, latest_backup = sys.argv[1:6]
+with open(migrations_file, "r", encoding="utf-8") as handle:
+    migration_names = [line.strip() for line in handle if line.strip()]
+
+def emit(key, value):
+    print(f"{key}={value}")
+
+emit("db_path", db_path)
+emit("db_exists", str(os.path.isfile(db_path)).lower())
+emit("db_backup_dir", backup_dir)
+emit("db_backup_dir_exists", str(os.path.isdir(backup_dir)).lower())
+emit("db_backup_count", backup_count)
+emit("db_latest_backup", latest_backup)
+
+if not os.path.isfile(db_path):
+    emit("db_size", 0)
+    emit("db_prisma_migrations_table", "false")
+    emit("db_applied_migration_count", 0)
+    emit("db_applied_migration_head", "")
+    emit("db_failed_migration_count", 0)
+    emit("db_rolled_back_migration_count", 0)
+    emit("db_unknown_migration_count", 0)
+    emit("db_unknown_migrations", "")
+    emit("db_pending_migration_count", len(migration_names))
+    emit("db_pending_migrations", ",".join(migration_names))
+    emit("migration_status", "missing_db")
+    raise SystemExit(0)
+
+emit("db_size", os.path.getsize(db_path))
+connection = sqlite3.connect(db_path)
+try:
+    row = connection.execute(
+        "select name from sqlite_master where type='table' and name='_prisma_migrations'"
+    ).fetchone()
+    has_table = row is not None
+    emit("db_prisma_migrations_table", str(has_table).lower())
+    if not has_table:
+        applied = []
+        failed = 0
+        rolled_back = 0
+    else:
+        rows = connection.execute(
+            "select migration_name, finished_at, rolled_back_at from _prisma_migrations order by migration_name"
+        ).fetchall()
+        applied = [name for name, finished_at, rolled_back_at in rows if finished_at and not rolled_back_at]
+        failed = sum(1 for _name, finished_at, rolled_back_at in rows if not finished_at and not rolled_back_at)
+        rolled_back = sum(1 for _name, _finished_at, rolled_back_at in rows if rolled_back_at)
+finally:
+    connection.close()
+
+applied_set = set(applied)
+known_set = set(migration_names)
+pending = [name for name in migration_names if name not in applied_set]
+unknown = [name for name in applied if name not in known_set]
+emit("db_applied_migration_count", len(applied))
+emit("db_applied_migration_head", applied[-1] if applied else "")
+emit("db_failed_migration_count", failed)
+emit("db_rolled_back_migration_count", rolled_back)
+emit("db_unknown_migration_count", len(unknown))
+emit("db_unknown_migrations", ",".join(unknown))
+emit("db_pending_migration_count", len(pending))
+emit("db_pending_migrations", ",".join(pending))
+if failed:
+    status = "failed"
+elif unknown:
+    status = "drift"
+elif pending:
+    status = "pending"
+elif not has_table:
+    status = "missing_migration_table"
+else:
+    status = "up-to-date"
+emit("migration_status", status)
+PY
+migration_status="$(awk -F= '$1 == "migration_status" { print $2 }' "$db_status_tmp")"
 
 printf 'container_status=%s\n' "$container_status"
 printf 'container_running=%s\n' "$container_running"
@@ -109,6 +203,8 @@ print(f'summary_card_routes={data["route_graph"]["summary_card_routes"]}')
 PY
 rm -f "$audit_tmp"
 printf 'migration_head=%s\n' "$migration_head"
+cat "$db_status_tmp"
+rm -f "$migration_names_tmp" "$db_status_tmp"
 printf 'remote_dirty_tracked=%s\n' "$remote_dirty_tracked"
 printf 'remote_dirty_untracked=%s\n' "$remote_dirty_untracked"
 
@@ -118,6 +214,10 @@ if [ "$container_running" != "false" ] || [ "$restart_policy" != "no" ]; then
 fi
 if [ -n "${EXPECTED_RUNTIME_MODE:-}" ] && [ "$runtime_mode" != "$EXPECTED_RUNTIME_MODE" ]; then
     printf 'preflight failed: runtime mode mismatch expected=%s actual=%s\n' "$EXPECTED_RUNTIME_MODE" "$runtime_mode" >&2
+    exit 1
+fi
+if [ "$STRICT_MIGRATIONS" = "1" ] && [ "$migration_status" != "up-to-date" ]; then
+    printf 'preflight failed: migration status is %s\n' "$migration_status" >&2
     exit 1
 fi
 if [ "$STRICT_COMMIT" = "1" ] && { [ -z "${EXPECTED_COMMIT:-}" ] || [ "$image_build_commit" != "$EXPECTED_COMMIT" ] || [ "$build_commit_file" != "$EXPECTED_COMMIT" ]; }; then
