@@ -38,6 +38,7 @@ import { buildRuntimeManifest } from '@/services/runtime-manifest-service'
 import { redactSecrets } from '@/services/redaction-service'
 import { buildNotificationSignalRecord, type NotificationSignalInput } from '@/services/notification-signal-service'
 import { buildNotificationSignalSummary } from '@/services/notification-signal-summary-service'
+import { resolveConfiguredCookieFilePath } from '@/services/cookie-file-path-service'
 import { redactTaskQueueEntriesForApi } from '@/services/task-queue-redaction-service'
 import { redactProcessorRunsForApi } from '@/services/processor-run-redaction-service'
 import {
@@ -518,7 +519,8 @@ export class APIManager extends BaseCompatibleModel {
             const crawler = this.resolveCrawlerByFinder(finder)
 
             if (crawler && crawler.cfg_crawler?.cookie_file) {
-                cookieFile = crawler.cfg_crawler.cookie_file
+                cookieFile =
+                    resolveConfiguredCookieFilePath(crawler.cfg_crawler.cookie_file) || crawler.cfg_crawler.cookie_file
             } else {
                 const safeName = path.basename(finder).replace(/\.txt$/, '')
                 cookieFile = path.join(getCookiesRoot(), `${safeName}.txt`)
@@ -836,7 +838,7 @@ export class APIManager extends BaseCompatibleModel {
 
     private resolveCookieFilePath(finder: string, crawler?: AppConfig['crawlers'][number]) {
         if (crawler?.cfg_crawler?.cookie_file) {
-            return crawler.cfg_crawler.cookie_file
+            return resolveConfiguredCookieFilePath(crawler.cfg_crawler.cookie_file) || crawler.cfg_crawler.cookie_file
         }
 
         const safeName = path.basename(finder).replace(/\.txt$/, '')

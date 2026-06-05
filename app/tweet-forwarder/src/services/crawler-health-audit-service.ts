@@ -3,6 +3,7 @@ import {
     auditNetscapeCookieFile,
     getCookieString,
     parseNetscapeCookieToPuppeteerCookie,
+    UserAgent,
     type NetscapeCookieFileAudit,
 } from '@idol-bbq-utils/spider'
 import type { CookieData } from 'puppeteer-core'
@@ -66,6 +67,14 @@ type XLiveProbeTarget =
           screen_name: string
       }
 
+type InstagramLiveProbeTarget = {
+    username: string
+}
+
+type TikTokLiveProbeTarget = {
+    username: string
+}
+
 type CrawlerHealthAuditOptions = {
     now?: number
     timeoutMs?: number
@@ -74,6 +83,8 @@ type CrawlerHealthAuditOptions = {
     resolveCookieFile?: (cookieFile: string) => string | null | undefined
     fetch?: typeof fetch
     xProbeTarget?: XLiveProbeTarget
+    instagramProbeTarget?: InstagramLiveProbeTarget
+    tiktokProbeTarget?: TikTokLiveProbeTarget
 }
 
 const LIVE_PROBE_PLATFORMS = new Set<CrawlerHealthPlatform>(['x', 'instagram', 'tiktok'])
@@ -100,6 +111,16 @@ const X_RESERVED_PATHS = new Set([
     'settings',
     'signup',
     'tos',
+])
+const INSTAGRAM_RESERVED_PATHS = new Set([
+    '',
+    'accounts',
+    'direct',
+    'explore',
+    'p',
+    'reel',
+    'reels',
+    'stories',
 ])
 
 function emptyCookieMetadata(): NetscapeCookieFileAudit {
@@ -195,6 +216,50 @@ function inferXProbeTarget(crawler: any): XLiveProbeTarget | undefined {
     return undefined
 }
 
+function inferInstagramProbeTarget(crawler: any): InstagramLiveProbeTarget | undefined {
+    const targets = normalizeCrawlerTargets(crawler)
+    for (const target of targets) {
+        try {
+            const url = new URL(target)
+            if (url.hostname !== 'instagram.com' && url.hostname !== 'www.instagram.com') {
+                continue
+            }
+            const username = decodeURIComponent(url.pathname.split('/').filter(Boolean)[0] || '')
+                .trim()
+                .replace(/^@+/, '')
+            if (!username || username.includes('/') || INSTAGRAM_RESERVED_PATHS.has(username.toLowerCase())) {
+                continue
+            }
+            return { username }
+        } catch {
+            continue
+        }
+    }
+
+    return undefined
+}
+
+function inferTikTokProbeTarget(crawler: any): TikTokLiveProbeTarget | undefined {
+    const targets = normalizeCrawlerTargets(crawler)
+    for (const target of targets) {
+        try {
+            const url = new URL(target)
+            if (url.hostname !== 'tiktok.com' && url.hostname !== 'www.tiktok.com') {
+                continue
+            }
+            const match = decodeURIComponent(url.pathname).match(/^\/@(?<username>[A-Za-z0-9._]+)/i)
+            const username = match?.groups?.username?.trim()
+            if (username) {
+                return { username }
+            }
+        } catch {
+            continue
+        }
+    }
+
+    return undefined
+}
+
 function serializeXProbeTarget(target?: XLiveProbeTarget) {
     if (!target) {
         return 'fallback'
@@ -203,6 +268,14 @@ function serializeXProbeTarget(target?: XLiveProbeTarget) {
         return `list:${target.id}`
     }
     return `user:${target.screen_name.toLowerCase()}`
+}
+
+function serializeInstagramProbeTarget(target?: InstagramLiveProbeTarget) {
+    return target ? `user:${target.username.toLowerCase()}` : 'fallback'
+}
+
+function serializeTikTokProbeTarget(target?: TikTokLiveProbeTarget) {
+    return target ? `user:${target.username.toLowerCase()}` : 'fallback'
 }
 
 function mergeStatus(staticStatus: CrawlerHealthStatus, liveStatus: CrawlerHealthStatus): CrawlerHealthStatus {
@@ -538,19 +611,21 @@ async function probeInstagram(
     cookies: Array<CookieData>,
     fetchImpl: typeof fetch,
     timeoutMs: number,
+    target?: InstagramLiveProbeTarget,
 ): Promise<CrawlerCookieLiveProbeResult> {
     const cookie = getCookieString(cookies)
     const csrf = cookieValue(cookies, 'csrftoken')
+    const username = target?.username || 'instagram'
     const response = await fetchWithTimeout(
         fetchImpl,
-        'https://www.instagram.com/api/v1/users/web_profile_info/?username=instagram',
+        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
         {
             method: 'GET',
             headers: {
                 cookie,
                 'x-csrftoken': csrf,
                 'x-ig-app-id': '936619743392459',
-                referer: 'https://www.instagram.com/instagram/',
+                referer: `https://www.instagram.com/${username}/`,
                 'user-agent':
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
                 'accept-language': 'en-US,en;q=0.9',
@@ -571,10 +646,18 @@ async function probeInstagram(
     }
     try {
         const json = await response.json()
-        if (!json?.data?.user?.username) {
+        const returnedUsername = String(json?.data?.user?.username || '').trim()
+        if (!returnedUsername) {
             return {
                 status: 'warn',
                 diagnostic_codes: ['instagram_live_payload_missing_user'],
+                http_status: response.status,
+            }
+        }
+        if (target && returnedUsername.toLowerCase() !== target.username.toLowerCase()) {
+            return {
+                status: 'warn',
+                diagnostic_codes: ['instagram_live_payload_username_mismatch'],
                 http_status: response.status,
             }
         }
@@ -592,15 +675,18 @@ async function probeTikTok(
     cookies: Array<CookieData>,
     fetchImpl: typeof fetch,
     timeoutMs: number,
+    target?: TikTokLiveProbeTarget,
 ): Promise<CrawlerCookieLiveProbeResult> {
+    const username = target?.username || 'tiktok'
     const response = await fetchWithTimeout(
         fetchImpl,
-        'https://www.tiktok.com/@tiktok',
+        `https://www.tiktok.com/@${encodeURIComponent(username)}`,
         {
             method: 'GET',
             headers: {
                 cookie: getCookieString(cookies),
                 referer: 'https://www.tiktok.com/',
+                'user-agent': UserAgent.CHROME,
                 'accept-language': 'en-US,en;q=0.9',
             },
         },
@@ -633,12 +719,13 @@ async function runLiveProbe(
     cookies: Array<CookieData>,
     fetchImpl: typeof fetch,
     timeoutMs: number,
-    options: Pick<CrawlerHealthAuditOptions, 'xProbeTarget'> = {},
+    options: Pick<CrawlerHealthAuditOptions, 'xProbeTarget' | 'instagramProbeTarget' | 'tiktokProbeTarget'> = {},
 ): Promise<CrawlerCookieLiveProbeResult> {
     try {
         if (platform === 'x') return await probeX(cookies, fetchImpl, timeoutMs, options.xProbeTarget)
-        if (platform === 'instagram') return await probeInstagram(cookies, fetchImpl, timeoutMs)
-        if (platform === 'tiktok') return await probeTikTok(cookies, fetchImpl, timeoutMs)
+        if (platform === 'instagram')
+            return await probeInstagram(cookies, fetchImpl, timeoutMs, options.instagramProbeTarget)
+        if (platform === 'tiktok') return await probeTikTok(cookies, fetchImpl, timeoutMs, options.tiktokProbeTarget)
         return {
             status: 'skipped',
             diagnostic_codes: ['live_probe_unsupported_platform'],
@@ -656,7 +743,10 @@ async function runLiveProbe(
 async function probeCrawlerCookieLiveHealth(
     platform: CookieHealthPlatform,
     cookies: Array<CookieData>,
-    options: Pick<CrawlerHealthAuditOptions, 'fetch' | 'timeoutMs' | 'xProbeTarget'> = {},
+    options: Pick<
+        CrawlerHealthAuditOptions,
+        'fetch' | 'timeoutMs' | 'xProbeTarget' | 'instagramProbeTarget' | 'tiktokProbeTarget'
+    > = {},
 ): Promise<CrawlerCookieLiveProbeResult> {
     const auditPlatform: CrawlerHealthPlatform = platform === 'website' ? 'unknown' : platform
     const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs || 15_000)))
@@ -669,6 +759,8 @@ async function probeCrawlerCookieLiveHealth(
     }
     return runLiveProbe(auditPlatform, cookies, options.fetch || fetch, timeoutMs, {
         xProbeTarget: options.xProbeTarget,
+        instagramProbeTarget: options.instagramProbeTarget,
+        tiktokProbeTarget: options.tiktokProbeTarget,
     })
 }
 
@@ -736,15 +828,21 @@ async function buildCrawlerLiveHealthAudit(
         }
         if (liveProbeEnabled && staticStatus !== 'fail' && LIVE_PROBE_PLATFORMS.has(platform)) {
             const xProbeTarget = platform === 'x' ? inferXProbeTarget(crawler) : undefined
+            const instagramProbeTarget = platform === 'instagram' ? inferInstagramProbeTarget(crawler) : undefined
+            const tiktokProbeTarget = platform === 'tiktok' ? inferTikTokProbeTarget(crawler) : undefined
             const cacheKey = [
                 platform,
                 resolvedCookieFile || cookieFile || '<none>',
                 platform === 'x' ? serializeXProbeTarget(xProbeTarget) : 'default',
+                platform === 'instagram' ? serializeInstagramProbeTarget(instagramProbeTarget) : 'default',
+                platform === 'tiktok' ? serializeTikTokProbeTarget(tiktokProbeTarget) : 'default',
             ].join('|')
             let pendingProbe = liveProbeCache.get(cacheKey)
             if (!pendingProbe) {
                 pendingProbe = runLiveProbe(platform, cookies, fetchImpl, timeoutMs, {
                     xProbeTarget,
+                    instagramProbeTarget,
+                    tiktokProbeTarget,
                 })
                 liveProbeCache.set(cacheKey, pendingProbe)
             }
@@ -790,7 +888,9 @@ async function buildCrawlerLiveHealthAudit(
 
 export {
     buildCrawlerLiveHealthAudit,
+    inferInstagramProbeTarget,
     inferCrawlerPlatform,
+    inferTikTokProbeTarget,
     inferXProbeTarget,
     probeCrawlerCookieLiveHealth,
     type CrawlerHealthAudit,
@@ -799,5 +899,7 @@ export {
     type CrawlerHealthResult,
     type CrawlerHealthStatus,
     type CrawlerCookieLiveProbeResult,
+    type InstagramLiveProbeTarget,
+    type TikTokLiveProbeTarget,
     type XLiveProbeTarget,
 }

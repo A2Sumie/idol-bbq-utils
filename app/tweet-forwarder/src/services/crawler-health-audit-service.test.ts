@@ -141,6 +141,66 @@ test('buildCrawlerLiveHealthAudit probes X username crawlers through user lookup
     }
 })
 
+test('buildCrawlerLiveHealthAudit probes Instagram configured usernames', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
+    try {
+        const cookieFile = join(dir, 'instagram.cookies.txt')
+        writeFileSync(
+            cookieFile,
+            [
+                '.instagram.com\tTRUE\t/\tTRUE\t9999999999\tsessionid\tsession-value',
+                '.instagram.com\tTRUE\t/\tTRUE\t9999999999\tcsrftoken\tcsrf-value',
+            ].join('\n'),
+            'utf8',
+        )
+        const requests: Array<{ url: string; headers: Record<string, string> }> = []
+        const audit = await buildCrawlerLiveHealthAudit(
+            {
+                crawlers: [
+                    {
+                        id: 'instagram-targeted',
+                        name: 'Instagram targeted',
+                        origin: 'https://www.instagram.com',
+                        paths: ['shiina_satsuki227'],
+                        cfg_crawler: { cookie_file: cookieFile },
+                    },
+                ],
+            } as any,
+            {
+                fetch: (async (url: string, init?: RequestInit) => {
+                    requests.push({ url, headers: init?.headers as Record<string, string> })
+                    return new Response(JSON.stringify({ data: { user: { username: 'shiina_satsuki227' } } }), {
+                        status: 200,
+                        headers: { 'content-type': 'application/json' },
+                    })
+                }) as any,
+            },
+        )
+
+        expect(audit.counts).toMatchObject({
+            checked: 1,
+            ok: 1,
+            fail: 0,
+        })
+        expect(audit.results[0]).toMatchObject({
+            crawler_id: 'instagram-targeted',
+            platform: 'instagram',
+            status: 'ok',
+            diagnostic_codes: ['instagram_live_probe_ok'],
+            live_probe: {
+                checked: true,
+                status: 'ok',
+                http_status: 200,
+            },
+        })
+        expect(requests).toHaveLength(1)
+        expect(requests[0]?.url).toContain('username=shiina_satsuki227')
+        expect(requests[0]?.headers.referer).toBe('https://www.instagram.com/shiina_satsuki227/')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+})
+
 test('buildCrawlerLiveHealthAudit fails missing TikTok ttwid before live probe', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
     try {
@@ -260,7 +320,64 @@ test('buildCrawlerLiveHealthAudit probes TikTok with crawler-compatible headers'
         })
         expect(requests).toHaveLength(1)
         expect(requests[0]?.url).toBe('https://www.tiktok.com/@tiktok')
-        expect(requests[0]?.headers['user-agent']).toBeUndefined()
+        expect(requests[0]?.headers['user-agent']).toContain('Chrome/')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+})
+
+test('buildCrawlerLiveHealthAudit probes TikTok configured usernames', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
+    try {
+        const cookieFile = join(dir, 'tiktok.cookies.txt')
+        writeFileSync(
+            cookieFile,
+            [
+                '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\tttwid\twid-value',
+                '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\ttt_csrf_token\tcsrf-value',
+            ].join('\n'),
+            'utf8',
+        )
+        const requests: Array<{ url: string; headers: Record<string, string> }> = []
+        const audit = await buildCrawlerLiveHealthAudit(
+            {
+                crawlers: [
+                    {
+                        id: 'crawler-tiktok-targeted',
+                        name: 'crawler tiktok targeted',
+                        origin: 'https://www.tiktok.com',
+                        paths: ['@227official'],
+                        cfg_crawler: {
+                            cookie_file: cookieFile,
+                        },
+                    },
+                ],
+            } as any,
+            {
+                fetch: (async (url: string, init?: RequestInit) => {
+                    requests.push({ url, headers: init?.headers as Record<string, string> })
+                    return new Response(
+                        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{"ok":true}</script>',
+                        { status: 200 },
+                    )
+                }) as any,
+            },
+        )
+
+        expect(audit.counts).toMatchObject({
+            checked: 1,
+            ok: 1,
+            fail: 0,
+        })
+        expect(audit.results[0]).toMatchObject({
+            crawler_id: 'crawler-tiktok-targeted',
+            platform: 'tiktok',
+            status: 'ok',
+            diagnostic_codes: ['tiktok_live_probe_ok'],
+        })
+        expect(requests).toHaveLength(1)
+        expect(requests[0]?.url).toBe('https://www.tiktok.com/@227official')
+        expect(requests[0]?.headers['user-agent']).toContain('Chrome/')
     } finally {
         rmSync(dir, { recursive: true, force: true })
     }

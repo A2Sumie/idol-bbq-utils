@@ -81,6 +81,27 @@ test('Netscape cookie parser preserves HttpOnly cookies and can include expired 
     )
 })
 
+test('Netscape cookie parser keeps session cookies loadable by omitting expires', () => {
+    withCookieFile(
+        ['.tiktok.com\tTRUE\t/\tTRUE\t0\ttt_csrf_token\tcsrf-token'].join('\n'),
+        (file) => {
+            const cookies = parseNetscapeCookieToPuppeteerCookie(file, { now: 2000 })
+
+            expect(cookies).toEqual([
+                {
+                    name: 'tt_csrf_token',
+                    value: 'csrf-token',
+                    domain: '.tiktok.com',
+                    path: '/',
+                    httpOnly: false,
+                    secure: true,
+                },
+            ])
+            expect(cookies[0]).not.toHaveProperty('expires')
+        },
+    )
+})
+
 test('Netscape cookie audit returns no-value metadata', () => {
     withCookieFile(
         [

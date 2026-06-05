@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
 import fs from 'fs'
-import path from 'path'
 import YAML from 'yaml'
 import { buildConfigAudit, type ConfigAudit } from '../src/services/config-audit-service'
+import { resolveConfiguredCookieFilePath } from '../src/services/cookie-file-path-service'
 import { SENSITIVE_KEY_PATTERN } from '../src/services/redaction-service'
 import { normalizePipelinesForRuntime } from '../src/services/quick-config-service'
 import type { AppConfig } from '../src/types'
@@ -71,24 +71,6 @@ function readConfig(configPath: string): AppConfig {
     return normalizePipelinesForRuntime(parsed)
 }
 
-function resolveCookieFile(cookieFile: string, configPath: string) {
-    if (!cookieFile.trim()) {
-        return null
-    }
-
-    if (path.isAbsolute(cookieFile)) {
-        if (fs.existsSync(cookieFile)) {
-            return cookieFile
-        }
-        if (cookieFile.startsWith('/app/')) {
-            return path.resolve(process.cwd(), cookieFile.slice('/app/'.length))
-        }
-        return cookieFile
-    }
-
-    return path.resolve(path.dirname(configPath), cookieFile)
-}
-
 function collectSensitiveValues(value: unknown) {
     const values = new Set<string>()
 
@@ -151,7 +133,8 @@ function main() {
     const args = parseArgs(process.argv.slice(2))
     const config = readConfig(args.configPath)
     const audit = buildConfigAudit(config, {
-        resolveCookieFile: (cookieFile) => resolveCookieFile(cookieFile, args.configPath),
+        resolveCookieFile: (cookieFile) =>
+            resolveConfiguredCookieFilePath(cookieFile, { configPath: args.configPath }),
     })
     const payload = args.format === 'json' ? audit : buildSummary(args.configPath, audit)
     const output = `${JSON.stringify(payload, null, 2)}\n`

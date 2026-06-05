@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
 import fs from 'fs'
-import path from 'path'
 import YAML from 'yaml'
 import { buildCrawlerLiveHealthAudit, type CrawlerHealthPlatform } from '../src/services/crawler-health-audit-service'
+import { resolveConfiguredCookieFilePath } from '../src/services/cookie-file-path-service'
 import { normalizePipelinesForRuntime } from '../src/services/quick-config-service'
 import { SENSITIVE_KEY_PATTERN } from '../src/services/redaction-service'
 import type { AppConfig } from '../src/types'
@@ -122,24 +122,6 @@ function readConfig(configPath: string): AppConfig {
     return normalizePipelinesForRuntime(parsed)
 }
 
-function resolveCookieFile(cookieFile: string, configPath: string) {
-    if (!cookieFile.trim()) {
-        return null
-    }
-
-    if (path.isAbsolute(cookieFile)) {
-        if (fs.existsSync(cookieFile)) {
-            return cookieFile
-        }
-        if (cookieFile.startsWith('/app/')) {
-            return path.resolve(process.cwd(), cookieFile.slice('/app/'.length))
-        }
-        return cookieFile
-    }
-
-    return path.resolve(path.dirname(configPath), cookieFile)
-}
-
 function collectSensitiveValues(value: unknown) {
     const values = new Set<string>()
 
@@ -174,9 +156,13 @@ function assertNoSensitiveValues(output: string, config: AppConfig) {
     }
 }
 
-function buildSummary(configPath: string, audit: Awaited<ReturnType<typeof buildCrawlerLiveHealthAudit>>) {
+function buildSummary(
+    configPath: string,
+    audit: Awaited<ReturnType<typeof buildCrawlerLiveHealthAudit>>,
+    options: Pick<Args, 'failOnWarn'>,
+) {
     return {
-        ok: audit.counts.fail === 0,
+        ok: audit.counts.fail === 0 && (!options.failOnWarn || audit.counts.warn === 0),
         generated_at: audit.generated_at,
         config_path: configPath,
         counts: audit.counts,
@@ -200,9 +186,10 @@ async function main() {
         platforms: args.platforms,
         timeoutMs: args.timeoutMs,
         liveProbe: args.liveProbe,
-        resolveCookieFile: (cookieFile) => resolveCookieFile(cookieFile, args.configPath),
+        resolveCookieFile: (cookieFile) =>
+            resolveConfiguredCookieFilePath(cookieFile, { configPath: args.configPath }),
     })
-    const payload = args.format === 'json' ? audit : buildSummary(args.configPath, audit)
+    const payload = args.format === 'json' ? audit : buildSummary(args.configPath, audit, args)
     const output = `${JSON.stringify(payload, null, 2)}\n`
     assertNoSensitiveValues(output, config)
     process.stdout.write(output)

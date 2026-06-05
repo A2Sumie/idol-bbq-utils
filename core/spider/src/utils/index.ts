@@ -31,7 +31,7 @@ function splitNetscapeCookieLine(line: string) {
     }
 }
 
-function isExpiredCookie(expires: number, now: number) {
+function isExpiredCookie(expires: number | undefined, now: number) {
     return Number.isFinite(expires) && expires > 0 && expires <= now
 }
 
@@ -60,16 +60,20 @@ function parseNetscapeCookieFields(line: string) {
     if (!domain || !path || !name || !expiresRaw) {
         return null
     }
+    const expires = Number(expiresRaw)
+    const cookie: CookieData = {
+        name,
+        value: value.trim(),
+        domain,
+        path,
+        secure: secure === 'TRUE',
+    }
+    if (Number.isFinite(expires) && expires > 0) {
+        cookie.expires = expires
+    }
 
     return {
-        cookie: {
-            name,
-            value: value.trim(),
-            domain,
-            path,
-            expires: Number(expiresRaw),
-            secure: secure === 'TRUE',
-        },
+        cookie,
     }
 }
 

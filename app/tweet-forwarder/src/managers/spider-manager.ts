@@ -26,9 +26,12 @@ import { shuffle } from 'lodash'
 import crypto from 'crypto'
 import dayjs from 'dayjs'
 import { BrowserSessionPool } from '@/services/browser-session-pool'
+import { resolveConfiguredCookieFilePath } from '@/services/cookie-file-path-service'
 import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
 import { normalizeCronSecond } from '@/utils/cron'
 import {
+    inferInstagramProbeTarget,
+    inferTikTokProbeTarget,
     inferXProbeTarget,
     probeCrawlerCookieLiveHealth,
     type CrawlerCookieLiveProbeResult,
@@ -597,7 +600,7 @@ class SpiderPools extends BaseCompatibleModel {
 
         const cookie_file = cfg_crawler?.cookie_file
         if (cookie_file) {
-            const cookies = parseNetscapeCookieToPuppeteerCookie(cookie_file)
+            const cookies = parseNetscapeCookieToPuppeteerCookie(resolveConfiguredCookieFilePath(cookie_file) || cookie_file)
             cookieString = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
         }
 
@@ -685,7 +688,13 @@ class SpiderPools extends BaseCompatibleModel {
                         pageKey = nextPageKey
 
                         if (cookie_file) {
-                            await page.browserContext().setCookie(...parseNetscapeCookieToPuppeteerCookie(cookie_file))
+                            await page
+                                .browserContext()
+                                .setCookie(
+                                    ...parseNetscapeCookieToPuppeteerCookie(
+                                        resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
+                                    ),
+                                )
                         }
                     } else if (!needsBrowser) {
                         ctx.log?.debug(`Using non-browser engine: ${crawl_engine}`)
@@ -938,7 +947,12 @@ class SpiderPools extends BaseCompatibleModel {
                 try {
                     await page
                         .browserContext()
-                        .setCookie(...parseNetscapeCookieToPuppeteerCookie(crawler.cfg_crawler.cookie_file))
+                        .setCookie(
+                            ...parseNetscapeCookieToPuppeteerCookie(
+                                resolveConfiguredCookieFilePath(crawler.cfg_crawler.cookie_file) ||
+                                    crawler.cfg_crawler.cookie_file,
+                            ),
+                        )
                     this.log?.info(
                         `Seeded browser session ${browserRequest.session_profile} from configured cookie file before cookie export.`,
                     )
@@ -1005,6 +1019,9 @@ class SpiderPools extends BaseCompatibleModel {
                     fetch: options.fetch,
                     timeoutMs: options.timeoutMs,
                     xProbeTarget: platformHint === 'x' ? inferXProbeTarget(crawler) : undefined,
+                    instagramProbeTarget:
+                        platformHint === 'instagram' ? inferInstagramProbeTarget(crawler) : undefined,
+                    tiktokProbeTarget: platformHint === 'tiktok' ? inferTikTokProbeTarget(crawler) : undefined,
                 })
                 if (liveProbe.status === 'fail') {
                     throw new CrawlerCookieExportError(
