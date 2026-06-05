@@ -130,12 +130,13 @@ function addSummaryCardDiagnostics(
         !policy.send_first_immediately &&
         !policy.send_first_native &&
         policy.media_realtime &&
+        policy.media_realtime_text === 'none' &&
         !policy.flush_on_threshold
     ) {
         diagnostics.push({
             severity: 'warn',
             code: 'summary_card_no_native_idle_first',
-            message: `${targetLabel} uses fixed-window summary media realtime but idle-first native send is disabled`,
+            message: `${targetLabel} uses fixed-window summary media realtime without realtime text while idle-first native send is disabled`,
             route_key,
         })
     }

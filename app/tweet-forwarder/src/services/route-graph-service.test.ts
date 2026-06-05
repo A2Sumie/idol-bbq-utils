@@ -126,6 +126,55 @@ test('buildRouteGraph diagnoses fixed-window summary-card policy mismatches', ()
     expect(graph.diagnostics.some((item) => item.code === 'summary_card_empty_realtime_text_non_qq')).toBe(true)
 })
 
+test('buildRouteGraph accepts metadata realtime media without idle-first native send', () => {
+    const graph = buildRouteGraph({
+        crawlers: [
+            {
+                id: 'crawler-x',
+                name: 'crawler x',
+            },
+        ],
+        formatters: [
+            {
+                id: 'formatter-a',
+                name: 'formatter a',
+            },
+        ],
+        forward_targets: [
+            {
+                id: 'target-bili',
+                platform: 'bilibili' as any,
+                cfg_platform: {
+                    summary_card: {
+                        enabled: true,
+                        send_first_immediately: false,
+                        send_first_native: false,
+                        media_realtime: true,
+                        media_realtime_text: 'metadata',
+                        flush_on_threshold: false,
+                    },
+                },
+            },
+        ],
+        connections: {
+            'crawler-formatter': {
+                'crawler-x': ['formatter-a'],
+            },
+            'formatter-target': {
+                'formatter-a': ['target-bili'],
+            },
+        },
+    } as any)
+
+    expect(graph.routes[0]?.policy.summary_card).toMatchObject({
+        send_first_immediately: false,
+        send_first_native: false,
+        media_realtime: true,
+        media_realtime_text: 'metadata',
+    })
+    expect(graph.diagnostics.some((item) => item.code === 'summary_card_no_native_idle_first')).toBe(false)
+})
+
 test('buildRouteGraph treats live relay crawlers without formatter as operational crawlers', () => {
     const graph = buildRouteGraph({
         crawlers: [
