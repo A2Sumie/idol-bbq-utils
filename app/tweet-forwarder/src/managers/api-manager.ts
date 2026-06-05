@@ -1464,13 +1464,18 @@ export class APIManager extends BaseCompatibleModel {
                 sourceRef: input.sourceRef,
                 text: input.text,
             }
+            let rawResult: string
+            let parsed: any
+            let selected: any
             if (action === 'translate' && input.article) {
-                await this.translateArticleChain(input.article, processor, true)
+                parsed = await this.translateArticleChain(input.article, processor, true)
+                rawResult = JSON.stringify(parsed)
+                selected = parsed
+            } else {
+                rawResult = await processor.process(input.text)
+                parsed = tryParseJson(rawResult)
+                selected = selectProcessorResult(parsed, body.resultKey || processorDef.cfg_processor?.result_key)
             }
-
-            const rawResult = await processor.process(input.text)
-            const parsed = tryParseJson(rawResult)
-            const selected = selectProcessorResult(parsed, body.resultKey || processorDef.cfg_processor?.result_key)
             const scheduleResults =
                 action === 'plan'
                     ? await this.writeSchedulesFromPlan(
@@ -1730,6 +1735,12 @@ export class APIManager extends BaseCompatibleModel {
 
     private async translateArticleChain(article: Article & { id: number }, processor: BaseProcessor, force = false) {
         const chain = flattenArticleChain(article)
+        const updated: Array<{
+            id: number
+            a_id: string
+            platform: Platform
+            fields: Array<string>
+        }> = []
         for (const current of chain) {
             const patch: Partial<Article> = {}
 
@@ -1768,7 +1779,19 @@ export class APIManager extends BaseCompatibleModel {
 
             if (Object.keys(patch).length > 0) {
                 await DB.Article.update(current.id, current.platform, patch)
+                updated.push({
+                    id: current.id,
+                    a_id: current.a_id,
+                    platform: current.platform,
+                    fields: Object.keys(patch),
+                })
             }
+        }
+        return {
+            action: 'translate',
+            translated_by: processor.NAME,
+            chain_length: chain.length,
+            updated,
         }
     }
 

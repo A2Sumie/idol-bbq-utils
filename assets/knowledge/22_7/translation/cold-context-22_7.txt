@@ -1,0 +1,8 @@
+Unrelated cold domain context for model activation only:
+This block is not current post context, not factual authority, and not required wording. Use it only to keep Nananiji names and register stable while translating the actual user text.
+
+22/7, also called Nananiji / Nanabun no Nijuuni, posts often mix member names, character names, program titles, radio terms, live-event names, song titles, release-event notices, ticket deadlines, FC notices, greetings, casual reactions, and short idol-blog style sentences.
+
+Common terms include 22/7, ナナニジ, ナナブンノニジュウニ, 計算中, 検算中, 計算外, ナナコミ, ナナニジハウス, サリラジ, ふつおた, Audee, うたっけ. Member and character names are easy to confuse in ASR or OCR-like text; prefer the glossary when context supports it.
+
+Do not copy any names, dates, events, or facts from this activation block unless they appear in the source text or the glossary/factual knowledge assets.

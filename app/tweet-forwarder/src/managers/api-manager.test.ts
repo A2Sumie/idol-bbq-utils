@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import { APIManager } from './api-manager'
+import { processorRegistry } from '@/middleware/processor'
 import { CACHE_DIR_ROOT } from '@/config'
 import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
@@ -1350,6 +1351,106 @@ test('APIManager records failed processor runs when processor execution fails', 
         ;(DB.TaskQueue as any).add = originalTaskAdd
         ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
         ;(DB.ProcessorRun as any).create = originalProcessorRunCreate
+    }
+})
+
+test('APIManager processor translate action does not process article digest twice', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const originalProcessorRunCreate = DB.ProcessorRun.create
+    const originalArticleGet = DB.Article.getSingleArticleByArticleCode
+    const originalArticleUpdate = DB.Article.update
+    const originalCreateProcessor = (processorRegistry as any).create
+    const processInputs: string[] = []
+    const processorRuns: any[] = []
+    const articleUpdates: any[] = []
+
+    ;(DB.TaskQueue as any).add = async () => ({ id: 78 })
+    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+    ;(DB.ProcessorRun as any).create = async (data: any) => {
+        processorRuns.push(data)
+        return { id: 1, ...data }
+    }
+    ;(DB.Article as any).getSingleArticleByArticleCode = async () =>
+        ({
+            id: 12,
+            a_id: 'post-1',
+            platform: Platform.X,
+            created_at: 1710000000,
+            u_id: 'user-1',
+            username: 'member',
+            content: 'こんにちは',
+        }) as any
+    ;(DB.Article as any).update = async (id: number, platform: Platform, patch: any) => {
+        articleUpdates.push({ id, platform, patch })
+    }
+    ;(processorRegistry as any).create = async () =>
+        ({
+            NAME: 'fake-translator',
+            process: async (text: string) => {
+                processInputs.push(text)
+                return `translated:${text}`
+            },
+        }) as any
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    processors: [
+                        {
+                            id: 'processor-a',
+                            name: 'processor-a',
+                            provider: 'Fake',
+                        },
+                    ],
+                }) as any,
+            getDeps: () => ({}) as any,
+        })
+
+        const response = await (manager as any).handleProcessorRun(
+            new Request('http://localhost/api/actions/processors/run', {
+                method: 'POST',
+                body: JSON.stringify({
+                    processorId: 'processor-a',
+                    action: 'translate',
+                    platform: 'x',
+                    a_id: 'post-1',
+                }),
+            }),
+        )
+        const payload = await response.json()
+
+        expect(payload.success).toBe(true)
+        expect(processInputs).toEqual(['こんにちは'])
+        expect(articleUpdates).toHaveLength(1)
+        expect(articleUpdates[0].patch).toMatchObject({
+            translation: 'translated:こんにちは',
+            translated_by: 'fake-translator',
+        })
+        expect(processorRuns[0].output.parsed).toMatchObject({
+            action: 'translate',
+            translated_by: 'fake-translator',
+            chain_length: 1,
+            updated: [
+                {
+                    id: 12,
+                    a_id: 'post-1',
+                    platform: Platform.X,
+                    fields: ['translation', 'translated_by'],
+                },
+            ],
+        })
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+        ;(DB.ProcessorRun as any).create = originalProcessorRunCreate
+        ;(DB.Article as any).getSingleArticleByArticleCode = originalArticleGet
+        ;(DB.Article as any).update = originalArticleUpdate
+        ;(processorRegistry as any).create = originalCreateProcessor
     }
 })
 

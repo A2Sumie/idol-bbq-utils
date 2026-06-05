@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "event_type",
+          "starts_at",
+          "ends_at",
+          "timezone",
+          "source_time_text",
+          "source_url",
+          "confidence",
+          "needs_review",
+          "notes"
+        ],
+        "properties": {
+          "title": { "type": "string" },
+          "event_type": {
+            "type": "string",
+            "enum": ["appearance", "stream", "release", "campaign", "live", "other"]
+          },
+          "starts_at": { "type": ["string", "null"] },
+          "ends_at": { "type": ["string", "null"] },
+          "timezone": { "type": ["string", "null"] },
+          "source_time_text": { "type": ["string", "null"] },
+          "source_url": { "type": ["string", "null"] },
+          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "needs_review": { "type": "boolean" },
+          "notes": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

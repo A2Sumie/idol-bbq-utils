@@ -45,6 +45,7 @@ enum ProcessorProvider {
 interface ProcessorConfig extends CommonCfgConfig {
     action?: 'translate' | 'extract' | 'merge' | 'plan'
     prompt?: string
+    prompt_assets?: Array<string | ProcessorPromptAssetConfig>
     /**
      * Customize api url
      */
@@ -61,9 +62,19 @@ interface ProcessorConfig extends CommonCfgConfig {
      */
     extended_payload?: Record<string, any>
     output_schema?: Record<string, any>
+    output_schema_file?: string
     schedule_url?: string
     schedule_api_key?: string
     result_key?: string
+}
+
+interface ProcessorPromptAssetConfig {
+    path: string
+    label?: string
+    format?: 'text' | 'translation_terms_json'
+    optional?: boolean
+    max_chars?: number
+    max_items?: number
 }
 
 interface Processor {
@@ -76,4 +87,4 @@ interface Processor {
 }
 
 export { ProcessorProvider }
-export type { Processor, ProcessorConfig }
+export type { Processor, ProcessorConfig, ProcessorPromptAssetConfig }

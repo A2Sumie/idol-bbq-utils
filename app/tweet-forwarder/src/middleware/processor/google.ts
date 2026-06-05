@@ -15,15 +15,16 @@ class GoogleLLMTranslator extends BaseProcessor {
         super(api_key, log, config)
         this.genAI = new GoogleGenerativeAI(api_key)
         const generationConfig: Record<string, unknown> = {}
+        const outputSchema = this.getOutputSchema()
         if (typeof this.config?.temperature === 'number') {
             generationConfig.temperature = this.config.temperature
         }
         if (typeof this.config?.max_tokens === 'number') {
             generationConfig.maxOutputTokens = this.config.max_tokens
         }
-        if (this.config?.output_schema) {
+        if (outputSchema) {
             generationConfig.responseMimeType = 'application/json'
-            generationConfig.responseSchema = this.config.output_schema
+            generationConfig.responseSchema = outputSchema
         }
         this.model = this.genAI.getGenerativeModel({
             model: this.config?.model_id || 'gemini-2.0-flash',
