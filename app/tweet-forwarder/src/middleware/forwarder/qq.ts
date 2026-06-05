@@ -2,6 +2,10 @@ import axios from 'axios'
 import { chunk } from 'lodash'
 import { Forwarder, PartialForwarderSendError, type SendProps } from './base'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
+import {
+    normalizeForwarderImageAttachments,
+    resolveForwarderImageMaxBytes,
+} from '@/services/forwarder-image-attachment-service'
 
 class QQForwarder extends Forwarder {
     static _PLATFORM = ForwardTargetPlatformEnum.QQ
@@ -27,6 +31,11 @@ class QQForwarder extends Forwarder {
         let { media } = props || {}
         media = media || []
         const _log = this.log
+        const normalizedAttachments = normalizeForwarderImageAttachments(media, {
+            maxImageBytes: resolveForwarderImageMaxBytes(this.getEffectiveConfig(props?.runtime_config)),
+            log: _log,
+        })
+        media = normalizedAttachments.media
         let pics: Array<{
             type: 'image'
             data: {
@@ -83,26 +92,30 @@ class QQForwarder extends Forwarder {
             }
         }
 
-        for (let i = 0; i < n; i++) {
-            const text = textChunks[i]
-            const msgPics = picChunks[i] || []
+        try {
+            for (let i = 0; i < n; i++) {
+                const text = textChunks[i]
+                const msgPics = picChunks[i] || []
 
-            const segments = []
-            if (text) {
-                segments.push({ type: 'text', data: { text } })
-            }
-            if (msgPics.length > 0) {
-                // Cast to any to avoid complex type reconstruction in this snippet, though structure matches.
-                segments.push(...(msgPics as any[]))
+                const segments = []
+                if (text) {
+                    segments.push({ type: 'text', data: { text } })
+                }
+                if (msgPics.length > 0) {
+                    // Cast to any to avoid complex type reconstruction in this snippet, though structure matches.
+                    segments.push(...(msgPics as any[]))
+                }
+
+                if (segments.length > 0) {
+                    await sendSegment(segments as any, `message:${i + 1}/${n}`)
+                }
             }
 
-            if (segments.length > 0) {
-                await sendSegment(segments as any, `message:${i + 1}/${n}`)
-            }
+            videos.length !== 0 && (await sendSegment(videos, 'video'))
+            return _res
+        } finally {
+            normalizedAttachments.cleanup()
         }
-
-        videos.length !== 0 && (await sendSegment(videos, 'video'))
-        return _res
     }
 
     async sendWithPayload(

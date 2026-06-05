@@ -1,9 +1,17 @@
 import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
+import { BiliForwarder } from './bilibili'
 import { QQForwarder } from './qq'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+
+async function writeLargePpm(filePath: string, width = 900, height = 900) {
+    const header = Buffer.from(`P6\n${width} ${height}\n255\n`)
+    const pixels = Buffer.alloc(width * height * 3, 255)
+    await writeFile(filePath, Buffer.concat([header, pixels]))
+}
 
 test('QQForwarder treats video thumbnails as images', async () => {
     const forwarder = new QQForwarder(
@@ -57,6 +65,94 @@ test('QQForwarder treats video thumbnails as images', async () => {
             },
         ],
     ])
+})
+
+test('QQForwarder compresses oversized image attachments before building image segments', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-image-compress-'))
+    const sourcePath = path.join(tempRoot, 'oversized.ppm')
+    await writeLargePpm(sourcePath)
+    const maxImageBytes = 60_000
+
+    try {
+        const forwarder = new QQForwarder(
+            {
+                group_id: '123',
+                url: 'http://127.0.0.1:3001',
+                token: '',
+                max_image_bytes: maxImageBytes,
+            } as any,
+            'qq-image-compress-test',
+        )
+        ;(forwarder as any).minInterval = 0
+
+        let sentPath = ''
+        ;(forwarder as any).sendWithPayload = async (segments: any) => {
+            const imageSegment = segments.find((segment: any) => segment.type === 'image')
+            sentPath = String(imageSegment?.data?.file || '').replace(/^file:\/\//, '')
+            expect(sentPath).not.toBe(sourcePath)
+            expect(sentPath).toContain('forwarder-compressed')
+            expect((await stat(sentPath)).size).toBeLessThanOrEqual(maxImageBytes)
+            return { ok: true }
+        }
+
+        await (forwarder as any).realSend(['oversized image'], {
+            media: [{ media_type: 'photo', path: sourcePath }],
+        })
+
+        expect(sentPath).toBeTruthy()
+        expect(existsSync(sentPath)).toBe(false)
+    } finally {
+        await rm(tempRoot, { recursive: true, force: true })
+    }
+})
+
+test('BiliForwarder compresses oversized dynamic images before upload', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'bili-image-compress-'))
+    const sourcePath = path.join(tempRoot, 'oversized.ppm')
+    await writeLargePpm(sourcePath)
+    const maxImageBytes = 60_000
+
+    try {
+        const forwarder = new BiliForwarder(
+            {
+                bili_jct: 'csrf-token',
+                sessdata: 'sess-token',
+                media_check_level: 'strict',
+                max_image_bytes: maxImageBytes,
+            } as any,
+            'bili-image-compress-test',
+        )
+        ;(forwarder as any).minInterval = 0
+
+        let uploadedPath = ''
+        ;(forwarder as any).uploadPhoto = async (filePath: string) => {
+            uploadedPath = filePath
+            expect(uploadedPath).not.toBe(sourcePath)
+            expect(uploadedPath).toContain('forwarder-compressed')
+            const uploadedSize = (await stat(uploadedPath)).size
+            expect(uploadedSize).toBeLessThanOrEqual(maxImageBytes)
+            return {
+                image_url: 'https://i0.hdslb.com/bfs/test/compressed.jpg',
+                image_width: 900,
+                image_height: 900,
+                image_size: uploadedSize,
+            }
+        }
+        ;(forwarder as any).sendTextWithPhotos = async (_text: string, pics: any[]) => {
+            expect(pics).toHaveLength(1)
+            expect(pics[0]?.img_size).toBeLessThanOrEqual(maxImageBytes)
+            return { data: { code: 0, message: 'ok' } }
+        }
+
+        await (forwarder as any).realSend(['dynamic text'], {
+            media: [{ media_type: 'photo', path: sourcePath }],
+        })
+
+        expect(uploadedPath).toBeTruthy()
+        expect(existsSync(uploadedPath)).toBe(false)
+    } finally {
+        await rm(tempRoot, { recursive: true, force: true })
+    }
 })
 
 test('QQForwarder keeps long text as a single payload instead of chunking', async () => {

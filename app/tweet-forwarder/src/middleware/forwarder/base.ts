@@ -29,11 +29,13 @@ import {
     type ForwarderMiddleware,
 } from './pipeline'
 
-type MediaFile = {
+export type MediaFile = {
     media_type: MediaType
     path: string
     sourceArticleId?: string
     sourceUserId?: string
+    content_hash?: string
+    size_bytes?: number
 }
 
 interface PreparedBatchItem {

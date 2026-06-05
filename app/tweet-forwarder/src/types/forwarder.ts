@@ -190,6 +190,11 @@ interface ForwardTargetPlatformCommonConfig {
               duplicate_behavior?: 'skip' | 'text_only'
           }
     /**
+     * Maximum image attachment size in bytes before provider upload. Defaults to 4,000,000.
+     */
+    max_image_bytes?: number
+    image_max_bytes?: number
+    /**
      * Collapse the text body of referenced/replied-to articles that were already forwarded to this target.
      * Defaults to enabled except for explicitly high-realtime targets.
      */

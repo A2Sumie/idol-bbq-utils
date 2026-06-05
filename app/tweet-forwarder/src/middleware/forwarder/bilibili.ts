@@ -6,6 +6,10 @@ import fs from 'fs'
 import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 import { buildBiliupUploadCandidate, runBiliupUpload } from './biliup'
+import {
+    normalizeForwarderImageAttachments,
+    resolveForwarderImageMaxBytes,
+} from '@/services/forwarder-image-attachment-service'
 
 interface BiliImageUploaded {
     img_src: string
@@ -86,73 +90,84 @@ class BiliForwarder extends Forwarder {
         let { media } = props || {}
         media = media || []
         const _log = this.log
-        let pics: Array<BiliImageUploaded> = (
-            await Promise.all(
-                media.map(async (item) => {
-                    if (item.media_type === 'photo' || item.media_type === 'video_thumbnail') {
-                        try {
-                            _log?.debug(`Uploading photo ${item.path}`)
-                            const obj = await pRetry(() => this.uploadPhoto(item.path), {
-                                retries: 2,
-                                onFailedAttempt() {
-                                    _log?.error('Upload photo failed, retrying...')
-                                },
-                            })
-                            return obj
-                        } catch (e) {
-                            _log?.error(`Upload photo ${item.path} failed, skip this photo`)
-                            return
-                        }
-                    }
-                    // video to gif
-                }),
-            )
-        )
-            .filter((i) => i !== undefined)
-            .map((i) => ({
-                img_src: i.image_url,
-                img_width: i.image_width,
-                img_height: i.image_height,
-                img_size: i.image_size,
-            }))
-        if (this.media_check_level === 'loose' && media.length !== 0 && pics.length === 0) {
-            _log?.error(`No photos uploaded, throw error.`)
-            throw new Error(`No photos uploaded, please check your bili_jct and sessdata.`)
-        }
-        if (this.media_check_level === 'strict' && media.length !== pics.length) {
-            _log?.error(`Some photos upload failed.`)
-            throw new Error(`Some photos upload failed, please check your bili_jct and sessdata.`)
-        }
-        // TODO: more pics support
-        const MAX_PICS = 9
-        const picChunks = chunk(pics, MAX_PICS)
-
-        const textChunks = texts.length > 0 ? texts : []
-
-        const n = Math.max(picChunks.length, textChunks.length)
-        const _res = []
-
-        for (let i = 0; i < n; i++) {
-            const text = textChunks[i] || (i === 0 ? 'Forwarded content' : ' ') // Fallback text. Bilibili dynamic needs text.
-            const msgPics = picChunks[i] || [] // Type: BiliImageUploaded[]
-
-            _log?.debug(`Sending chunk ${i + 1}/${n}: text length ${text.length}, pics count ${msgPics.length}`)
-
-            let res
-            if (msgPics.length > 0) {
-                res = await this.sendTextWithPhotos(text, msgPics)
-            } else {
-                if (!textChunks[i]) continue; // If no text and no pics, skip (shouldn't happen due to Math.max logic unless textChunks ran out and picChunks ran out)
-                res = await this.sendText(text)
-            }
-            _res.push(res)
-        }
-        _res.forEach((res) => {
-            if (res.data.code !== 0) {
-                throw new Error(`Send text to ${this.NAME} failed. ${res.data.message}: ${JSON.stringify(res.data)}`)
-            }
+        const normalizedAttachments = normalizeForwarderImageAttachments(media, {
+            maxImageBytes: resolveForwarderImageMaxBytes(this.getEffectiveConfig(props?.runtime_config)),
+            log: _log,
         })
-        return _res
+        media = normalizedAttachments.media
+        try {
+            let pics: Array<BiliImageUploaded> = (
+                await Promise.all(
+                    media.map(async (item) => {
+                        if (item.media_type === 'photo' || item.media_type === 'video_thumbnail') {
+                            try {
+                                _log?.debug(`Uploading photo ${item.path}`)
+                                const obj = await pRetry(() => this.uploadPhoto(item.path), {
+                                    retries: 2,
+                                    onFailedAttempt() {
+                                        _log?.error('Upload photo failed, retrying...')
+                                    },
+                                })
+                                return obj
+                            } catch (e) {
+                                _log?.error(`Upload photo ${item.path} failed, skip this photo`)
+                                return
+                            }
+                        }
+                        // video to gif
+                    }),
+                )
+            )
+                .filter((i) => i !== undefined)
+                .map((i) => ({
+                    img_src: i.image_url,
+                    img_width: i.image_width,
+                    img_height: i.image_height,
+                    img_size: i.image_size,
+                }))
+            if (this.media_check_level === 'loose' && media.length !== 0 && pics.length === 0) {
+                _log?.error(`No photos uploaded, throw error.`)
+                throw new Error(`No photos uploaded, please check your bili_jct and sessdata.`)
+            }
+            if (this.media_check_level === 'strict' && media.length !== pics.length) {
+                _log?.error(`Some photos upload failed.`)
+                throw new Error(`Some photos upload failed, please check your bili_jct and sessdata.`)
+            }
+            // TODO: more pics support
+            const MAX_PICS = 9
+            const picChunks = chunk(pics, MAX_PICS)
+
+            const textChunks = texts.length > 0 ? texts : []
+
+            const n = Math.max(picChunks.length, textChunks.length)
+            const _res = []
+
+            for (let i = 0; i < n; i++) {
+                const text = textChunks[i] || (i === 0 ? 'Forwarded content' : ' ') // Fallback text. Bilibili dynamic needs text.
+                const msgPics = picChunks[i] || [] // Type: BiliImageUploaded[]
+
+                _log?.debug(`Sending chunk ${i + 1}/${n}: text length ${text.length}, pics count ${msgPics.length}`)
+
+                let res
+                if (msgPics.length > 0) {
+                    res = await this.sendTextWithPhotos(text, msgPics)
+                } else {
+                    if (!textChunks[i]) continue; // If no text and no pics, skip (shouldn't happen due to Math.max logic unless textChunks ran out and picChunks ran out)
+                    res = await this.sendText(text)
+                }
+                _res.push(res)
+            }
+            _res.forEach((res) => {
+                if (res.data.code !== 0) {
+                    throw new Error(
+                        `Send text to ${this.NAME} failed. ${res.data.message}: ${JSON.stringify(res.data)}`,
+                    )
+                }
+            })
+            return _res
+        } finally {
+            normalizedAttachments.cleanup()
+        }
     }
 
     private async uploadPhoto(path: string) {
