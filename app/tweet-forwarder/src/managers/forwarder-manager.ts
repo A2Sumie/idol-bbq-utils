@@ -3064,9 +3064,9 @@ class ForwarderPools extends BaseCompatibleModel {
             now,
             primaryTextMode,
         )
-        const translatedCard = queue.config.translatedCard
-            ? await this.prepareSummaryCardTranslations(queue, allItems).then(() =>
-                  this.buildSummaryCardRenderVariant(
+        const translatedCard =
+            queue.config.translatedCard && (await this.prepareSummaryCardTranslations(queue, allItems))
+                ? await this.buildSummaryCardRenderVariant(
                       queue,
                       groups,
                       allItems,
@@ -3074,10 +3074,9 @@ class ForwarderPools extends BaseCompatibleModel {
                       content,
                       now,
                       'translated',
-                      queue.config.translatedCard!.badgeLabel,
-                  ),
-              )
-            : null
+                      queue.config.translatedCard.badgeLabel,
+                  )
+                : null
         const cardResults = [primaryCard.cardResult, translatedCard?.cardResult].filter(
             (result): result is RenderResult => Boolean(result),
         )
@@ -3343,18 +3342,34 @@ class ForwarderPools extends BaseCompatibleModel {
             })
     }
 
+    private hasSummaryCardTranslatedContent(items: SummaryCardQueueItem[]) {
+        return items.some((item) =>
+            this.flattenSummaryArticleChain(item.article).some((article) => {
+                if (BaseProcessor.isValidResult(article.translation)) {
+                    return true
+                }
+                if (
+                    article.media?.some((media) => BaseProcessor.isValidResult((media as any).translation))
+                ) {
+                    return true
+                }
+                return BaseProcessor.isValidResult((article.extra as any)?.translation)
+            }),
+        )
+    }
+
     private async prepareSummaryCardTranslations(queue: SummaryCardQueue, items: SummaryCardQueueItem[]) {
         const processorId = queue.config.translatedCard?.processorId
         if (!processorId) {
             this.log?.warn(
                 `Summary-card translated companion enabled for ${queue.target.id} without processor_id; using existing translations only`,
             )
-            return
+            return this.hasSummaryCardTranslatedContent(items)
         }
 
         const processor = await this.getSummaryCardProcessor(processorId)
         if (!processor) {
-            return
+            return this.hasSummaryCardTranslatedContent(items)
         }
 
         const seenArticles = new Set<string>()
@@ -3417,6 +3432,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 `Translated ${updatedArticles} article(s) for summary-card companion ${queue.target.id} using ${processor.NAME}`,
             )
         }
+        return this.hasSummaryCardTranslatedContent(items)
     }
 
     private async buildSummaryCardRenderVariant(
