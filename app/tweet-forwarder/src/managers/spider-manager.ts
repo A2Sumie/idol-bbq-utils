@@ -29,6 +29,7 @@ import { BrowserSessionPool } from '@/services/browser-session-pool'
 import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
 import { normalizeCronSecond } from '@/utils/cron'
 import {
+    inferXProbeTarget,
     probeCrawlerCookieLiveHealth,
     type CrawlerCookieLiveProbeResult,
 } from '@/services/crawler-health-audit-service'
@@ -1003,6 +1004,7 @@ class SpiderPools extends BaseCompatibleModel {
                 liveProbe = await probeCrawlerCookieLiveHealth(platformHint, filteredCookies, {
                     fetch: options.fetch,
                     timeoutMs: options.timeoutMs,
+                    xProbeTarget: platformHint === 'x' ? inferXProbeTarget(crawler) : undefined,
                 })
                 if (liveProbe.status === 'fail') {
                     throw new CrawlerCookieExportError(

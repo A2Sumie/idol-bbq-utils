@@ -5,7 +5,7 @@ type CookieHealthPlatform = 'x' | 'instagram' | 'tiktok' | 'youtube' | 'website'
 const REQUIRED_COOKIE_NAMES: Record<CookieHealthPlatform, Array<string>> = {
     x: ['auth_token', 'ct0'],
     instagram: ['sessionid', 'csrftoken'],
-    tiktok: ['sessionid'],
+    tiktok: ['ttwid'],
     youtube: [],
     website: [],
     unknown: [],

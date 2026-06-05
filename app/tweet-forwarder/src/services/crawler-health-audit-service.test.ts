@@ -23,7 +23,8 @@ test('buildCrawlerLiveHealthAudit probes healthy X cookies without exposing secr
                     {
                         id: 'crawler-x',
                         name: 'crawler x',
-                        origin: 'https://x.com',
+                        origin: 'https://x.com/i/lists',
+                        paths: ['1940955289840476438'],
                         cfg_crawler: {
                             cookie_file: cookieFile,
                         },
@@ -33,7 +34,7 @@ test('buildCrawlerLiveHealthAudit probes healthy X cookies without exposing secr
             {
                 fetch: (async (url: string, init?: RequestInit) => {
                     requests.push({ url, headers: init?.headers })
-                    return new Response(JSON.stringify({ screen_name: 'X' }), {
+                    return new Response(JSON.stringify({ data: { list: { tweets_timeline: {} } } }), {
                         status: 200,
                         headers: { 'content-type': 'application/json' },
                     })
@@ -51,7 +52,7 @@ test('buildCrawlerLiveHealthAudit probes healthy X cookies without exposing secr
             crawler_id: 'crawler-x',
             platform: 'x',
             status: 'ok',
-            diagnostic_codes: ['x_live_probe_ok'],
+            diagnostic_codes: ['x_list_timeline_probe_ok'],
             static_cookie: {
                 exists: true,
                 usable_cookie_count: 2,
@@ -67,7 +68,8 @@ test('buildCrawlerLiveHealthAudit probes healthy X cookies without exposing secr
             },
         })
         expect(requests).toHaveLength(1)
-        expect(requests[0]?.url).toBe('https://x.com/i/api/1.1/account/settings.json')
+        expect(requests[0]?.url).toContain('/ListLatestTweetsTimeline?')
+        expect(requests[0]?.url).toContain('1940955289840476438')
         expect(serialized).not.toContain(cookieFile)
         expect(serialized).not.toContain(dir)
         expect(serialized).not.toContain('auth-value')
@@ -77,7 +79,69 @@ test('buildCrawlerLiveHealthAudit probes healthy X cookies without exposing secr
     }
 })
 
-test('buildCrawlerLiveHealthAudit fails missing TikTok sessionid before live probe', async () => {
+test('buildCrawlerLiveHealthAudit probes X username crawlers through user lookup graphql', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
+    try {
+        const cookieFile = join(dir, 'x.cookies.txt')
+        writeFileSync(
+            cookieFile,
+            [
+                '.x.com\tTRUE\t/\tTRUE\t9999999999\tauth_token\tauth-value',
+                '.x.com\tTRUE\t/\tTRUE\t9999999999\tct0\tcsrf-value',
+            ].join('\n'),
+            'utf8',
+        )
+        const requests: Array<{ url: string; headers: HeadersInit | undefined }> = []
+        const audit = await buildCrawlerLiveHealthAudit(
+            {
+                crawlers: [
+                    {
+                        id: 'crawler-x-user',
+                        name: 'crawler x user',
+                        origin: 'https://x.com',
+                        paths: ['227_staff'],
+                        cfg_crawler: {
+                            cookie_file: cookieFile,
+                        },
+                    },
+                ],
+            } as any,
+            {
+                fetch: (async (url: string, init?: RequestInit) => {
+                    requests.push({ url, headers: init?.headers })
+                    return new Response(JSON.stringify({ data: { user: { result: { rest_id: '1' } } } }), {
+                        status: 200,
+                        headers: { 'content-type': 'application/json' },
+                    })
+                }) as any,
+            },
+        )
+
+        expect(audit.counts).toMatchObject({
+            checked: 1,
+            ok: 1,
+            fail: 0,
+        })
+        expect(audit.results[0]).toMatchObject({
+            crawler_id: 'crawler-x-user',
+            platform: 'x',
+            status: 'ok',
+            diagnostic_codes: ['x_user_lookup_probe_ok'],
+            live_probe: {
+                checked: true,
+                status: 'ok',
+                http_status: 200,
+            },
+        })
+        expect(requests).toHaveLength(1)
+        expect(requests[0]?.url).toContain('/UserByScreenName?')
+        expect(requests[0]?.url).toContain('227_staff')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+})
+
+test('buildCrawlerLiveHealthAudit fails missing TikTok ttwid before live probe', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
     try {
         const cookieFile = join(dir, 'tiktok.cookies.txt')
@@ -85,7 +149,7 @@ test('buildCrawlerLiveHealthAudit fails missing TikTok sessionid before live pro
             cookieFile,
             [
                 '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\ttt_chain_token\tchain-value',
-                '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\tttwid\twid-value',
+                '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\ttt_csrf_token\tcsrf-value',
             ].join('\n'),
             'utf8',
         )
@@ -128,7 +192,7 @@ test('buildCrawlerLiveHealthAudit fails missing TikTok sessionid before live pro
                 usable_cookie_count: 2,
                 required_cookie_names: {
                     present: [],
-                    missing: ['sessionid'],
+                    missing: ['ttwid'],
                 },
             },
             live_probe: {
@@ -140,7 +204,7 @@ test('buildCrawlerLiveHealthAudit fails missing TikTok sessionid before live pro
         expect(serialized).not.toContain(cookieFile)
         expect(serialized).not.toContain(dir)
         expect(serialized).not.toContain('chain-value')
-        expect(serialized).not.toContain('wid-value')
+        expect(serialized).not.toContain('csrf-value')
     } finally {
         rmSync(dir, { recursive: true, force: true })
     }

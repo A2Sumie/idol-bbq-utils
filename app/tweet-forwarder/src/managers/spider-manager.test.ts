@@ -665,7 +665,8 @@ test('SpiderPools exportCrawlerCookies rejects X sessions that fail live auth va
         await pools.exportCrawlerCookies(
             {
                 name: 'x-list',
-                origin: 'https://x.com',
+                origin: 'https://x.com/i/lists',
+                paths: ['1940955289840476438'],
                 cfg_crawler: {
                     session_profile: 'x-main',
                 },
@@ -692,11 +693,13 @@ test('SpiderPools exportCrawlerCookies rejects X sessions that fail live auth va
         live_probe: {
             checked: true,
             status: 'fail',
-            diagnostic_codes: ['x_live_auth_rejected'],
+            diagnostic_codes: ['x_list_timeline_auth_rejected'],
             http_status: 401,
         },
     })
-    expect(probeUrls).toEqual(['https://x.com/i/api/1.1/account/settings.json'])
+    expect(probeUrls).toHaveLength(1)
+    expect(probeUrls[0]).toContain('/ListLatestTweetsTimeline?')
+    expect(probeUrls[0]).toContain('1940955289840476438')
 })
 
 test('SpiderPools exportCrawlerCookies can audit without seeding configured cookies or visiting pages', async () => {
