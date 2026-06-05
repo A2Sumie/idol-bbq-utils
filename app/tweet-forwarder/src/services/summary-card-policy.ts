@@ -11,6 +11,7 @@ type ResolvedSummaryCardConfig = {
     sendFirstNative: boolean
     mediaRealtime: boolean
     mediaRealtimeText: 'none' | 'basic' | 'metadata' | 'rendered'
+    mediaRealtimeDropSummaryPlatforms: string[]
     flushOnThreshold: boolean
     flushDelaySeconds: number
     windowAlignment: SummaryCardWindowAlignment
@@ -31,6 +32,7 @@ type SummaryCardRoutePolicy = {
     send_first_native: boolean
     media_realtime: boolean
     media_realtime_text: 'none' | 'basic' | 'metadata' | 'rendered'
+    media_realtime_drop_summary_platforms: string[]
     flush_on_threshold: boolean
     flush_delay_seconds: number
     window_alignment: SummaryCardWindowAlignment
@@ -65,6 +67,24 @@ function resolveTranslatedCardConfig(raw: unknown): ResolvedSummaryCardConfig['t
         ),
         ...(processorId ? { processorId } : {}),
     }
+}
+
+function normalizePlatformTokens(raw: unknown) {
+    if (!Array.isArray(raw)) {
+        return []
+    }
+    return Array.from(
+        new Set(
+            raw
+                .map((value) =>
+                    String(value || '')
+                        .trim()
+                        .toLocaleLowerCase()
+                        .replace(/[_\s-]+/g, ''),
+                )
+                .filter(Boolean),
+        ),
+    )
 }
 
 function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): ResolvedSummaryCardConfig | null {
@@ -105,6 +125,9 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         ? ((objectConfig as any).media_realtime_text as 'basic' | 'metadata' | 'rendered')
         : 'none'
     const translatedCard = resolveTranslatedCardConfig((objectConfig as any).translated_card)
+    const mediaRealtimeDropSummaryPlatforms = normalizePlatformTokens(
+        (objectConfig as any).media_realtime_drop_summary_platforms,
+    )
 
     return {
         intervalSeconds,
@@ -115,6 +138,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         sendFirstNative: (objectConfig as any).send_first_native === true,
         mediaRealtime,
         mediaRealtimeText,
+        mediaRealtimeDropSummaryPlatforms,
         flushOnThreshold: (objectConfig as any).flush_on_threshold !== false,
         flushDelaySeconds: Math.max(0, Math.floor(Number((objectConfig as any).flush_delay_seconds || 0))),
         windowAlignment,
@@ -134,6 +158,7 @@ function toSummaryCardRoutePolicy(config: ResolvedSummaryCardConfig): SummaryCar
         send_first_native: config.sendFirstNative,
         media_realtime: config.mediaRealtime,
         media_realtime_text: config.mediaRealtimeText,
+        media_realtime_drop_summary_platforms: config.mediaRealtimeDropSummaryPlatforms,
         flush_on_threshold: config.flushOnThreshold,
         flush_delay_seconds: config.flushDelaySeconds,
         window_alignment: config.windowAlignment,

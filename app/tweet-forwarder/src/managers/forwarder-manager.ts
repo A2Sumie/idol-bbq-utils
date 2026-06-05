@@ -108,6 +108,12 @@ type SummaryCardGroup = {
 }
 type SummaryCardMediaUsage = Map<string, number>
 type SummaryCardTextMode = 'default' | 'original' | 'translated'
+type SummaryCardRealtimeMediaResult = {
+    hadMedia: boolean
+    handled: boolean
+    visibleMediaSent: boolean
+    skippedDuplicate: boolean
+}
 type RenderedMediaFile = RenderResult['originalMediaFiles'][number]
 type MediaVisibilityDuplicateBehavior = 'skip' | 'text_only'
 type ResolvedMediaVisibilityPolicy = {
@@ -153,6 +159,49 @@ function uniquePreserveOrder(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean)))
 }
 
+function normalizePlatformToken(value: unknown) {
+    const normalized = String(value || '')
+        .trim()
+        .toLocaleLowerCase()
+        .replace(/[_\s-]+/g, '')
+    if (['2', 'instagram', 'ig', 'ins'].includes(normalized)) {
+        return 'instagram'
+    }
+    if (['3', 'tiktok', 'tt'].includes(normalized)) {
+        return 'tiktok'
+    }
+    if (['0', '1', 'x', 'twitter'].includes(normalized)) {
+        return 'x'
+    }
+    if (['4', 'youtube', 'yt'].includes(normalized)) {
+        return 'youtube'
+    }
+    if (['5', 'website', 'web'].includes(normalized)) {
+        return 'website'
+    }
+    return normalized
+}
+
+function getArticlePlatformToken(article: Pick<ArticleWithId, 'platform'>) {
+    return normalizePlatformToken(article.platform)
+}
+
+function normalizePlatformTokenList(values: unknown) {
+    if (!Array.isArray(values)) {
+        return []
+    }
+    return uniquePreserveOrder(values.map((value) => normalizePlatformToken(value)).filter(Boolean))
+}
+
+function arePlatformTokenListsEqual(left: unknown, right: unknown) {
+    const normalizedLeft = normalizePlatformTokenList(left)
+    const normalizedRight = normalizePlatformTokenList(right)
+    return (
+        normalizedLeft.length === normalizedRight.length &&
+        normalizedLeft.every((value, index) => value === normalizedRight[index])
+    )
+}
+
 function resolveMediaVisibilityPolicy(
     config: ForwardTargetPlatformCommonConfig | undefined,
 ): ResolvedMediaVisibilityPolicy | null {
@@ -174,19 +223,6 @@ function resolveMediaVisibilityPolicy(
         maxVisible: Math.max(1, Number.isFinite(rawMaxVisible) ? rawMaxVisible : 1),
         duplicateBehavior: (objectConfig as any).duplicate_behavior === 'text_only' ? 'text_only' : 'skip',
     }
-}
-
-function formatMediaVisibilityWindow(seconds: number) {
-    if (seconds === 86400) {
-        return '24小时'
-    }
-    if (seconds % 86400 === 0) {
-        return `${seconds / 86400}天`
-    }
-    if (seconds % 3600 === 0) {
-        return `${seconds / 3600}小时`
-    }
-    return `${seconds}秒`
 }
 
 function mergeFeatureFlags(...values: Array<Array<string> | undefined>) {
@@ -956,6 +992,10 @@ class ForwarderPools extends BaseCompatibleModel {
             current.sendFirstNative === persisted.sendFirstNative &&
             current.mediaRealtime === persisted.mediaRealtime &&
             current.mediaRealtimeText === persisted.mediaRealtimeText &&
+            arePlatformTokenListsEqual(
+                current.mediaRealtimeDropSummaryPlatforms,
+                (persisted as any).mediaRealtimeDropSummaryPlatforms,
+            ) &&
             current.flushOnThreshold === persisted.flushOnThreshold &&
             current.flushDelaySeconds === persisted.flushDelaySeconds &&
             current.windowAlignment === persisted.windowAlignment &&
@@ -2386,8 +2426,14 @@ class ForwarderPools extends BaseCompatibleModel {
             return true
         }
 
+        let realtimeMediaResult: SummaryCardRealtimeMediaResult = {
+            hadMedia: false,
+            handled: true,
+            visibleMediaSent: false,
+            skippedDuplicate: false,
+        }
         if (summaryConfig.mediaRealtime) {
-            await this.sendSummaryCardRealtimeMedia(
+            realtimeMediaResult = await this.sendSummaryCardRealtimeMedia(
                 log,
                 article,
                 target,
@@ -2396,6 +2442,36 @@ class ForwarderPools extends BaseCompatibleModel {
                 summaryConfig,
                 renderResult,
             )
+            if (this.shouldDropSummaryCardAfterRealtimeMedia(article, summaryConfig)) {
+                if (realtimeMediaResult.hadMedia && !realtimeMediaResult.handled) {
+                    log?.warn(
+                        `Not queueing summary-card text for ${article.a_id} to ${target.id}: realtime media failed and platform is media-only`,
+                    )
+                    return true
+                }
+                const claimed = await this.claimArticleChain(article, article.platform, target.id)
+                if (claimed) {
+                    await this.markArticleOutboundSkipped(
+                        log,
+                        article,
+                        target,
+                        summaryRouteKey,
+                        realtimeMediaResult.hadMedia
+                            ? 'summary_realtime_media_only'
+                            : 'summary_realtime_media_required_missing',
+                        {
+                            media_realtime_drop_summary_platforms:
+                                summaryConfig.mediaRealtimeDropSummaryPlatforms,
+                            realtime_media: realtimeMediaResult,
+                        },
+                        renderResult,
+                    )
+                    log?.debug(
+                        `Dropped summary-card queue item ${article.a_id} for ${target.id}: platform is realtime-media-only`,
+                    )
+                }
+                return true
+            }
         }
 
         let queue = existingQueue
@@ -2513,6 +2589,19 @@ class ForwarderPools extends BaseCompatibleModel {
         return uniquePreserveOrder([header, headline, article.url || '']).join('\n')
     }
 
+    private shouldDropSummaryCardAfterRealtimeMedia(
+        article: ArticleWithId,
+        config: ResolvedSummaryCardConfig,
+    ) {
+        if (!config.mediaRealtime || config.mediaRealtimeDropSummaryPlatforms.length === 0) {
+            return false
+        }
+        const articlePlatform = getArticlePlatformToken(article)
+        return config.mediaRealtimeDropSummaryPlatforms
+            .map((value) => normalizePlatformToken(value))
+            .some((value) => value === '*' || value === articlePlatform)
+    }
+
     private buildRenderedMediaIdentity(file: RenderedMediaFile) {
         return file.content_hash || file.sourceUrl || file.path
     }
@@ -2625,7 +2714,8 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private buildMediaVisibilityTextNotice(policy: ResolvedMediaVisibilityPolicy) {
-        return `【重复媒体已文字缩略】${formatMediaVisibilityWindow(policy.windowSeconds)}内该媒体已出现${policy.maxVisible}次，已省略重复媒体。`
+        void policy
+        return '[图略]'
     }
 
     private async releaseTargetMediaVisibilityClaims(visibility: MediaVisibilityResult | null | undefined) {
@@ -2645,10 +2735,15 @@ class ForwarderPools extends BaseCompatibleModel {
         routeKeyValue: string,
         config: ResolvedSummaryCardConfig,
         renderResult: RenderResult,
-    ) {
+    ): Promise<SummaryCardRealtimeMediaResult> {
         const mediaFiles = [...renderResult.originalMediaFiles]
         if (mediaFiles.length === 0) {
-            return true
+            return {
+                hadMedia: false,
+                handled: true,
+                visibleMediaSent: false,
+                skippedDuplicate: false,
+            }
         }
 
         const text = this.buildSummaryCardRealtimeMediaText(article, renderResult, config)
@@ -2687,10 +2782,20 @@ class ForwarderPools extends BaseCompatibleModel {
             log?.debug(
                 `Skipping summary realtime media for ${article.a_id} to ${target.id}: target media visibility duplicate`,
             )
-            return true
+            return {
+                hadMedia: true,
+                handled: true,
+                visibleMediaSent: false,
+                skippedDuplicate: true,
+            }
         }
         if (visibleMediaFiles.length === 0) {
-            return true
+            return {
+                hadMedia: true,
+                handled: true,
+                visibleMediaSent: false,
+                skippedDuplicate: false,
+            }
         }
         const outboundPayloadHash = payloadHash({
             routeKey: routeKeyValue,
@@ -2717,7 +2822,13 @@ class ForwarderPools extends BaseCompatibleModel {
                     `Summary realtime media outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible media send`,
                 )
                 await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
-                return isOutboundVisibleCompletionStatus(outbound.record.status)
+                const visibleCompletion = isOutboundVisibleCompletionStatus(outbound.record.status)
+                return {
+                    hadMedia: true,
+                    handled: visibleCompletion,
+                    visibleMediaSent: visibleCompletion,
+                    skippedDuplicate: false,
+                }
             }
 
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
@@ -2739,7 +2850,12 @@ class ForwarderPools extends BaseCompatibleModel {
                     last_send_status: 'queued',
                     details: sendResult,
                 }).catch(() => undefined)
-                return false
+                return {
+                    hadMedia: true,
+                    handled: false,
+                    visibleMediaSent: false,
+                    skippedDuplicate: false,
+                }
             }
             if (sendResult.status === 'blocked') {
                 await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
@@ -2751,7 +2867,12 @@ class ForwarderPools extends BaseCompatibleModel {
                     last_send_status: 'blocked',
                     details: sendResult,
                 }).catch(() => undefined)
-                return false
+                return {
+                    hadMedia: true,
+                    handled: false,
+                    visibleMediaSent: false,
+                    skippedDuplicate: false,
+                }
             }
             if (sendResult.status === 'dry_run') {
                 await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
@@ -2763,7 +2884,12 @@ class ForwarderPools extends BaseCompatibleModel {
                     last_send_status: 'dry_run',
                     details: sendResult,
                 }).catch(() => undefined)
-                return false
+                return {
+                    hadMedia: true,
+                    handled: false,
+                    visibleMediaSent: false,
+                    skippedDuplicate: false,
+                }
             }
             const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
@@ -2775,7 +2901,12 @@ class ForwarderPools extends BaseCompatibleModel {
                 last_provider_code: providerCode(providerResult),
                 details: summarizeProviderResult(providerResult),
             })
-            return true
+            return {
+                hadMedia: true,
+                handled: true,
+                visibleMediaSent: true,
+                skippedDuplicate: false,
+            }
         } catch (error) {
             log?.error(`Failed to send summary realtime media for ${article.a_id} to ${target.id}: ${error}`)
             if (error instanceof PartialForwarderSendError) {
@@ -2793,7 +2924,12 @@ class ForwarderPools extends BaseCompatibleModel {
                     disabled_reason: error.message,
                     details: summarizeProviderResult(error.partialResults),
                 }).catch(() => undefined)
-                return true
+                return {
+                    hadMedia: true,
+                    handled: true,
+                    visibleMediaSent: true,
+                    skippedDuplicate: false,
+                }
             }
             await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
             await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
@@ -2809,7 +2945,12 @@ class ForwarderPools extends BaseCompatibleModel {
                     article_key: articleKey(article),
                 },
             }).catch(() => undefined)
-            return false
+            return {
+                hadMedia: true,
+                handled: false,
+                visibleMediaSent: false,
+                skippedDuplicate: false,
+            }
         }
     }
 
@@ -3333,8 +3474,46 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private async processSummaryCardTranslationText(processor: BaseProcessor, text: string) {
-        return await pRetry(() => processor.process(text), {
+    private buildOrderedTranslationInput(
+        rootArticle: ArticleWithId,
+        targetArticle: ArticleWithId | Article,
+        sourceText: string,
+        fieldLabel: string,
+    ) {
+        const chain = this.flattenSummaryArticleChain(rootArticle).reverse()
+        if (chain.length <= 1) {
+            return sourceText
+        }
+
+        const targetStableId = String((targetArticle as any).id ?? targetArticle.a_id ?? '')
+        const lines = [
+            '请只翻译【当前待译】段落，输出简体中文译文，不要输出原文、序号、说明或上下文。',
+            '以下按发生顺序排列：第1条最先发生，序号越大越后发生。',
+        ]
+        for (const [index, article] of chain.entries()) {
+            const stableId = String((article as any).id ?? article.a_id ?? '')
+            const isTarget = stableId === targetStableId
+            const orderLabel =
+                index === 0
+                    ? '最先发生'
+                    : index === chain.length - 1
+                      ? '最后发生'
+                      : `第${index + 1}条发生`
+            const body = isTarget ? sourceText : String(article.content || '').trim()
+            if (!body) {
+                continue
+            }
+            lines.push(
+                `【第${index + 1}条/${orderLabel}${isTarget ? '/当前待译' : '/上下文'}】`,
+                body,
+            )
+        }
+        lines.push(`【当前待译字段】${fieldLabel}`)
+        return lines.join('\n\n')
+    }
+
+    private async processSummaryCardTranslationText(processor: BaseProcessor, inputText: string) {
+        return await pRetry(() => processor.process(inputText), {
             retries: RETRY_LIMIT,
         })
             .then((value) => value)
@@ -3377,7 +3556,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const seenArticles = new Set<string>()
         let updatedArticles = 0
         for (const item of articles) {
-            for (const article of this.flattenSummaryArticleChain(item)) {
+            for (const article of this.flattenSummaryArticleChain(item).reverse()) {
                 const key = `${article.platform}:${article.id}`
                 if (seenArticles.has(key)) {
                     continue
@@ -3386,7 +3565,10 @@ class ForwarderPools extends BaseCompatibleModel {
 
                 const patch: Partial<Article> = {}
                 if (article.content && !BaseProcessor.isValidResult(article.translation)) {
-                    patch.translation = await this.processSummaryCardTranslationText(processor, article.content)
+                    patch.translation = await this.processSummaryCardTranslationText(
+                        processor,
+                        this.buildOrderedTranslationInput(item, article, article.content, '正文'),
+                    )
                     patch.translated_by = processor.NAME
                     article.translation = patch.translation
                     article.translated_by = processor.NAME
@@ -3402,7 +3584,10 @@ class ForwarderPools extends BaseCompatibleModel {
                             changed = true
                             return {
                                 ...media,
-                                translation: await this.processSummaryCardTranslationText(processor, media.alt),
+                                translation: await this.processSummaryCardTranslationText(
+                                    processor,
+                                    this.buildOrderedTranslationInput(item, article, media.alt, '图片说明'),
+                                ),
                                 translated_by: processor.NAME,
                             }
                         }),
@@ -3416,7 +3601,10 @@ class ForwarderPools extends BaseCompatibleModel {
                 if (article.extra?.content && !BaseProcessor.isValidResult((article.extra as any).translation)) {
                     patch.extra = {
                         ...article.extra,
-                        translation: await this.processSummaryCardTranslationText(processor, article.extra.content),
+                        translation: await this.processSummaryCardTranslationText(
+                            processor,
+                            this.buildOrderedTranslationInput(item, article, article.extra.content, '补充内容'),
+                        ),
                         translated_by: processor.NAME,
                     } as any
                     article.extra = patch.extra as any
@@ -3589,14 +3777,16 @@ class ForwarderPools extends BaseCompatibleModel {
                           )
                         : []
                 const media = this.buildSummaryCardItemMedia(item, 4, queue.config, mediaUsage)
+                const omittedMedia = this.countSummaryCardItemMedia(item) > media.length
+                const itemText = await this.buildSummaryCardItemText(
+                    queue,
+                    item.article,
+                    nonStormTags,
+                    options.textMode || 'default',
+                )
                 itemMetas.push({
                     index: itemIndex + 1,
-                    text: await this.buildSummaryCardItemText(
-                        queue,
-                        item.article,
-                        nonStormTags,
-                        options.textMode || 'default',
-                    ),
+                    text: omittedMedia ? [itemText, '[图略]'].filter(Boolean).join('\n') : itemText,
                     avatar: this.buildSummaryCardAvatar(item.article),
                     media,
                     mediaLabel: media.length > 0 ? `#${itemIndex + 1} 图集` : undefined,

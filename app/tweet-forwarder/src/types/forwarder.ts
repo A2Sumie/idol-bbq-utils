@@ -157,6 +157,13 @@ interface ForwardTargetPlatformCommonConfig {
               send_first_native?: boolean
               media_realtime?: boolean
               media_realtime_text?: 'none' | 'basic' | 'metadata' | 'rendered'
+              /**
+               * Platforms whose realtime media posts should not also remain in
+               * the later summary-card text/card queue. Useful for image-only
+               * IG/TT relays where the immediate media dynamic is the whole
+               * outward-facing send.
+               */
+              media_realtime_drop_summary_platforms?: Array<string | number | Platform>
               flush_on_threshold?: boolean
               flush_delay_seconds?: number
               align_to_hour?: boolean

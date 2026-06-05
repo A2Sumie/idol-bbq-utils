@@ -384,6 +384,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         sendFirstNative: false,
         mediaRealtime: false,
         mediaRealtimeText: 'none',
+        mediaRealtimeDropSummaryPlatforms: [],
         flushOnThreshold: true,
         flushDelaySeconds: 0,
         windowAlignment: 'none',
@@ -402,6 +403,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
                 send_first_native: true,
                 media_realtime: true,
                 media_realtime_text: 'basic',
+                media_realtime_drop_summary_platforms: ['instagram', 'tt'],
                 flush_on_threshold: false,
                 flush_delay_seconds: 300,
                 align_to_interval: true,
@@ -422,6 +424,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         sendFirstNative: true,
         mediaRealtime: true,
         mediaRealtimeText: 'basic',
+        mediaRealtimeDropSummaryPlatforms: ['instagram', 'tt'],
         flushOnThreshold: false,
         flushDelaySeconds: 300,
         windowAlignment: 'interval',
@@ -4724,6 +4727,177 @@ test('sendArticles fills missing translations before rendering translated summar
     expect(translatedText).toContain('译:この後19:00〜 バースデーSHOWROOM配信スタート')
 })
 
+test('sendArticles prompts summary-card translation with chronological chain order', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const processCalls: string[] = []
+    const originalCreateProcessor = (processorRegistry as any).create
+    const originalArticleUpdate = (DB.Article as any).update
+    ;(processorRegistry as any).create = async () => ({
+        NAME: 'fake-ordered-translator',
+        process: async (text: string) => {
+            processCalls.push(text)
+            if (text.includes('【第2条/最后发生/当前待译】')) {
+                return '译:後の返信'
+            }
+            if (text.includes('【第1条/最先发生/当前待译】')) {
+                return '译:先の本文'
+            }
+            return '译:unknown'
+        },
+        drop: async () => undefined,
+    })
+    ;(DB.Article as any).update = async (id: number, _platform: Platform, patch: any) => {
+        return { id, ...patch }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.Deepseek,
+                    api_key: 'test-key',
+                    cfg_processor: {
+                        action: 'translate',
+                    },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                    processor_id: '22_7-social-ja-zh',
+                },
+            },
+        } as any,
+        'target-summary-card-ordered-translation',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            if (article.id < 0) {
+                const suffix = config?.card_features?.includes('translated-corner-badge') ? 'translated' : 'original'
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: `/tmp/ordered-${suffix}.png` }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: `/tmp/ordered-${suffix}.png` }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    const parentArticle = {
+        id: 920,
+        a_id: 'ordered-parent',
+        platform: Platform.X,
+        username: 'first member',
+        u_id: 'first_member',
+        content: '先の本文',
+        translation: null,
+        translated_by: null,
+        url: 'https://x.com/first_member/status/920',
+        type: 'tweet',
+        created_at: now,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const replyArticle = {
+        id: 921,
+        a_id: 'ordered-reply',
+        platform: Platform.X,
+        username: 'reply member',
+        u_id: 'reply_member',
+        content: '後の返信',
+        translation: null,
+        translated_by: null,
+        url: 'https://x.com/reply_member/status/921',
+        type: 'reply',
+        created_at: now + 60,
+        ref: parentArticle,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-ordered-translation',
+            [replyArticle],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        await (pools as any).flushAllSummaryCardQueues()
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+        ;(DB.Article as any).update = originalArticleUpdate
+    }
+
+    expect(processCalls).toHaveLength(2)
+    expect(processCalls[0]).toContain('以下按发生顺序排列')
+    expect(processCalls[0]).toContain('【第1条/最先发生/当前待译】')
+    expect(processCalls[0]).toContain('先の本文')
+    expect(processCalls[0]).toContain('【第2条/最后发生/上下文】')
+    expect(processCalls[0]).toContain('後の返信')
+    expect(processCalls[1]).toContain('以下按发生顺序排列')
+    expect(processCalls[1]).toContain('【第1条/最先发生/上下文】')
+    expect(processCalls[1]).toContain('先の本文')
+    expect(processCalls[1]).toContain('【第2条/最后发生/当前待译】')
+    expect(processCalls[1]).toContain('後の返信')
+    expect(target.sent).toHaveLength(1)
+})
+
 test('sendArticles suppresses empty translated summary companion when processor is unavailable', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -5947,6 +6121,146 @@ test('summary-card realtime media metadata text stays one line without body or U
     expect(target.sent[0]?.props?.media?.[0]?.media_type).toBe('photo')
 })
 
+test('summary-card realtime media-only platforms do not leak into later dynamics', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'metadata',
+                media_realtime_drop_summary_platforms: ['instagram', 'tiktok'],
+                flush_on_threshold: false,
+            },
+        } as any,
+        'target-summary-card-realtime-media-only',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            const files =
+                article.platform === Platform.Instagram
+                    ? [
+                          {
+                              media_type: 'photo',
+                              path: `/tmp/instagram-media-only-${article.id}.jpg`,
+                              sourceArticleId: article.a_id,
+                              sourceUrl: `https://example.com/instagram-media-only-${article.id}.jpg`,
+                          },
+                      ]
+                    : []
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: files,
+                mediaFiles: files,
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    const instagramArticle = {
+        id: 814,
+        a_id: 'instagram-media-only',
+        platform: Platform.Instagram,
+        username: 'IG Nick',
+        u_id: 'ig_member',
+        content: 'instagram body should not become summary dynamic',
+        url: 'https://www.instagram.com/p/media-only/',
+        type: 'post',
+        created_at: now,
+        ref: null,
+        has_media: true,
+        media: [{ type: 'photo', url: 'https://example.com/instagram-media-only-814.jpg' }],
+        extra: null,
+        u_avatar: null,
+    }
+    const tiktokArticle = {
+        id: 815,
+        a_id: 'tiktok-no-media-only',
+        platform: Platform.TikTok,
+        username: 'TT Nick',
+        u_id: 'tt_member',
+        content: 'tiktok body should not become summary dynamic',
+        url: 'https://www.tiktok.com/@tt_member/video/815',
+        type: 'video',
+        created_at: now + 1,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-realtime-media-only-instagram',
+        [instagramArticle],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-realtime-media-only-tiktok',
+        [tiktokArticle],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('@ig_member')
+    expect(target.sent[0]?.texts[0]).not.toContain('instagram body should not become summary dynamic')
+    expect(target.sent[0]?.props?.media?.[0]?.path).toBe('/tmp/instagram-media-only-814.jpg')
+    expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
+    expect(
+        await DB.ForwardBy.checkExist(instagramArticle.id, instagramArticle.platform, target.id, 'article'),
+    ).not.toBeNull()
+    expect(
+        await DB.ForwardBy.checkExist(tiktokArticle.id, tiktokArticle.platform, target.id, 'article'),
+    ).not.toBeNull()
+
+    const articleSkips = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values()).filter(
+        (record: any) => record.task_kind === 'article',
+    )
+    expect(articleSkips.map((record: any) => record.provider_message_ids?.reason).sort()).toEqual([
+        'summary_realtime_media_only',
+        'summary_realtime_media_required_missing',
+    ])
+})
+
 test('target media visibility text-collapses media after the second visible occurrence', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -6045,8 +6359,9 @@ test('target media visibility text-collapses media after the second visible occu
     expect(target.sent[2]?.props?.contentMedia).toEqual([])
     expect(target.sent[2]?.props?.cardMedia).toEqual([])
     expect(target.sent[2]?.texts[0]).toContain('high realtime text 932')
-    expect(target.sent[2]?.texts[0]).toContain('重复媒体已文字缩略')
-    expect(target.sent[2]?.texts[0]).toContain('24小时')
+    expect(target.sent[2]?.texts[0]).toContain('[图略]')
+    expect(target.sent[2]?.texts[0]).not.toContain('重复媒体已文字缩略')
+    expect(target.sent[2]?.texts[0]).not.toContain('24小时')
 })
 
 test('summary-card aligned windows wait for the configured five-minute delay', async () => {
@@ -7009,13 +7324,14 @@ test('idle-first translated native companion is suppressed for text-only media v
     expect(target.sent[0]?.props?.cardMedia).toHaveLength(2)
     expect(target.sent[1]?.props?.cardMedia).toEqual([])
     expect(target.sent[1]?.props?.contentMedia).toEqual([])
-    expect(target.sent[1]?.texts[0]).toContain('重复媒体已文字缩略')
+    expect(target.sent[1]?.texts[0]).toContain('[图略]')
+    expect(target.sent[1]?.texts[0]).not.toContain('重复媒体已文字缩略')
     expect(
         renderProcessCalls.filter((call) => call.config?.card_features?.includes('translated-corner-badge')),
     ).toHaveLength(1)
 })
 
-test('summary-card media duplicate budget omits the third visible occurrence', async () => {
+test('summary-card media duplicate budget keeps one top representative per card', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -7050,7 +7366,7 @@ test('summary-card media duplicate budget omits the third visible occurrence', a
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
-                media_duplicate_limit: 2,
+                media_duplicate_limit: 1,
             },
         } as any,
         'target-summary-card-media-duplicate-limit',
@@ -7142,5 +7458,11 @@ test('summary-card media duplicate budget omits the third visible occurrence', a
     const itemMediaCounts = packedArticles[0]?.extra?.data?.groups.flatMap((group: any) =>
         group.items.map((item: any) => item.media.length),
     )
-    expect(itemMediaCounts).toEqual([1, 0, 0])
+    expect(itemMediaCounts).toEqual([0, 0, 0])
+    const itemTexts = packedArticles[0]?.extra?.data?.groups.flatMap((group: any) =>
+        group.items.map((item: any) => item.text),
+    )
+    expect(itemTexts[0]).toContain('[图略]')
+    expect(itemTexts[1]).toContain('[图略]')
+    expect(itemTexts[2]).toContain('[图略]')
 })
