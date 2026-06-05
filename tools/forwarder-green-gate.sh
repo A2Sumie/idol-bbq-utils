@@ -29,6 +29,7 @@ HELP
     run git diff --check
     run bash -n \
         tools/deploy-forwarder-stopped.sh \
+        tools/forwarder-capture-smoke.sh \
         tools/forwarder-db-backup-drill.sh \
         tools/forwarder-operator-contracts.sh \
         tools/forwarder-preflight.sh \

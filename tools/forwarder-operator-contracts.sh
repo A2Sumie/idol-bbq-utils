@@ -40,7 +40,7 @@ HELP
 
     git rev-parse --is-inside-work-tree >/dev/null
 
-    local deploy preflight start dockerfile drill drift converge
+    local deploy preflight start dockerfile drill drift converge capture_smoke
     deploy="tools/deploy-forwarder-stopped.sh"
     preflight="tools/forwarder-preflight.sh"
     start="app/tweet-forwarder/start.sh"
@@ -48,6 +48,7 @@ HELP
     drill="tools/forwarder-db-backup-drill.sh"
     drift="tools/forwarder-remote-drift.sh"
     converge="tools/forwarder-remote-converge.sh"
+    capture_smoke="tools/forwarder-capture-smoke.sh"
 
     require_contains "$deploy" 'require_clean_local_worktree' \
         'local clean-worktree deploy guard'
@@ -159,6 +160,25 @@ HELP
         'remote convergence archive count visibility'
     require_contains "$converge" 'import subprocess' \
         'remote convergence local HEAD source scan import'
+
+    require_contains "$capture_smoke" 'CAPTURE_SMOKE_REQUIRE_PRODUCTION_STOPPED' \
+        'capture smoke production-stopped guard'
+    require_contains "$capture_smoke" 'IDOL_BBQ_OUTBOUND_SEND_MODE=capture' \
+        'capture smoke outbound send-mode override'
+    require_contains "$capture_smoke" 'sqlite_backup "$repo/assets/refactor.db" "$tmp_db"' \
+        'capture smoke temporary DB copy'
+    require_contains "$capture_smoke" 'prepare_temp_db "$tmp_db" "$db_prepare_file"' \
+        'capture smoke temp DB background task suppression'
+    require_contains "$capture_smoke" '"$tmp_config:/app/config.yaml:ro"' \
+        'capture smoke read-only temporary config mount'
+    require_contains "$capture_smoke" '"$repo/assets/cookies:/app/assets/cookies:ro"' \
+        'capture smoke read-only production cookies mount'
+    require_contains "$capture_smoke" 'rm -f "$tmp_config" "$auth_header"' \
+        'capture smoke secret-bearing artifact cleanup'
+    require_contains "$capture_smoke" 'production container is not stopped' \
+        'capture smoke production stop refusal'
+    require_contains "$capture_smoke" 'unmatched_capture_count' \
+        'capture smoke no unrelated capture assertion'
 
     python3 - "$dockerfile" <<'PY'
 import sys
