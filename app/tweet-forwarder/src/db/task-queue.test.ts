@@ -19,6 +19,7 @@ test('TaskQueue task type groups keep worker and inline API tasks distinct', () 
     expect(DB.TaskQueue.WORKER_TYPES).toEqual(['aggregate_daily', 'aggregate_hourly'])
     expect(DB.TaskQueue.INLINE_API_TYPES).toEqual([
         'manual_crawler_run',
+        'notification_signal',
         'article_simulate',
         'article_reprocess',
         'article_resend',

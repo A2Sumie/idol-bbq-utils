@@ -265,6 +265,115 @@ test('APIManager task list forwards operator filters safely', async () => {
     }
 })
 
+test('APIManager records notification signals in api-only shadow mode without dispatching crawlers', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const taskAdds: any[] = []
+    const statusUpdates: any[] = []
+
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        taskAdds.push({ type, payload, executeAt, meta })
+        return { id: 91, status: 'pending' }
+    }
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            id: 'ig-sakura',
+                            name: 'Instagram Sakura',
+                            origin: 'https://www.instagram.com',
+                            paths: ['/sakura.member/'],
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    emitter: {
+                        emit: () => {
+                            throw new Error('notification signal must not dispatch')
+                        },
+                    },
+                }) as any,
+            getRuntimeMeta: () =>
+                ({
+                    generation: 0,
+                    configPath: 'config.yaml',
+                    mode: 'api-only',
+                    startedAt: new Date(0).toISOString(),
+                    lastReloadedAt: new Date(0).toISOString(),
+                    reloading: false,
+                }) as any,
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/actions/notification-signals/ingest', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+                body: JSON.stringify({
+                    platform: 'instagram',
+                    username: 'sakura.member',
+                    title: 'private notification title',
+                    body: 'private notification body',
+                    received_at: 1_800_000_000,
+                }),
+            }),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(200)
+        const payload = await response.json()
+        expect(payload).toMatchObject({
+            success: true,
+            mode: 'shadow',
+            platform: 'instagram',
+            source_ref: 'notification:instagram:sakura.member',
+            taskQueueId: 91,
+            matched_crawlers: [
+                {
+                    crawler_id: 'ig-sakura',
+                    crawler_name: 'Instagram Sakura',
+                    reason: 'identity',
+                },
+            ],
+            would_trigger_crawlers: false,
+        })
+
+        expect(taskAdds).toHaveLength(1)
+        expect(taskAdds[0].type).toBe('notification_signal')
+        expect(taskAdds[0].payload.notification.title).toBeUndefined()
+        expect(taskAdds[0].payload.notification.body).toBeUndefined()
+        expect(taskAdds[0].payload.notification.title_hash).toHaveLength(64)
+        expect(taskAdds[0].meta).toMatchObject({
+            source_ref: 'notification:instagram:sakura.member',
+            action_type: 'notification_signal',
+        })
+        expect(statusUpdates).toEqual([
+            {
+                id: 91,
+                status: 'completed',
+                meta: {
+                    result_summary: 'notification signal shadowed: instagram, matches=1',
+                },
+            },
+        ])
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
 test('APIManager marks manual crawler run task failed when dispatch throws', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus

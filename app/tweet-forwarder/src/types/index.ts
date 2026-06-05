@@ -47,6 +47,9 @@ interface AppConfig {
         secret?: string
         cors_origin?: string | Array<string>
     }
+    notification_signals?: {
+        mode?: 'shadow' | 'disabled'
+    }
 }
 
 export type { AppConfig }

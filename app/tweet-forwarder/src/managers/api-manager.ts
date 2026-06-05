@@ -36,6 +36,7 @@ import { buildConfigAudit } from '@/services/config-audit-service'
 import { buildRouteGraph } from '@/services/route-graph-service'
 import { buildRuntimeManifest } from '@/services/runtime-manifest-service'
 import { redactSecrets } from '@/services/redaction-service'
+import { buildNotificationSignalRecord, type NotificationSignalInput } from '@/services/notification-signal-service'
 
 interface ApiConfig {
     port?: number
@@ -399,6 +400,8 @@ export class APIManager extends BaseCompatibleModel {
         }
 
         if (req.method === 'POST' && url.pathname === '/api/actions/crawlers/run') return this.handleCrawlerRun(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/notification-signals/ingest')
+            return this.handleNotificationSignalIngest(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/articles/simulate')
             return this.handleArticleSimulate(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/articles/reprocess')
@@ -1124,6 +1127,37 @@ export class APIManager extends BaseCompatibleModel {
             throw error
         }
         return jsonResponse({ success: true, status: 'queued', taskId, taskQueueId: queueTask.id, crawler: crawler.name })
+    }
+
+    private async handleNotificationSignalIngest(req: Request): Promise<Response> {
+        const body = (await req.json()) as NotificationSignalInput
+        const signal = buildNotificationSignalRecord(this.config, body)
+        const taskType = DB.TaskQueue.TYPE.NotificationSignal
+        const queueTask = await DB.TaskQueue.add(taskType, signal, signal.received_at, {
+            source_ref: signal.source_ref,
+            action_type: 'notification_signal',
+            idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, {
+                platform: signal.platform,
+                event_key: signal.event_key,
+            }),
+        })
+
+        if (!DB.TaskQueue.isTerminalStatus(queueTask.status)) {
+            await DB.TaskQueue.updateStatus(queueTask.id, DB.TaskQueue.STATUS.Completed, {
+                result_summary: `notification signal shadowed: ${signal.platform}, matches=${signal.matched_crawlers.length}`,
+            })
+        }
+
+        return jsonResponse({
+            success: true,
+            mode: signal.mode,
+            platform: signal.platform,
+            event_key: signal.event_key,
+            source_ref: signal.source_ref,
+            taskQueueId: queueTask.id,
+            matched_crawlers: signal.matched_crawlers,
+            would_trigger_crawlers: signal.would_trigger_crawlers,
+        })
     }
 
     private async handleArticleSimulate(req: Request): Promise<Response> {

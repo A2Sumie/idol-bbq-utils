@@ -445,6 +445,7 @@ namespace DB {
             AggregateDaily: 'aggregate_daily',
             AggregateHourly: 'aggregate_hourly',
             ManualCrawlerRun: 'manual_crawler_run',
+            NotificationSignal: 'notification_signal',
             ArticleSimulate: 'article_simulate',
             ArticleReprocess: 'article_reprocess',
             ArticleResend: 'article_resend',
@@ -463,6 +464,7 @@ namespace DB {
         export const WORKER_TYPES = [TYPE.AggregateDaily, TYPE.AggregateHourly] as const
         export const INLINE_API_TYPES = [
             TYPE.ManualCrawlerRun,
+            TYPE.NotificationSignal,
             TYPE.ArticleSimulate,
             TYPE.ArticleReprocess,
             TYPE.ArticleResend,
