@@ -3,7 +3,7 @@ import { spiderRegistry } from '@idol-bbq-utils/spider'
 import { CronJob } from 'cron'
 import EventEmitter from 'events'
 import { BaseCompatibleModel, sanitizeWebsites, TaskScheduler } from '@/utils/base'
-import type { AppConfig } from '@/types'
+import type { AppConfig, Processor } from '@/types'
 import { Platform, type MediaType, type TaskType } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import type { Article, ArticleWithId, DBFollows } from '@/db'
@@ -19,6 +19,8 @@ import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } fr
 import { getForwarder } from '@/middleware/forwarder'
 import crypto from 'crypto'
 import { RenderService, type RenderResult } from '@/services/render-service'
+import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
+import { processorRegistry } from '@/middleware/processor'
 import {
     extractArticleHeadline,
     followsToText,
@@ -50,6 +52,8 @@ import {
 } from '@/services/outbound-message-service'
 import { resolveSummaryCardConfig, type ResolvedSummaryCardConfig } from '@/services/summary-card-policy'
 import { isNonLiveOutboundSendMode } from '@/services/outbound-send-mode'
+import { pRetry } from '@idol-bbq-utils/utils'
+import { RETRY_LIMIT } from '@/config'
 
 type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
 type ForwarderTemplate = NonNullable<AppConfig['forwarders']>[number]
@@ -703,8 +707,10 @@ class ForwarderPools extends BaseCompatibleModel {
         | 'cfg_forwarder'
         | 'forwarders'
         | 'crawlers'
+        | 'processors'
     >
     private renderService: RenderService
+    private processors: Processor[]
 
     /**
      * max allowed error count for a single article in every cycle
@@ -717,6 +723,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private tagDigestStates = new Map<string, TagDigestState>()
     private summaryCardQueues = new Map<string, SummaryCardQueue>()
     private summaryCardLastSentAt = new Map<string, number>()
+    private summaryCardProcessors = new Map<string, BaseProcessor>()
     private summaryCardFlushTimer?: ReturnType<typeof setInterval>
     private dispatchListener: (payload: unknown) => Promise<void>
     private shuttingDown = false
@@ -732,6 +739,7 @@ class ForwarderPools extends BaseCompatibleModel {
             | 'cfg_forwarder'
             | 'forwarders'
             | 'crawlers'
+            | 'processors'
         >,
         emitter: EventEmitter,
         log?: Logger,
@@ -741,6 +749,7 @@ class ForwarderPools extends BaseCompatibleModel {
         this.renderService = new RenderService(this.log)
         this.emitter = emitter
         this.props = props
+        this.processors = props.processors || []
         this.dispatchListener = this.onDispatchReceived.bind(this)
     }
 
@@ -1159,6 +1168,14 @@ class ForwarderPools extends BaseCompatibleModel {
         this.forward_to.clear()
         this.subscribers.clear()
         this.errorCounter.clear()
+        await Promise.all(
+            Array.from(this.summaryCardProcessors.values()).map((processor) =>
+                processor.drop().catch((error) => {
+                    this.log?.warn(`Failed to drop summary-card processor ${processor.NAME}: ${error}`)
+                }),
+            ),
+        )
+        this.summaryCardProcessors.clear()
         this.summaryCardQueues.clear()
         this.summaryCardLastSentAt.clear()
         this.log?.info('Pools dropped')
@@ -3048,15 +3065,17 @@ class ForwarderPools extends BaseCompatibleModel {
             primaryTextMode,
         )
         const translatedCard = queue.config.translatedCard
-            ? await this.buildSummaryCardRenderVariant(
-                  queue,
-                  groups,
-                  allItems,
-                  title,
-                  content,
-                  now,
-                  'translated',
-                  queue.config.translatedCard.badgeLabel,
+            ? await this.prepareSummaryCardTranslations(queue, allItems).then(() =>
+                  this.buildSummaryCardRenderVariant(
+                      queue,
+                      groups,
+                      allItems,
+                      title,
+                      content,
+                      now,
+                      'translated',
+                      queue.config.translatedCard!.badgeLabel,
+                  ),
               )
             : null
         const cardResults = [primaryCard.cardResult, translatedCard?.cardResult].filter(
@@ -3251,6 +3270,152 @@ class ForwarderPools extends BaseCompatibleModel {
             return false
         } finally {
             this.renderService.cleanup(cardResults.flatMap((result) => result.mediaFiles))
+        }
+    }
+
+    private flattenSummaryArticleChain(article: ArticleWithId) {
+        const chain: ArticleWithId[] = []
+        let current: ArticleWithId | null = article
+        const visited = new Set<number>()
+        while (current && typeof current === 'object') {
+            if (visited.has(current.id)) {
+                break
+            }
+            visited.add(current.id)
+            chain.push(current)
+            current = current.ref && typeof current.ref === 'object' ? (current.ref as ArticleWithId) : null
+        }
+        return chain
+    }
+
+    private resolveSummaryCardProcessorDefinition(processorId?: string) {
+        const normalized = String(processorId || '').trim()
+        if (!normalized) {
+            return null
+        }
+        return (
+            this.processors.find((processor) => processor.id === normalized || processor.name === normalized) || null
+        )
+    }
+
+    private async getSummaryCardProcessor(processorId?: string) {
+        const processorDef = this.resolveSummaryCardProcessorDefinition(processorId)
+        if (!processorDef) {
+            if (processorId) {
+                this.log?.warn(`Summary-card translation processor not found: ${processorId}`)
+            }
+            return null
+        }
+
+        const cacheKey = processorDef.id || processorDef.name || processorId || processorDef.provider
+        const cached = this.summaryCardProcessors.get(cacheKey)
+        if (cached) {
+            return cached
+        }
+
+        try {
+            const processor = await processorRegistry.create(
+                processorDef.provider,
+                processorDef.api_key,
+                this.log,
+                processorDef.cfg_processor,
+            )
+            this.summaryCardProcessors.set(cacheKey, processor)
+            return processor
+        } catch (error) {
+            this.log?.warn(
+                `Failed to initialize summary-card translation processor ${cacheKey}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            return null
+        }
+    }
+
+    private async processSummaryCardTranslationText(processor: BaseProcessor, text: string) {
+        return await pRetry(() => processor.process(text), {
+            retries: RETRY_LIMIT,
+        })
+            .then((value) => value)
+            .catch((error) => {
+                this.log?.error(`Summary-card translation processor failed: ${error}`)
+                return PROCESSOR_ERROR_FALLBACK
+            })
+    }
+
+    private async prepareSummaryCardTranslations(queue: SummaryCardQueue, items: SummaryCardQueueItem[]) {
+        const processorId = queue.config.translatedCard?.processorId
+        if (!processorId) {
+            this.log?.warn(
+                `Summary-card translated companion enabled for ${queue.target.id} without processor_id; using existing translations only`,
+            )
+            return
+        }
+
+        const processor = await this.getSummaryCardProcessor(processorId)
+        if (!processor) {
+            return
+        }
+
+        const seenArticles = new Set<string>()
+        let updatedArticles = 0
+        for (const item of items) {
+            for (const article of this.flattenSummaryArticleChain(item.article)) {
+                const key = `${article.platform}:${article.id}`
+                if (seenArticles.has(key)) {
+                    continue
+                }
+                seenArticles.add(key)
+
+                const patch: Partial<Article> = {}
+                if (article.content && !BaseProcessor.isValidResult(article.translation)) {
+                    patch.translation = await this.processSummaryCardTranslationText(processor, article.content)
+                    patch.translated_by = processor.NAME
+                    article.translation = patch.translation
+                    article.translated_by = processor.NAME
+                }
+
+                if (article.media) {
+                    let changed = false
+                    const updatedMedia = await Promise.all(
+                        article.media.map(async (media) => {
+                            if (!media.alt || BaseProcessor.isValidResult((media as any).translation)) {
+                                return media
+                            }
+                            changed = true
+                            return {
+                                ...media,
+                                translation: await this.processSummaryCardTranslationText(processor, media.alt),
+                                translated_by: processor.NAME,
+                            }
+                        }),
+                    )
+                    if (changed) {
+                        patch.media = updatedMedia as any
+                        article.media = updatedMedia as any
+                    }
+                }
+
+                if (article.extra?.content && !BaseProcessor.isValidResult((article.extra as any).translation)) {
+                    patch.extra = {
+                        ...article.extra,
+                        translation: await this.processSummaryCardTranslationText(processor, article.extra.content),
+                        translated_by: processor.NAME,
+                    } as any
+                    article.extra = patch.extra as any
+                }
+
+                if (Object.keys(patch).length > 0) {
+                    await DB.Article.update(article.id, article.platform, patch)
+                    updatedArticles += 1
+                }
+            }
+        }
+
+        if (updatedArticles > 0) {
+            this.log?.info(
+                `Translated ${updatedArticles} article(s) for summary-card companion ${queue.target.id} using ${processor.NAME}`,
+            )
         }
     }
 

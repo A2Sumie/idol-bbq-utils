@@ -173,6 +173,7 @@ interface ForwardTargetPlatformCommonConfig {
                   | {
                         enabled?: boolean
                         badge_label?: string
+                        processor_id?: string
                     }
           }
     /**

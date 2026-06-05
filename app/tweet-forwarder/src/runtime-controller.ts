@@ -295,6 +295,7 @@ export class RuntimeController {
                     cfg_forwarder,
                     forwarders,
                     crawlers,
+                    processors: config.processors,
                 },
                 emitter,
                 log,

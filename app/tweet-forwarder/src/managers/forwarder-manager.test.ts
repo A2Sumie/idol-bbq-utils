@@ -15,6 +15,8 @@ import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { normalizeCronSecond } from '@/utils/cron'
 import { articleOutboundKey } from '@/services/outbound-message-service'
+import { processorRegistry } from '@/middleware/processor'
+import { ProcessorProvider } from '@/types/processor'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 process.env.RENDER_REMOTE_ASSETS = '0'
@@ -24,6 +26,7 @@ const originalAggregationWindow = { ...DB.AggregationWindow }
 const originalTargetHealth = { ...DB.TargetHealth }
 const originalForwardBy = { ...DB.ForwardBy }
 const originalMediaHash = { ...DB.MediaHash }
+const originalArticle = { ...DB.Article }
 
 beforeEach(() => {
     const outboundRecords = new Map<string, any>()
@@ -288,6 +291,7 @@ afterEach(() => {
     Object.assign(DB.TargetHealth, originalTargetHealth)
     Object.assign(DB.ForwardBy, originalForwardBy)
     Object.assign(DB.MediaHash, originalMediaHash)
+    Object.assign(DB.Article, originalArticle)
 })
 
 function backdateSummaryCardQueues(pools: any, seconds: number) {
@@ -405,6 +409,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
                 translated_card: {
                     enabled: true,
                     badge_label: '译文',
+                    processor_id: '22_7-social-ja-zh',
                 },
             },
         } as any),
@@ -423,6 +428,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         mediaDuplicateLimit: 2,
         translatedCard: {
             badgeLabel: '译文',
+            processorId: '22_7-social-ja-zh',
         },
     })
     expect(
@@ -4554,6 +4560,165 @@ test('sendArticles renders a translated companion summary card with stable forwa
     expect(
         renderTextCalls.filter((call) => call.article.id === 302).every((call) => call.collapsedArticleIds?.has(301)),
     ).toBeTrue()
+})
+
+test('sendArticles fills missing translations before rendering translated summary companion card', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const processCalls: string[] = []
+    const originalCreateProcessor = (processorRegistry as any).create
+    const articleUpdates: Array<{ id: number; platform: Platform; patch: any }> = []
+    ;(processorRegistry as any).create = async () => ({
+        NAME: 'fake-22/7-translator',
+        process: async (text: string) => {
+            processCalls.push(text)
+            return `译:${text}`
+        },
+        drop: async () => undefined,
+    })
+    ;(DB.Article as any).update = async (id: number, platform: Platform, patch: any) => {
+        articleUpdates.push({ id, platform, patch })
+        return { id, ...patch }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.Deepseek,
+                    api_key: 'test-key',
+                    cfg_processor: {
+                        action: 'translate',
+                    },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                    processor_id: '22_7-social-ja-zh',
+                },
+            },
+        } as any,
+        'target-summary-card-translated-on-demand',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                const suffix = config?.card_features?.includes('translated-corner-badge') ? 'translated' : 'original'
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: `/tmp/on-demand-${suffix}.png` }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: `/tmp/on-demand-${suffix}.png` }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const article = {
+        id: 915,
+        a_id: 'translated-on-demand',
+        platform: Platform.X,
+        username: '22/7',
+        u_id: '227_staff',
+        content: 'この後19:00〜 バースデーSHOWROOM配信スタート',
+        translation: null,
+        translated_by: null,
+        url: 'https://x.com/227_staff/status/915',
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-translated-on-demand',
+            [article],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        backdateSummaryCardQueues(pools as any, 1800)
+        await (pools as any).flushDueSummaryCardQueues()
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+    }
+
+    expect(processCalls).toEqual(['この後19:00〜 バースデーSHOWROOM配信スタート'])
+    expect(articleUpdates).toEqual([
+        {
+            id: 915,
+            platform: Platform.X,
+            patch: {
+                translation: '译:この後19:00〜 バースデーSHOWROOM配信スタート',
+                translated_by: 'fake-22/7-translator',
+            },
+        },
+    ])
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.props?.cardMedia).toEqual([
+        { media_type: 'photo', path: '/tmp/on-demand-original.png' },
+        { media_type: 'photo', path: '/tmp/on-demand-translated.png' },
+    ])
+    const originalText = packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[0]?.text || ''
+    const translatedText = packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text || ''
+    expect(originalText).toContain('この後19:00〜 バースデーSHOWROOM配信スタート')
+    expect(originalText).not.toContain('译:')
+    expect(translatedText).toContain('译:この後19:00〜 バースデーSHOWROOM配信スタート')
 })
 
 test('sendArticles promotes queued summary-card hashtag items after a storm activates', async () => {

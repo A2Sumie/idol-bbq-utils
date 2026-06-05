@@ -17,6 +17,7 @@ type ResolvedSummaryCardConfig = {
     mediaDuplicateLimit: number | null
     translatedCard: {
         badgeLabel: string
+        processorId?: string
     } | null
 }
 
@@ -37,6 +38,7 @@ type SummaryCardRoutePolicy = {
     translated_card: {
         enabled: true
         badge_label: string
+        processor_id?: string
     } | null
 }
 
@@ -55,10 +57,13 @@ function resolveTranslatedCardConfig(raw: unknown): ResolvedSummaryCardConfig['t
         return null
     }
 
+    const processorId =
+        typeof raw === 'object' && raw ? String((raw as any).processor_id || (raw as any).processorId || '').trim() : ''
     return {
         badgeLabel: normalizeTranslatedBadgeLabel(
             typeof raw === 'object' && raw ? (raw as any).badge_label : undefined,
         ),
+        ...(processorId ? { processorId } : {}),
     }
 }
 
@@ -137,6 +142,7 @@ function toSummaryCardRoutePolicy(config: ResolvedSummaryCardConfig): SummaryCar
             ? {
                   enabled: true,
                   badge_label: config.translatedCard.badgeLabel,
+                  ...(config.translatedCard.processorId ? { processor_id: config.translatedCard.processorId } : {}),
               }
             : null,
     }
