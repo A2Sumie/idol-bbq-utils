@@ -1,20 +1,20 @@
 {
   "schema_version": 1,
   "kind": "22_7_discography",
-  "generated_at": "2026-06-05T08:32:52.668Z",
+  "generated_at": "2026-06-05T08:58:52.526Z",
   "source_policy": "Official 22/7 mobile pages and Sony Music official JSONP/API pages are authoritative for stored facts. Secondary search results are used only for discovery/cross-check notes unless explicitly promoted later.",
   "sources": [
     {
       "id": "sony_music_discography_index_api",
       "type": "official_jsonp_api",
       "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/start/0/count/100/callback/callback",
-      "fetched_at": "2026-06-05T08:32:52.668Z"
+      "fetched_at": "2026-06-05T08:58:52.526Z"
     },
     {
       "id": "sony_music_discography_human_page",
       "type": "official_page",
       "url": "https://www.sonymusic.co.jp/artist/nanabunnonijyuuni/discography/",
-      "fetched_at": "2026-06-05T08:32:52.668Z"
+      "fetched_at": "2026-06-05T08:58:52.526Z"
     }
   ],
   "counts": {
@@ -143,7 +143,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13650/callback/srcl13650",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -262,7 +262,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13653/callback/srcl13653",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -316,7 +316,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13656/callback/srcl13656",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -380,7 +380,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13657/callback/srcl13657",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -609,7 +609,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-633/callback/srxl633",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -923,7 +923,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13440/callback/srcl13440",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -1137,7 +1137,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13444/callback/srcl13444",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -1341,7 +1341,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13448/callback/srcl13448",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -1425,7 +1425,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13452/callback/srcl13452",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -1569,7 +1569,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13336/callback/srcl13336",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -1713,7 +1713,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13340/callback/srcl13340",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -1767,7 +1767,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13344/callback/srcl13344",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -1831,7 +1831,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13345/callback/srcl13345",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -1890,7 +1890,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13347/callback/srcl13347",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -2264,7 +2264,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-560/callback/srxl560",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -2393,7 +2393,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13134/callback/srcl13134",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -2517,7 +2517,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13137/callback/srcl13137",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -2571,7 +2571,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13140/callback/srcl13140",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -2640,7 +2640,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-13141/callback/srcl13141",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -2774,7 +2774,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12985/callback/srcl12985",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -2908,7 +2908,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12989/callback/srcl12989",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3057,7 +3057,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12993/callback/srcl12993",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3111,7 +3111,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12997/callback/srcl12997",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3180,7 +3180,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12998/callback/srcl12998",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3339,7 +3339,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12830/callback/srcl12830",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3498,7 +3498,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12832/callback/srcl12832",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3557,7 +3557,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12834/callback/srcl12834",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3611,7 +3611,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12836/callback/srcl12836",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3760,7 +3760,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-471/callback/srxl471",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3904,7 +3904,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-474/callback/srxl474",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -3998,7 +3998,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12630/callback/srcl12630",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -4092,7 +4092,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12634/callback/srcl12634",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -4186,7 +4186,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12638/callback/srcl12638",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -4270,7 +4270,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12642/callback/srcl12642",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -4344,7 +4344,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12460/callback/srcl12460",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -4418,7 +4418,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12462/callback/srcl12462",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -4472,7 +4472,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12464/callback/srcl12464",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -4661,7 +4661,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2140/callback/srbl2140",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -4845,7 +4845,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2143/callback/srbl2143",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -5034,7 +5034,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-420/callback/srxl420",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -5218,7 +5218,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-422/callback/srxl422",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -5532,7 +5532,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2101/callback/srbl2101",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -5661,7 +5661,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2106/callback/srbl2106",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -5775,7 +5775,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2107/callback/srbl2107",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -5889,7 +5889,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2108/callback/srbl2108",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -6203,7 +6203,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-405/callback/srxl405",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -6332,7 +6332,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-410/callback/srxl410",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -6446,7 +6446,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-411/callback/srxl411",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -6560,7 +6560,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-412/callback/srxl412",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -6704,7 +6704,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12290/callback/srcl12290",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -6848,7 +6848,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12293/callback/srcl12293",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -6907,7 +6907,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12296/callback/srcl12296",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -6961,7 +6961,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12298/callback/srcl12298",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -7095,7 +7095,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12150/callback/srcl12150",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -7229,7 +7229,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12153/callback/srcl12153",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -7288,7 +7288,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12156/callback/srcl12156",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -7342,7 +7342,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-12158/callback/srcl12158",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -7491,7 +7491,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2055/callback/srbl2055",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -7635,7 +7635,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2058/callback/srbl2058",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -7784,7 +7784,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-355/callback/srxl355",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -7928,7 +7928,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-357/callback/srxl357",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -8212,7 +8212,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2042/callback/srbl2042",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -8366,7 +8366,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2046/callback/srbl2046",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -8515,7 +8515,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-2047/callback/srbl2047",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -8799,7 +8799,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-344/callback/srxl344",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -8953,7 +8953,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-348/callback/srxl348",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9102,7 +9102,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-349/callback/srxl349",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9261,7 +9261,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11957/callback/srcl11957",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9420,7 +9420,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11960/callback/srcl11960",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9479,7 +9479,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11963/callback/srcl11963",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9533,7 +9533,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11965/callback/srcl11965",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9657,7 +9657,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11780/callback/srcl11780",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9776,7 +9776,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11784/callback/srcl11784",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9910,7 +9910,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11788/callback/srcl11788",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -9989,7 +9989,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11792/callback/srcl11792",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10012,7 +10012,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-1990/callback/srbl1990",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10035,7 +10035,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRBL-1992/callback/srbl1992",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10058,7 +10058,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-315/callback/srxl315",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10081,7 +10081,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRXL-317/callback/srxl317",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10135,7 +10135,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11690/callback/srcl11690",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10189,7 +10189,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11693/callback/srcl11693",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10248,7 +10248,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11696/callback/srcl11696",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10302,7 +10302,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11698/callback/srcl11698",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10325,7 +10325,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11536/callback/srcl11536",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10348,7 +10348,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11538/callback/srcl11538",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10371,7 +10371,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11547/callback/srcl11547",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10440,7 +10440,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11413/callback/srcl11413",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10504,7 +10504,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11415/callback/srcl11415",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10558,7 +10558,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11417/callback/srcl11417",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10617,7 +10617,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11240/callback/srcl11240",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10696,7 +10696,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11242/callback/srcl11242",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10750,7 +10750,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-11244/callback/srcl11244",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10773,7 +10773,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-9891/callback/srcl9891",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10796,7 +10796,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-9893/callback/srcl9893",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10819,7 +10819,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-9895/callback/srcl9895",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10878,7 +10878,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-9713/callback/srcl9713",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10937,7 +10937,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-9715/callback/srcl9715",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -10991,7 +10991,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-9717/callback/srcl9717",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -11050,7 +11050,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-9520/callback/srcl9520",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     },
@@ -11104,7 +11104,7 @@
           "id": "sony_music_discography_api",
           "type": "official_jsonp_api",
           "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/SRCL-9522/callback/srcl9522",
-          "fetched_at": "2026-06-05T08:32:52.668Z"
+          "fetched_at": "2026-06-05T08:58:52.526Z"
         }
       ]
     }

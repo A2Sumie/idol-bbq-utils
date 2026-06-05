@@ -1,0 +1,67 @@
+# 22/7 Compact Official Facts For JP-ZH Translation
+
+Generated: 2026-06-05T08:58:52.526Z
+Use only to stabilize member names, character names, titles, release dates, and performance dates when the source text mentions them. Do not insert facts absent from the source. Performance entries are day-level facts only; detailed open/start/end times are intentionally omitted.
+
+## Members
+相川奈央 / あいかわなお / birthday:7月6日 / color:ターコイズブルー / character:西浦そら
+麻丘真央 / あさおかまお / birthday:10月6日 / color:若竹色 / character:桐生塔子
+天城サリー / あまきさりー / birthday:4月26日 / color:レモンイエロー / character:藤間桜
+河瀬詩 / かわせうた / birthday:2月27日 / color:スカイブルー / character:斎藤ニコル
+椎名桜月 / しいなさつき / birthday:3月27日 / color:アクアマリン / character:織原純佳
+月城咲舞 / つきしろえま / birthday:5月22日 / color:ルージュ / character:氷室みず姫
+望月りの / もちづきりの / birthday:3月29日 / color:オレンジ / character:瀬良穂乃花
+折本美玲 / おりもとみれい / birthday:11月3日 / color:藤紫
+北原実咲 / きたはらみさき / birthday:6月5日 / color:ダークグリーン
+黒崎ありす / くろさきありす / birthday:4月1日 / color:藍色
+橘茉奈 / たちばなまな / birthday:1月21日 / color:桃色
+桧山依子 / ひやまいこ / birthday:1月8日 / color:朱色
+三雲遥加 / みくもはるか / birthday:8月31日 / color:向日葵色
+南伊織 / みなみいおり / birthday:12月21日 / color:鈍色
+吉沢珠璃 / よしざわじゅり / birthday:12月1日 / color:ルビーレッド
+
+## Characters
+西浦そら / SORA NISHIURA / CV:相川奈央 / birthday:8月12日 / penlight:ターコイズブルー
+桐生塔子 / TOUKO KIRYU / CV:麻丘真央 / birthday:5月10日 / penlight:若竹色
+藤間桜 / SAKURA FUJIMA / CV:天城サリー / birthday:3月3日 / penlight:レモンイエロー
+斎藤ニコル / NICOLE SAITO / CV:河瀬詩 / birthday:7月7日 / penlight:スカイブルー
+織原純佳 / SUMIKA ORIHARA / CV:椎名桜月 / birthday:10月22日 / penlight:アクアマリン
+氷室みず姫 / MIZUKI HIMURO / CV:月城咲舞 / birthday:12月10日 / penlight:ルージュ
+瀬良穂乃花 / HONOKA SERA / CV:望月りの / birthday:2月9日 / penlight:オレンジ
+
+## Release Dates
+2017-09-20 僕は存在していなかった (シングル)
+2018-04-11 シャンプーの匂いがした (シングル)
+2018-08-22 理解者 (シングル)
+2019-08-21 何もしてあげられない (シングル)
+2020-02-26 ムズイ (シングル)
+2020-09-30 風は吹いてるか？ (シングル)
+2021-02-24 僕が持ってるものなら (シングル)
+2021-07-14 11という名の永遠の素数 (アルバム)
+2021-11-24 覚醒 (シングル)
+2022-07-27 曇り空の向こうは晴れている (シングル)
+2023-01-11 神様だって決められない (シングル)
+2023-05-24 僕は今夜、出て行く (シングル)
+2023-11-22 旅人算 (アルバム)
+2024-05-01 後でわかること (シングル)
+2024-10-30 YESとNOの間に (シングル)
+2025-02-26 ロックは死なない (シングル)
+2025-07-16 あなたでなくちゃ (シングル)
+2025-12-10 ABC予想 (アルバム)
+2026-04-22 二つの道 (シングル)
+
+## Performance Dates
+2026-01-29 22/7 3期生 定期公演「ナナニジライブ2026」#1 / note:3期生定期公演
+2026-01-30 22/7 3期生 定期公演「ナナニジライブ2026」#2 / note:3期生定期公演
+2026-02-23 22/7リアル公演「ナナニジライブ inジャパンフェスタ」 / venue:西新井文化ホール / note:リアル公演
+2026-02-25 22/7 3期生 定期公演「ナナニジライブ2026」#3 / note:3期生定期公演
+2026-02-26 22/7 3期生 定期公演「ナナニジライブ2026」#4 / note:3期生定期公演
+2026-04-04 22/7 LIVE「15」 / venue:東京国際フォーラム ホールC / note:15人体制ライブ
+2026-05-11 22/7 3期生 定期公演「ナナニジライブ2026」 / note:3期生定期公演
+2026-05-12 22/7 3期生 定期公演「ナナニジライブ2026」 / note:3期生定期公演
+2026-05-24 22/7 LIVE「Fivesta」 / venue:西新井文化ホール / note:2期生5人: 相川奈央・麻丘真央・椎名桜月・月城咲舞・望月りの
+2026-06-08 ナナニジハウス限定 22/7 LIVE「Fivesta」振り返り生配信 / venue:ナナニジハウス / note:FC限定番組
+2026-06-25 22/7 3期生 定期公演「ナナニジライブ2026」Final / venue:ヒューリックホール東京 / note:3期生定期公演 Final
+2026-07-24 ATC Special Stage 22/7 ファンミーティング / venue:2026 第25回漫画博覧会 メインBステージ / 台北世界貿易センター第1展示ホール / note:麻丘真央および3期生の出演なし
+2026-07-25 22/7 Live in Taipei 2026 / venue:Clapper Studio / note:3期生の出演なし
+2026-11-07 22/7 ANNIVERSARY LIVE 2026 / venue:東京国際フォーラム ホールA / note:約4年ぶりの東京国際フォーラム ホールA公演

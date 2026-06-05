@@ -1,7 +1,7 @@
 # 22/7 Prompt Facts Brief
 
-Generated: 2026-06-05T08:32:52.668Z
-Authority: official 22/7 mobile member/character pages and Sony Music official discography API. Use this as factual lookup context; do not invent missing facts.
+Generated: 2026-06-05T08:58:52.526Z
+Authority: official 22/7 mobile pages and Sony Music official discography API. Use this as factual lookup context; do not invent missing facts. Performance entries intentionally keep date-level facts only; detailed open/start/end times are omitted.
 
 ## Members
 相川奈央（あいかわなお） | 誕生日:7月6日 | メンバーカラー:ターコイズブルー | 出身地:東京都 | 身長:158cm | 22/7キャラクター:西浦そら
@@ -30,22 +30,38 @@ Authority: official 22/7 mobile member/character pages and Sony Music official d
 瀬良穂乃花（HONOKA SERA） | CV:望月りの | 誕生日:2月9日 | ペンライト:オレンジ
 
 ## Singles And Albums
-2026-04-22 | シングル | 二つの道 | editions:4
-2025-12-10 | アルバム | ABC予想 | editions:4
-2025-07-16 | シングル | あなたでなくちゃ | editions:5
-2025-02-26 | シングル | ロックは死なない | editions:4
-2024-10-30 | シングル | YESとNOの間に | editions:5
-2024-05-01 | シングル | 後でわかること | editions:4
-2023-11-22 | アルバム | 旅人算 | editions:4
-2023-05-24 | シングル | 僕は今夜、出て行く | editions:3
-2023-01-11 | シングル | 神様だって決められない | editions:4
-2022-07-27 | シングル | 曇り空の向こうは晴れている | editions:4
-2021-11-24 | シングル | 覚醒 | editions:4
-2021-07-14 | アルバム | 11という名の永遠の素数 | editions:4
-2021-02-24 | シングル | 僕が持ってるものなら | editions:4
-2020-09-30 | シングル | 風は吹いてるか？ | editions:3
-2020-02-26 | シングル | ムズイ | editions:3
-2019-08-21 | シングル | 何もしてあげられない | editions:3
-2018-08-22 | シングル | 理解者 | editions:3
-2018-04-11 | シングル | シャンプーの匂いがした | editions:3
 2017-09-20 | シングル | 僕は存在していなかった | editions:2
+2018-04-11 | シングル | シャンプーの匂いがした | editions:3
+2018-08-22 | シングル | 理解者 | editions:3
+2019-08-21 | シングル | 何もしてあげられない | editions:3
+2020-02-26 | シングル | ムズイ | editions:3
+2020-09-30 | シングル | 風は吹いてるか？ | editions:3
+2021-02-24 | シングル | 僕が持ってるものなら | editions:4
+2021-07-14 | アルバム | 11という名の永遠の素数 | editions:4
+2021-11-24 | シングル | 覚醒 | editions:4
+2022-07-27 | シングル | 曇り空の向こうは晴れている | editions:4
+2023-01-11 | シングル | 神様だって決められない | editions:4
+2023-05-24 | シングル | 僕は今夜、出て行く | editions:3
+2023-11-22 | アルバム | 旅人算 | editions:4
+2024-05-01 | シングル | 後でわかること | editions:4
+2024-10-30 | シングル | YESとNOの間に | editions:5
+2025-02-26 | シングル | ロックは死なない | editions:4
+2025-07-16 | シングル | あなたでなくちゃ | editions:5
+2025-12-10 | アルバム | ABC予想 | editions:4
+2026-04-22 | シングル | 二つの道 | editions:4
+
+## Performance Dates
+2026-01-29 | 22/7 3期生 定期公演「ナナニジライブ2026」#1 | period:nananiji_live_2026 | note:3期生定期公演
+2026-01-30 | 22/7 3期生 定期公演「ナナニジライブ2026」#2 | period:nananiji_live_2026 | note:3期生定期公演
+2026-02-23 | 22/7リアル公演「ナナニジライブ inジャパンフェスタ」 | period:nananiji_live_2026 | venue:西新井文化ホール | note:リアル公演
+2026-02-25 | 22/7 3期生 定期公演「ナナニジライブ2026」#3 | period:nananiji_live_2026 | note:3期生定期公演
+2026-02-26 | 22/7 3期生 定期公演「ナナニジライブ2026」#4 | period:nananiji_live_2026 | note:3期生定期公演
+2026-04-04 | 22/7 LIVE「15」 | period:fifteen_member_live | venue:東京国際フォーラム ホールC | note:15人体制ライブ
+2026-05-11 | 22/7 3期生 定期公演「ナナニジライブ2026」 | period:nananiji_live_2026 | note:3期生定期公演
+2026-05-12 | 22/7 3期生 定期公演「ナナニジライブ2026」 | period:nananiji_live_2026 | note:3期生定期公演
+2026-05-24 | 22/7 LIVE「Fivesta」 | period:second_generation_five_member_stage | venue:西新井文化ホール | note:2期生5人: 相川奈央・麻丘真央・椎名桜月・月城咲舞・望月りの
+2026-06-08 | ナナニジハウス限定 22/7 LIVE「Fivesta」振り返り生配信 | period:second_generation_five_member_stage | venue:ナナニジハウス | note:FC限定番組
+2026-06-25 | 22/7 3期生 定期公演「ナナニジライブ2026」Final | period:nananiji_live_2026 | venue:ヒューリックホール東京 | note:3期生定期公演 Final
+2026-07-24 | ATC Special Stage 22/7 ファンミーティング | period:live_in_taipei_2026 | venue:2026 第25回漫画博覧会 メインBステージ / 台北世界貿易センター第1展示ホール | note:麻丘真央および3期生の出演なし
+2026-07-25 | 22/7 Live in Taipei 2026 | period:live_in_taipei_2026 | venue:Clapper Studio | note:3期生の出演なし
+2026-11-07 | 22/7 ANNIVERSARY LIVE 2026 | period:anniversary_live_2026 | venue:東京国際フォーラム ホールA | note:約4年ぶりの東京国際フォーラム ホールA公演

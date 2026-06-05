@@ -1,0 +1,1154 @@
+{
+  "schema_version": 1,
+  "kind": "22_7_performances",
+  "generated_at": "2026-06-05T08:58:52.526Z",
+  "source_policy": "Official 22/7 mobile pages and Sony Music official JSONP/API pages are authoritative for stored facts. Secondary search results are used only for discovery/cross-check notes unless explicitly promoted later.",
+  "sources": [
+    {
+      "id": "22_7_official_live_report_list",
+      "type": "official_live_report_list",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/special/list?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_1",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9193?dy=20260129",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_2026_1",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446422?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_2",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9194?dy=20260130",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_2026_2",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446543?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_japan_festa",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9191?dy=20260223",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_japan_festa",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447065?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_3",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9195?dy=20260225",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_2026_3",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_4",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9196?dy=20260226",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_2026_4",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_live_15",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9279?dy=20260404&ima=0000&link=ROBO004",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_live_15",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/448820?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_20260511",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9369?dy=20260511",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_20260512",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9370?dy=20260512",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_fivesta",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11193?ima=1105",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "galaxcity_official_event_fivesta",
+      "type": "official_venue_page",
+      "url": "https://www.galaxcity.jp/cultural-hall/event/20260524-008515.html",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_fivesta_reflection_stream",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11328?ima=0000&link=ROBO004",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_nananiji_live_2026_final",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11253?ima=0000&link=ROBO004",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_nananiji_live_2026_final_general_sale",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11319?ima=0000&link=ROBO004",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_taipei",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11315?ima=0037",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_anniversary_live_2026",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11252",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    }
+  ],
+  "counts": {
+    "confirmed_events": 14,
+    "official_live_reports": 41
+  },
+  "confirmed_events": [
+    {
+      "id": "2026-01-29-nananiji-live-2026-1",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」#1",
+      "kind": "regular_live",
+      "period": "nananiji_live_2026",
+      "date": "2026-01-29",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": null,
+      "lineup_note": "3期生定期公演",
+      "notes": [
+        "official schedule item; live report title confirms #1 and 1月29日公演"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_schedule_nananiji_live_2026_1",
+          "type": "official_schedule",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9193?dy=20260129",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        },
+        {
+          "id": "22_7_official_live_report_nananiji_live_2026_1",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446422?cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-01-30-nananiji-live-2026-2",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」#2",
+      "kind": "regular_live",
+      "period": "nananiji_live_2026",
+      "date": "2026-01-30",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": null,
+      "lineup_note": "3期生定期公演",
+      "notes": [
+        "official schedule item; live report title confirms #2 and 1月30日公演"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_schedule_nananiji_live_2026_2",
+          "type": "official_schedule",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9194?dy=20260130",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        },
+        {
+          "id": "22_7_official_live_report_nananiji_live_2026_2",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446543?cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-02-23-nananiji-live-japan-festa",
+      "title": "22/7リアル公演「ナナニジライブ inジャパンフェスタ」",
+      "kind": "live",
+      "period": "nananiji_live_2026",
+      "date": "2026-02-23",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": "西新井文化ホール",
+      "lineup_note": "リアル公演",
+      "notes": [
+        "official schedule item; official live report published 2026-02-27"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_schedule_nananiji_live_japan_festa",
+          "type": "official_schedule",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9191?dy=20260223",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        },
+        {
+          "id": "22_7_official_live_report_nananiji_live_japan_festa",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447065?cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-02-25-nananiji-live-2026-3",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」#3",
+      "kind": "regular_live",
+      "period": "nananiji_live_2026",
+      "date": "2026-02-25",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": null,
+      "lineup_note": "3期生定期公演",
+      "notes": [
+        "official schedule item; live report title confirms #3 and 2月25日公演"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_schedule_nananiji_live_2026_3",
+          "type": "official_schedule",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9195?dy=20260225",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        },
+        {
+          "id": "22_7_official_live_report_nananiji_live_2026_3",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-02-26-nananiji-live-2026-4",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」#4",
+      "kind": "regular_live",
+      "period": "nananiji_live_2026",
+      "date": "2026-02-26",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": null,
+      "lineup_note": "3期生定期公演",
+      "notes": [
+        "official schedule item; live report title confirms #4 and 2月26日公演"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_schedule_nananiji_live_2026_4",
+          "type": "official_schedule",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9196?dy=20260226",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        },
+        {
+          "id": "22_7_official_live_report_nananiji_live_2026_4",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-04-04-live-15",
+      "title": "22/7 LIVE「15」",
+      "kind": "live",
+      "period": "fifteen_member_live",
+      "date": "2026-04-04",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": "東京国際フォーラム ホールC",
+      "lineup_note": "15人体制ライブ",
+      "notes": [
+        "追加公演"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_schedule_live_15",
+          "type": "official_schedule",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9279?dy=20260404&ima=0000&link=ROBO004",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        },
+        {
+          "id": "22_7_official_live_report_live_15",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/448820?cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-05-11-nananiji-live-2026-5",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」",
+      "kind": "regular_live",
+      "period": "nananiji_live_2026",
+      "date": "2026-05-11",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": null,
+      "lineup_note": "3期生定期公演",
+      "notes": [],
+      "sources": [
+        {
+          "id": "22_7_official_schedule_nananiji_live_2026_20260511",
+          "type": "official_schedule",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9369?dy=20260511",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-05-12-nananiji-live-2026-6",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」",
+      "kind": "regular_live",
+      "period": "nananiji_live_2026",
+      "date": "2026-05-12",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": null,
+      "lineup_note": "3期生定期公演",
+      "notes": [],
+      "sources": [
+        {
+          "id": "22_7_official_schedule_nananiji_live_2026_20260512",
+          "type": "official_schedule",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9370?dy=20260512",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-05-24-fivesta",
+      "title": "22/7 LIVE「Fivesta」",
+      "kind": "live",
+      "period": "second_generation_five_member_stage",
+      "date": "2026-05-24",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": "西新井文化ホール",
+      "lineup_note": "2期生5人: 相川奈央・麻丘真央・椎名桜月・月城咲舞・望月りの",
+      "notes": [
+        "22/7初のカメコ席販売あり"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_news_fivesta",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11193?ima=1105",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        },
+        {
+          "id": "galaxcity_official_event_fivesta",
+          "type": "official_venue_page",
+          "url": "https://www.galaxcity.jp/cultural-hall/event/20260524-008515.html",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-06-08-fivesta-reflection-stream",
+      "title": "ナナニジハウス限定 22/7 LIVE「Fivesta」振り返り生配信",
+      "kind": "fc_stream",
+      "period": "second_generation_five_member_stage",
+      "date": "2026-06-08",
+      "date_kind": "stream_date",
+      "date_precision": "day",
+      "venue": "ナナニジハウス",
+      "lineup_note": "FC限定番組",
+      "notes": [
+        "Fivesta振り返り生配信"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_news_fivesta_reflection_stream",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11328?ima=0000&link=ROBO004",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-06-25-nananiji-live-2026-final",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」Final",
+      "kind": "regular_live_final",
+      "period": "nananiji_live_2026",
+      "date": "2026-06-25",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": "ヒューリックホール東京",
+      "lineup_note": "3期生定期公演 Final",
+      "notes": [
+        "3期生にとって初のヒューリックホール東京公演"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_news_nananiji_live_2026_final",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11253?ima=0000&link=ROBO004",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        },
+        {
+          "id": "22_7_official_news_nananiji_live_2026_final_general_sale",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11319?ima=0000&link=ROBO004",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-07-24-atc-special-stage-taipei-fan-meeting",
+      "title": "ATC Special Stage 22/7 ファンミーティング",
+      "kind": "fan_meeting",
+      "period": "live_in_taipei_2026",
+      "date": "2026-07-24",
+      "date_kind": "event_date",
+      "date_precision": "day",
+      "venue": "2026 第25回漫画博覧会 メインBステージ / 台北世界貿易センター第1展示ホール",
+      "lineup_note": "麻丘真央および3期生の出演なし",
+      "notes": [
+        "22/7 Live in Taipei 2026前夜祭的企画"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_news_taipei",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11315?ima=0037",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-07-25-live-in-taipei",
+      "title": "22/7 Live in Taipei 2026",
+      "kind": "live",
+      "period": "live_in_taipei_2026",
+      "date": "2026-07-25",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": "Clapper Studio",
+      "lineup_note": "3期生の出演なし",
+      "notes": [
+        "22/7初の海外単独公演"
+      ],
+      "sources": [
+        {
+          "id": "22_7_official_news_taipei",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11315?ima=0037",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "2026-11-07-anniversary-live-2026",
+      "title": "22/7 ANNIVERSARY LIVE 2026",
+      "kind": "anniversary_live",
+      "period": "anniversary_live_2026",
+      "date": "2026-11-07",
+      "date_kind": "performance_date",
+      "date_precision": "day",
+      "venue": "東京国際フォーラム ホールA",
+      "lineup_note": "約4年ぶりの東京国際フォーラム ホールA公演",
+      "notes": [],
+      "sources": [
+        {
+          "id": "22_7_official_news_anniversary_live_2026",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11252",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    }
+  ],
+  "official_live_reports": [
+    {
+      "id": "live-report-448820",
+      "title": "22/7 LIVE「15」 公式ライブレポート",
+      "date": "2026-04-12",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/448820?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/448820?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-447855",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」#4 2月26日公演 公式ライブレポート",
+      "date": "2026-03-20",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-447239",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」#3 2月25日公演 公式ライブレポート",
+      "date": "2026-03-04",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-447065",
+      "title": "22/7リアル公演「ナナニジライブ inジャパンフェスタ」＠西新井文化ホール 公式ライブレポート",
+      "date": "2026-02-27",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447065?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447065?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-446543",
+      "title": "22/7 3期生 定期公演「ナナニジライブ2026」#2 1月30日公演 公式ライブレポート",
+      "date": "2026-02-18",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446543?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446543?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-446422",
+      "title": "22/7 3期生 定期公演 「ナナニジライブ2026」#1 1月29日公演 公式ライブレポート",
+      "date": "2026-02-17",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446422?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446422?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-444326",
+      "title": "『22/7 ANNIVERSARY LIVE 2025』 公式ライブレポート",
+      "date": "2025-12-17",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/444326?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/444326?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-440473",
+      "title": "22/7『西條和 卒業コンサート ～存在の証明～』 公式ライブレポート",
+      "date": "2025-09-01",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/440473?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/440473?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-439789",
+      "title": "『22/7 Summer Live 2025 ～Toyboxの秘密～』 公式ライブレポート",
+      "date": "2025-08-13",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/439789?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/439789?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-437504",
+      "title": "『22/7 カントリーライブ in 北海道根室市』 公式ライブレポート",
+      "date": "2025-05-20",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/437504?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/437504?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-434838",
+      "title": "『22/7 Spring Tour 2025 「Casino Party!!」』 公式ライブレポート",
+      "date": "2025-04-03",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/434838?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/434838?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-431754",
+      "title": "12/28(土)開催 『22/7 CHARACTER LIVE 2024～RED or WHITE？～』 公式ライブレポート",
+      "date": "2025-01-06",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/431754?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/431754?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-429764",
+      "title": "『22/7 ANNIVERSARY LIVE 2024』 公式ライブレポート",
+      "date": "2024-11-12",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/429764?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/429764?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-426920",
+      "title": "22/7『Magic School Days 〜夏の夜空と最後の魔法〜』DAY3 22/7 涼花萌 卒業コンサート『もえぴよ♡ぴよぴよWonderland♡のtea party♡』 公式ライブレポート",
+      "date": "2024-09-03",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/426920?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/426920?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-425435",
+      "title": "22/7 Summer Live 2024「Magic School Days ～月と地球のフィルハーモニー～」 ライブレポート",
+      "date": "2024-07-25",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/425435?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/425435?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-411916",
+      "title": "「ANNIVERSARY LIVE 2023」 ライブレポート",
+      "date": "2023-11-16",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/411916?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/411916?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-405071",
+      "title": "ナナニジライブ2023 #8",
+      "date": "2023-07-07",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/405071?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/405071?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-404464",
+      "title": "ナナニジライブ2023 #7",
+      "date": "2023-07-01",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/404464?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/404464?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-403146",
+      "title": "ナナニジライブ2023 #6",
+      "date": "2023-05-30",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/403146?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/403146?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-402637",
+      "title": "ナナニジライブ2023 #5",
+      "date": "2023-05-20",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/402637?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/402637?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-401498",
+      "title": "ナナニジライブ2023 #4",
+      "date": "2023-04-24",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/401498?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/401498?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-400963",
+      "title": "ナナニジライブ2023 #3",
+      "date": "2023-04-11",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/400963?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/400963?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-396867",
+      "title": "ナナニジライブ2023 #2",
+      "date": "2023-01-19",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/396867?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/396867?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-396798",
+      "title": "ナナニジライブ2023 #1",
+      "date": "2023-01-17",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/396798?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/396798?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347409",
+      "title": "ナナニジライブ ＃12",
+      "date": "2019-12-30",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347409?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347409?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347407",
+      "title": "ナナニジライブ ＃11",
+      "date": "2019-11-27",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347407?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347407?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347406",
+      "title": "ナナニジライブ ＃10",
+      "date": "2019-10-22",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347406?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347406?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347405",
+      "title": "ナナニジライブ ＃9",
+      "date": "2019-09-30",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347405?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347405?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347404",
+      "title": "ナナニジライブ ＃8",
+      "date": "2019-08-22",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347404?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347404?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347403",
+      "title": "ナナニジライブ ＃7",
+      "date": "2019-07-31",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347403?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347403?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347402",
+      "title": "ナナニジライブ ＃6",
+      "date": "2019-06-27",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347402?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347402?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347400",
+      "title": "ナナニジライブ ＃5",
+      "date": "2019-05-22",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347400?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347400?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347399",
+      "title": "ナナニジライブ ＃4",
+      "date": "2019-04-22",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347399?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347399?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347398",
+      "title": "ナナニジライブ ＃3",
+      "date": "2019-03-27",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347398?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347398?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347397",
+      "title": "ナナニジライブ ＃2",
+      "date": "2019-02-25",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347397?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347397?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347396",
+      "title": "ナナニジライブ ＃1",
+      "date": "2019-01-22",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347396?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347396?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347381",
+      "title": "『僕は存在していなかった』 リリース記念イベント",
+      "date": "2017-09-21",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347381?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347381?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347380",
+      "title": "初ライブイベント",
+      "date": "2017-07-22",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347380?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347380?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347379",
+      "title": "朗読劇 第三回公演",
+      "date": "2017-06-24",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347379?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347379?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347157",
+      "title": "朗読劇 第二回公演",
+      "date": "2017-05-20",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347157?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347157?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    },
+    {
+      "id": "live-report-347155",
+      "title": "朗読劇 第一回公演",
+      "date": "2017-04-21",
+      "date_kind": "report_date",
+      "date_precision": "day",
+      "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347155?ima=5942&cd=special",
+      "sources": [
+        {
+          "id": "22_7_official_live_report_list",
+          "type": "official_live_report",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/347155?ima=5942&cd=special",
+          "fetched_at": "2026-06-05T08:58:52.526Z"
+        }
+      ]
+    }
+  ]
+}

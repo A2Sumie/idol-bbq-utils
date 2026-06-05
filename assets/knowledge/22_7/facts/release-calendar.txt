@@ -1,0 +1,47 @@
+# 22/7 Official Release Calendar
+
+Generated: 2026-06-05T08:58:52.526Z
+Authority: Sony Music official discography API. Dates are release dates, not announcement dates.
+
+2017-09-20 | シングル | 僕は存在していなかった | editions:2
+2018-04-11 | シングル | シャンプーの匂いがした | editions:3
+2018-08-22 | シングル | 理解者 | editions:3
+2019-08-21 | シングル | 何もしてあげられない | editions:3
+2020-02-26 | シングル | ムズイ | editions:3
+2020-09-30 | シングル | 風は吹いてるか？ | editions:3
+2021-02-24 | シングル | 僕が持ってるものなら | editions:4
+2021-04-21 | DVD | 22/7 LIVE at STUDIO COAST ～11（イレブン）～ | editions:2
+2021-04-21 | BD | 22/7 LIVE at STUDIO COAST ～11（イレブン）～ | editions:2
+2021-07-14 | アルバム | 11という名の永遠の素数 | editions:4
+2021-11-24 | シングル | 覚醒 | editions:4
+2022-03-09 | DVD | 22/7 LIVE at 東京国際フォーラム -Day- ～ANNIVERSARY LIVE 2021～ | editions:1
+2022-03-09 | BD | 22/7 LIVE at 東京国際フォーラム -Day- ～ANNIVERSARY LIVE 2021～ | editions:1
+2022-03-09 | DVD | 22/7 LIVE at 東京国際フォーラム -Night- ～ANNIVERSARY LIVE 2021～ | editions:1
+2022-03-09 | BD | 22/7 LIVE at 東京国際フォーラム -Night- ～ANNIVERSARY LIVE 2021～ | editions:1
+2022-03-09 | DVD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2021～ | editions:1
+2022-03-09 | BD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2021～ | editions:1
+2022-05-04 | DVD | 22/7 5th BIRTHDAY LIVE 2021 ～Colors of Flowers～ | editions:2
+2022-05-04 | BD | 22/7 5th BIRTHDAY LIVE 2021 ～Colors of Flowers～ | editions:2
+2022-07-27 | シングル | 曇り空の向こうは晴れている | editions:4
+2023-01-11 | シングル | 神様だって決められない | editions:4
+2023-03-15 | DVD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2022～ | editions:1
+2023-03-15 | BD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2022～ | editions:1
+2023-03-15 | DVD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2022～ (2022.10.22) | editions:1
+2023-03-15 | BD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2022～ (2022.10.22) | editions:1
+2023-03-15 | DVD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2022～ (2022.10.23 -Day-) | editions:1
+2023-03-15 | BD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2022～ (2022.10.23 -Day-) | editions:1
+2023-03-15 | DVD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2022～ (2022.10.23 -Night-) | editions:1
+2023-03-15 | BD | 22/7 LIVE at 東京国際フォーラム ～ANNIVERSARY LIVE 2022～ (2022.10.23 -Night-) | editions:1
+2023-05-24 | DVD | 22/7 CHARACTER LIVE ～6th BIRTHDAY PARTY 2022～ | editions:2
+2023-05-24 | BD | 22/7 CHARACTER LIVE ～6th BIRTHDAY PARTY 2022～ | editions:2
+2023-05-24 | シングル | 僕は今夜、出て行く | editions:3
+2023-11-22 | アルバム | 旅人算 | editions:4
+2024-03-06 | BD | 22/7 LIVE at EX THEATER ROPPONGI ～ANNIVERSARY LIVE 2023～ | editions:2
+2024-05-01 | シングル | 後でわかること | editions:4
+2024-10-30 | シングル | YESとNOの間に | editions:5
+2025-02-26 | シングル | ロックは死なない | editions:4
+2025-04-02 | BD | 22/7 LIVE at THEATER MILANO-Za ～ANNIVERSARY LIVE 2024～ | editions:1
+2025-07-16 | シングル | あなたでなくちゃ | editions:5
+2025-12-10 | アルバム | ABC予想 | editions:4
+2026-03-04 | BD | 22/7 LIVE at Tokyo College of Music 100th Anniversary Hall ～ANNIVERSARY LIVE 2025～ | editions:1
+2026-04-22 | シングル | 二つの道 | editions:4

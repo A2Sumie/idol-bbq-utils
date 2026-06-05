@@ -10,6 +10,316 @@ const SONY_DISCO_LIST =
 const SONY_DISCO_DETAIL =
   "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/{code}/callback/{callback}";
 const OUTPUT_DIR = new URL("../assets/knowledge/22_7/facts/", import.meta.url);
+const OFFICIAL_LIVE_REPORT_LIST =
+  "https://nanabunnonijyuuni-mobile.com/s/n110/diary/special/list?cd=special";
+const OFFICIAL_PERFORMANCE_EVENTS = [
+  {
+    id: "2026-01-29-nananiji-live-2026-1",
+    title: "22/7 3期生 定期公演「ナナニジライブ2026」#1",
+    kind: "regular_live",
+    period: "nananiji_live_2026",
+    date: "2026-01-29",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: null,
+    lineup_note: "3期生定期公演",
+    notes: ["official schedule item; live report title confirms #1 and 1月29日公演"],
+    sources: [
+      {
+        id: "22_7_official_schedule_nananiji_live_2026_1",
+        type: "official_schedule",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9193?dy=20260129",
+      },
+      {
+        id: "22_7_official_live_report_nananiji_live_2026_1",
+        type: "official_live_report",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446422?cd=special",
+      },
+    ],
+  },
+  {
+    id: "2026-01-30-nananiji-live-2026-2",
+    title: "22/7 3期生 定期公演「ナナニジライブ2026」#2",
+    kind: "regular_live",
+    period: "nananiji_live_2026",
+    date: "2026-01-30",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: null,
+    lineup_note: "3期生定期公演",
+    notes: ["official schedule item; live report title confirms #2 and 1月30日公演"],
+    sources: [
+      {
+        id: "22_7_official_schedule_nananiji_live_2026_2",
+        type: "official_schedule",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9194?dy=20260130",
+      },
+      {
+        id: "22_7_official_live_report_nananiji_live_2026_2",
+        type: "official_live_report",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446543?cd=special",
+      },
+    ],
+  },
+  {
+    id: "2026-02-23-nananiji-live-japan-festa",
+    title: "22/7リアル公演「ナナニジライブ inジャパンフェスタ」",
+    kind: "live",
+    period: "nananiji_live_2026",
+    date: "2026-02-23",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: "西新井文化ホール",
+    lineup_note: "リアル公演",
+    notes: ["official schedule item; official live report published 2026-02-27"],
+    sources: [
+      {
+        id: "22_7_official_schedule_nananiji_live_japan_festa",
+        type: "official_schedule",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9191?dy=20260223",
+      },
+      {
+        id: "22_7_official_live_report_nananiji_live_japan_festa",
+        type: "official_live_report",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447065?cd=special",
+      },
+    ],
+  },
+  {
+    id: "2026-02-25-nananiji-live-2026-3",
+    title: "22/7 3期生 定期公演「ナナニジライブ2026」#3",
+    kind: "regular_live",
+    period: "nananiji_live_2026",
+    date: "2026-02-25",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: null,
+    lineup_note: "3期生定期公演",
+    notes: ["official schedule item; live report title confirms #3 and 2月25日公演"],
+    sources: [
+      {
+        id: "22_7_official_schedule_nananiji_live_2026_3",
+        type: "official_schedule",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9195?dy=20260225",
+      },
+      {
+        id: "22_7_official_live_report_nananiji_live_2026_3",
+        type: "official_live_report",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?cd=special",
+      },
+    ],
+  },
+  {
+    id: "2026-02-26-nananiji-live-2026-4",
+    title: "22/7 3期生 定期公演「ナナニジライブ2026」#4",
+    kind: "regular_live",
+    period: "nananiji_live_2026",
+    date: "2026-02-26",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: null,
+    lineup_note: "3期生定期公演",
+    notes: ["official schedule item; live report title confirms #4 and 2月26日公演"],
+    sources: [
+      {
+        id: "22_7_official_schedule_nananiji_live_2026_4",
+        type: "official_schedule",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9196?dy=20260226",
+      },
+      {
+        id: "22_7_official_live_report_nananiji_live_2026_4",
+        type: "official_live_report",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?cd=special",
+      },
+    ],
+  },
+  {
+    id: "2026-04-04-live-15",
+    title: "22/7 LIVE「15」",
+    kind: "live",
+    period: "fifteen_member_live",
+    date: "2026-04-04",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: "東京国際フォーラム ホールC",
+    lineup_note: "15人体制ライブ",
+    notes: ["追加公演"],
+    sources: [
+      {
+        id: "22_7_official_schedule_live_15",
+        type: "official_schedule",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9279?dy=20260404&ima=0000&link=ROBO004",
+      },
+      {
+        id: "22_7_official_live_report_live_15",
+        type: "official_live_report",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/448820?cd=special",
+      },
+    ],
+  },
+  {
+    id: "2026-05-11-nananiji-live-2026-5",
+    title: "22/7 3期生 定期公演「ナナニジライブ2026」",
+    kind: "regular_live",
+    period: "nananiji_live_2026",
+    date: "2026-05-11",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: null,
+    lineup_note: "3期生定期公演",
+    notes: [],
+    sources: [
+      {
+        id: "22_7_official_schedule_nananiji_live_2026_20260511",
+        type: "official_schedule",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9369?dy=20260511",
+      },
+    ],
+  },
+  {
+    id: "2026-05-12-nananiji-live-2026-6",
+    title: "22/7 3期生 定期公演「ナナニジライブ2026」",
+    kind: "regular_live",
+    period: "nananiji_live_2026",
+    date: "2026-05-12",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: null,
+    lineup_note: "3期生定期公演",
+    notes: [],
+    sources: [
+      {
+        id: "22_7_official_schedule_nananiji_live_2026_20260512",
+        type: "official_schedule",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9370?dy=20260512",
+      },
+    ],
+  },
+  {
+    id: "2026-05-24-fivesta",
+    title: "22/7 LIVE「Fivesta」",
+    kind: "live",
+    period: "second_generation_five_member_stage",
+    date: "2026-05-24",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: "西新井文化ホール",
+    lineup_note: "2期生5人: 相川奈央・麻丘真央・椎名桜月・月城咲舞・望月りの",
+    notes: ["22/7初のカメコ席販売あり"],
+    sources: [
+      {
+        id: "22_7_official_news_fivesta",
+        type: "official_page",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11193?ima=1105",
+      },
+      {
+        id: "galaxcity_official_event_fivesta",
+        type: "official_venue_page",
+        url: "https://www.galaxcity.jp/cultural-hall/event/20260524-008515.html",
+      },
+    ],
+  },
+  {
+    id: "2026-06-08-fivesta-reflection-stream",
+    title: "ナナニジハウス限定 22/7 LIVE「Fivesta」振り返り生配信",
+    kind: "fc_stream",
+    period: "second_generation_five_member_stage",
+    date: "2026-06-08",
+    date_kind: "stream_date",
+    date_precision: "day",
+    venue: "ナナニジハウス",
+    lineup_note: "FC限定番組",
+    notes: ["Fivesta振り返り生配信"],
+    sources: [
+      {
+        id: "22_7_official_news_fivesta_reflection_stream",
+        type: "official_page",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11328?ima=0000&link=ROBO004",
+      },
+    ],
+  },
+  {
+    id: "2026-06-25-nananiji-live-2026-final",
+    title: "22/7 3期生 定期公演「ナナニジライブ2026」Final",
+    kind: "regular_live_final",
+    period: "nananiji_live_2026",
+    date: "2026-06-25",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: "ヒューリックホール東京",
+    lineup_note: "3期生定期公演 Final",
+    notes: ["3期生にとって初のヒューリックホール東京公演"],
+    sources: [
+      {
+        id: "22_7_official_news_nananiji_live_2026_final",
+        type: "official_page",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11253?ima=0000&link=ROBO004",
+      },
+      {
+        id: "22_7_official_news_nananiji_live_2026_final_general_sale",
+        type: "official_page",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11319?ima=0000&link=ROBO004",
+      },
+    ],
+  },
+  {
+    id: "2026-07-24-atc-special-stage-taipei-fan-meeting",
+    title: "ATC Special Stage 22/7 ファンミーティング",
+    kind: "fan_meeting",
+    period: "live_in_taipei_2026",
+    date: "2026-07-24",
+    date_kind: "event_date",
+    date_precision: "day",
+    venue: "2026 第25回漫画博覧会 メインBステージ / 台北世界貿易センター第1展示ホール",
+    lineup_note: "麻丘真央および3期生の出演なし",
+    notes: ["22/7 Live in Taipei 2026前夜祭的企画"],
+    sources: [
+      {
+        id: "22_7_official_news_taipei",
+        type: "official_page",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11315?ima=0037",
+      },
+    ],
+  },
+  {
+    id: "2026-07-25-live-in-taipei",
+    title: "22/7 Live in Taipei 2026",
+    kind: "live",
+    period: "live_in_taipei_2026",
+    date: "2026-07-25",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: "Clapper Studio",
+    lineup_note: "3期生の出演なし",
+    notes: ["22/7初の海外単独公演"],
+    sources: [
+      {
+        id: "22_7_official_news_taipei",
+        type: "official_page",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11315?ima=0037",
+      },
+    ],
+  },
+  {
+    id: "2026-11-07-anniversary-live-2026",
+    title: "22/7 ANNIVERSARY LIVE 2026",
+    kind: "anniversary_live",
+    period: "anniversary_live_2026",
+    date: "2026-11-07",
+    date_kind: "performance_date",
+    date_precision: "day",
+    venue: "東京国際フォーラム ホールA",
+    lineup_note: "約4年ぶりの東京国際フォーラム ホールA公演",
+    notes: [],
+    sources: [
+      {
+        id: "22_7_official_news_anniversary_live_2026",
+        type: "official_page",
+        url: "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11252",
+      },
+    ],
+  },
+];
 
 const userAgent =
   "Mozilla/5.0 (compatible; idol-bbq-utils knowledge refresh; +https://github.com/idol-bbq-utils/idol-bbq-utils)";
@@ -399,10 +709,76 @@ async function parseDiscography(fetchedAt) {
   };
 }
 
+function normalizeDottedDate(value) {
+  const match = String(value ?? "").match(/(\d{4})\.(\d{1,2})\.(\d{1,2})/);
+  if (!match) return null;
+  return `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+}
+
+async function parseOfficialLiveReports(fetchedAt) {
+  const reports = [];
+  const seen = new Set();
+  let url = OFFICIAL_LIVE_REPORT_LIST;
+
+  for (let page = 0; page < 20 && url; page += 1) {
+    const html = await fetchText(url);
+    const itemPattern =
+      /<div class="special_box[\s\S]*?<div class="special_thumb">[\s\S]*?<a\s+href="([^"]+)"[\s\S]*?<div class="special_date[^"]*">([\s\S]*?)<\/div>\s*<div class="special_title">([\s\S]*?)<\/div>/gi;
+    for (const match of html.matchAll(itemPattern)) {
+      const sourceUrl = absoluteUrl(match[1]);
+      if (seen.has(sourceUrl)) continue;
+      seen.add(sourceUrl);
+      reports.push({
+        id: `live-report-${sourceUrl.match(/detail\/(\d+)/)?.[1] ?? slugify(sourceUrl)}`,
+        title: stripTags(match[3]).replace(/\s+/g, " "),
+        date: normalizeDottedDate(stripTags(match[2])),
+        date_kind: "report_date",
+        date_precision: "day",
+        source_url: sourceUrl,
+        sources: [
+          {
+            id: "22_7_official_live_report_list",
+            type: "official_live_report",
+            url: sourceUrl,
+            fetched_at: fetchedAt,
+          },
+        ],
+      });
+    }
+
+    const nextHref = attrFirst(
+      html,
+      /<li class="next">\s*<a\s+href="([^"]+)">次のページ<\/a>\s*<\/li>/i,
+    );
+    url = nextHref ? absoluteUrl(nextHref) : "";
+  }
+
+  return reports.sort(compareByDateDescThenTitle);
+}
+
+function buildPerformanceFacts(generatedAt, liveReports) {
+  const confirmedEvents = OFFICIAL_PERFORMANCE_EVENTS.map((event) => ({
+    ...event,
+    sources: event.sources.map((source) => ({ ...source, fetched_at: generatedAt })),
+  })).sort(compareByDateAscThenTitle);
+
+  return {
+    confirmed_events: confirmedEvents,
+    official_live_reports: liveReports,
+  };
+}
+
 function compareByDateDescThenTitle(a, b) {
-  const ad = a.release_date ?? a.first_release_date ?? "";
-  const bd = b.release_date ?? b.first_release_date ?? "";
+  const ad = a.date ?? a.release_date ?? a.first_release_date ?? "";
+  const bd = b.date ?? b.release_date ?? b.first_release_date ?? "";
   if (ad !== bd) return ad < bd ? 1 : -1;
+  return (a.title ?? "").localeCompare(b.title ?? "", "ja");
+}
+
+function compareByDateAscThenTitle(a, b) {
+  const ad = a.date ?? a.release_date ?? "";
+  const bd = b.date ?? b.release_date ?? "";
+  if (ad !== bd) return ad < bd ? -1 : 1;
   return (a.title ?? "").localeCompare(b.title ?? "", "ja");
 }
 
@@ -452,6 +828,8 @@ async function main() {
   }
 
   const discography = await parseDiscography(generatedAt);
+  const liveReports = await parseOfficialLiveReports(generatedAt);
+  const performanceFacts = buildPerformanceFacts(generatedAt, liveReports);
 
   await mkdir(OUTPUT_DIR, { recursive: true });
   await writeJson("members.json", {
@@ -502,6 +880,22 @@ async function main() {
     release_groups: discography.release_groups,
     songs: discography.songs,
   });
+  await writeJson("performances.json", {
+    ...metadata("22_7_performances", generatedAt, [
+      {
+        id: "22_7_official_live_report_list",
+        type: "official_live_report_list",
+        url: OFFICIAL_LIVE_REPORT_LIST,
+        fetched_at: generatedAt,
+      },
+      ...collectUniqueSources(performanceFacts.confirmed_events, generatedAt),
+    ]),
+    counts: {
+      confirmed_events: performanceFacts.confirmed_events.length,
+      official_live_reports: performanceFacts.official_live_reports.length,
+    },
+    ...performanceFacts,
+  });
   await writeJson("source-index.json", {
     ...metadata("22_7_source_index", generatedAt, [
       {
@@ -523,6 +917,13 @@ async function main() {
         fetched_at: generatedAt,
       },
       {
+        id: "22_7_official_live_report_list",
+        type: "official_live_report_list",
+        url: OFFICIAL_LIVE_REPORT_LIST,
+        fetched_at: generatedAt,
+      },
+      ...collectUniqueSources(performanceFacts.confirmed_events, generatedAt),
+      {
         id: "web_search_discovery",
         type: "search_discovery_note",
         url: "https://www.google.com/search?q=22%2F7+%E5%85%AC%E5%BC%8F+%E3%83%97%E3%83%AD%E3%83%95%E3%82%A3%E3%83%BC%E3%83%AB+%E3%83%A1%E3%83%B3%E3%83%90%E3%83%BC+%E8%AA%95%E7%94%9F%E6%97%A5",
@@ -533,16 +934,54 @@ async function main() {
   });
   await writeText(
     "prompt-facts-brief.txt",
-    renderPromptFactsBrief(generatedAt, members, characters, discography.release_groups),
+    renderPromptFactsBrief(
+      generatedAt,
+      members,
+      characters,
+      discography.release_groups,
+      performanceFacts.confirmed_events,
+    ),
   );
   await writeText(
     "song-title-index.txt",
     renderSongTitleIndex(generatedAt, discography.songs),
   );
+  await writeText(
+    "release-calendar.txt",
+    renderReleaseCalendar(generatedAt, discography.release_groups),
+  );
+  await writeText(
+    "performance-calendar.txt",
+    renderPerformanceCalendar(generatedAt, performanceFacts),
+  );
+  await writeText(
+    "prompt-knowledge-compact.txt",
+    renderCompactPromptKnowledge(
+      generatedAt,
+      members,
+      characters,
+      discography.release_groups,
+      performanceFacts.confirmed_events,
+    ),
+  );
 
   console.log(
-    `Wrote ${members.length} members, ${characters.length} characters, ${discography.editions.length} discography editions.`,
+    `Wrote ${members.length} members, ${characters.length} characters, ${discography.editions.length} discography editions, ${performanceFacts.confirmed_events.length} performance events, ${performanceFacts.official_live_reports.length} live reports.`,
   );
+}
+
+function collectUniqueSources(items, fetchedAt) {
+  const sources = [];
+  const seen = new Set();
+  for (const item of items) {
+    for (const source of item.sources ?? []) {
+      const key = `${source.id}:${source.url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      sources.push({ ...source, fetched_at: fetchedAt });
+    }
+  }
+  return sources;
 }
 
 async function writeJson(name, data) {
@@ -555,7 +994,7 @@ async function writeText(name, text) {
   await writeFile(file, text.endsWith("\n") ? text : `${text}\n`, "utf8");
 }
 
-function renderPromptFactsBrief(generatedAt, members, characters, releaseGroups) {
+function renderPromptFactsBrief(generatedAt, members, characters, releaseGroups, performanceEvents) {
   const memberLines = members.map((member) => {
     const profile = member.profile;
     const character =
@@ -583,6 +1022,7 @@ function renderPromptFactsBrief(generatedAt, members, characters, releaseGroups)
 
   const releaseLines = releaseGroups
     .filter((release) => ["シングル", "アルバム"].includes(release.type))
+    .sort(compareByDateAscThenTitle)
     .map((release) =>
       [
         release.release_date,
@@ -592,10 +1032,24 @@ function renderPromptFactsBrief(generatedAt, members, characters, releaseGroups)
       ].join(" | "),
     );
 
+  const performanceLines = performanceEvents
+    .filter((event) => ["performance_date", "event_date", "stream_date"].includes(event.date_kind))
+    .map((event) =>
+      [
+        event.date,
+        event.title,
+        `period:${event.period}`,
+        event.venue ? `venue:${event.venue}` : null,
+        event.lineup_note ? `note:${event.lineup_note}` : null,
+      ]
+        .filter(Boolean)
+        .join(" | "),
+    );
+
   return `# 22/7 Prompt Facts Brief
 
 Generated: ${generatedAt}
-Authority: official 22/7 mobile member/character pages and Sony Music official discography API. Use this as factual lookup context; do not invent missing facts.
+Authority: official 22/7 mobile pages and Sony Music official discography API. Use this as factual lookup context; do not invent missing facts. Performance entries intentionally keep date-level facts only; detailed open/start/end times are omitted.
 
 ## Members
 ${memberLines.join("\n")}
@@ -605,6 +1059,9 @@ ${characterLines.join("\n")}
 
 ## Singles And Albums
 ${releaseLines.join("\n")}
+
+## Performance Dates
+${performanceLines.join("\n")}
 `;
 }
 
@@ -624,6 +1081,123 @@ Generated: ${generatedAt}
 Authority: Sony Music official discography API. Titles are source titles, not Chinese translations.
 
 ${lines.join("\n")}
+`;
+}
+
+function renderCompactPromptKnowledge(generatedAt, members, characters, releaseGroups, performanceEvents) {
+  const memberLines = members.map((member) => {
+    const character =
+      member.character.name_from_appearance_work ||
+      characters.find((item) => item.voice_actor_member?.id === member.id)?.names.ja ||
+      "";
+    return [
+      member.names.ja,
+      member.names.kana,
+      `birthday:${member.profile.birthday.label}`,
+      `color:${member.profile.member_color}`,
+      character ? `character:${character}` : null,
+    ]
+      .filter(Boolean)
+      .join(" / ");
+  });
+
+  const characterLines = characters.map((character) =>
+    [
+      character.names.ja,
+      character.names.romaji,
+      `CV:${character.voice_actor_member?.name ?? "unknown"}`,
+      `birthday:${character.profile.birthday.label}`,
+      `penlight:${character.profile.penlight_color}`,
+    ].join(" / "),
+  );
+
+  const releaseLines = releaseGroups
+    .filter((release) => ["シングル", "アルバム"].includes(release.type))
+    .sort(compareByDateAscThenTitle)
+    .map((release) => `${release.release_date} ${release.title} (${release.type})`);
+
+  const performanceLines = performanceEvents.map((event) =>
+    [
+      `${event.date} ${event.title}`,
+      event.venue ? `venue:${event.venue}` : null,
+      event.lineup_note ? `note:${event.lineup_note}` : null,
+    ]
+      .filter(Boolean)
+      .join(" / "),
+  );
+
+  return `# 22/7 Compact Official Facts For JP-ZH Translation
+
+Generated: ${generatedAt}
+Use only to stabilize member names, character names, titles, release dates, and performance dates when the source text mentions them. Do not insert facts absent from the source. Performance entries are day-level facts only; detailed open/start/end times are intentionally omitted.
+
+## Members
+${memberLines.join("\n")}
+
+## Characters
+${characterLines.join("\n")}
+
+## Release Dates
+${releaseLines.join("\n")}
+
+## Performance Dates
+${performanceLines.join("\n")}
+`;
+}
+
+function renderReleaseCalendar(generatedAt, releaseGroups) {
+  const lines = releaseGroups
+    .filter((release) => release.release_date)
+    .sort(compareByDateAscThenTitle)
+    .map((release) =>
+      [
+        release.release_date,
+        release.type,
+        release.title,
+        `editions:${release.edition_ids.length}`,
+      ].join(" | "),
+    );
+
+  return `# 22/7 Official Release Calendar
+
+Generated: ${generatedAt}
+Authority: Sony Music official discography API. Dates are release dates, not announcement dates.
+
+${lines.join("\n")}
+`;
+}
+
+function renderPerformanceCalendar(generatedAt, performanceFacts) {
+  const confirmedLines = performanceFacts.confirmed_events.map((event) =>
+    [
+      event.date,
+      event.title,
+      `kind:${event.kind}`,
+      `period:${event.period}`,
+      `date_kind:${event.date_kind}`,
+      event.venue ? `venue:${event.venue}` : null,
+      event.lineup_note ? `note:${event.lineup_note}` : null,
+    ]
+      .filter(Boolean)
+      .join(" | "),
+  );
+
+  const reportLines = performanceFacts.official_live_reports.map((report) =>
+    [report.date, report.title, `date_kind:${report.date_kind}`, `source:${report.source_url}`].join(
+      " | ",
+    ),
+  );
+
+  return `# 22/7 Official Performance Calendar
+
+Generated: ${generatedAt}
+Authority: 22/7 official schedule/news/live report pages. Confirmed events store day-level event dates; live reports store report dates unless the event date is confirmed separately.
+
+## Confirmed Date Events
+${confirmedLines.join("\n")}
+
+## Official Live Report References
+${reportLines.join("\n")}
 `;
 }
 

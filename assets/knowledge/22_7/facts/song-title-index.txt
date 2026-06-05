@@ -1,6 +1,6 @@
 # 22/7 Official Track Title Index
 
-Generated: 2026-06-05T08:32:52.668Z
+Generated: 2026-06-05T08:58:52.526Z
 Authority: Sony Music official discography API. Titles are source titles, not Chinese translations.
 
 Plazma | first_release_date:2026-04-22 | first_release:二つの道 | source_edition:SRCL-13653

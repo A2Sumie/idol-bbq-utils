@@ -1,32 +1,164 @@
 {
   "schema_version": 1,
   "kind": "22_7_source_index",
-  "generated_at": "2026-06-05T08:32:52.668Z",
+  "generated_at": "2026-06-05T08:58:52.526Z",
   "source_policy": "Official 22/7 mobile pages and Sony Music official JSONP/API pages are authoritative for stored facts. Secondary search results are used only for discovery/cross-check notes unless explicitly promoted later.",
   "sources": [
     {
       "id": "22_7_official_member_seed",
       "type": "official_page",
       "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a22?ima=4750",
-      "fetched_at": "2026-06-05T08:32:52.668Z"
+      "fetched_at": "2026-06-05T08:58:52.526Z"
     },
     {
       "id": "sony_music_discography_index_api",
       "type": "official_jsonp_api",
       "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/start/0/count/100/callback/callback",
-      "fetched_at": "2026-06-05T08:32:52.668Z"
+      "fetched_at": "2026-06-05T08:58:52.526Z"
     },
     {
       "id": "sony_music_discography_human_page",
       "type": "official_page",
       "url": "https://www.sonymusic.co.jp/artist/nanabunnonijyuuni/discography/",
-      "fetched_at": "2026-06-05T08:32:52.668Z"
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_list",
+      "type": "official_live_report_list",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/special/list?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_1",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9193?dy=20260129",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_2026_1",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446422?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_2",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9194?dy=20260130",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_2026_2",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/446543?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_japan_festa",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9191?dy=20260223",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_japan_festa",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447065?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_3",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9195?dy=20260225",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_2026_3",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_4",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9196?dy=20260226",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_nananiji_live_2026_4",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_live_15",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9279?dy=20260404&ima=0000&link=ROBO004",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_live_report_live_15",
+      "type": "official_live_report",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/448820?cd=special",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_20260511",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9369?dy=20260511",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_schedule_nananiji_live_2026_20260512",
+      "type": "official_schedule",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/media/detail/9370?dy=20260512",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_fivesta",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11193?ima=1105",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "galaxcity_official_event_fivesta",
+      "type": "official_venue_page",
+      "url": "https://www.galaxcity.jp/cultural-hall/event/20260524-008515.html",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_fivesta_reflection_stream",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11328?ima=0000&link=ROBO004",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_nananiji_live_2026_final",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11253?ima=0000&link=ROBO004",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_nananiji_live_2026_final_general_sale",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11319?ima=0000&link=ROBO004",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_taipei",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11315?ima=0037",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
+    },
+    {
+      "id": "22_7_official_news_anniversary_live_2026",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/11252",
+      "fetched_at": "2026-06-05T08:58:52.526Z"
     },
     {
       "id": "web_search_discovery",
       "type": "search_discovery_note",
       "url": "https://www.google.com/search?q=22%2F7+%E5%85%AC%E5%BC%8F+%E3%83%97%E3%83%AD%E3%83%95%E3%82%A3%E3%83%BC%E3%83%AB+%E3%83%A1%E3%83%B3%E3%83%90%E3%83%BC+%E8%AA%95%E7%94%9F%E6%97%A5",
-      "fetched_at": "2026-06-05T08:32:52.668Z",
+      "fetched_at": "2026-06-05T08:58:52.526Z",
       "note": "Search was used to discover the official mobile member profile URL and to identify secondary sources; secondary sources are not imported as authoritative facts."
     }
   ]
