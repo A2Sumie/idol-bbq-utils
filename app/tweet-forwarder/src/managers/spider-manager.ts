@@ -28,6 +28,10 @@ import { BrowserSessionPool } from '@/services/browser-session-pool'
 import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
 import { normalizeCronSecond } from '@/utils/cron'
 import {
+    probeCrawlerCookieLiveHealth,
+    type CrawlerCookieLiveProbeResult,
+} from '@/services/crawler-health-audit-service'
+import {
     inferCookieHealthPlatform,
     summarizeRequiredCookieNames,
     toCookieHealthPlatformFromSpiderPlatform,
@@ -86,6 +90,12 @@ interface BrowserCookieSnapshot {
     expires?: number
     secure?: boolean
     httpOnly?: boolean
+}
+
+interface CrawlerCookieExportOptions {
+    validateLiveProbe?: boolean
+    fetch?: typeof fetch
+    timeoutMs?: number
 }
 
 class CrawlerCookieExportError extends Error {
@@ -746,7 +756,7 @@ class SpiderPools extends BaseCompatibleModel {
         this.log?.info('Spider Pools dropped')
     }
 
-    async exportCrawlerCookies(crawler: Crawler): Promise<{
+    async exportCrawlerCookies(crawler: Crawler, options: CrawlerCookieExportOptions = {}): Promise<{
         cookies: Array<BrowserCookieSnapshot>
         visitedUrl: string
         sessionProfile: string | null
@@ -755,6 +765,12 @@ class SpiderPools extends BaseCompatibleModel {
         requiredCookieNames: {
             present: Array<string>
             missing: Array<string>
+        }
+        liveProbe: {
+            checked: boolean
+            status: CrawlerCookieLiveProbeResult['status']
+            diagnostic_codes: Array<string>
+            http_status: number | null
         }
     }> {
         const websites = sanitizeWebsites({
@@ -840,6 +856,23 @@ class SpiderPools extends BaseCompatibleModel {
                     'crawler_cookie_required_names_missing',
                 )
             }
+            let liveProbe: CrawlerCookieLiveProbeResult = {
+                status: 'skipped',
+                diagnostic_codes: ['live_probe_not_requested'],
+                http_status: null,
+            }
+            if (options.validateLiveProbe) {
+                liveProbe = await probeCrawlerCookieLiveHealth(platformHint, filteredCookies, {
+                    fetch: options.fetch,
+                    timeoutMs: options.timeoutMs,
+                })
+                if (liveProbe.status === 'fail') {
+                    throw new CrawlerCookieExportError(
+                        `Browser session ${browserRequest.session_profile} failed live ${platformHint} cookie probe: ${liveProbe.diagnostic_codes.join(', ')}`,
+                        'crawler_cookie_live_probe_failed',
+                    )
+                }
+            }
 
             return {
                 cookies: filteredCookies,
@@ -848,6 +881,12 @@ class SpiderPools extends BaseCompatibleModel {
                 domains: targetDomains,
                 platformHint,
                 requiredCookieNames,
+                liveProbe: {
+                    checked: liveProbe.status !== 'skipped',
+                    status: liveProbe.status,
+                    diagnostic_codes: liveProbe.diagnostic_codes,
+                    http_status: liveProbe.http_status,
+                },
             }
         } finally {
             await page.close().catch(() => null)

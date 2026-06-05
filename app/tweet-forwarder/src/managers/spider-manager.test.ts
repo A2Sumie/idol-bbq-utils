@@ -535,6 +535,12 @@ test('SpiderPools exportCrawlerCookies returns only relevant cookies and require
         missing: [],
     })
     expect(snapshot.cookies.map((cookie) => cookie.name).sort()).toEqual(['auth_token', 'ct0'])
+    expect(snapshot.liveProbe).toEqual({
+        checked: false,
+        status: 'skipped',
+        diagnostic_codes: ['live_probe_not_requested'],
+        http_status: null,
+    })
 })
 
 test('SpiderPools exportCrawlerCookies rejects sessions missing required platform cookies', async () => {
@@ -567,4 +573,52 @@ test('SpiderPools exportCrawlerCookies rejects sessions missing required platfor
         }),
     ).rejects.toThrow(CrawlerCookieExportError)
     expect(pageRequests[0]?.device_profile).toBe('desktop_chrome')
+})
+
+test('SpiderPools exportCrawlerCookies rejects X sessions that fail live auth validation', async () => {
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-cookie-export-live-fail', new EventEmitter())
+    const probeUrls: Array<string> = []
+    ;(pools as any).browserPool = {
+        createPage: async () =>
+            makeCookieExportPage([
+                {
+                    name: 'auth_token',
+                    value: 'stale-auth-value',
+                    domain: '.x.com',
+                    path: '/',
+                    expires: 9999999999,
+                    secure: true,
+                    httpOnly: true,
+                },
+                {
+                    name: 'ct0',
+                    value: 'stale-csrf-value',
+                    domain: '.x.com',
+                    path: '/',
+                    expires: 9999999999,
+                    secure: true,
+                    httpOnly: false,
+                },
+            ]),
+    }
+
+    await expect(
+        pools.exportCrawlerCookies(
+            {
+                name: 'x-list',
+                origin: 'https://x.com',
+                cfg_crawler: {
+                    session_profile: 'x-main',
+                },
+            },
+            {
+                validateLiveProbe: true,
+                fetch: (async (url: string) => {
+                    probeUrls.push(url)
+                    return new Response('', { status: 401 })
+                }) as any,
+            },
+        ),
+    ).rejects.toThrow(CrawlerCookieExportError)
+    expect(probeUrls).toEqual(['https://x.com/i/api/1.1/account/settings.json'])
 })

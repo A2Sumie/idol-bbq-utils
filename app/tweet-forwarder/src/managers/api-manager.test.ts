@@ -711,6 +711,7 @@ test('APIManager crawler list exposes cookie metadata without cookie paths', asy
 test('APIManager cookie sync response avoids returning full cookie paths', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-api-cookie-sync-'))
     const cookieFile = join(dir, 'synced.cookies.txt')
+    let exportOptions: any
     try {
         const manager = new APIManager({
             getConfig: () =>
@@ -731,36 +732,45 @@ test('APIManager cookie sync response avoids returning full cookie paths', async
             getDeps: () =>
                 ({
                     spiderPools: {
-                        exportCrawlerCookies: async () => ({
-                            cookies: [
-                                {
-                                    name: 'auth_token',
-                                    value: 'auth-value',
-                                    domain: '.x.com',
-                                    path: '/',
-                                    expires: 9999999999,
-                                    secure: true,
-                                    httpOnly: true,
+                        exportCrawlerCookies: async (_crawler: any, options: any) => {
+                            exportOptions = options
+                            return {
+                                cookies: [
+                                    {
+                                        name: 'auth_token',
+                                        value: 'auth-value',
+                                        domain: '.x.com',
+                                        path: '/',
+                                        expires: 9999999999,
+                                        secure: true,
+                                        httpOnly: true,
+                                    },
+                                    {
+                                        name: 'ct0',
+                                        value: 'csrf-value',
+                                        domain: '.x.com',
+                                        path: '/',
+                                        expires: 9999999999,
+                                        secure: true,
+                                        httpOnly: false,
+                                    },
+                                ],
+                                sessionProfile: 'profile-a',
+                                visitedUrl: 'https://x.com/X',
+                                domains: ['x.com'],
+                                platformHint: 'x',
+                                requiredCookieNames: {
+                                    present: ['auth_token', 'ct0'],
+                                    missing: [],
                                 },
-                                {
-                                    name: 'ct0',
-                                    value: 'csrf-value',
-                                    domain: '.x.com',
-                                    path: '/',
-                                    expires: 9999999999,
-                                    secure: true,
-                                    httpOnly: false,
+                                liveProbe: {
+                                    checked: true,
+                                    status: 'ok',
+                                    diagnostic_codes: ['x_live_probe_ok'],
+                                    http_status: 200,
                                 },
-                            ],
-                            sessionProfile: 'profile-a',
-                            visitedUrl: 'https://x.com/X',
-                            domains: ['x.com'],
-                            platformHint: 'x',
-                            requiredCookieNames: {
-                                present: ['auth_token', 'ct0'],
-                                missing: [],
-                            },
-                        }),
+                            }
+                        },
                     },
                 }) as any,
             getRuntimeMeta: () =>
@@ -795,6 +805,15 @@ test('APIManager cookie sync response avoids returning full cookie paths', async
         expect(payload.requiredCookieNames).toEqual({
             present: ['auth_token', 'ct0'],
             missing: [],
+        })
+        expect(payload.liveProbe).toEqual({
+            checked: true,
+            status: 'ok',
+            diagnostic_codes: ['x_live_probe_ok'],
+            http_status: 200,
+        })
+        expect(exportOptions).toMatchObject({
+            validateLiveProbe: true,
         })
         expect(serialized).not.toContain(cookieFile)
         expect(serialized).not.toContain(dir)

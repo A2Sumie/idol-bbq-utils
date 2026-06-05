@@ -535,7 +535,9 @@ export class APIManager extends BaseCompatibleModel {
             }
 
             const cookieFile = this.resolveCookieFilePath(finder, crawler)
-            const snapshot = await this.deps.spiderPools.exportCrawlerCookies(crawler)
+            const snapshot = await this.deps.spiderPools.exportCrawlerCookies(crawler, {
+                validateLiveProbe: true,
+            })
             if (!snapshot.cookies || snapshot.cookies.length === 0) {
                 return new Response('No session cookies found for crawler', { status: 409 })
             }
@@ -559,6 +561,7 @@ export class APIManager extends BaseCompatibleModel {
                 domains: snapshot.domains,
                 platformHint: snapshot.platformHint,
                 requiredCookieNames: snapshot.requiredCookieNames,
+                liveProbe: snapshot.liveProbe,
                 count: snapshot.cookies.length,
                 lastModified: new Date().toISOString(),
             })

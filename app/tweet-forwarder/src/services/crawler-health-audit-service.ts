@@ -50,7 +50,7 @@ type CrawlerHealthAudit = {
     results: Array<CrawlerHealthResult>
 }
 
-type LiveProbeResult = {
+type CrawlerCookieLiveProbeResult = {
     status: CrawlerHealthStatus
     diagnostic_codes: Array<string>
     http_status: number | null
@@ -135,7 +135,7 @@ function statusFromAuthResponse(
     rejectedCode: string,
     rateLimitedCode: string,
     unexpectedCode: string,
-): LiveProbeResult {
+): CrawlerCookieLiveProbeResult {
     if (response.status >= 200 && response.status < 300) {
         return {
             status: 'ok',
@@ -164,7 +164,11 @@ function statusFromAuthResponse(
     }
 }
 
-async function probeX(cookies: Array<CookieData>, fetchImpl: typeof fetch, timeoutMs: number): Promise<LiveProbeResult> {
+async function probeX(
+    cookies: Array<CookieData>,
+    fetchImpl: typeof fetch,
+    timeoutMs: number,
+): Promise<CrawlerCookieLiveProbeResult> {
     const cookie = getCookieString(cookies)
     const ct0 = cookieValue(cookies, 'ct0')
     const response = await fetchWithTimeout(
@@ -199,7 +203,7 @@ async function probeInstagram(
     cookies: Array<CookieData>,
     fetchImpl: typeof fetch,
     timeoutMs: number,
-): Promise<LiveProbeResult> {
+): Promise<CrawlerCookieLiveProbeResult> {
     const cookie = getCookieString(cookies)
     const csrf = cookieValue(cookies, 'csrftoken')
     const response = await fetchWithTimeout(
@@ -253,7 +257,7 @@ async function probeTikTok(
     cookies: Array<CookieData>,
     fetchImpl: typeof fetch,
     timeoutMs: number,
-): Promise<LiveProbeResult> {
+): Promise<CrawlerCookieLiveProbeResult> {
     const response = await fetchWithTimeout(
         fetchImpl,
         'https://www.tiktok.com/@tiktok',
@@ -296,7 +300,7 @@ async function runLiveProbe(
     cookies: Array<CookieData>,
     fetchImpl: typeof fetch,
     timeoutMs: number,
-): Promise<LiveProbeResult> {
+): Promise<CrawlerCookieLiveProbeResult> {
     try {
         if (platform === 'x') return await probeX(cookies, fetchImpl, timeoutMs)
         if (platform === 'instagram') return await probeInstagram(cookies, fetchImpl, timeoutMs)
@@ -313,6 +317,23 @@ async function runLiveProbe(
             http_status: null,
         }
     }
+}
+
+async function probeCrawlerCookieLiveHealth(
+    platform: CookieHealthPlatform,
+    cookies: Array<CookieData>,
+    options: Pick<CrawlerHealthAuditOptions, 'fetch' | 'timeoutMs'> = {},
+): Promise<CrawlerCookieLiveProbeResult> {
+    const auditPlatform: CrawlerHealthPlatform = platform === 'website' ? 'unknown' : platform
+    const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs || 15_000)))
+    if (!LIVE_PROBE_PLATFORMS.has(auditPlatform)) {
+        return {
+            status: 'skipped',
+            diagnostic_codes: ['live_probe_unsupported_platform'],
+            http_status: null,
+        }
+    }
+    return runLiveProbe(auditPlatform, cookies, options.fetch || fetch, timeoutMs)
 }
 
 async function buildCrawlerLiveHealthAudit(
@@ -369,7 +390,7 @@ async function buildCrawlerLiveHealthAudit(
         const staticStatus: CrawlerHealthStatus =
             diagnosticCodes.length > 0 ? (missing.length > 0 || metadata.usable_cookie_count === 0 ? 'fail' : 'warn') : 'ok'
 
-        let liveProbe: LiveProbeResult = {
+        let liveProbe: CrawlerCookieLiveProbeResult = {
             status: 'skipped',
             diagnostic_codes: ['live_probe_static_cookie_unhealthy'],
             http_status: null,
@@ -417,9 +438,11 @@ async function buildCrawlerLiveHealthAudit(
 export {
     buildCrawlerLiveHealthAudit,
     inferCrawlerPlatform,
+    probeCrawlerCookieLiveHealth,
     type CrawlerHealthAudit,
     type CrawlerHealthAuditOptions,
     type CrawlerHealthPlatform,
     type CrawlerHealthResult,
     type CrawlerHealthStatus,
+    type CrawlerCookieLiveProbeResult,
 }
