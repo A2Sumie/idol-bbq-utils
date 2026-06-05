@@ -4739,6 +4739,7 @@ test('sendArticles prompts summary-card translation with chronological chain ord
     }
 
     const processCalls: string[] = []
+    const articleUpdates: Array<{ id: number; patch: any }> = []
     const originalCreateProcessor = (processorRegistry as any).create
     const originalArticleUpdate = (DB.Article as any).update
     ;(processorRegistry as any).create = async () => ({
@@ -4756,6 +4757,7 @@ test('sendArticles prompts summary-card translation with chronological chain ord
         drop: async () => undefined,
     })
     ;(DB.Article as any).update = async (id: number, _platform: Platform, patch: any) => {
+        articleUpdates.push({ id, patch })
         return { id, ...patch }
     }
 
@@ -4838,7 +4840,7 @@ test('sendArticles prompts summary-card translation with chronological chain ord
         platform: Platform.X,
         username: 'first member',
         u_id: 'first_member',
-        content: '先の本文',
+        content: '先の本文 #ナナニジ',
         translation: null,
         translated_by: null,
         url: 'https://x.com/first_member/status/920',
@@ -4856,7 +4858,7 @@ test('sendArticles prompts summary-card translation with chronological chain ord
         platform: Platform.X,
         username: 'reply member',
         u_id: 'reply_member',
-        content: '後の返信',
+        content: '後の返信 #出演情報',
         translation: null,
         translated_by: null,
         url: 'https://x.com/reply_member/status/921',
@@ -4885,16 +4887,22 @@ test('sendArticles prompts summary-card translation with chronological chain ord
     }
 
     expect(processCalls).toHaveLength(2)
+    expect(processCalls[0]).toContain('保留所有 hashtag 原文')
     expect(processCalls[0]).toContain('以下按发生顺序排列')
     expect(processCalls[0]).toContain('【第1条/最先发生/当前待译】')
-    expect(processCalls[0]).toContain('先の本文')
+    expect(processCalls[0]).toContain('先の本文 #ナナニジ')
     expect(processCalls[0]).toContain('【第2条/最后发生/上下文】')
-    expect(processCalls[0]).toContain('後の返信')
+    expect(processCalls[0]).toContain('後の返信 #出演情報')
+    expect(processCalls[1]).toContain('保留所有 hashtag 原文')
     expect(processCalls[1]).toContain('以下按发生顺序排列')
     expect(processCalls[1]).toContain('【第1条/最先发生/上下文】')
-    expect(processCalls[1]).toContain('先の本文')
+    expect(processCalls[1]).toContain('先の本文 #ナナニジ')
     expect(processCalls[1]).toContain('【第2条/最后发生/当前待译】')
-    expect(processCalls[1]).toContain('後の返信')
+    expect(processCalls[1]).toContain('後の返信 #出演情報')
+    expect(articleUpdates.map((update) => ({ id: update.id, translation: update.patch.translation }))).toEqual([
+        { id: 920, translation: '译:先の本文 #ナナニジ' },
+        { id: 921, translation: '译:後の返信 #出演情報' },
+    ])
     expect(target.sent).toHaveLength(1)
 })
 

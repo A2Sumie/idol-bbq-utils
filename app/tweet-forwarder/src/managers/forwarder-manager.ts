@@ -253,6 +253,22 @@ function stripHashtagsFromText(text?: string | null) {
         .trim()
 }
 
+function preserveSourceHashtags(sourceText: string, translatedText: string) {
+    if (!BaseProcessor.isValidResult(translatedText)) {
+        return translatedText
+    }
+    const sourceTags = extractHashtagsFromText(sourceText)
+    if (sourceTags.length === 0) {
+        return translatedText
+    }
+    const existingTagKeys = new Set(extractHashtagsFromText(translatedText).map((tag) => normalizeHashtagKey(tag)))
+    const missingTags = uniquePreserveOrder(sourceTags).filter((tag) => !existingTagKeys.has(normalizeHashtagKey(tag)))
+    if (missingTags.length === 0) {
+        return translatedText
+    }
+    return [translatedText.trim(), missingTags.join(' ')].filter(Boolean).join(' ')
+}
+
 function truncateDigestText(text: string, maxLength: number) {
     if (text.length <= maxLength) {
         return text
@@ -3481,15 +3497,22 @@ class ForwarderPools extends BaseCompatibleModel {
         fieldLabel: string,
     ) {
         const chain = this.flattenSummaryArticleChain(rootArticle).reverse()
-        if (chain.length <= 1) {
+        const sourceHashtags = extractHashtagsFromText(sourceText)
+        if (chain.length <= 1 && sourceHashtags.length === 0) {
             return sourceText
         }
 
-        const targetStableId = String((targetArticle as any).id ?? targetArticle.a_id ?? '')
         const lines = [
             '请只翻译【当前待译】段落，输出简体中文译文，不要输出原文、序号、说明或上下文。',
-            '以下按发生顺序排列：第1条最先发生，序号越大越后发生。',
+            '保留所有 hashtag 原文（例如 #ナナニジ），不要翻译、改写、删除或增减。',
         ]
+        if (chain.length <= 1) {
+            lines.push(`【当前待译字段】${fieldLabel}`, '【当前待译】', sourceText)
+            return lines.join('\n\n')
+        }
+
+        const targetStableId = String((targetArticle as any).id ?? targetArticle.a_id ?? '')
+        lines.push('以下按发生顺序排列：第1条最先发生，序号越大越后发生。')
         for (const [index, article] of chain.entries()) {
             const stableId = String((article as any).id ?? article.a_id ?? '')
             const isTarget = stableId === targetStableId
@@ -3512,11 +3535,11 @@ class ForwarderPools extends BaseCompatibleModel {
         return lines.join('\n\n')
     }
 
-    private async processSummaryCardTranslationText(processor: BaseProcessor, inputText: string) {
+    private async processSummaryCardTranslationText(processor: BaseProcessor, inputText: string, sourceText: string) {
         return await pRetry(() => processor.process(inputText), {
             retries: RETRY_LIMIT,
         })
-            .then((value) => value)
+            .then((value) => preserveSourceHashtags(sourceText, value))
             .catch((error) => {
                 this.log?.error(`Summary-card translation processor failed: ${error}`)
                 return PROCESSOR_ERROR_FALLBACK
@@ -3568,6 +3591,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     patch.translation = await this.processSummaryCardTranslationText(
                         processor,
                         this.buildOrderedTranslationInput(item, article, article.content, '正文'),
+                        article.content,
                     )
                     patch.translated_by = processor.NAME
                     article.translation = patch.translation
@@ -3587,6 +3611,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 translation: await this.processSummaryCardTranslationText(
                                     processor,
                                     this.buildOrderedTranslationInput(item, article, media.alt, '图片说明'),
+                                    media.alt,
                                 ),
                                 translated_by: processor.NAME,
                             }
@@ -3604,6 +3629,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         translation: await this.processSummaryCardTranslationText(
                             processor,
                             this.buildOrderedTranslationInput(item, article, article.extra.content, '补充内容'),
+                            article.extra.content,
                         ),
                         translated_by: processor.NAME,
                     } as any

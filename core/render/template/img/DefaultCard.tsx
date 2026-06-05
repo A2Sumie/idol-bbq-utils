@@ -762,12 +762,12 @@ function TranslatedCornerBadge({ label }: { label: string }) {
         <div
             tw="absolute left-0 top-0 flex items-center justify-center"
             style={{
-                width: 54,
-                height: 26,
-                background: '#dc2626',
-                borderTopLeftRadius: 16,
-                borderBottomRightRadius: 8,
-                boxShadow: '0 2px 5px rgba(127, 29, 29, 0.24)',
+                width: 62,
+                height: 30,
+                background: '#ec4899',
+                borderTopLeftRadius: 18,
+                borderBottomRightRadius: 10,
+                boxShadow: '0 2px 6px rgba(190, 24, 93, 0.25)',
                 zIndex: 20,
             }}
         >
@@ -776,8 +776,8 @@ function TranslatedCornerBadge({ label }: { label: string }) {
                 lang="zh-CN"
                 style={{
                     fontFamily: CARD_UI_FONT_FAMILY,
-                    fontSize: CARD_TEXT_SIZE.xs,
-                    lineHeight: CARD_LINE_HEIGHT.xs,
+                    fontSize: CARD_TEXT_SIZE.sm,
+                    lineHeight: CARD_LINE_HEIGHT.sm,
                 }}
             >
                 {sanitizeCardText(label)}

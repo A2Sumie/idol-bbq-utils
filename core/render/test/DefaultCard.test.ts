@@ -143,7 +143,7 @@ test('sanitizeCardText removes stray selectors from rino-style decorative text',
     expect(sanitizeCardText('今日も素敵🪄︎︎◝✩ ‌‌ ‌')).toBe('今日も素敵🪄◝✩  ')
 })
 
-test('translated-corner-badge feature renders a red summary card badge', () => {
+test('translated-corner-badge feature renders a pink summary card badge', () => {
     const article = {
         id: -1,
         platform: Platform.X,
@@ -170,9 +170,11 @@ test('translated-corner-badge feature renders a red summary card badge', () => {
         u_avatar: null,
     }
     const { component } = articleParser(article as any, { features: ['translated-corner-badge'] } as any)
-    const badge = findReactElement(component, (node) => node.props?.style?.background === '#dc2626')
+    const badge = findReactElement(component, (node) => node.props?.style?.background === '#ec4899')
 
     expect(badge).toBeTruthy()
+    expect(badge.props.style.width).toBe(62)
+    expect(badge.props.style.height).toBe(30)
     expect(JSON.stringify(badge.props.children)).toContain('译文')
 })
 
