@@ -124,6 +124,7 @@ export class RenderService {
             card_features?: Array<string>
             collapsedArticleIds?: Set<string | number>
             mediaConfig?: Media
+            preloadedMediaFiles?: Array<RenderedMediaFile>
             deduplication?: boolean
         },
     ): Promise<RenderResult> {
@@ -131,14 +132,16 @@ export class RenderService {
         const effectiveDeduplication = deduplication && !isNonLiveOutboundSendMode()
         const cloned_article = cloneDeep(article)
 
-        let maybe_media_files: Array<RenderedMediaFile> = []
+        let maybe_media_files: Array<RenderedMediaFile> = (config.preloadedMediaFiles || []).map((file) => ({
+            ...file,
+        }))
         let card_media_files: Array<RenderedMediaFile> = []
         let skipReason: string | undefined
 
         // 1. Download/Handle Media Files
         if (mediaConfig) {
             const mediaResult = await this.handleMedia(taskId, cloned_article, mediaConfig, effectiveDeduplication)
-            maybe_media_files = mediaResult.files
+            maybe_media_files = [...maybe_media_files, ...mediaResult.files]
             skipReason = mediaResult.skipReason
         }
 

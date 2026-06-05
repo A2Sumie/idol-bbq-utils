@@ -6133,6 +6133,284 @@ test('idle-first summary-card items can fall back to native article send', async
     expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
 })
 
+test('idle-first translated summary-card targets append companion card to native sends', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: true,
+                send_first_native: true,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                },
+            },
+        } as any,
+        'target-summary-card-native-first-translated',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const sourceMedia = {
+        media_type: 'photo',
+        path: '/tmp/native-source.jpg',
+        sourceArticleId: 'summary-native-first-translated',
+        sourceUrl: 'https://example.com/native-source.jpg',
+        content_hash: 'native-source-hash',
+    }
+    const originalCard = { media_type: 'photo', path: '/tmp/native-original-card.png' }
+    const translatedCard = { media_type: 'photo', path: '/tmp/native-translated-card.png' }
+    const renderProcessCalls: Array<{ article: any; config: any }> = []
+    const cleanupPaths: string[] = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            renderProcessCalls.push({ article, config })
+            const translated = config?.card_features?.includes('translated-corner-badge')
+            if (translated) {
+                expect(article.content).toBe('native first translated text')
+                expect(article.translation).toBeNull()
+                expect(article.extra?.data?.translated_badge_label).toBe('译文')
+                expect(config?.preloadedMediaFiles).toEqual([sourceMedia])
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [translatedCard],
+                    originalMediaFiles: config?.preloadedMediaFiles || [],
+                    mediaFiles: [...(config?.preloadedMediaFiles || []), translatedCard],
+                }
+            }
+            return {
+                text: article.content,
+                textCollapseMode: 'article',
+                cardMediaFiles: [originalCard],
+                originalMediaFiles: [sourceMedia],
+                mediaFiles: [sourceMedia, originalCard],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: (files: Array<{ path: string }>) => {
+            cleanupPaths.push(...files.map((file) => file.path))
+        },
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-native-first-translated',
+            [
+                {
+                    id: 831,
+                    a_id: 'summary-native-first-translated',
+                    platform: Platform.X,
+                    username: 'native member',
+                    u_id: 'native_member',
+                    content: 'native first text',
+                    translation: 'native first translated text',
+                    translated_by: 'LLM',
+                    url: 'https://x.com/native_member/status/831',
+                    type: 'tweet',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: null,
+                    has_media: true,
+                    media: [
+                        {
+                            type: 'photo',
+                            url: 'https://example.com/native-source.jpg',
+                            alt: 'native alt',
+                            translation: 'native translated alt',
+                        },
+                    ],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card', card_features: ['media-contain'] } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toBe('native first text')
+    expect(target.sent[0]?.props?.media).toEqual([sourceMedia, originalCard, translatedCard])
+    expect(target.sent[0]?.props?.cardMedia).toEqual([originalCard, translatedCard])
+    expect(target.sent[0]?.props?.contentMedia).toEqual([sourceMedia])
+    expect(renderProcessCalls).toHaveLength(2)
+    expect(renderProcessCalls[1]?.config?.card_features).toEqual(['media-contain', 'translated-corner-badge'])
+    expect(cleanupPaths).toContain('/tmp/native-translated-card.png')
+    expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
+})
+
+test('idle-first translated native companion is suppressed for text-only media visibility', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: true,
+                send_first_native: true,
+                translated_card: true,
+            },
+            media_visibility: {
+                enabled: true,
+                window_seconds: 86400,
+                max_visible: 1,
+                duplicate_behavior: 'text_only',
+            },
+        } as any,
+        'target-summary-card-native-first-translated-text-only',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const sourceMediaFor = (id: string) => ({
+        media_type: 'photo',
+        path: `/tmp/${id}-source.jpg`,
+        sourceArticleId: id,
+        sourceUrl: 'https://example.com/same-visible-media.jpg',
+        content_hash: 'same-visible-media-hash',
+    })
+    const renderProcessCalls: Array<{ article: any; config: any }> = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            renderProcessCalls.push({ article, config })
+            const translated = config?.card_features?.includes('translated-corner-badge')
+            if (translated) {
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: `/tmp/${article.a_id}-translated-card.png` }],
+                    originalMediaFiles: config?.preloadedMediaFiles || [],
+                    mediaFiles: [
+                        ...(config?.preloadedMediaFiles || []),
+                        { media_type: 'photo', path: `/tmp/${article.a_id}-translated-card.png` },
+                    ],
+                }
+            }
+            const sourceMedia = sourceMediaFor(article.a_id)
+            const originalCard = { media_type: 'photo', path: `/tmp/${article.a_id}-original-card.png` }
+            return {
+                text: article.content,
+                textCollapseMode: 'article',
+                cardMediaFiles: [originalCard],
+                originalMediaFiles: [sourceMedia],
+                mediaFiles: [sourceMedia, originalCard],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const makeArticle = (id: number) => ({
+        id,
+        a_id: `summary-native-visible-${id}`,
+        platform: Platform.X,
+        username: 'native member',
+        u_id: 'native_member',
+        content: `native visible text ${id}`,
+        translation: `native visible translated ${id}`,
+        translated_by: 'LLM',
+        url: `https://x.com/native_member/status/${id}`,
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: true,
+        media: [{ type: 'photo', url: 'https://example.com/same-visible-media.jpg' }],
+        extra: null,
+        u_avatar: null,
+    })
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-native-visible-first',
+        [makeArticle(832)],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+    ;(pools as any).summaryCardLastSentAt.clear()
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-native-visible-second',
+        [makeArticle(833)],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(target.sent).toHaveLength(2)
+    expect(target.sent[0]?.props?.cardMedia).toHaveLength(2)
+    expect(target.sent[1]?.props?.cardMedia).toEqual([])
+    expect(target.sent[1]?.props?.contentMedia).toEqual([])
+    expect(target.sent[1]?.texts[0]).toContain('重复媒体已文字缩略')
+    expect(
+        renderProcessCalls.filter((call) => call.config?.card_features?.includes('translated-corner-badge')),
+    ).toHaveLength(1)
+})
+
 test('summary-card media duplicate budget omits the third visible occurrence', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

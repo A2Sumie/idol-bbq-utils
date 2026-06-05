@@ -1685,6 +1685,7 @@ class ForwarderPools extends BaseCompatibleModel {
             let forceSendError: Error | null = null
             const cloned_article = cloneDeep(article)
             const errorCounterKey = `${platform}:${cloned_article.a_id}`
+            const companionMediaFilesForCleanup: Array<RenderedMediaFile> = []
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     let visibilityForRelease: MediaVisibilityResult | null = null
@@ -1899,6 +1900,23 @@ class ForwarderPools extends BaseCompatibleModel {
                             return
                         }
 
+                        const translatedCompanionCard = await this.buildTranslatedNativeCompanionCard(
+                            article,
+                            renderResult,
+                            cfg_forwarder,
+                            target,
+                            runtime_config,
+                            taskId,
+                            cardMediaFiles,
+                        )
+                        if (translatedCompanionCard) {
+                            companionMediaFilesForCleanup.push(...translatedCompanionCard.mediaFiles)
+                            if (translatedCompanionCard.cardMediaFiles.length > 0) {
+                                mediaFiles = [...mediaFiles, ...translatedCompanionCard.cardMediaFiles]
+                                cardMediaFiles = [...cardMediaFiles, ...translatedCompanionCard.cardMediaFiles]
+                            }
+                        }
+
                         const outboundPayloadHash = payloadHash({
                             routeKey: routeKeyForTarget,
                             targetId: target.id,
@@ -2106,7 +2124,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 this.errorCounter.delete(errorCounterKey)
             }
 
-            this.renderService.cleanup(renderResult.mediaFiles)
+            this.renderService.cleanup([...renderResult.mediaFiles, ...companionMediaFilesForCleanup])
             if (forceSendError) {
                 throw forceSendError
             }
@@ -3603,7 +3621,7 @@ class ForwarderPools extends BaseCompatibleModel {
         return true
     }
 
-    private buildSummaryCardTextArticle(article: ArticleWithId, textMode: SummaryCardTextMode) {
+    private buildArticleTextVariant(article: ArticleWithId, textMode: SummaryCardTextMode) {
         if (textMode === 'default') {
             return article
         }
@@ -3654,6 +3672,51 @@ class ForwarderPools extends BaseCompatibleModel {
         return cloned
     }
 
+    private attachTranslatedCardBadgeLabel<T extends ArticleWithId | Article>(article: T, badgeLabel: string): T {
+        const extra = article.extra && typeof article.extra === 'object' ? (article.extra as any) : {}
+        article.extra = {
+            ...extra,
+            data: {
+                ...(extra.data && typeof extra.data === 'object' ? extra.data : {}),
+                translated_badge_label: badgeLabel,
+            },
+        } as any
+        return article
+    }
+
+    private async buildTranslatedNativeCompanionCard(
+        article: ArticleWithId,
+        renderResult: Pick<RenderResult, 'cardMediaFiles' | 'originalMediaFiles'>,
+        cfg_forwarder: Forwarder['cfg_forwarder'],
+        target: BaseForwarder,
+        runtime_config: ForwardTargetPlatformCommonConfig | undefined,
+        taskId: string,
+        visibleCardMediaFiles: Array<RenderedMediaFile>,
+    ) {
+        if (renderResult.cardMediaFiles.length === 0 || visibleCardMediaFiles.length === 0) {
+            return null
+        }
+
+        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
+        const translatedCard = summaryConfig?.translatedCard
+        if (!translatedCard) {
+            return null
+        }
+
+        const translatedArticle = this.attachTranslatedCardBadgeLabel(
+            this.buildArticleTextVariant(article, 'translated'),
+            translatedCard.badgeLabel,
+        )
+        return this.renderService.process(translatedArticle, {
+            taskId: `${taskId}-${target.id}-${article.a_id}-translated-card`,
+            render_type: cfg_forwarder?.render_type,
+            render_features: cfg_forwarder?.render_features,
+            card_features: mergeFeatureFlags(cfg_forwarder?.card_features, ['translated-corner-badge']),
+            preloadedMediaFiles: renderResult.originalMediaFiles,
+            deduplication: false,
+        })
+    }
+
     private async buildSummaryCardItemText(
         queue: SummaryCardQueue,
         article: ArticleWithId,
@@ -3671,7 +3734,7 @@ class ForwarderPools extends BaseCompatibleModel {
                   ),
               )
             : undefined
-        const textArticle = this.buildSummaryCardTextArticle(article, textMode)
+        const textArticle = this.buildArticleTextVariant(article, textMode)
         const message =
             this.renderService.renderText(textArticle, { render_type: 'text-compact', collapsedArticleIds }).trim() ||
             formatArticleHeaderLine(textArticle as any).trim() ||
