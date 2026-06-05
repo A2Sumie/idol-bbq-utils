@@ -1,0 +1,777 @@
+{
+  "schema_version": 1,
+  "kind": "22_7_members",
+  "generated_at": "2026-06-05T08:32:52.668Z",
+  "source_policy": "Official 22/7 mobile pages and Sony Music official JSONP/API pages are authoritative for stored facts. Secondary search results are used only for discovery/cross-check notes unless explicitly promoted later.",
+  "sources": [
+    {
+      "id": "22_7_official_member_seed",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a22?ima=4750",
+      "fetched_at": "2026-06-05T08:32:52.668Z"
+    }
+  ],
+  "count": 15,
+  "items": [
+    {
+      "id": "a13",
+      "official_section": "member",
+      "names": {
+        "ja": "相川奈央",
+        "kana": "あいかわなお"
+      },
+      "profile": {
+        "birthplace": "東京都",
+        "birthday": {
+          "label": "7月6日",
+          "month_day": "07-06"
+        },
+        "blood_type": "O型",
+        "zodiac": "かに座",
+        "member_color": "ターコイズブルー",
+        "height_cm": 158,
+        "hobbies": "お菓子作り、少女漫画を読むこと、オリジナル振り付け",
+        "skills": "鏡文字、百人一首",
+        "comment": "誰かの生きる意味になれるよう、全力を尽くします！\n応援よろしくお願いいたします！"
+      },
+      "character": {
+        "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c17",
+        "name_from_appearance_work": "西浦そら"
+      },
+      "appearance_work": {
+        "22/7": "西浦そら",
+        "声優": "「カッコウの許嫁Season2」#10（生徒）",
+        "舞台": "「ありのままに生きろ。今」（2024年）（高橋千夏）\n\n「9 R.I.P.」（2025年）（優衣）"
+      },
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://twitter.com/nao_aikawa227"
+        },
+        {
+          "platform": "instagram",
+          "url": "https://www.instagram.com/nao_aikawa227/"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/bf8/216806f1d564fa253c9e11bc53fa9.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a13",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a14",
+      "official_section": "member",
+      "names": {
+        "ja": "麻丘真央",
+        "kana": "あさおかまお"
+      },
+      "profile": {
+        "birthplace": "東京都",
+        "birthday": {
+          "label": "10月6日",
+          "month_day": "10-06"
+        },
+        "blood_type": "O型",
+        "zodiac": "てんびん座",
+        "member_color": "若竹色",
+        "height_cm": 159,
+        "hobbies": "ドラマ鑑賞、キックボクシング、華道、インストイントロドン",
+        "skills": "フェンシング(全国大会優勝経験あり)、茶道、中国語",
+        "comment": "家族には宇宙から遊びに来ている妖精ちゃんや、気まぐれな猫と言われています！行動が少し不思議みたいです。\n\n皆さんに笑顔と癒しをお届けできる妖精ちゃん(？)になります！"
+      },
+      "character": {
+        "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c14",
+        "name_from_appearance_work": "桐生塔子"
+      },
+      "appearance_work": {
+        "22/7": "桐生塔子",
+        "声優": "「カッコウの許嫁Season2」#11（生徒）",
+        "TV": "フジテレビ「めざましテレビ」イマドキガール",
+        "写真集": "「光の鏡」"
+      },
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://twitter.com/mao_asaoka227"
+        },
+        {
+          "platform": "instagram",
+          "url": "https://instagram.com/asaoka_mao__"
+        },
+        {
+          "platform": "tiktok",
+          "url": "https://www.tiktok.com/@mao_asaoka"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/088/13073edaaec87a3944773c4df5476.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a14",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a1",
+      "official_section": "member",
+      "names": {
+        "ja": "天城サリー",
+        "kana": "あまきさりー"
+      },
+      "profile": {
+        "birthplace": "ロサンゼルス",
+        "birthday": {
+          "label": "4月26日",
+          "month_day": "04-26"
+        },
+        "blood_type": "B型",
+        "zodiac": "おうし座",
+        "member_color": "レモンイエロー",
+        "height_cm": 165,
+        "hobbies": "ギター、ゴルフ、初めて探検",
+        "skills": "フィギュアスケート、英語、スペイン語、笑いの絶対音感",
+        "comment": "根暗な明るいオタク、天城サリーです！食も笑顔もアメリカンサイズで頑張ります！"
+      },
+      "character": {
+        "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c7",
+        "name_from_appearance_work": "藤間桜"
+      },
+      "appearance_work": {
+        "22/7": "藤間桜",
+        "TVアニメ": "「ゲーセン少女と異文化交流」（リリー・ベイカー）\n\n「トモちゃんは女の子！ 」(キャロル・オールストン)\n\n「ワールドダイスター」 (カトリナ・グリーベル)\n\n「ぼっち・ざ・ろっく ! 」（清水イライザ、生徒）\n\n「龍族」（リン）\n\n「メダリスト」（胡荒亜子）\n\n「最後にひとつだけお願いしてもよろしいでしょうか」（ローザリア・レイ・マドレーヌ）\n\n「mono」（猪俣先輩(偽・田島)）\n\n「かぐや様は告らせたい～ 天才たちの恋愛頭脳戦～ 」(ベツィー)\n\n「UniteUp!」(香椎はな、香椎さき）\n\n「夜のクラゲは泳げない」（鈴村 あかり）\n\n「やくならマグカップも 二番窯」(ヒメナ)\n\n「擾乱 THE PRINCESS OF SNOW AND BLOOD」(咲月)\n\n「ピーチボーイリバーサイド」 (ベレット)\n\n「ヴィジランテ -僕のヒーローアカデミア ILLEGALS-」（少女）\n\n「ウマ娘 シンデレラグレイ」（アメリカのウマ娘）\n\n「DIVE!!」(小学生)\n\n「Fate/Grand Order- 絶対魔獣戦線バビロニア - 」(子供)\n\n「ヒプノシスマイク - D i v i s i o n Rap Ba t t l e - 」(女性 B)\n\n「3D 彼女 リアルガール」 (女性)\n\n「大福くん」(マンゴー大福ちゃん)\n\n「3D 彼女 リアルガール」(女性)\n\n「豆しば学園 第 6 話」(女子高生)\n\n「真夜中ぱんチ」（綾の友達）\n\n「カッコウの許嫁 Season2」（観客達）\n\n「最強の王様、二度目の人生は何をする？」Season2",
+        "TVドラマ": "「日本統一　関東編」",
+        "劇場アニメ": "「パンドラとアクビ」 (アクビ)\n\n「クスノキの番人」（山ガール）\n\n「フラ・フラダンス」（環奈の後輩⑥）\n\n「岬のマヨイガ」（座敷童）",
+        "ゲーム": "「オーバーウォッチ 2 」 (霧子） - 英語版\n\n「ワールドダイスター 夢のステラリウム」（カトリナ・グリーベル）\n\n「MARVEL」（ペニー・パーカー）※英日どちらも担当\n\n「マギアレコード 魔法少女まどか☆マギカ外伝」（アシュリー・テイラー）\n\n「魔法少女まどか☆マギカ Magia Exedra」（アシュリー・テイラー）\n\n「RATATAN（ラタタン）」（ピョコラッパ）\n\n「22/7 音楽の時間」（藤間桜）\n\n「ブレイブソード ×ブレイズソウル」（バロックフロート）\n\n「魔法司書アリアナ ～七英傑の書～」（ディビーナ・オルデン）\n\n「大悪逆令嬢 ストラテジーオブリリィ」（プリムラ・グレイボルト）\n\n「君は雪間に希う」",
+        "デジタルコミック": "「ラブコメと怪獣退治の不文律」（桜木アンナ）\n\n「マタギの子作り」（又鬼射胡）\n\n「ぼっち・ざ・ろっく!外伝 廣井きくりの深酒日記」（清水イライザ）",
+        "舞台": "「千本桜～令和間引刻～」（2025 年）（初音未來）\n\n「ミュージカル悪ノ娘」（2021 年,2024 年）（ミカエラ）\n\n江戸川乱歩朗読劇「幻調乱歩大系」\n\n「幻調乱歩 4 夜明けに怯える怪機城」",
+        "ラジオ": "ニッポン放送「ANIMEコンシェルジュ」\n\nニッポン放送　ガクのネ「天城サリー(22/7)のBehind the Scene」\n\nニッポン放送「キャロルのふわっとRADIO」\n\nRadiotalk「天城サリーのラジオな時間」\n\n文化放送 超A&G 「くらてん！」\n\nTOKYO FM「22/7 天城サリー 帆風千春の10分で話しきるなんてムズイ！」\n\nInter FM「MUSIClock」\n\nニッポン放送「Anime English Club with Sally Amaki」",
+        "海外イベント": "ジャカルタ「Creators Super Fest 2019 Jakarta」\n\nシカゴ「Anime Central 2024」\n\nシンガポール「AFA Creators Super Fest Singapore 2024」\n\nカナダ「Animethon 2024」\n\nシンガポール「Anime Festival Asia Singapore 2024」\n\nシアトル「Sakura-Con 2025」\n\nジャカルタ「AFA Indonesia 2025」\n\nシンガポール「Anime Festival Asia Singapore 2025」\n\nフロリダ「HolidayMatsuri」",
+        "MC": "「Aniplex Online Fest 2020.2021.2022.2023.2024.2025」(メインMC)\n\n「Crunchyroll Anime Awards 2022,2023,2024,2025,2026」(メインMC)",
+        "その他": "「大福くん」(マンゴー大福ちゃん)\n\n「豆しば学園 第6話」(女子高生)"
+      },
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://twitter.com/sally_amaki"
+        },
+        {
+          "platform": "instagram",
+          "url": "https://www.instagram.com/sallyamaki/"
+        },
+        {
+          "platform": "tiktok",
+          "url": "https://www.tiktok.com/@sally_amaki"
+        },
+        {
+          "platform": "youtube",
+          "url": "https://youtube.com/@sallyamakiofficial"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/fce/b4ea1055824d36f112aec38d69859.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a1",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a12",
+      "official_section": "member",
+      "names": {
+        "ja": "河瀬詩",
+        "kana": "かわせうた"
+      },
+      "profile": {
+        "birthplace": "北海道",
+        "birthday": {
+          "label": "2月27日",
+          "month_day": "02-27"
+        },
+        "blood_type": "O型",
+        "zodiac": "うお座",
+        "member_color": "スカイブルー",
+        "height_cm": 159,
+        "hobbies": "小説を読むこと、ジグゾーパズル、カレー屋さん巡り(スパイスも欧風もエスニックも)",
+        "skills": "ドラム演奏、バランスボールに立つこと",
+        "comment": "いつかシェットランド・シープドッグと暮らすのが夢です。よろしくお願いします！"
+      },
+      "character": {
+        "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c2",
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://twitter.com/kawase_uta_0227"
+        },
+        {
+          "platform": "instagram",
+          "url": "https://instagram.com/kawase_uta"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/1e0/0621a496d1e06df189045f0f31d00.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a12",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a17",
+      "official_section": "member",
+      "names": {
+        "ja": "椎名桜月",
+        "kana": "しいなさつき"
+      },
+      "profile": {
+        "birthplace": "山梨県",
+        "birthday": {
+          "label": "3月27日",
+          "month_day": "03-27"
+        },
+        "blood_type": "O型",
+        "zodiac": "おひつじ座",
+        "member_color": "アクアマリン",
+        "height_cm": 157,
+        "hobbies": "アニメ、漫画、1人カラオケ、女性アイドルを見ること、グッズ収集",
+        "skills": "ギター弾き語り、トロンボーン",
+        "comment": "歌を歌うことが好きです！\n自分らしく、楽しみながら頑張ります〜！"
+      },
+      "character": {
+        "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c13",
+        "name_from_appearance_work": "織原純佳"
+      },
+      "appearance_work": {
+        "22/7": "織原純佳",
+        "声優": "「最後にひとつだけお願いしてもよろしいでしょうか」（女子生徒B）\n\n「カッコウの許嫁Season2」#4（観客役）#11（生徒）\n\n「NEEDY GIRL OVERDOSE」（獄薔薇美血華）",
+        "その他": "『月刊偶像』第七弾 11月号ボーカル\n「riddle mermaid feat. 椎名桜月(22/7)」"
+      },
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://twitter.com/satsuki_shiina"
+        },
+        {
+          "platform": "instagram",
+          "url": "https://instagram.com/shiina_satsuki227"
+        },
+        {
+          "platform": "tiktok",
+          "url": "https://www.tiktok.com/@satsuki_shiina"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/a45/2f5b15131f8d0ba361dd4f42946c7.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a17",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a19",
+      "official_section": "member",
+      "names": {
+        "ja": "月城咲舞",
+        "kana": "つきしろえま"
+      },
+      "profile": {
+        "birthplace": "福岡県",
+        "birthday": {
+          "label": "5月22日",
+          "month_day": "05-22"
+        },
+        "blood_type": "O型",
+        "zodiac": "ふたご座",
+        "member_color": "ルージュ",
+        "height_cm": 156,
+        "hobbies": "スピリチュアル、創作ダンス",
+        "skills": "世界の早口言葉、忍者ジャンプ",
+        "comment": "電撃担当月城咲舞です！必殺ナナニジクラッシュ！"
+      },
+      "character": {
+        "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c18",
+        "name_from_appearance_work": "氷室みず姫"
+      },
+      "appearance_work": {
+        "22/7": "氷室みず姫",
+        "声優": "「カッコウの許嫁Season2」#11（生徒）",
+        "ラジオ": "LOVE FM「22/7のラジオの時間になったっちゃん」"
+      },
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://twitter.com/emma_tsukishiro"
+        },
+        {
+          "platform": "instagram",
+          "url": "https://www.instagram.com/em_matcha227/"
+        },
+        {
+          "platform": "tiktok",
+          "url": "https://www.tiktok.com/@emma_tsukishiro"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/2ed/e0f3f5373fbeb9b87a9aa3d699823.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a19",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a20",
+      "official_section": "member",
+      "names": {
+        "ja": "望月りの",
+        "kana": "もちづきりの"
+      },
+      "profile": {
+        "birthplace": "神奈川県",
+        "birthday": {
+          "label": "3月29日",
+          "month_day": "03-29"
+        },
+        "blood_type": "O型",
+        "zodiac": "おひつじ座",
+        "member_color": "オレンジ",
+        "height_cm": 158,
+        "hobbies": "歌う、絵を描く、怖いものを観ること",
+        "skills": "140dBを出すこと、チアダンス、Y字バランス",
+        "comment": "みんなの心のチアリーダーです!!\nおバカと天才は紙一重らしい!つまりそういうことです!頑張りますっ!"
+      },
+      "character": {
+        "source_url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c15",
+        "name_from_appearance_work": "瀬良穂乃花"
+      },
+      "appearance_work": {
+        "22/7": "瀬良穂乃花",
+        "声優": "「カッコウの許嫁Season2」#4（観客）",
+        "舞台": "「千本桜〜令和間引刻〜」（2025年）（巡音流歌）"
+      },
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://twitter.com/rino_mochizuki"
+        },
+        {
+          "platform": "instagram",
+          "url": "https://instagram.com/cure_rinochi"
+        },
+        {
+          "platform": "tiktok",
+          "url": "https://www.tiktok.com/@cure_rinochi"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/673/c05c5388bd5d9dc99c71495bf4665.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a20",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a21",
+      "official_section": "22/7_the_3rd",
+      "names": {
+        "ja": "折本美玲",
+        "kana": "おりもとみれい"
+      },
+      "profile": {
+        "birthplace": "東京都",
+        "birthday": {
+          "label": "11月3日",
+          "month_day": "11-03"
+        },
+        "blood_type": "A型",
+        "zodiac": "さそり座",
+        "member_color": "藤紫",
+        "height_cm": 170,
+        "hobbies": "食べること、ファッション",
+        "skills": "日本舞踊(12 年間)",
+        "comment": null
+      },
+      "character": {
+        "source_url": null,
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://x.com/mirei_orimoto"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/757/68dd22c5a3403aa24ac5911b44387.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a21",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a22",
+      "official_section": "22/7_the_3rd",
+      "names": {
+        "ja": "北原実咲",
+        "kana": "きたはらみさき"
+      },
+      "profile": {
+        "birthplace": "京都府",
+        "birthday": {
+          "label": "6月5日",
+          "month_day": "06-05"
+        },
+        "blood_type": "A型",
+        "zodiac": "ふたご座",
+        "member_color": "ダークグリーン",
+        "height_cm": 158,
+        "hobbies": "映画鑑賞",
+        "skills": "カラスの鳴きまね",
+        "comment": null
+      },
+      "character": {
+        "source_url": null,
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://x.com/kitahara_misaki"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/4cd/1bb3d9bd4d8829cfe03550293314e.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a22",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a23",
+      "official_section": "22/7_the_3rd",
+      "names": {
+        "ja": "黒崎ありす",
+        "kana": "くろさきありす"
+      },
+      "profile": {
+        "birthplace": "埼玉県",
+        "birthday": {
+          "label": "4月1日",
+          "month_day": "04-01"
+        },
+        "blood_type": "A型",
+        "zodiac": "おひつじ座",
+        "member_color": "藍色",
+        "height_cm": 158,
+        "hobbies": "歌舞伎鑑賞、墨絵（創作）、カメラ",
+        "skills": "書道(準師範)",
+        "comment": null
+      },
+      "character": {
+        "source_url": null,
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://x.com/alice__kurosaki"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/805/f29a262c7b7a812c60ec3f88593c2.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a23",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a24",
+      "official_section": "22/7_the_3rd",
+      "names": {
+        "ja": "橘茉奈",
+        "kana": "たちばなまな"
+      },
+      "profile": {
+        "birthplace": "東京都",
+        "birthday": {
+          "label": "1月21日",
+          "month_day": "01-21"
+        },
+        "blood_type": "O型",
+        "zodiac": "みずがめ座",
+        "member_color": "桃色",
+        "height_cm": 158,
+        "hobbies": "小説風日記(文章を書くこと)",
+        "skills": "新体操",
+        "comment": null
+      },
+      "character": {
+        "source_url": null,
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://x.com/mana__tachibana"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/5e1/664ee877c5f14ac445aec9df3fd02.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a24",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a25",
+      "official_section": "22/7_the_3rd",
+      "names": {
+        "ja": "桧山依子",
+        "kana": "ひやまいこ"
+      },
+      "profile": {
+        "birthplace": "沖縄県",
+        "birthday": {
+          "label": "1月8日",
+          "month_day": "01-08"
+        },
+        "blood_type": "B型",
+        "zodiac": "やぎ座",
+        "member_color": "朱色",
+        "height_cm": 150,
+        "hobbies": "一人〇〇(一人映画、一人ラーメン…)",
+        "skills": "どこでも寝ることができる",
+        "comment": null
+      },
+      "character": {
+        "source_url": null,
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://x.com/iko_hiyama"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/c56/3a5d367b64aeb1305adadfc2d54f4.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a25",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a26",
+      "official_section": "22/7_the_3rd",
+      "names": {
+        "ja": "三雲遥加",
+        "kana": "みくもはるか"
+      },
+      "profile": {
+        "birthplace": "埼玉県",
+        "birthday": {
+          "label": "8月31日",
+          "month_day": "08-31"
+        },
+        "blood_type": "O型",
+        "zodiac": "おとめ座",
+        "member_color": "向日葵色",
+        "height_cm": 150,
+        "hobbies": "アイドルアニメ鑑賞、散歩",
+        "skills": "剣道",
+        "comment": null
+      },
+      "character": {
+        "source_url": null,
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://x.com/haruka_mikumo"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/f3f/f51bbf373cebdda9876d08dbea4c7.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a26",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a27",
+      "official_section": "22/7_the_3rd",
+      "names": {
+        "ja": "南伊織",
+        "kana": "みなみいおり"
+      },
+      "profile": {
+        "birthplace": "東京都",
+        "birthday": {
+          "label": "12月21日",
+          "month_day": "12-21"
+        },
+        "blood_type": "A型",
+        "zodiac": "いて座",
+        "member_color": "鈍色",
+        "height_cm": 163,
+        "hobbies": "漫画を読むこと、バレーボール",
+        "skills": "書道(半紙準誌友、条幅 8 段)、けん玉(宇宙一周)",
+        "comment": null
+      },
+      "character": {
+        "source_url": null,
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://x.com/minami__iori"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/40c/b023e47d0385f4eb4d2ca5c0434d6.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a27",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "a28",
+      "official_section": "22/7_the_3rd",
+      "names": {
+        "ja": "吉沢珠璃",
+        "kana": "よしざわじゅり"
+      },
+      "profile": {
+        "birthplace": "千葉県",
+        "birthday": {
+          "label": "12月1日",
+          "month_day": "12-01"
+        },
+        "blood_type": "A型",
+        "zodiac": "いて座",
+        "member_color": "ルビーレッド",
+        "height_cm": 155,
+        "hobbies": "ミュージカル鑑賞",
+        "skills": "多言語での自己紹介(英語・フランス語・ロシア語)",
+        "comment": null
+      },
+      "character": {
+        "source_url": null,
+        "name_from_appearance_work": null
+      },
+      "appearance_work": null,
+      "sns": [
+        {
+          "platform": "x",
+          "url": "https://x.com/julie_yoshizawa"
+        }
+      ],
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/262/3aea1699ba396bfc2b75259a9e4b4.jpg"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_member_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a28",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    }
+  ]
+}

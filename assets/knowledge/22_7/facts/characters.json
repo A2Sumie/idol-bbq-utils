@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "kind": "22_7_characters",
+  "generated_at": "2026-06-05T08:32:52.668Z",
+  "source_policy": "Official 22/7 mobile pages and Sony Music official JSONP/API pages are authoritative for stored facts. Secondary search results are used only for discovery/cross-check notes unless explicitly promoted later.",
+  "sources": [
+    {
+      "id": "22_7_official_member_seed",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a22?ima=4750",
+      "fetched_at": "2026-06-05T08:32:52.668Z"
+    }
+  ],
+  "count": 7,
+  "items": [
+    {
+      "id": "c17",
+      "names": {
+        "ja": "西浦そら",
+        "romaji": "SORA NISHIURA"
+      },
+      "voice_actor_member": {
+        "id": "a13",
+        "name": "相川奈央"
+      },
+      "profile": {
+        "birthday": {
+          "label": "8月12日",
+          "month_day": "08-12"
+        },
+        "age": "15歳",
+        "blood_type": "O型",
+        "zodiac": "しし座",
+        "height_cm": 159,
+        "birthplace": "東京都",
+        "penlight_color": "ターコイズブルー",
+        "motto": "乗りかけた船には、ためらわずに乗ってしまえ！",
+        "skills": "アコギを弾くこと",
+        "dream": "おばあちゃんになるまで笑って暮らしたい",
+        "likes": "グミ／ショッピング",
+        "dislikes": "辛いもの／虫",
+        "hobbies": "お菓子作り"
+      },
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/795/4f7289ea1eb870eacdcc075aa9b0c.png"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_character_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c17",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "c14",
+      "names": {
+        "ja": "桐生塔子",
+        "romaji": "TOUKO KIRYU"
+      },
+      "voice_actor_member": {
+        "id": "a14",
+        "name": "麻丘真央"
+      },
+      "profile": {
+        "birthday": {
+          "label": "5月10日",
+          "month_day": "05-10"
+        },
+        "age": "15歳",
+        "blood_type": "O型",
+        "zodiac": "おうし座",
+        "height_cm": 154,
+        "birthplace": "東京都",
+        "penlight_color": "若竹色",
+        "motto": "何事もやってみなきゃ分からない！",
+        "skills": "フェンシング",
+        "dream": "幼稚園の先生",
+        "likes": "アナベル",
+        "dislikes": "ホラー映画／カラス",
+        "hobbies": "お抹茶をたてたり、お花を生けたりする事"
+      },
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/5ad/319cdf1335fd5a1c5c72503e646dc.png"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_character_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c14",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "c7",
+      "names": {
+        "ja": "藤間桜",
+        "romaji": "SAKURA FUJIMA"
+      },
+      "voice_actor_member": {
+        "id": "a1",
+        "name": "天城サリー"
+      },
+      "profile": {
+        "birthday": {
+          "label": "3月3日",
+          "month_day": "03-03"
+        },
+        "age": "16歳",
+        "blood_type": "O型",
+        "zodiac": null,
+        "height_cm": 158,
+        "birthplace": "ロサンゼルス",
+        "penlight_color": "レモンイエロー",
+        "motto": "Con pan y vino se anda el camino （パンとワインで進んでゆける）",
+        "skills": "多言語を話す／バレエ／乗馬",
+        "dream": "桜の花のようにみんなを元気にするアイドル",
+        "likes": null,
+        "dislikes": "漢字／ラジオ体操",
+        "hobbies": "クラシック音楽を聴くこと"
+      },
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/481/81a14590eac6da734ba4a81a202a5.png"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_character_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c7",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "c2",
+      "names": {
+        "ja": "斎藤ニコル",
+        "romaji": "NICOLE SAITO"
+      },
+      "voice_actor_member": {
+        "id": "a12",
+        "name": "河瀬詩"
+      },
+      "profile": {
+        "birthday": {
+          "label": "7月7日",
+          "month_day": "07-07"
+        },
+        "age": "16歳",
+        "blood_type": "A型",
+        "zodiac": null,
+        "height_cm": 162,
+        "birthplace": "神奈川県",
+        "penlight_color": "スカイブルー",
+        "motto": "才能は努力できる人間にこそ与えられる",
+        "skills": "ヴァイオリン／ピアノ／ジャンケンが強い",
+        "dream": "完璧なアイドル（夢ではなく目標）",
+        "likes": null,
+        "dislikes": "勉強",
+        "hobbies": "アイドルグッズ、ゆるキャラグッズを集めること"
+      },
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/52f/227d0dc775f70673a2db6448cb6f4.png"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_character_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c2",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "c13",
+      "names": {
+        "ja": "織原純佳",
+        "romaji": "SUMIKA ORIHARA"
+      },
+      "voice_actor_member": {
+        "id": "a17",
+        "name": "椎名桜月"
+      },
+      "profile": {
+        "birthday": {
+          "label": "10月22日",
+          "month_day": "10-22"
+        },
+        "age": "16歳",
+        "blood_type": "O型",
+        "zodiac": "てんびん座",
+        "height_cm": 159,
+        "birthplace": "山梨県",
+        "penlight_color": "アクアマリン",
+        "motto": "焦らない焦らない、一休み一休み",
+        "skills": "ギター弾き語り、トロンボーン、空想",
+        "dream": "看護師",
+        "likes": "甘いもの／可愛いもの",
+        "dislikes": "ブニョブニョした食べ物",
+        "hobbies": "歌うこと、漫画を読むこと、アニメ鑑賞"
+      },
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/8fb/e5d57bec4e79f0e523699b8a526cf.png"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_character_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c13",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "c18",
+      "names": {
+        "ja": "氷室みず姫",
+        "romaji": "MIZUKI HIMURO"
+      },
+      "voice_actor_member": {
+        "id": "a19",
+        "name": "月城咲舞"
+      },
+      "profile": {
+        "birthday": {
+          "label": "12月10日",
+          "month_day": "12-10"
+        },
+        "age": "16歳",
+        "blood_type": "O型",
+        "zodiac": "いて座",
+        "height_cm": 160,
+        "birthplace": "福岡県",
+        "penlight_color": "ルージュ",
+        "motto": "きつい時こそ全力で！",
+        "skills": "ダンス",
+        "dream": "ダンスの楽しさを世界中の子供たちに伝えること",
+        "likes": "秋の果物",
+        "dislikes": "なす／ゴーヤ／レーズン",
+        "hobbies": "腹筋作り"
+      },
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/df8/5a4fd0ddc4026a2c5e7d1fb88e111.png"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_character_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c18",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    },
+    {
+      "id": "c15",
+      "names": {
+        "ja": "瀬良穂乃花",
+        "romaji": "HONOKA SERA"
+      },
+      "voice_actor_member": {
+        "id": "a20",
+        "name": "望月りの"
+      },
+      "profile": {
+        "birthday": {
+          "label": "2月9日",
+          "month_day": "02-09"
+        },
+        "age": "15歳",
+        "blood_type": "O型",
+        "zodiac": "みずがめ座",
+        "height_cm": 155,
+        "birthplace": "神奈川県",
+        "penlight_color": "オレンジ",
+        "motto": "宇宙まるごとふわっと包み込むみんなのパワーアイドル!!",
+        "skills": "チアダンス",
+        "dream": "お城に住むこと!",
+        "likes": "マカロン／チョコレート／ケーキ",
+        "dislikes": "お勉強",
+        "hobbies": "似顔絵描き"
+      },
+      "media": {
+        "image_url": "https://nanabunnonijyuuni-mobile.com/images/4/94e/454fb4adf0f9ae3af88bb2d4c82c4.png"
+      },
+      "sources": [
+        {
+          "id": "22_7_official_character_profile",
+          "type": "official_page",
+          "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/c15",
+          "fetched_at": "2026-06-05T08:32:52.668Z"
+        }
+      ],
+      "verification_status": "official_profile"
+    }
+  ]
+}

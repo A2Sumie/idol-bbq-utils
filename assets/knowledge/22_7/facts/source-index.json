@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "kind": "22_7_source_index",
+  "generated_at": "2026-06-05T08:32:52.668Z",
+  "source_policy": "Official 22/7 mobile pages and Sony Music official JSONP/API pages are authoritative for stored facts. Secondary search results are used only for discovery/cross-check notes unless explicitly promoted later.",
+  "sources": [
+    {
+      "id": "22_7_official_member_seed",
+      "type": "official_page",
+      "url": "https://nanabunnonijyuuni-mobile.com/s/n110/artist/a22?ima=4750",
+      "fetched_at": "2026-06-05T08:32:52.668Z"
+    },
+    {
+      "id": "sony_music_discography_index_api",
+      "type": "official_jsonp_api",
+      "url": "https://www.sonymusic.co.jp/json/v2/artist/nanabunnonijyuuni/discography/start/0/count/100/callback/callback",
+      "fetched_at": "2026-06-05T08:32:52.668Z"
+    },
+    {
+      "id": "sony_music_discography_human_page",
+      "type": "official_page",
+      "url": "https://www.sonymusic.co.jp/artist/nanabunnonijyuuni/discography/",
+      "fetched_at": "2026-06-05T08:32:52.668Z"
+    },
+    {
+      "id": "web_search_discovery",
+      "type": "search_discovery_note",
+      "url": "https://www.google.com/search?q=22%2F7+%E5%85%AC%E5%BC%8F+%E3%83%97%E3%83%AD%E3%83%95%E3%82%A3%E3%83%BC%E3%83%AB+%E3%83%A1%E3%83%B3%E3%83%90%E3%83%BC+%E8%AA%95%E7%94%9F%E6%97%A5",
+      "fetched_at": "2026-06-05T08:32:52.668Z",
+      "note": "Search was used to discover the official mobile member profile URL and to identify secondary sources; secondary sources are not imported as authoritative facts."
+    }
+  ]
+}
