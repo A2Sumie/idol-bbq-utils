@@ -55,6 +55,7 @@ import {
     redactArchiveListForApi,
     redactArchiveUploadResultForApi,
 } from '@/services/archive-admin-redaction-service'
+import { sanitizeArticleForApi, sanitizeArticlesForApi } from '@/services/article-api-redaction-service'
 
 interface ApiConfig {
     port?: number
@@ -105,7 +106,7 @@ interface NetscapeCookieLike {
 function jsonResponse(payload: unknown, status = 200) {
     return new Response(JSON.stringify(payload), {
         status,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
     })
 }
 
@@ -941,7 +942,7 @@ export class APIManager extends BaseCompatibleModel {
             to: to ? Number(to) : undefined,
             limit,
         })
-        return jsonResponse(articles)
+        return jsonResponse(sanitizeArticlesForApi(articles))
     }
 
     private async handleArticleView(url: URL): Promise<Response> {
@@ -960,7 +961,7 @@ export class APIManager extends BaseCompatibleModel {
         if (!article) {
             return new Response('Article not found', { status: 404 })
         }
-        return jsonResponse(article)
+        return jsonResponse(sanitizeArticleForApi(article))
     }
 
     private async handleTasks(url: URL): Promise<Response> {

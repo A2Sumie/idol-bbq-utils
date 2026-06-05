@@ -880,6 +880,66 @@ test('APIManager runtime logs exposes only redacted log metadata and lines', asy
     }
 })
 
+test('APIManager article endpoints preserve content while redacting host paths and secrets', async () => {
+    const originalArticleQuery = DB.Article.query
+    const originalGetSingleArticle = DB.Article.getSingleArticle
+
+    ;(DB.Article as any).query = async () => [
+        {
+            id: 1,
+            platform: Platform.X,
+            a_id: 'article-a',
+            content: 'visible article content',
+            url: 'https://example.test/article-a',
+            media: [{ type: 'photo', url: 'https://cdn.example.test/a.jpg', path: '/tmp/private-a.jpg' }],
+            extra: { api_key: 'private-api-key' },
+        },
+    ]
+    ;(DB.Article as any).getSingleArticle = async () => ({
+        id: 1,
+        platform: Platform.X,
+        a_id: 'article-a',
+        content: 'visible article content',
+        url: 'https://example.test/article-a',
+        media: [{ type: 'photo', url: 'https://cdn.example.test/a.jpg', path: '/tmp/private-a.jpg' }],
+        extra: { nested: { cookie: 'private-cookie', localPath: '/home/sumie/private-extra.json' } },
+    })
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const listResponse = await (manager as any).handleArticleList(new URL('http://localhost/api/articles?limit=10'))
+        const detailResponse = await (manager as any).handleArticleView(new URL('http://localhost/api/articles/x/1'))
+        const listPayload = await listResponse.json()
+        const detailPayload = await detailResponse.json()
+        const serialized = JSON.stringify({ listPayload, detailPayload })
+
+        expect(listResponse.headers.get('Cache-Control')).toBe('no-store')
+        expect(listPayload[0].content).toBe('visible article content')
+        expect(listPayload[0].url).toBe('https://example.test/article-a')
+        expect(listPayload[0].media[0].url).toBe('https://cdn.example.test/a.jpg')
+        expect(listPayload[0].media[0].path).toBe('[redacted]')
+        expect(detailPayload.media[0].path).toBe('[redacted]')
+        expect(detailPayload.extra.nested.cookie).toBe('[redacted]')
+        expect(detailPayload.extra.nested.localPath).toBe('[redacted]')
+        expect(serialized).not.toContain('/tmp/private-a.jpg')
+        expect(serialized).not.toContain('/home/sumie/private-extra.json')
+        expect(serialized).not.toContain('private-api-key')
+        expect(serialized).not.toContain('private-cookie')
+    } finally {
+        ;(DB.Article as any).query = originalArticleQuery
+        ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
+    }
+})
+
 test('APIManager records notification signals in api-only shadow mode without dispatching crawlers', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
