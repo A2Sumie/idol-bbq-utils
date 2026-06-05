@@ -645,19 +645,23 @@ test('SpiderPools exportCrawlerCookies can audit without seeding configured cook
     const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-cookie-export-readonly', new EventEmitter())
     let setCookieCalls = 0
     let gotoCalls = 0
+    const pageRequests: Array<any> = []
     ;(pools as any).browserPool = {
-        createPage: async () => ({
-            browserContext: () => ({
-                cookies: async () => [],
-                setCookie: async () => {
-                    setCookieCalls += 1
+        createPage: async (request: any) => {
+            pageRequests.push(request)
+            return {
+                browserContext: () => ({
+                    cookies: async () => [],
+                    setCookie: async () => {
+                        setCookieCalls += 1
+                    },
+                }),
+                goto: async () => {
+                    gotoCalls += 1
                 },
-            }),
-            goto: async () => {
-                gotoCalls += 1
-            },
-            close: async () => undefined,
-        }),
+                close: async () => undefined,
+            }
+        },
     }
 
     await expect(
@@ -666,6 +670,7 @@ test('SpiderPools exportCrawlerCookies can audit without seeding configured cook
                 name: 'x-list',
                 origin: 'https://x.com',
                 cfg_crawler: {
+                    browser_mode: 'headed-xvfb',
                     session_profile: 'x-main',
                     cookie_file: '/tmp/seed-would-be-used.txt',
                 },
@@ -673,9 +678,59 @@ test('SpiderPools exportCrawlerCookies can audit without seeding configured cook
             {
                 seedConfiguredCookieFile: false,
                 visit: false,
+                browserModeOverride: 'headless',
             },
         ),
     ).rejects.toThrow(CrawlerCookieExportError)
+    expect(pageRequests[0]?.browser_mode).toBe('headless')
     expect(setCookieCalls).toBe(0)
     expect(gotoCalls).toBe(0)
+})
+
+test('SpiderPools exportCrawlerCookies reports safe browser page creation failures', async () => {
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-cookie-export-browser-fail', new EventEmitter())
+    ;(pools as any).browserPool = {
+        createPage: async () => {
+            throw new Error('/private/profile/path is intentionally hidden')
+        },
+    }
+
+    let exportError: any
+    try {
+        await pools.exportCrawlerCookies({
+            name: 'x-backfill',
+            origin: 'https://x.com',
+            cfg_crawler: {
+                browser_mode: 'headed-xvfb',
+                session_profile: 'x-main',
+            },
+        })
+    } catch (error) {
+        exportError = error
+    }
+
+    expect(exportError).toBeInstanceOf(CrawlerCookieExportError)
+    expect(exportError.code).toBe('crawler_cookie_browser_page_failed')
+    expect(exportError.publicDetails).toMatchObject({
+        cookie_count: 0,
+        domains: ['x.com', 'twitter.com', 'api.x.com'],
+        required_cookie_names: {
+            present: [],
+            missing: ['auth_token', 'ct0'],
+        },
+        browser: {
+            session_profile: 'x-main',
+            configured_browser_mode: 'headed-xvfb',
+            effective_browser_mode: 'headed-xvfb',
+            device_profile: 'desktop_chrome',
+        },
+        error_name: 'Error',
+        live_probe: {
+            checked: false,
+            status: 'skipped',
+            diagnostic_codes: ['browser_page_not_created'],
+            http_status: null,
+        },
+    })
+    expect(JSON.stringify(exportError.publicDetails)).not.toContain('/private/profile/path')
 })

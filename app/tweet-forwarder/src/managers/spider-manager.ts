@@ -4,6 +4,7 @@ import {
     spiderRegistry,
     parseNetscapeCookieToPuppeteerCookie,
 } from '@idol-bbq-utils/spider'
+import type { BrowserMode } from '@idol-bbq-utils/spider'
 import { Page } from 'puppeteer-core'
 import { CronJob } from 'cron'
 import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
@@ -96,6 +97,7 @@ interface CrawlerCookieExportOptions {
     validateLiveProbe?: boolean
     seedConfiguredCookieFile?: boolean
     visit?: boolean
+    browserModeOverride?: BrowserMode
     fetch?: typeof fetch
     timeoutMs?: number
 }
@@ -764,6 +766,12 @@ class SpiderPools extends BaseCompatibleModel {
         cookies: Array<BrowserCookieSnapshot>
         visitedUrl: string
         sessionProfile: string | null
+        browser: {
+            session_profile: string | null
+            configured_browser_mode: BrowserMode | null
+            effective_browser_mode: BrowserMode | null
+            device_profile: string | null
+        }
         domains: Array<string>
         platformHint: CookieHealthPlatform
         requiredCookieNames: {
@@ -795,18 +803,63 @@ class SpiderPools extends BaseCompatibleModel {
         const platformHint =
             crawlerPlatformHint === 'unknown' ? toCookieHealthPlatformFromSpiderPlatform(platform) : crawlerPlatformHint
         const browserRequest = this.resolveBrowserRequest(crawler.cfg_crawler, url, platform)
+        const effectiveBrowserRequest = options.browserModeOverride
+            ? {
+                  ...browserRequest,
+                  browser_mode: options.browserModeOverride,
+              }
+            : browserRequest
+        const browserDetails = {
+            session_profile: effectiveBrowserRequest.session_profile || null,
+            configured_browser_mode: browserRequest.browser_mode || null,
+            effective_browser_mode: effectiveBrowserRequest.browser_mode || null,
+            device_profile: effectiveBrowserRequest.device_profile || null,
+        }
         if (!browserRequest.session_profile) {
             throw new CrawlerCookieExportError(
                 `Crawler ${crawler.name || visitedUrl} is missing session_profile`,
                 'crawler_cookie_session_profile_missing',
+                {
+                    cookie_count: 0,
+                    domains: [],
+                    required_cookie_names: summarizeRequiredCookieNames(platformHint, []),
+                    browser: browserDetails,
+                    live_probe: {
+                        checked: false,
+                        status: 'skipped',
+                        diagnostic_codes: ['browser_session_profile_missing'],
+                        http_status: null,
+                    },
+                },
             )
         }
 
         const targetDomains = this.resolveCookieDomains(websites, platform)
-        const page = await this.browserPool.createPage({
-            ...browserRequest,
-            user_agent: crawler.cfg_crawler?.user_agent,
-        })
+        let page: Page
+        try {
+            page = await this.browserPool.createPage({
+                ...effectiveBrowserRequest,
+                user_agent: crawler.cfg_crawler?.user_agent,
+            })
+        } catch (error) {
+            throw new CrawlerCookieExportError(
+                `Browser session ${effectiveBrowserRequest.session_profile} failed to create a page for cookie export`,
+                'crawler_cookie_browser_page_failed',
+                {
+                    cookie_count: 0,
+                    domains: targetDomains,
+                    required_cookie_names: summarizeRequiredCookieNames(platformHint, []),
+                    browser: browserDetails,
+                    error_name: error instanceof Error ? error.name : typeof error,
+                    live_probe: {
+                        checked: false,
+                        status: 'skipped',
+                        diagnostic_codes: ['browser_page_not_created'],
+                        http_status: null,
+                    },
+                },
+            )
+        }
 
         try {
             const existingCookies = await page.browserContext().cookies()
@@ -868,6 +921,7 @@ class SpiderPools extends BaseCompatibleModel {
                         cookie_count: filteredCookies.length,
                         domains: targetDomains,
                         required_cookie_names: requiredCookieNames,
+                        browser: browserDetails,
                         live_probe: {
                             checked: false,
                             status: 'skipped',
@@ -895,6 +949,7 @@ class SpiderPools extends BaseCompatibleModel {
                             cookie_count: filteredCookies.length,
                             domains: targetDomains,
                             required_cookie_names: requiredCookieNames,
+                            browser: browserDetails,
                             live_probe: {
                                 checked: true,
                                 status: liveProbe.status,
@@ -910,6 +965,7 @@ class SpiderPools extends BaseCompatibleModel {
                 cookies: filteredCookies,
                 visitedUrl,
                 sessionProfile: browserRequest.session_profile || null,
+                browser: browserDetails,
                 domains: targetDomains,
                 platformHint,
                 requiredCookieNames,

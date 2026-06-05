@@ -11,6 +11,7 @@ import type { AppConfig, Crawler } from '../src/types'
 
 type OutputFormat = 'summary' | 'json'
 type AuditStatus = 'ok' | 'warn' | 'fail' | 'skipped'
+type AuditBrowserMode = 'headless' | 'headed-xvfb'
 
 type Args = {
     configPath: string
@@ -20,13 +21,14 @@ type Args = {
     validateLive: boolean
     seedConfiguredCookieFile: boolean
     visit: boolean
+    browserMode?: AuditBrowserMode
     timeoutMs: number
 }
 
 const DEFAULT_PLATFORMS: Array<CookieHealthPlatform> = ['x', 'instagram', 'tiktok']
 
 function usage() {
-    return `Usage: bun app/tweet-forwarder/scripts/crawler-cookie-export-audit.ts [--config <path>] [--format summary|json] [--platform x,instagram,tiktok] [--crawler <id-or-name>] [--timeout-ms <ms>] [--no-live-validation] [--seed-configured-cookie-file] [--visit]
+    return `Usage: bun app/tweet-forwarder/scripts/crawler-cookie-export-audit.ts [--config <path>] [--format summary|json] [--platform x,instagram,tiktok] [--crawler <id-or-name>] [--browser-mode headless|headed-xvfb] [--timeout-ms <ms>] [--no-live-validation] [--seed-configured-cookie-file] [--visit]
 
 Runs a no-secret browser-profile cookie export audit. By default it does not
 write cookie files, does not seed from configured cookie files, and does not
@@ -57,6 +59,7 @@ function parseArgs(argv: Array<string>): Args {
         validateLive: true,
         seedConfiguredCookieFile: false,
         visit: false,
+        browserMode: undefined,
         timeoutMs: 15_000,
     }
 
@@ -76,6 +79,15 @@ function parseArgs(argv: Array<string>): Args {
         }
         if (key === '--visit') {
             args.visit = true
+            continue
+        }
+        if (key === '--browser-mode') {
+            const value = argv[index + 1] as AuditBrowserMode | undefined
+            if (value !== 'headless' && value !== 'headed-xvfb') {
+                throw new Error('--browser-mode must be headless or headed-xvfb')
+            }
+            args.browserMode = value
+            index += 1
             continue
         }
         if (key === '--config') {
@@ -225,6 +237,7 @@ async function main() {
                     validateLiveProbe: args.validateLive,
                     seedConfiguredCookieFile: args.seedConfiguredCookieFile,
                     visit: args.visit,
+                    browserModeOverride: args.browserMode,
                     timeoutMs: args.timeoutMs,
                 })
                 results.push({
@@ -235,6 +248,7 @@ async function main() {
                     diagnostic_codes: snapshot.liveProbe?.diagnostic_codes || [],
                     cookie_count: snapshot.cookies.length,
                     session_profile: snapshot.sessionProfile,
+                    browser: snapshot.browser,
                     domains: snapshot.domains,
                     required_cookie_names: snapshot.requiredCookieNames,
                     live_probe: snapshot.liveProbe,
@@ -258,6 +272,12 @@ async function main() {
                     diagnostic_codes: diagnosticCodes,
                     cookie_count: Number(details.cookie_count || 0),
                     session_profile: crawler.cfg_crawler?.session_profile || null,
+                    browser: details.browser || {
+                        session_profile: crawler.cfg_crawler?.session_profile || null,
+                        configured_browser_mode: crawler.cfg_crawler?.browser_mode || null,
+                        effective_browser_mode: args.browserMode || crawler.cfg_crawler?.browser_mode || null,
+                        device_profile: crawler.cfg_crawler?.device_profile || null,
+                    },
                     domains: Array.isArray(details.domains) ? details.domains : [],
                     required_cookie_names: details.required_cookie_names || {
                         present: [],
@@ -279,6 +299,7 @@ async function main() {
             validate_live: args.validateLive,
             seed_configured_cookie_file: args.seedConfiguredCookieFile,
             visit: args.visit,
+            browser_mode_override: args.browserMode || null,
             timeout_ms: args.timeoutMs,
         },
         counts: {
