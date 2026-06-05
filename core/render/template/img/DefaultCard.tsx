@@ -402,12 +402,13 @@ export function resolve227WebsiteBrandKey(article: Pick<Article, 'platform' | 'e
 function getPlatformBadge(article: Article) {
     const websiteBrandKey = resolve227WebsiteBrandKey(article)
     if (!websiteBrandKey) {
+        const platformBadge = SVG[article.platform] || SVG[Platform.X]
         return {
             layers: [
                 {
                     width: DEFAULT_PLATFORM_BADGE_WIDTH,
-                    ratio: SVG[article.platform].ratio,
-                    icon: SVG[article.platform].icon,
+                    ratio: platformBadge.ratio,
+                    icon: platformBadge.icon,
                     opacity: 0.2,
                     right: 16,
                     top: 16,
@@ -1044,6 +1045,9 @@ function estimateImagesHeight(media: Exclude<Article['media'], null>, level: num
         return 0
     }
     const rows = layoutMediaRows(media, level)
+    if (rows.length === 0) {
+        return 0
+    }
     return (
         rows.reduce((sum, row) => sum + Math.max(...row.map((tile) => tile.height)), 0) +
         Math.max(0, rows.length - 1) * MEDIA_GAP

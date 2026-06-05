@@ -629,6 +629,82 @@ describe('RenderService text-card', () => {
         }
     })
 
+    test('tolerates media handlers that return null files', async () => {
+        const service = new RenderService()
+        ;(service as any).handleMedia = async () => ({
+            files: null,
+            skipReason: undefined,
+        })
+
+        const result = await service.process(
+            {
+                id: 16,
+                a_id: 'null-media-files-card',
+                u_id: 'member',
+                username: 'member',
+                created_at: 1710000000,
+                content: 'media handler returned null files',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/member/status/null-media-files-card',
+                type: 'tweet',
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: SAMPLE_PNG_DATA_URL }],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.X,
+            } as any,
+            {
+                taskId: 'test-null-media-files-card',
+                render_type: 'text-card',
+                mediaConfig: {
+                    type: 'no-storage',
+                    use: {
+                        tool: MediaToolEnum.DEFAULT,
+                    },
+                },
+            },
+        )
+
+        expect(result.originalMediaFiles).toEqual([])
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
+
+    test('renders a card with a fallback badge for unknown platform values', async () => {
+        const service = new RenderService()
+        const result = await service.process(
+            {
+                id: 17,
+                a_id: 'unknown-platform-card',
+                u_id: 'member',
+                username: 'member',
+                created_at: 1710000000,
+                content: 'unknown platform should still render',
+                translation: null,
+                translated_by: null,
+                url: 'https://example.com/unknown-platform-card',
+                type: 'post',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: 999,
+            } as any,
+            {
+                taskId: 'test-unknown-platform-card',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
+
     test('renders progressive jpeg media inside the card instead of a gray tile', async () => {
         const service = new RenderService()
         const result = await service.process(

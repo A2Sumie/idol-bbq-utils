@@ -141,8 +141,8 @@ export class RenderService {
         // 1. Download/Handle Media Files
         if (mediaConfig) {
             const mediaResult = await this.handleMedia(taskId, cloned_article, mediaConfig, effectiveDeduplication)
-            maybe_media_files = [...maybe_media_files, ...mediaResult.files]
-            skipReason = mediaResult.skipReason
+            maybe_media_files = [...maybe_media_files, ...(Array.isArray(mediaResult?.files) ? mediaResult.files : [])]
+            skipReason = mediaResult?.skipReason
         }
 
         let text = ''
@@ -754,7 +754,7 @@ export class RenderService {
                         try {
                             const path = await plainDownloadMediaFile(url, taskId, {
                                 cookie: cookie || '',
-                                ...(currentArticle?.platform ? platformPresetHeadersMap[currentArticle.platform] : {}),
+                                ...((currentArticle?.platform && platformPresetHeadersMap[currentArticle.platform]) || {}),
                             })
 
                             files.push(await finalizeDownloadedFile(path, url, overrideType ? undefined : type))

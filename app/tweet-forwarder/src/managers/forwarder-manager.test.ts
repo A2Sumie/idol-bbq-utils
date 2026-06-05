@@ -4718,6 +4718,7 @@ test('sendArticles fills missing translations before rendering translated summar
     ])
     const originalText = packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[0]?.text || ''
     const translatedText = packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text || ''
+    expect(packedArticles[1]?.content).toContain('译:この後19:00〜 バースデーSHOWROOM配信スタート')
     expect(originalText).toContain('この後19:00〜 バースデーSHOWROOM配信スタート')
     expect(originalText).not.toContain('译:')
     expect(translatedText).toContain('译:この後19:00〜 バースデーSHOWROOM配信スタート')
@@ -6695,6 +6696,187 @@ test('idle-first translated summary-card targets append companion card to native
     expect(renderProcessCalls).toHaveLength(2)
     expect(renderProcessCalls[1]?.config?.card_features).toEqual(['media-contain', 'translated-corner-badge'])
     expect(cleanupPaths).toContain('/tmp/native-translated-card.png')
+    expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
+})
+
+test('idle-first translated native companion translates missing article text before rendering', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const processCalls: string[] = []
+    const articleUpdates: Array<{ id: number; platform: Platform; patch: any }> = []
+    const originalCreateProcessor = (processorRegistry as any).create
+    const originalArticleUpdate = (DB.Article as any).update
+    ;(processorRegistry as any).create = async () => ({
+        NAME: 'fake-native-translator',
+        process: async (text: string) => {
+            processCalls.push(text)
+            return `译:${text}`
+        },
+        drop: async () => undefined,
+    })
+    ;(DB.Article as any).update = async (id: number, platform: Platform, patch: any) => {
+        articleUpdates.push({ id, platform, patch })
+        return { id, ...patch }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.OpenAI,
+                    api_key: 'test-key',
+                    cfg_processor: {
+                        action: 'translate',
+                    },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: true,
+                send_first_native: true,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                    processor_id: '22_7-social-ja-zh',
+                },
+            },
+        } as any,
+        'target-summary-card-native-first-translated-on-demand',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const sourceMedia = {
+        media_type: 'photo',
+        path: '/tmp/native-on-demand-source.jpg',
+        sourceArticleId: 'summary-native-on-demand',
+        sourceUrl: 'https://example.com/native-on-demand-source.jpg',
+        content_hash: 'native-on-demand-source-hash',
+    }
+    const originalCard = { media_type: 'photo', path: '/tmp/native-on-demand-original-card.png' }
+    const translatedCard = { media_type: 'photo', path: '/tmp/native-on-demand-translated-card.png' }
+    const renderProcessCalls: Array<{ article: any; config: any }> = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            renderProcessCalls.push({ article, config })
+            const translated = config?.card_features?.includes('translated-corner-badge')
+            if (translated) {
+                expect(article.content).toBe('译:native text without stored translation')
+                expect(article.media?.[0]?.alt).toBe('译:native image alt')
+                expect(article.translation).toBeNull()
+                expect(article.extra?.data?.translated_badge_label).toBe('译文')
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [translatedCard],
+                    originalMediaFiles: config?.preloadedMediaFiles || [],
+                    mediaFiles: [...(config?.preloadedMediaFiles || []), translatedCard],
+                }
+            }
+            return {
+                text: article.content,
+                textCollapseMode: 'article',
+                cardMediaFiles: [originalCard],
+                originalMediaFiles: [sourceMedia],
+                mediaFiles: [sourceMedia, originalCard],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-native-on-demand',
+            [
+                {
+                    id: 840,
+                    a_id: 'summary-native-on-demand',
+                    platform: Platform.X,
+                    username: 'native member',
+                    u_id: 'native_member',
+                    content: 'native text without stored translation',
+                    translation: null,
+                    translated_by: null,
+                    url: 'https://x.com/native_member/status/840',
+                    type: 'tweet',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: null,
+                    has_media: true,
+                    media: [
+                        {
+                            type: 'photo',
+                            url: 'https://example.com/native-on-demand-source.jpg',
+                            alt: 'native image alt',
+                        },
+                    ],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card', card_features: ['media-contain'] } as any,
+        )
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+        ;(DB.Article as any).update = originalArticleUpdate
+    }
+
+    expect(processCalls).toEqual(['native text without stored translation', 'native image alt'])
+    expect(articleUpdates).toEqual([
+        {
+            id: 840,
+            platform: Platform.X,
+            patch: {
+                translation: '译:native text without stored translation',
+                translated_by: 'fake-native-translator',
+                media: [
+                    {
+                        type: 'photo',
+                        url: 'https://example.com/native-on-demand-source.jpg',
+                        alt: 'native image alt',
+                        translation: '译:native image alt',
+                        translated_by: 'fake-native-translator',
+                    },
+                ],
+            },
+        },
+    ])
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.props?.cardMedia).toEqual([originalCard, translatedCard])
+    expect(renderProcessCalls).toHaveLength(2)
     expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
 })
 
