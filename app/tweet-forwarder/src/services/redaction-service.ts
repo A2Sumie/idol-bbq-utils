@@ -1,4 +1,5 @@
-const SENSITIVE_KEY_PATTERN = /(secret|token|password|passwd|cookie|sessdata|bili_jct|csrf|auth|waf_bypass)/i
+const SENSITIVE_KEY_PATTERN =
+    /(secret|token|password|passwd|cookie|sessdata|bili_jct|csrf|auth|waf_bypass|api[_-]?key)/i
 
 function redactSecrets<T>(value: T): T {
     if (Array.isArray(value)) {

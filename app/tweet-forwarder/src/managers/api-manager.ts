@@ -39,6 +39,7 @@ import { redactSecrets } from '@/services/redaction-service'
 import { buildNotificationSignalRecord, type NotificationSignalInput } from '@/services/notification-signal-service'
 import { buildNotificationSignalSummary } from '@/services/notification-signal-summary-service'
 import { redactTaskQueueEntriesForApi } from '@/services/task-queue-redaction-service'
+import { redactProcessorRunsForApi } from '@/services/processor-run-redaction-service'
 
 interface ApiConfig {
     port?: number
@@ -980,7 +981,7 @@ export class APIManager extends BaseCompatibleModel {
     private async handleProcessorRuns(url: URL): Promise<Response> {
         const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '100'), 200))
         const source_ref = url.searchParams.get('source_ref') || undefined
-        return jsonResponse(await DB.ProcessorRun.list(limit, source_ref))
+        return jsonResponse(redactProcessorRunsForApi(await DB.ProcessorRun.list(limit, source_ref)))
     }
 
     private async handleArchiveList(url: URL): Promise<Response> {

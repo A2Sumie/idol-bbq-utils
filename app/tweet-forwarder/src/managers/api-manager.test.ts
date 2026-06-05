@@ -378,6 +378,202 @@ test('APIManager task list redacts notification signal payload identity fields',
     }
 })
 
+test('APIManager task list redacts non-notification payloads and metadata', async () => {
+    const originalTaskList = DB.TaskQueue.list
+
+    ;(DB.TaskQueue as any).list = async () => [
+        {
+            id: 1,
+            type: DB.TaskQueue.TYPE.ArticleSimulate,
+            status: 'completed',
+            source_ref: '1:private-article',
+            idempotency_key: 'private-idempotency-key',
+            last_error: 'private last error',
+            result_summary: 'private simulated result summary',
+            payload: {
+                platform: 1,
+                a_id: 'private-article',
+                u_id: 'private-member',
+                username: 'private username',
+                content: 'private simulated content',
+                url: 'https://example.test/private-article',
+                mediaUrls: ['https://example.test/private-media.jpg'],
+                processWithCrawler: true,
+                crawlerName: 'private crawler',
+            },
+        },
+        {
+            id: 2,
+            type: DB.TaskQueue.TYPE.ProcessorRun,
+            status: 'failed',
+            source_ref: 'manual:text',
+            payload: {
+                processorId: 'private processor',
+                action: 'plan',
+                text: 'private processor text',
+                scheduleUrl: 'https://scheduler.example/private',
+                scheduleApiKey: 'private-schedule-api-key',
+            },
+        },
+    ]
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).handleTasks(new URL('http://localhost/api/tasks?limit=20'))
+        expect(response.status).toBe(200)
+        const tasks = await response.json()
+        const serialized = JSON.stringify(tasks)
+
+        expect(tasks[0]).toMatchObject({
+            source_ref: '[redacted]',
+            idempotency_key: '[redacted]',
+            last_error: '[redacted]',
+            result_summary: {
+                redacted_summary: true,
+                summary_present: true,
+                summary_type: 'string',
+                summary_length: 'private simulated result summary'.length,
+            },
+            payload: {
+                redacted_payload: true,
+                content_present: true,
+                url_present: true,
+                media_url_count: 1,
+                crawler_name_present: true,
+            },
+        })
+        expect(tasks[1]).toMatchObject({
+            source_ref: '[redacted]',
+            payload: {
+                redacted_payload: true,
+                processor_id_present: true,
+                action: 'plan',
+                text_present: true,
+                schedule_url_present: true,
+                schedule_api_key_present: true,
+            },
+        })
+        expect(serialized).not.toContain('private simulated content')
+        expect(serialized).not.toContain('private processor text')
+        expect(serialized).not.toContain('private-schedule-api-key')
+        expect(serialized).not.toContain('scheduler.example')
+        expect(serialized).not.toContain('private-member')
+        expect(serialized).not.toContain('private-article')
+        expect(serialized).not.toContain('private crawler')
+        expect(serialized).not.toContain('private processor')
+        expect(serialized).not.toContain('private last error')
+        expect(serialized).not.toContain('private simulated result summary')
+    } finally {
+        ;(DB.TaskQueue as any).list = originalTaskList
+    }
+})
+
+test('APIManager processor run list redacts input output and source refs', async () => {
+    const originalProcessorRunList = DB.ProcessorRun.list
+    const calls: any[] = []
+
+    ;(DB.ProcessorRun as any).list = async (limit: number, sourceRef?: string) => {
+        calls.push({ limit, sourceRef })
+        return [
+            {
+                id: 1,
+                processor_id: 'processor-a',
+                action: 'plan',
+                source_type: 'text',
+                source_ref: 'manual:private-source',
+                status: 'completed',
+                input: {
+                    request: {
+                        text: 'private request text',
+                        scheduleUrl: 'https://scheduler.example/private',
+                        scheduleApiKey: 'private-schedule-api-key',
+                    },
+                    text: 'private processor input text',
+                },
+                output: {
+                    raw: 'private raw output',
+                    parsed: {
+                        title: 'private parsed title',
+                    },
+                    selected: {
+                        payload: 'private selected payload',
+                    },
+                    result_key: 'plans',
+                    schedules: [
+                        {
+                            body: 'private schedule response',
+                        },
+                    ],
+                },
+                error: 'private error',
+            },
+        ]
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).handleProcessorRuns(
+            new URL('http://localhost/api/processor-runs?limit=999&source_ref=manual%3Aprivate-source'),
+        )
+        expect(response.status).toBe(200)
+        const runs = await response.json()
+        const serialized = JSON.stringify(runs)
+
+        expect(calls).toEqual([{ limit: 200, sourceRef: 'manual:private-source' }])
+        expect(runs[0]).toMatchObject({
+            source_ref: '[redacted]',
+            input: {
+                redacted_input: true,
+                request: {
+                    has_request: true,
+                    text_present: true,
+                    schedule_url_present: true,
+                    schedule_api_key_present: true,
+                },
+                text_present: true,
+            },
+            output: {
+                redacted_output: true,
+                raw_present: true,
+                parsed_present: true,
+                selected_present: true,
+                schedule_count: 1,
+            },
+            error: '[redacted]',
+        })
+        expect(serialized).not.toContain('manual:private-source')
+        expect(serialized).not.toContain('private request text')
+        expect(serialized).not.toContain('private processor input text')
+        expect(serialized).not.toContain('private raw output')
+        expect(serialized).not.toContain('private parsed title')
+        expect(serialized).not.toContain('private selected payload')
+        expect(serialized).not.toContain('private-schedule-api-key')
+        expect(serialized).not.toContain('scheduler.example')
+        expect(serialized).not.toContain('private schedule response')
+        expect(serialized).not.toContain('private error')
+    } finally {
+        ;(DB.ProcessorRun as any).list = originalProcessorRunList
+    }
+})
+
 test('APIManager notification signal summary returns no-secret observation metrics', async () => {
     const originalTaskList = DB.TaskQueue.list
     const calls: any[] = []

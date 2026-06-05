@@ -25,6 +25,17 @@ function makeConfig(summaryCard: Record<string, unknown> = {}) {
                 name: 'formatter a',
             },
         ],
+        processors: [
+            {
+                id: 'processor-a',
+                provider: 'noop',
+                api_key: 'model-api-key',
+                cfg_processor: {
+                    schedule_api_key: 'schedule-api-key',
+                    result_key: 'safe.result',
+                },
+            },
+        ],
         forward_targets: [
             {
                 id: 'target-qq',
@@ -68,6 +79,8 @@ test('buildConfigAudit exposes policy evidence without secret values', () => {
         'api.secret',
         'crawlers[0].cfg_crawler.cookie_file',
         'forward_targets[0].cfg_platform.token',
+        'processors[0].api_key',
+        'processors[0].cfg_processor.schedule_api_key',
     ])
     expect(audit.route_graph.counts.routes).toBe(1)
     expect(audit.cookie_audit.counts).toMatchObject({
@@ -87,6 +100,8 @@ test('buildConfigAudit exposes policy evidence without secret values', () => {
 
     expect(serialized).not.toContain('test-secret')
     expect(serialized).not.toContain('bot-token')
+    expect(serialized).not.toContain('model-api-key')
+    expect(serialized).not.toContain('schedule-api-key')
     expect(serialized).not.toContain('/tmp/private-cookies.txt')
     expect(serialized).toContain('api.secret')
 })
@@ -162,7 +177,7 @@ test('buildRuntimeManifest uses no-secret config hashes and route counts', () =>
 
     expect(manifest.config.hash).toBe(manifest.config.redacted_hash)
     expect(manifest.config.policy_hash).toMatch(/^[a-f0-9]{64}$/)
-    expect(manifest.config.secret_field_count).toBe(3)
+    expect(manifest.config.secret_field_count).toBe(5)
     expect(manifest.config.raw_file_hash_present).toBe(false)
     expect(manifest.config.route_graph_counts).toMatchObject({
         routes: 1,
@@ -170,5 +185,7 @@ test('buildRuntimeManifest uses no-secret config hashes and route counts', () =>
     })
     expect(serialized).not.toContain('test-secret')
     expect(serialized).not.toContain('bot-token')
+    expect(serialized).not.toContain('model-api-key')
+    expect(serialized).not.toContain('schedule-api-key')
     expect(serialized).not.toContain('/tmp/private-cookies.txt')
 })
