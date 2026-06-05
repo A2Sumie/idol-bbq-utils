@@ -422,8 +422,8 @@ test('APIManager records notification signals in api-only shadow mode without di
             success: true,
             mode: 'shadow',
             platform: 'instagram',
-            source_ref: 'notification:instagram:sakura.member',
             taskQueueId: 91,
+            matched_crawler_count: 1,
             matched_crawlers: [
                 {
                     crawler_id: 'ig-sakura',
@@ -433,6 +433,11 @@ test('APIManager records notification signals in api-only shadow mode without di
             ],
             would_trigger_crawlers: false,
         })
+        const serialized = JSON.stringify(payload)
+        expect(serialized).not.toContain('sakura.member')
+        expect(serialized).not.toContain('notification:instagram')
+        expect(serialized).not.toContain('private notification title')
+        expect(serialized).not.toContain('private notification body')
 
         expect(taskAdds).toHaveLength(1)
         expect(taskAdds[0].type).toBe('notification_signal')
@@ -532,7 +537,7 @@ test('APIManager ignores notification signals when notification shadow intake is
             success: false,
             mode: 'disabled',
             platform: 'x',
-            source_ref: 'notification:x:227_staff',
+            matched_crawler_count: 1,
             matched_crawlers: [
                 {
                     crawler_id: 'x-staff',
