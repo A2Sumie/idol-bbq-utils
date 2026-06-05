@@ -162,9 +162,11 @@ IDOL_BBQ_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" IDOL_BBQ_OUTBOUND_SEND_MODE="$DEPLO
         up --no-start --force-recreate --no-build "$COMPOSE_SERVICE"
 docker update --restart=no "$CONTAINER_NAME" >/dev/null
 status="$(docker inspect "$CONTAINER_NAME" --format 'status={{.State.Status}} running={{.State.Running}} restart={{.HostConfig.RestartPolicy.Name}} image={{.Image}}')"
+stop_timeout="$(docker inspect "$CONTAINER_NAME" --format '{{.Config.StopTimeout}}')"
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
 outbound_send_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_OUTBOUND_SEND_MODE" { print $2; found=1 } END { if (!found) print "" }')"
 printf '%s\n' "$status"
+printf 'stop_timeout=%s\n' "$stop_timeout"
 printf 'runtime_mode=%s\n' "$runtime_mode"
 printf 'outbound_send_mode=%s\n' "$outbound_send_mode"
 case "$status" in

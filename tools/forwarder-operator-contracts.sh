@@ -84,6 +84,8 @@ HELP
         'container running-state preflight expectation'
     require_contains "$preflight" 'EXPECTED_RESTART_POLICY' \
         'container restart-policy preflight expectation'
+    require_contains "$preflight" 'EXPECTED_STOP_TIMEOUT_SECONDS' \
+        'container stop-timeout preflight expectation'
     require_contains "$preflight" 'STRICT_COMMIT' \
         'strict commit preflight gate'
     require_contains "$preflight" 'STRICT_MIGRATIONS' \
@@ -120,6 +122,8 @@ HELP
         'compose outbound capture receiver env'
     require_contains "docker-compose.yaml" 'IDOL_BBQ_OUTBOUND_CAPTURE_FILE=${IDOL_BBQ_OUTBOUND_CAPTURE_FILE:-}' \
         'compose outbound capture file env'
+    require_contains "docker-compose.yaml" "stop_grace_period: '90s'" \
+        'compose stop grace period'
     require_contains "$preflight" 'backup_container_dir' \
         'preflight backup container env resolution'
     require_contains "$preflight" 'db_backup_host_dir' \

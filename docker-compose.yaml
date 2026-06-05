@@ -14,6 +14,9 @@ services:
     network_mode: 'host'
     # Default to no restart/offline so a plain compose up cannot activate production.
     restart: '${IDOL_BBQ_RESTART_POLICY:-no}'
+    # Runtime shutdown waits up to 30s for active schedulers before forced teardown.
+    # Keep Docker's grace period longer so active crawls are not SIGKILLed mid-cleanup.
+    stop_grace_period: '90s'
     environment:
       # 设置时区为东京时间，您可以根据需要修改
       - TZ=Asia/Tokyo

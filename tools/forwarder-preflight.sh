@@ -10,6 +10,7 @@ EXPECTED_RUNTIME_MODE="${EXPECTED_RUNTIME_MODE:-offline}"
 EXPECTED_OUTBOUND_SEND_MODE="${EXPECTED_OUTBOUND_SEND_MODE:-}"
 EXPECTED_RUNNING="${EXPECTED_RUNNING:-false}"
 EXPECTED_RESTART_POLICY="${EXPECTED_RESTART_POLICY:-no}"
+EXPECTED_STOP_TIMEOUT_SECONDS="${EXPECTED_STOP_TIMEOUT_SECONDS:-90}"
 STRICT_MIGRATIONS="${STRICT_MIGRATIONS:-0}"
 STRICT_COMMIT="${STRICT_COMMIT:-0}"
 
@@ -22,7 +23,7 @@ fi
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE EXPECTED_OUTBOUND_SEND_MODE EXPECTED_RUNNING EXPECTED_RESTART_POLICY STRICT_MIGRATIONS STRICT_COMMIT; do
+    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE EXPECTED_OUTBOUND_SEND_MODE EXPECTED_RUNNING EXPECTED_RESTART_POLICY EXPECTED_STOP_TIMEOUT_SECONDS STRICT_MIGRATIONS STRICT_COMMIT; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -49,6 +50,7 @@ Environment:
   EXPECTED_OUTBOUND_SEND_MODE=  # set to blocked/live to assert the send exit guard
   EXPECTED_RUNNING=false
   EXPECTED_RESTART_POLICY=no
+  EXPECTED_STOP_TIMEOUT_SECONDS=90
   STRICT_MIGRATIONS=0      # set 1 to fail when DB migrations are pending/failed
   STRICT_COMMIT=0         # set 1 to fail when image commit != expected commit
 HELP
@@ -65,6 +67,7 @@ config_path="$repo/assets/config.yaml"
 container_status="$(docker inspect "$CONTAINER_NAME" --format '{{.State.Status}}')"
 container_running="$(docker inspect "$CONTAINER_NAME" --format '{{.State.Running}}')"
 restart_policy="$(docker inspect "$CONTAINER_NAME" --format '{{.HostConfig.RestartPolicy.Name}}')"
+stop_timeout="$(docker inspect "$CONTAINER_NAME" --format '{{.Config.StopTimeout}}')"
 container_image="$(docker inspect "$CONTAINER_NAME" --format '{{.Image}}')"
 image_build_commit="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "moe.n2nj.idol-bbq.build-commit" }}' 2>/dev/null || true)"
 image_oci_revision="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
@@ -248,6 +251,7 @@ migration_status="$(awk -F= '$1 == "migration_status" { print $2 }' "$db_status_
 printf 'container_status=%s\n' "$container_status"
 printf 'container_running=%s\n' "$container_running"
 printf 'restart_policy=%s\n' "$restart_policy"
+printf 'stop_timeout=%s\n' "$stop_timeout"
 printf 'runtime_mode=%s\n' "$runtime_mode"
 printf 'outbound_send_mode=%s\n' "$outbound_send_mode"
 printf 'container_image=%s\n' "$container_image"
@@ -266,6 +270,7 @@ printf 'expected_runtime_mode=%s\n' "${EXPECTED_RUNTIME_MODE:-}"
 printf 'expected_outbound_send_mode=%s\n' "${EXPECTED_OUTBOUND_SEND_MODE:-}"
 printf 'expected_running=%s\n' "${EXPECTED_RUNNING:-}"
 printf 'expected_restart_policy=%s\n' "${EXPECTED_RESTART_POLICY:-}"
+printf 'expected_stop_timeout_seconds=%s\n' "${EXPECTED_STOP_TIMEOUT_SECONDS:-}"
 if [ -n "${EXPECTED_COMMIT:-}" ] && [ "$image_build_commit" = "$EXPECTED_COMMIT" ] && [ "$build_commit_file" = "$EXPECTED_COMMIT" ]; then
     printf 'commit_match=true\n'
 else
@@ -303,6 +308,10 @@ if [ -n "${EXPECTED_RUNNING:-}" ] && [ "$container_running" != "$EXPECTED_RUNNIN
 fi
 if [ -n "${EXPECTED_RESTART_POLICY:-}" ] && [ "$restart_policy" != "$EXPECTED_RESTART_POLICY" ]; then
     printf 'preflight failed: restart policy mismatch expected=%s actual=%s\n' "$EXPECTED_RESTART_POLICY" "$restart_policy" >&2
+    exit 1
+fi
+if [ -n "${EXPECTED_STOP_TIMEOUT_SECONDS:-}" ] && [ "$stop_timeout" != "$EXPECTED_STOP_TIMEOUT_SECONDS" ]; then
+    printf 'preflight failed: stop timeout mismatch expected=%s actual=%s\n' "$EXPECTED_STOP_TIMEOUT_SECONDS" "$stop_timeout" >&2
     exit 1
 fi
 if [ -n "${EXPECTED_RUNTIME_MODE:-}" ] && [ "$runtime_mode" != "$EXPECTED_RUNTIME_MODE" ]; then
