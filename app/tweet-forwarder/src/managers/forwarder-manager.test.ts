@@ -384,6 +384,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         flushDelaySeconds: 0,
         windowAlignment: 'none',
         mediaDuplicateLimit: null,
+        translatedCard: null,
     })
     expect(
         resolveSummaryCardConfig({
@@ -401,6 +402,10 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
                 flush_delay_seconds: 300,
                 align_to_interval: true,
                 media_duplicate_limit: 2,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                },
             },
         } as any),
     ).toEqual({
@@ -416,6 +421,9 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         flushDelaySeconds: 300,
         windowAlignment: 'interval',
         mediaDuplicateLimit: 2,
+        translatedCard: {
+            badgeLabel: '译文',
+        },
     })
     expect(
         resolveSummaryCardConfig({
@@ -4242,6 +4250,189 @@ test('sendArticles folds idle-first summary-card item when it appears as a later
     expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('@first_member 2320⁹（略）')
     expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).not.toContain('first body should not repeat')
     expect(renderTextCalls.some((call) => call.article.id === 302 && call.collapsedArticleIds?.has(301))).toBeTrue()
+})
+
+test('sendArticles renders a translated companion summary card with stable forwarded references', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                },
+            },
+        } as any,
+        'target-summary-card-translated-companion',
+    )
+
+    const forwardedIds = new Set<number>()
+    ;(pools as any).claimArticleChain = async (article: any) => {
+        forwardedIds.add(article.id)
+        return true
+    }
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const packedArticles: Array<any> = []
+    const renderProcessCalls: Array<{ article: any; config: any }> = []
+    const renderTextCalls: Array<{ article: any; collapsedArticleIds?: Set<string | number> }> = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            if (article.id < 0) {
+                renderProcessCalls.push({ article, config })
+                packedArticles.push(article)
+                const suffix = config?.card_features?.includes('translated-corner-badge') ? 'translated' : 'original'
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: `/tmp/summary-card-${suffix}.png` }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: `/tmp/summary-card-${suffix}.png` }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any, config?: any) => {
+            renderTextCalls.push({ article, collapsedArticleIds: config?.collapsedArticleIds })
+            const body = article.content || ''
+            if (article.ref && config?.collapsedArticleIds?.has(article.ref.id)) {
+                return `${body}\n------------\n@first_member 2320⁹（略）`
+            }
+            if (article.ref) {
+                return `${body}\n------------\n${article.ref.content}`
+            }
+            return body
+        },
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const firstCreatedAt = Math.floor(Date.now() / 1000)
+    const firstArticle = {
+        id: 301,
+        a_id: 'translated-parent',
+        platform: Platform.X,
+        username: 'first member',
+        u_id: 'first_member',
+        content: 'first body should not repeat',
+        translation: '首条译文不应重复',
+        translated_by: 'LLM',
+        url: 'https://x.com/first_member/status/301',
+        type: 'tweet',
+        created_at: firstCreatedAt,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const replyArticle = {
+        id: 302,
+        a_id: 'translated-reply',
+        platform: Platform.X,
+        username: 'reply member',
+        u_id: 'reply_member',
+        content: 'reply body',
+        translation: '回复译文',
+        translated_by: 'LLM',
+        url: 'https://x.com/reply_member/status/302',
+        type: 'reply',
+        created_at: firstCreatedAt + 60,
+        ref: firstArticle,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async (refId: number) => {
+        if (forwardedIds.has(refId)) {
+            return { ref_id: refId }
+        }
+        return null
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-translated-parent',
+            [firstArticle],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-translated-reply',
+            [replyArticle],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        backdateSummaryCardQueues(pools as any, 1800)
+        await (pools as any).flushDueSummaryCardQueues()
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.props?.cardMedia).toEqual([
+        { media_type: 'photo', path: '/tmp/summary-card-original.png' },
+        { media_type: 'photo', path: '/tmp/summary-card-translated.png' },
+    ])
+    expect(renderProcessCalls[0]?.config?.card_features).toBeUndefined()
+    expect(renderProcessCalls[1]?.config?.card_features).toEqual(['translated-corner-badge'])
+    expect(packedArticles).toHaveLength(2)
+    expect(packedArticles[1]?.extra?.data?.translated_badge_label).toBe('译文')
+
+    const originalReplyText = packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[1]?.text || ''
+    const translatedReplyText = packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[1]?.text || ''
+    expect(originalReplyText).toContain('reply body')
+    expect(originalReplyText).not.toContain('回复译文')
+    expect(translatedReplyText).toContain('回复译文')
+    expect(translatedReplyText).toContain('@first_member 2320⁹（略）')
+    expect(translatedReplyText).not.toContain('first body should not repeat')
+    expect(translatedReplyText).not.toContain('首条译文不应重复')
+    expect(
+        renderTextCalls.filter((call) => call.article.id === 302).every((call) => call.collapsedArticleIds?.has(301)),
+    ).toBeTrue()
 })
 
 test('sendArticles promotes queued summary-card hashtag items after a storm activates', async () => {

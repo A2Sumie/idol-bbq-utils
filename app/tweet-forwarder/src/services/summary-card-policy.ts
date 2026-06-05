@@ -15,6 +15,9 @@ type ResolvedSummaryCardConfig = {
     flushDelaySeconds: number
     windowAlignment: SummaryCardWindowAlignment
     mediaDuplicateLimit: number | null
+    translatedCard: {
+        badgeLabel: string
+    } | null
 }
 
 type SummaryCardRoutePolicy = {
@@ -31,11 +34,33 @@ type SummaryCardRoutePolicy = {
     flush_delay_seconds: number
     window_alignment: SummaryCardWindowAlignment
     media_duplicate_limit: number | null
+    translated_card: {
+        enabled: true
+        badge_label: string
+    } | null
 }
 
 const DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS = 30 * 60
 const DEFAULT_SUMMARY_CARD_THRESHOLD = 8
 const DEFAULT_SUMMARY_CARD_MAX_ITEMS = 14
+const DEFAULT_TRANSLATED_SUMMARY_CARD_BADGE_LABEL = '译文'
+
+function normalizeTranslatedBadgeLabel(value: unknown) {
+    const label = String(value || DEFAULT_TRANSLATED_SUMMARY_CARD_BADGE_LABEL).trim()
+    return label.slice(0, 6) || DEFAULT_TRANSLATED_SUMMARY_CARD_BADGE_LABEL
+}
+
+function resolveTranslatedCardConfig(raw: unknown): ResolvedSummaryCardConfig['translatedCard'] {
+    if (raw !== true && (typeof raw !== 'object' || !raw || (raw as any).enabled === false)) {
+        return null
+    }
+
+    return {
+        badgeLabel: normalizeTranslatedBadgeLabel(
+            typeof raw === 'object' && raw ? (raw as any).badge_label : undefined,
+        ),
+    }
+}
 
 function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): ResolvedSummaryCardConfig | null {
     const raw = config.summary_card
@@ -69,9 +94,12 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
             : (objectConfig as any).align_to_hour === true
               ? 'hour'
               : 'none'
-    const mediaRealtimeText = ['basic', 'metadata', 'rendered'].includes(String((objectConfig as any).media_realtime_text))
+    const mediaRealtimeText = ['basic', 'metadata', 'rendered'].includes(
+        String((objectConfig as any).media_realtime_text),
+    )
         ? ((objectConfig as any).media_realtime_text as 'basic' | 'metadata' | 'rendered')
         : 'none'
+    const translatedCard = resolveTranslatedCardConfig((objectConfig as any).translated_card)
 
     return {
         intervalSeconds,
@@ -86,6 +114,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         flushDelaySeconds: Math.max(0, Math.floor(Number((objectConfig as any).flush_delay_seconds || 0))),
         windowAlignment,
         mediaDuplicateLimit: duplicateLimit > 0 ? duplicateLimit : null,
+        translatedCard,
     }
 }
 
@@ -104,6 +133,12 @@ function toSummaryCardRoutePolicy(config: ResolvedSummaryCardConfig): SummaryCar
         flush_delay_seconds: config.flushDelaySeconds,
         window_alignment: config.windowAlignment,
         media_duplicate_limit: config.mediaDuplicateLimit,
+        translated_card: config.translatedCard
+            ? {
+                  enabled: true,
+                  badge_label: config.translatedCard.badgeLabel,
+              }
+            : null,
     }
 }
 

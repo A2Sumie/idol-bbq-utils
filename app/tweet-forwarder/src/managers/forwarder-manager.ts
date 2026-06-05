@@ -103,6 +103,7 @@ type SummaryCardGroup = {
     items: SummaryCardQueueItem[]
 }
 type SummaryCardMediaUsage = Map<string, number>
+type SummaryCardTextMode = 'default' | 'original' | 'translated'
 type RenderedMediaFile = RenderResult['originalMediaFiles'][number]
 type MediaVisibilityDuplicateBehavior = 'skip' | 'text_only'
 type ResolvedMediaVisibilityPolicy = {
@@ -949,7 +950,8 @@ class ForwarderPools extends BaseCompatibleModel {
             current.flushOnThreshold === persisted.flushOnThreshold &&
             current.flushDelaySeconds === persisted.flushDelaySeconds &&
             current.windowAlignment === persisted.windowAlignment &&
-            current.mediaDuplicateLimit === persisted.mediaDuplicateLimit
+            current.mediaDuplicateLimit === persisted.mediaDuplicateLimit &&
+            (current.translatedCard?.badgeLabel || null) === (persisted.translatedCard?.badgeLabel || null)
         )
     }
 
@@ -2843,6 +2845,7 @@ class ForwarderPools extends BaseCompatibleModel {
             config.mediaRealtime ? `media-${config.mediaRealtimeText}` : 'text',
             config.includeOriginalMedia ? 'with-original' : 'card-only',
             config.mediaDuplicateLimit || 0,
+            config.translatedCard ? `translated-${config.translatedCard.badgeLabel}` : 'single',
         ].join(':')
     }
 
@@ -3006,10 +3009,10 @@ class ForwarderPools extends BaseCompatibleModel {
         if (allItems.length === 0) {
             return true
         }
-        const content = await this.buildSummaryCardBatchContent(queue, groups)
+        const primaryTextMode: SummaryCardTextMode = queue.config.translatedCard ? 'original' : 'default'
+        const content = await this.buildSummaryCardBatchContent(queue, groups, primaryTextMode)
         const hasStorm = groups.some((group) => group.kind === 'storm')
         const totalArticles = allItems.length
-        const mediaUsage: SummaryCardMediaUsage = new Map()
         const title =
             hasStorm && groups.length === 1
                 ? `话题聚合 ${groups[0]?.label || ''}`.trim()
@@ -3018,29 +3021,40 @@ class ForwarderPools extends BaseCompatibleModel {
                       allItems.map((item) => item.article),
                   )}`
         const now = Math.floor(Date.now() / 1000)
-        const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems, queue.config, mediaUsage)
-        const summaryArticle = this.buildSyntheticSummaryArticle(
+        const primaryCard = await this.buildSummaryCardRenderVariant(
+            queue,
+            groups,
+            allItems,
             title,
             content,
-            allItems[0]?.article,
             now,
-            embeddedMedia,
-            await this.buildSummaryCardRenderMeta(queue, groups, mediaUsage),
+            primaryTextMode,
         )
-        const cardResult = await this.renderService.process(summaryArticle, {
-            taskId: `summary-card-${queue.target.id}-${now}`,
-            render_type: 'text-card',
-            deduplication: false,
-        })
+        const translatedCard = queue.config.translatedCard
+            ? await this.buildSummaryCardRenderVariant(
+                  queue,
+                  groups,
+                  allItems,
+                  title,
+                  content,
+                  now,
+                  'translated',
+                  queue.config.translatedCard.badgeLabel,
+              )
+            : null
+        const cardResults = [primaryCard.cardResult, translatedCard?.cardResult].filter(
+            (result): result is RenderResult => Boolean(result),
+        )
+        const cardMediaFiles = cardResults.flatMap((result) => result.cardMediaFiles)
         const originalMediaFiles = queue.config.includeOriginalMedia
             ? this.filterSummaryCardRenderedFiles(
                   allItems.flatMap((item) => item.originalMediaFiles),
                   queue.config,
-                  mediaUsage,
+                  primaryCard.mediaUsage,
               )
             : []
-        const mediaFiles = [...cardResult.cardMediaFiles, ...originalMediaFiles]
-        const hasRenderedCard = cardResult.cardMediaFiles.length > 0
+        const mediaFiles = [...cardMediaFiles, ...originalMediaFiles]
+        const hasRenderedCard = cardMediaFiles.length > 0
         const sendText = title
         const articleKeys = allItems.map((item) => articleKey(item.article)).sort((a, b) => a.localeCompare(b))
         const syntheticKey = `${queue.routeKey}:${queue.windowId || 'immediate'}:${articleKeys.join('|')}`
@@ -3107,11 +3121,11 @@ class ForwarderPools extends BaseCompatibleModel {
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
             const sendResult = await queue.target.send(sendText, {
                 media: mediaFiles,
-                cardMedia: cardResult.cardMediaFiles,
+                cardMedia: cardMediaFiles,
                 contentMedia: originalMediaFiles,
                 timestamp: now,
                 runtime_config: queue.runtime_config,
-                article: summaryArticle,
+                article: primaryCard.summaryArticle,
                 forceSend: true,
             })
             if (sendResult.status === 'queued') {
@@ -3219,16 +3233,58 @@ class ForwarderPools extends BaseCompatibleModel {
             }
             return false
         } finally {
-            this.renderService.cleanup(cardResult.mediaFiles)
+            this.renderService.cleanup(cardResults.flatMap((result) => result.mediaFiles))
         }
     }
 
-    private async buildSummaryCardBatchContent(queue: SummaryCardQueue, groups: SummaryCardGroup[]) {
+    private async buildSummaryCardRenderVariant(
+        queue: SummaryCardQueue,
+        groups: SummaryCardGroup[],
+        allItems: SummaryCardQueueItem[],
+        title: string,
+        content: string,
+        now: number,
+        textMode: SummaryCardTextMode,
+        translatedBadgeLabel?: string,
+    ) {
+        const mediaUsage: SummaryCardMediaUsage = new Map()
+        const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems, queue.config, mediaUsage)
+        const renderMeta = await this.buildSummaryCardRenderMeta(queue, groups, mediaUsage, {
+            textMode,
+            translatedBadgeLabel,
+        })
+        const summaryArticle = this.buildSyntheticSummaryArticle(
+            title,
+            content,
+            allItems[0]?.article,
+            now,
+            embeddedMedia,
+            renderMeta,
+        )
+        const cardFeatures = textMode === 'translated' ? ['translated-corner-badge'] : undefined
+        const cardResult = await this.renderService.process(summaryArticle, {
+            taskId: `summary-card-${queue.target.id}-${now}-${textMode}`,
+            render_type: 'text-card',
+            card_features: cardFeatures,
+            deduplication: false,
+        })
+        return {
+            summaryArticle,
+            cardResult,
+            mediaUsage,
+        }
+    }
+
+    private async buildSummaryCardBatchContent(
+        queue: SummaryCardQueue,
+        groups: SummaryCardGroup[],
+        textMode: SummaryCardTextMode = 'default',
+    ) {
         const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
         const allItems = sortedGroups.flatMap((group) => group.items)
         if (sortedGroups.length === 1) {
             const group = sortedGroups[0]
-            return this.buildSummaryCardContent(queue, group.kind, group.items)
+            return this.buildSummaryCardContent(queue, group.kind, group.items, textMode)
         }
 
         const sections = await Promise.all(
@@ -3240,7 +3296,10 @@ class ForwarderPools extends BaseCompatibleModel {
                               queue,
                               group.items.map((item) => item.article),
                           )}`
-                return [sectionTitle, await this.buildSummaryCardContent(queue, group.kind, group.items)].join('\n')
+                return [
+                    sectionTitle,
+                    await this.buildSummaryCardContent(queue, group.kind, group.items, textMode),
+                ].join('\n')
             }),
         )
 
@@ -3289,6 +3348,7 @@ class ForwarderPools extends BaseCompatibleModel {
         queue: SummaryCardQueue,
         groups: SummaryCardGroup[],
         mediaUsage?: SummaryCardMediaUsage,
+        options: { textMode?: SummaryCardTextMode; translatedBadgeLabel?: string } = {},
     ) {
         const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
         const allItems = sortedGroups.flatMap((group) => group.items)
@@ -3317,7 +3377,12 @@ class ForwarderPools extends BaseCompatibleModel {
                 const media = this.buildSummaryCardItemMedia(item, 4, queue.config, mediaUsage)
                 itemMetas.push({
                     index: itemIndex + 1,
-                    text: await this.buildSummaryCardItemText(queue, item.article, nonStormTags),
+                    text: await this.buildSummaryCardItemText(
+                        queue,
+                        item.article,
+                        nonStormTags,
+                        options.textMode || 'default',
+                    ),
                     avatar: this.buildSummaryCardAvatar(item.article),
                     media,
                     mediaLabel: media.length > 0 ? `#${itemIndex + 1} 图集` : undefined,
@@ -3343,6 +3408,11 @@ class ForwarderPools extends BaseCompatibleModel {
                 allItems.map((item) => item.article),
             ),
             groups: groupMetas,
+            ...(options.textMode === 'translated'
+                ? {
+                      translated_badge_label: options.translatedBadgeLabel || '译文',
+                  }
+                : {}),
         }
     }
 
@@ -3533,10 +3603,62 @@ class ForwarderPools extends BaseCompatibleModel {
         return true
     }
 
+    private buildSummaryCardTextArticle(article: ArticleWithId, textMode: SummaryCardTextMode) {
+        if (textMode === 'default') {
+            return article
+        }
+
+        const cloned = cloneDeep(article)
+        const visit = (currentArticle?: ArticleWithId | Article | null) => {
+            if (!currentArticle) {
+                return
+            }
+
+            if (Array.isArray(currentArticle.media)) {
+                currentArticle.media = currentArticle.media.map((mediaItem) => {
+                    const clonedMedia = { ...(mediaItem as any) }
+                    if (textMode === 'translated' && clonedMedia.translation) {
+                        clonedMedia.alt = clonedMedia.translation
+                    }
+                    delete clonedMedia.translation
+                    delete clonedMedia.translated_by
+                    return clonedMedia
+                }) as any
+            }
+
+            if (currentArticle.extra) {
+                const nextExtra = { ...(currentArticle.extra as any) }
+                if (textMode === 'translated' && nextExtra.translation) {
+                    nextExtra.content = nextExtra.translation
+                }
+                delete nextExtra.translation
+                currentArticle.extra = nextExtra as any
+            }
+
+            if (textMode === 'translated') {
+                const translatedContent = String(currentArticle.translation || '').trim()
+                if (translatedContent) {
+                    currentArticle.content = translatedContent
+                }
+            }
+
+            currentArticle.translation = null
+            currentArticle.translated_by = null
+
+            if (currentArticle.ref && typeof currentArticle.ref === 'object') {
+                visit(currentArticle.ref as ArticleWithId | Article)
+            }
+        }
+
+        visit(cloned)
+        return cloned
+    }
+
     private async buildSummaryCardItemText(
         queue: SummaryCardQueue,
         article: ArticleWithId,
         nonStormTags: Array<string> = [],
+        textMode: SummaryCardTextMode = 'default',
     ) {
         const config = queue.target.getEffectiveConfig(queue.runtime_config)
         const collapsedArticleIds = this.shouldCollapseSummaryCardItemRefText(queue, article)
@@ -3549,10 +3671,11 @@ class ForwarderPools extends BaseCompatibleModel {
                   ),
               )
             : undefined
+        const textArticle = this.buildSummaryCardTextArticle(article, textMode)
         const message =
-            this.renderService.renderText(article, { render_type: 'text-compact', collapsedArticleIds }).trim() ||
-            formatArticleHeaderLine(article as any).trim() ||
-            extractArticleHeadline(article as any, 100).trim() ||
+            this.renderService.renderText(textArticle, { render_type: 'text-compact', collapsedArticleIds }).trim() ||
+            formatArticleHeaderLine(textArticle as any).trim() ||
+            extractArticleHeadline(textArticle as any, 100).trim() ||
             article.url ||
             article.a_id ||
             '无正文'
@@ -3569,6 +3692,7 @@ class ForwarderPools extends BaseCompatibleModel {
         queue: SummaryCardQueue,
         kind: 'storm' | 'thread',
         items: SummaryCardQueueItem[],
+        textMode: SummaryCardTextMode = 'default',
     ) {
         const shown = items.slice(0, queue.config.maxItems)
         const omitted = items.length - shown.length
@@ -3582,7 +3706,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     )
                     return [
                         `【${index + 1}】`,
-                        await this.buildSummaryCardItemText(queue, item.article, nonStormTags),
+                        await this.buildSummaryCardItemText(queue, item.article, nonStormTags, textMode),
                         this.buildSummaryCardItemMediaLine(item),
                     ]
                         .filter(Boolean)
@@ -3610,7 +3734,7 @@ class ForwarderPools extends BaseCompatibleModel {
             shown.map(async (item, index) => {
                 return [
                     `【${index + 1}】`,
-                    await this.buildSummaryCardItemText(queue, item.article),
+                    await this.buildSummaryCardItemText(queue, item.article, [], textMode),
                     this.buildSummaryCardItemMediaLine(item),
                 ]
                     .filter(Boolean)

@@ -165,6 +165,15 @@ interface ForwardTargetPlatformCommonConfig {
                * Defaults to 2 when realtime media or original media is enabled.
                */
               media_duplicate_limit?: number
+              /**
+               * Send a second summary card whose item bodies prefer translated text.
+               */
+              translated_card?:
+                  | boolean
+                  | {
+                        enabled?: boolean
+                        badge_label?: string
+                    }
           }
     /**
      * Target-level visible media memory. This suppresses or text-collapses repeated

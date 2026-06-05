@@ -98,6 +98,7 @@ type MessagePackGroup = {
 type MessagePackMeta = {
     total?: number
     range?: string
+    translated_badge_label?: string
     groups?: Array<MessagePackGroup>
 }
 
@@ -746,6 +747,44 @@ function Metaline({ article }: { article: Article }) {
     )
 }
 
+function getTranslatedCornerBadgeLabel(article: Article, features: CardRenderFeatures) {
+    if (!hasFeature(features, 'translated-corner-badge')) {
+        return null
+    }
+
+    const label = String(getMessagePackMeta(article)?.translated_badge_label || '译文').trim()
+    return label.slice(0, 6) || '译文'
+}
+
+function TranslatedCornerBadge({ label }: { label: string }) {
+    return (
+        <div
+            tw="absolute left-0 top-0 flex items-center justify-center"
+            style={{
+                width: 54,
+                height: 26,
+                background: '#dc2626',
+                borderTopLeftRadius: 16,
+                borderBottomRightRadius: 8,
+                boxShadow: '0 2px 5px rgba(127, 29, 29, 0.24)',
+                zIndex: 20,
+            }}
+        >
+            <span
+                tw="text-white font-bold"
+                lang="zh-CN"
+                style={{
+                    fontFamily: CARD_UI_FONT_FAMILY,
+                    fontSize: CARD_TEXT_SIZE.xs,
+                    lineHeight: CARD_LINE_HEIGHT.xs,
+                }}
+            >
+                {sanitizeCardText(label)}
+            </span>
+        </div>
+    )
+}
+
 function AttributionLine({ article }: { article: Article }) {
     if (isMessagePackArticle(article)) {
         return null
@@ -1209,6 +1248,7 @@ function BaseCard({
     const flattedArticle = flatArticle(article)
     const badge = getPlatformBadge(article)
     const hasVisualMedia = articleHasVisualMedia(article)
+    const translatedCornerBadgeLabel = getTranslatedCornerBadgeLabel(article, features)
     return (
         <div
             tw={clsx('p-4 bg-white rounded-2xl shadow-sm h-full w-full flex flex-col relative', {
@@ -1221,6 +1261,7 @@ function BaseCard({
                 rowGap: '6px',
             }}
         >
+            {translatedCornerBadgeLabel && <TranslatedCornerBadge label={translatedCornerBadgeLabel} />}
             {badge.layers.map((layer, index) => (
                 <img
                     key={`${layer.icon}-${index}`}

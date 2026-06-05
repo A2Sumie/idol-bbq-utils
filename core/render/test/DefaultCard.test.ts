@@ -3,6 +3,7 @@ import { Platform } from '@idol-bbq-utils/spider/types'
 import {
     CARD_FONT_FAMILY,
     CARD_UI_FONT_FAMILY,
+    articleParser,
     estimateTextLinesHeight,
     layoutMediaRows,
     resolve227WebsiteBrandKey,
@@ -23,6 +24,31 @@ function buildWebsiteArticle(feed: string, site: string = '22/7') {
             },
         },
     } as Parameters<typeof resolve227WebsiteBrandKey>[0]
+}
+
+function findReactElement(node: any, predicate: (node: any) => boolean): any {
+    if (!node) {
+        return null
+    }
+    if (Array.isArray(node)) {
+        for (const child of node) {
+            const match = findReactElement(child, predicate)
+            if (match) {
+                return match
+            }
+        }
+        return null
+    }
+    if (typeof node !== 'object') {
+        return null
+    }
+    if (predicate(node)) {
+        return node
+    }
+    if (typeof node.type === 'function') {
+        return findReactElement(node.type(node.props), predicate)
+    }
+    return findReactElement(node.props?.children, predicate)
 }
 
 test('resolve227WebsiteBrandKey distinguishes official and FC website feeds', () => {
@@ -115,6 +141,39 @@ test('emoji icon code ignores text and emoji variation selectors', () => {
 test('sanitizeCardText removes stray selectors from rino-style decorative text', () => {
     expect(sanitizeCardText('おはりのち︎︎︎︎❤︎')).toBe('おはりのち❤️')
     expect(sanitizeCardText('今日も素敵🪄︎︎◝✩ ‌‌ ‌')).toBe('今日も素敵🪄◝✩  ')
+})
+
+test('translated-corner-badge feature renders a red summary card badge', () => {
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'summary-card-test',
+        u_id: 'message_pack',
+        username: '聚合',
+        created_at: 1710000000,
+        content: '聚合',
+        translation: null,
+        translated_by: null,
+        url: '',
+        type: 'message_pack',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: {
+            extra_type: 'message_pack_meta',
+            data: {
+                range: '1条 / 1900～2100',
+                translated_badge_label: '译文',
+                groups: [],
+            },
+        },
+        u_avatar: null,
+    }
+    const { component } = articleParser(article as any, { features: ['translated-corner-badge'] } as any)
+    const badge = findReactElement(component, (node) => node.props?.style?.background === '#dc2626')
+
+    expect(badge).toBeTruthy()
+    expect(JSON.stringify(badge.props.children)).toContain('译文')
 })
 
 test('font loader rejects TTC collections because satori cannot render them', () => {
