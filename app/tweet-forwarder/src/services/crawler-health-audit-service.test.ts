@@ -328,3 +328,72 @@ test('buildCrawlerLiveHealthAudit reuses live probes for shared cookie files', a
         rmSync(dir, { recursive: true, force: true })
     }
 })
+
+test('buildCrawlerLiveHealthAudit can skip live probes for rate-limited platforms', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
+    try {
+        const cookieFile = join(dir, 'instagram.cookies.txt')
+        writeFileSync(
+            cookieFile,
+            [
+                '.instagram.com\tTRUE\t/\tTRUE\t9999999999\tsessionid\tsession-value',
+                '.instagram.com\tTRUE\t/\tTRUE\t9999999999\tcsrftoken\tcsrf-value',
+            ].join('\n'),
+            'utf8',
+        )
+        let fetchCalls = 0
+        const audit = await buildCrawlerLiveHealthAudit(
+            {
+                crawlers: [
+                    {
+                        id: 'instagram-a',
+                        name: 'Instagram A',
+                        origin: 'https://www.instagram.com',
+                        cfg_crawler: { cookie_file: cookieFile },
+                    },
+                ],
+            } as any,
+            {
+                liveProbe: false,
+                fetch: (async () => {
+                    fetchCalls += 1
+                    return new Response('', { status: 429 })
+                }) as any,
+            },
+        )
+        const serialized = JSON.stringify(audit)
+
+        expect(fetchCalls).toBe(0)
+        expect(audit.counts).toMatchObject({
+            checked: 1,
+            ok: 1,
+            warn: 0,
+            fail: 0,
+        })
+        expect(audit.results[0]).toMatchObject({
+            crawler_id: 'instagram-a',
+            platform: 'instagram',
+            status: 'ok',
+            diagnostic_codes: ['live_probe_disabled'],
+            static_cookie: {
+                exists: true,
+                usable_cookie_count: 2,
+                required_cookie_names: {
+                    present: ['sessionid', 'csrftoken'],
+                    missing: [],
+                },
+            },
+            live_probe: {
+                checked: false,
+                status: 'skipped',
+                http_status: null,
+            },
+        })
+        expect(serialized).not.toContain(cookieFile)
+        expect(serialized).not.toContain(dir)
+        expect(serialized).not.toContain('session-value')
+        expect(serialized).not.toContain('csrf-value')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+})

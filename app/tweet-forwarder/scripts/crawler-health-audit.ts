@@ -17,16 +17,18 @@ type Args = {
     failOnWarn: boolean
     platforms: Array<CrawlerHealthPlatform>
     timeoutMs: number
+    liveProbe: boolean
 }
 
 const DEFAULT_PLATFORMS: Array<CrawlerHealthPlatform> = ['x', 'instagram', 'tiktok']
 
 function usage() {
-    return `Usage: bun app/tweet-forwarder/scripts/crawler-health-audit.ts [--config <path>] [--format summary|json] [--platform x,instagram,tiktok] [--timeout-ms <ms>] [--fail-on-unhealthy] [--fail-on-warn]
+    return `Usage: bun app/tweet-forwarder/scripts/crawler-health-audit.ts [--config <path>] [--format summary|json] [--platform x,instagram,tiktok] [--timeout-ms <ms>] [--no-live-probe] [--fail-on-unhealthy] [--fail-on-warn]
 
-Runs a no-secret crawler cookie live health audit. The output includes crawler
-names, platform hints, status codes, and HTTP status only; cookie values and
-cookie file paths are never printed.`
+Runs a no-secret crawler cookie health audit. By default it performs low-volume
+live probes for supported platforms. Use --no-live-probe or --static-only when a
+platform is rate-limited and only cookie structure/required-name evidence is
+needed. Output never includes cookie values or cookie file paths.`
 }
 
 function parsePlatforms(value: string): Array<CrawlerHealthPlatform> {
@@ -51,6 +53,7 @@ function parseArgs(argv: Array<string>): Args {
         failOnWarn: false,
         platforms: DEFAULT_PLATFORMS,
         timeoutMs: 15_000,
+        liveProbe: true,
     }
 
     for (let index = 0; index < argv.length; index += 1) {
@@ -65,6 +68,10 @@ function parseArgs(argv: Array<string>): Args {
         }
         if (key === '--fail-on-warn') {
             args.failOnWarn = true
+            continue
+        }
+        if (key === '--no-live-probe' || key === '--static-only') {
+            args.liveProbe = false
             continue
         }
         if (key === '--config') {
@@ -192,6 +199,7 @@ async function main() {
     const audit = await buildCrawlerLiveHealthAudit(config, {
         platforms: args.platforms,
         timeoutMs: args.timeoutMs,
+        liveProbe: args.liveProbe,
         resolveCookieFile: (cookieFile) => resolveCookieFile(cookieFile, args.configPath),
     })
     const payload = args.format === 'json' ? audit : buildSummary(args.configPath, audit)

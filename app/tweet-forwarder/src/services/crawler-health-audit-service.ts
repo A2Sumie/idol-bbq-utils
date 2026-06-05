@@ -70,6 +70,7 @@ type CrawlerHealthAuditOptions = {
     now?: number
     timeoutMs?: number
     platforms?: Array<CrawlerHealthPlatform>
+    liveProbe?: boolean
     resolveCookieFile?: (cookieFile: string) => string | null | undefined
     fetch?: typeof fetch
     xProbeTarget?: XLiveProbeTarget
@@ -678,6 +679,7 @@ async function buildCrawlerLiveHealthAudit(
     const fetchImpl = options.fetch || fetch
     const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs || 15_000)))
     const platformFilter = new Set(options.platforms || Array.from(LIVE_PROBE_PLATFORMS))
+    const liveProbeEnabled = options.liveProbe !== false
     const results: Array<CrawlerHealthResult> = []
     const liveProbeCache = new Map<string, Promise<CrawlerCookieLiveProbeResult>>()
 
@@ -729,10 +731,10 @@ async function buildCrawlerLiveHealthAudit(
 
         let liveProbe: CrawlerCookieLiveProbeResult = {
             status: 'skipped',
-            diagnostic_codes: ['live_probe_static_cookie_unhealthy'],
+            diagnostic_codes: [liveProbeEnabled ? 'live_probe_static_cookie_unhealthy' : 'live_probe_disabled'],
             http_status: null,
         }
-        if (staticStatus !== 'fail' && LIVE_PROBE_PLATFORMS.has(platform)) {
+        if (liveProbeEnabled && staticStatus !== 'fail' && LIVE_PROBE_PLATFORMS.has(platform)) {
             const xProbeTarget = platform === 'x' ? inferXProbeTarget(crawler) : undefined
             const cacheKey = [
                 platform,
@@ -748,12 +750,13 @@ async function buildCrawlerLiveHealthAudit(
             }
             liveProbe = await pendingProbe
         }
+        const status = liveProbeEnabled ? mergeStatus(staticStatus, liveProbe.status) : staticStatus
 
         results.push({
             crawler_id: crawlerId,
             crawler_name: crawlerName,
             platform,
-            status: mergeStatus(staticStatus, liveProbe.status),
+            status,
             diagnostic_codes: Array.from(new Set([...diagnosticCodes, ...liveProbe.diagnostic_codes])).sort(),
             static_cookie: {
                 exists,

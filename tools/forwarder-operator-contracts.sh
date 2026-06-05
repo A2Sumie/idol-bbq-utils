@@ -40,7 +40,7 @@ HELP
 
     git rev-parse --is-inside-work-tree >/dev/null
 
-    local deploy preflight start dockerfile drill drift converge capture_smoke
+    local deploy preflight start dockerfile drill drift converge capture_smoke health_audit
     deploy="tools/deploy-forwarder-stopped.sh"
     preflight="tools/forwarder-preflight.sh"
     start="app/tweet-forwarder/start.sh"
@@ -49,6 +49,7 @@ HELP
     drift="tools/forwarder-remote-drift.sh"
     converge="tools/forwarder-remote-converge.sh"
     capture_smoke="tools/forwarder-capture-smoke.sh"
+    health_audit="app/tweet-forwarder/scripts/crawler-health-audit.ts"
 
     require_contains "$deploy" 'require_clean_local_worktree' \
         'local clean-worktree deploy guard'
@@ -189,6 +190,10 @@ HELP
         'capture smoke target allowlist capture assertion'
     require_contains "$capture_smoke" 'disallowed_outbound_count' \
         'capture smoke target allowlist outbound assertion'
+    require_contains "$health_audit" '--no-live-probe' \
+        'crawler health audit static-only option'
+    require_contains "$health_audit" 'liveProbe: args.liveProbe' \
+        'crawler health audit live-probe toggle wiring'
 
     python3 - "$dockerfile" <<'PY'
 import sys
