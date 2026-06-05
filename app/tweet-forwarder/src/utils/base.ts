@@ -7,15 +7,20 @@ interface Droppable {
     drop(...args: any[]): Promise<void>
 }
 
+interface Stoppable {
+    stop?(...args: any[]): Promise<void> | void
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null
 }
 
-abstract class BaseCompatibleModel implements Droppable {
+abstract class BaseCompatibleModel implements Droppable, Stoppable {
     abstract NAME: string
     protected abstract log?: Logger
 
     abstract init(...args: any[]): Promise<void>
+    stop?(...args: any[]): Promise<void> | void
     abstract drop(...args: any[]): Promise<void>
 }
 

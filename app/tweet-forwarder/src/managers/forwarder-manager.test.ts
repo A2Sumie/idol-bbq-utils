@@ -1199,6 +1199,80 @@ test('sendArticles does not poison outbound state when ForwardBy claim loses a r
     expect((DB.OutboundMessage as any).__records.get(outboundKey)).toBeUndefined()
 })
 
+test('sendArticles stops after render when forwarder pool starts shutting down', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    let sendCalls = 0
+    let renderCalls = 0
+    let cleanupCalls = 0
+    const target = {
+        id: 'target-shutdown-stop',
+        NAME: 'recording',
+        getEffectiveConfig: (runtimeConfig?: any) => runtimeConfig || {},
+        check_blocked: async () => false,
+        send: async () => {
+            sendCalls += 1
+            return { status: 'sent' }
+        },
+    }
+    const article = {
+        id: 208,
+        a_id: 'shutdown-stop-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+    }
+
+    ;(pools as any).renderService = {
+        process: async () => {
+            renderCalls += 1
+            ;(pools as any).shuttingDown = true
+            return {
+                text: 'shutdown stop payload',
+                mediaFiles: [{ media_type: 'photo', path: '/tmp/shutdown-stop.jpg' }],
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+            }
+        },
+        cleanup: () => {
+            cleanupCalls += 1
+        },
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'shutdown-stop-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: undefined,
+            },
+        ],
+        {
+            render_type: 'text',
+        } as any,
+    )
+
+    expect(renderCalls).toBe(1)
+    expect(cleanupCalls).toBe(1)
+    expect(sendCalls).toBe(0)
+    expect((DB.OutboundMessage as any).__records.size).toBe(0)
+})
+
 test('sendArticles keeps ForwardBy for terminal blocked target sends', async () => {
     const pools = new ForwarderPools(
         {

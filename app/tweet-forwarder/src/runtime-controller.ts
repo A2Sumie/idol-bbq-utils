@@ -353,6 +353,19 @@ export class RuntimeController {
             await taskScheduler.stop()
         }
 
+        for (const model of [...runtime.compatibleModels].reverse()) {
+            if (typeof model.stop !== 'function') {
+                continue
+            }
+            try {
+                await model.stop(reason)
+            } catch (error) {
+                this.log.warn(
+                    `Failed to signal ${model.NAME} stop: ${error instanceof Error ? error.message : String(error)}`,
+                )
+            }
+        }
+
         const idle = await this.waitForSchedulersIdle(runtime.taskSchedulers, 30000, 250)
         if (!idle) {
             this.log.warn(`Runtime stop timeout (${reason}); forcing teardown with active tasks still present`)

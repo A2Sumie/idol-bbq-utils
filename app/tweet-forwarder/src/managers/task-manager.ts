@@ -85,6 +85,7 @@ export class TaskManager extends BaseCompatibleModel {
     private readonly taskRetryBaseSeconds = 120
     private readonly taskRetryMaxSeconds = 3600
     private readonly workerTaskTypes = [...DB.TaskQueue.WORKER_TYPES]
+    private stopping = false
 
     constructor(forwarderPools: ForwarderPools, options: { processors?: Processor[] } = {}, log?: Logger) {
         super()
@@ -96,11 +97,13 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     async init() {
+        this.stopping = false
         this.log?.info('TaskManager initialized')
         this.pollingJob.start()
     }
 
     async stop() {
+        this.stopping = true
         this.pollingJob.stop()
     }
 
@@ -109,6 +112,9 @@ export class TaskManager extends BaseCompatibleModel {
     }
 
     private async poll() {
+        if (this.shouldStopForShutdown('poll')) {
+            return
+        }
         const now = Math.floor(Date.now() / 1000)
         try {
             const recovered = await DB.TaskQueue.recoverStaleProcessing(now, this.staleProcessingSeconds, {
@@ -122,10 +128,19 @@ export class TaskManager extends BaseCompatibleModel {
                 this.log?.info(`Found ${tasks.length} pending tasks`)
             }
             for (const task of tasks) {
+                if (this.shouldStopForShutdown('poll task loop')) {
+                    break
+                }
                 const claimedTask = await DB.TaskQueue.claimPending(task.id)
                 if (!claimedTask) {
                     this.log?.debug(`Task ${task.id} was already claimed by another worker`)
                     continue
+                }
+                if (this.shouldStopForShutdown('claimed task')) {
+                    await DB.TaskQueue.updateStatus(claimedTask.id, DB.TaskQueue.STATUS.Pending, {
+                        result_summary: 'runtime stopping; task returned to pending',
+                    })
+                    break
                 }
                 try {
                     let resultSummary: string | undefined
@@ -176,6 +191,14 @@ export class TaskManager extends BaseCompatibleModel {
         } catch (e) {
             this.log?.error(`Polling error: ${e}`)
         }
+    }
+
+    private shouldStopForShutdown(scope = 'task manager') {
+        if (!this.stopping) {
+            return false
+        }
+        this.log?.warn(`Stopping ${scope}: task manager is shutting down`)
+        return true
     }
 
     private async handleHourlyAggregation(payload: AggregatePayload): Promise<string | undefined> {
@@ -367,6 +390,12 @@ export class TaskManager extends BaseCompatibleModel {
 
         const outcomes: AggregateSendOutcome[] = []
         for (const targetId of targetIds) {
+            if (this.shouldStopForShutdown(`aggregate send ${targetId}`)) {
+                throw new TaskDeliveryError(`Runtime stopping before ${taskKind} delivery to ${targetId}`, {
+                    retryable: true,
+                    resultSummary: `${taskKind} runtime_stopping`,
+                })
+            }
             outcomes.push(await this.sendAggregateToTarget(taskKind, targetId, payload, text, mediaFiles))
         }
 
@@ -497,6 +526,9 @@ export class TaskManager extends BaseCompatibleModel {
         text: string,
         mediaFiles: Array<{ path: string; media_type: 'photo' | 'video' }>,
     ): Promise<AggregateSendOutcome> {
+        if (this.shouldStopForShutdown(`aggregate target ${targetId}`)) {
+            return { targetId, status: 'failed', retryable: true, error: 'runtime stopping' }
+        }
         const forwarder = this.forwarderPools.getTarget(targetId)
         if (!forwarder) {
             this.log?.warn(`Target ${targetId} not found for ${taskKind}`)
@@ -544,8 +576,22 @@ export class TaskManager extends BaseCompatibleModel {
                 )
                 return this.classifySuppressedOutbound(targetId, status)
             }
+            if (this.shouldStopForShutdown(`aggregate outbound ${targetId}`)) {
+                await DB.OutboundMessage.markFailed(
+                    outboundIdempotencyKey,
+                    new Error('task_manager_shutdown'),
+                ).catch(() => undefined)
+                return { targetId, status: 'failed', retryable: true, error: 'runtime stopping' }
+            }
 
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
+            if (this.shouldStopForShutdown(`aggregate provider send ${targetId}`)) {
+                await DB.OutboundMessage.markFailed(
+                    outboundIdempotencyKey,
+                    new Error('task_manager_shutdown'),
+                ).catch(() => undefined)
+                return { targetId, status: 'failed', retryable: true, error: 'runtime stopping' }
+            }
             const sendResult = await forwarder.send(text, {
                 timestamp: Math.floor(Date.now() / 1000),
                 media: mediaFiles.length > 0 ? mediaFiles : undefined,

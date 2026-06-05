@@ -413,6 +413,7 @@ class SpiderPools extends BaseCompatibleModel {
      */
     private spiders: Map<string, BaseSpider> = new Map()
     private dispatchListener: (payload: unknown) => Promise<void>
+    private stopping = false
     // private workers:
     constructor(cacheRoot: string, emitter: EventEmitter, log?: Logger) {
         super()
@@ -425,6 +426,7 @@ class SpiderPools extends BaseCompatibleModel {
 
     async init() {
         this.log?.info('Spider Pools initializing...')
+        this.stopping = false
         this.emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
     }
 
@@ -451,12 +453,38 @@ class SpiderPools extends BaseCompatibleModel {
         }
     }
 
+    private shouldStopForShutdown(log?: Logger, scope = 'crawler task') {
+        if (!this.stopping) {
+            return false
+        }
+        log?.warn(`Stopping ${scope}: spider pool is shutting down`)
+        return true
+    }
+
+    private async cancelTaskForShutdown(ctx: TaskScheduler.TaskCtx, crawlerName?: string) {
+        this.emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
+            taskId: ctx.taskId,
+            status: TaskScheduler.TaskStatus.CANCELLED,
+        })
+        await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Cancelled, {
+            last_error: null,
+            result_summary: `crawler ${crawlerName || 'unknown'} cancelled: runtime stopping`,
+        })
+    }
+
     private async onDispatchReceived(payload: unknown) {
         if (!TaskScheduler.isTaskCtx(payload)) {
             this.log?.warn('Ignoring malformed spider dispatch payload')
             return
         }
         const ctx = payload
+        if (this.stopping) {
+            const taskName = (ctx.task.data as Crawler | undefined)?.name || 'unknown'
+            ctx.log = ctx.log || this.log?.child({ label: taskName, trace_id: ctx.taskId })
+            ctx.log?.warn(`Cancelling crawler task ${ctx.taskId}: pool is shutting down`)
+            await this.cancelTaskForShutdown(ctx, taskName)
+            return
+        }
         try {
             await this.onTaskReceived(ctx)
         } catch (error) {
@@ -494,6 +522,10 @@ class SpiderPools extends BaseCompatibleModel {
             result_summary: `crawler ${name || 'unknown'} running`,
         })
         ctx.log?.debug(`Task received: ${JSON.stringify(task)}`)
+        if (this.shouldStopForShutdown(ctx.log, 'crawler task before start')) {
+            await this.cancelTaskForShutdown(ctx, name)
+            return
+        }
         if (!websites && !origin && !paths) {
             ctx.log?.error(`No websites or origin or paths found`)
             this.emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
@@ -580,10 +612,15 @@ class SpiderPools extends BaseCompatibleModel {
 
         let result: Array<CrawlerTaskResult> = []
         let errors: Array<any> = []
+        let cancelledByShutdown = false
 
         try {
             // 开始任务
             for (const website of websites) {
+                if (this.shouldStopForShutdown(ctx.log, 'crawler website loop')) {
+                    cancelledByShutdown = true
+                    break
+                }
                 // 单次系列爬虫任务
                 try {
                     const url = new URL(website)
@@ -665,6 +702,10 @@ class SpiderPools extends BaseCompatibleModel {
 
                     ctx.log?.info(`[${taskId}] crawler wait for ${waitTime}ms before ${url.href}`)
                     await delay(waitTime)
+                    if (this.shouldStopForShutdown(ctx.log, 'crawler before crawl')) {
+                        cancelledByShutdown = true
+                        break
+                    }
 
                     if (task_type === 'article') {
                         let saved_article_ids = await this.crawlArticle(
@@ -714,6 +755,11 @@ class SpiderPools extends BaseCompatibleModel {
                         }
                     }
                 } catch (error) {
+                    if (this.stopping) {
+                        ctx.log?.warn(`Cancelling crawler ${name || 'unknown'} after shutdown-time error: ${error}`)
+                        cancelledByShutdown = true
+                        break
+                    }
                     ctx.log?.error(`Error while crawling for ${website}: ${error}`)
                     errors.push(error)
                     continue
@@ -724,6 +770,11 @@ class SpiderPools extends BaseCompatibleModel {
                 await page.close()
                 ctx.log?.info('Browser page closed')
             }
+        }
+
+        if (cancelledByShutdown) {
+            await this.cancelTaskForShutdown(ctx, name)
+            return
         }
 
         if (errors.length > 0) {
@@ -752,11 +803,19 @@ class SpiderPools extends BaseCompatibleModel {
         }
     }
 
+    async stop(..._args: any[]): Promise<void> {
+        this.stopping = true
+        this.emitter.off(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
+        await this.browserPool.closeAll().catch((error) => {
+            this.log?.warn(`Failed to close browser sessions during spider stop: ${toErrorMessage(error)}`)
+        })
+    }
+
     async drop(...args: any[]): Promise<void> {
         this.log?.info('Dropping Spider Pools...')
+        await this.stop(...args)
         this.spiders.clear()
         this.processors.clear()
-        this.emitter.off(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
         await this.browserPool.closeAll()
         this.log?.info('Browser sessions closed')
         this.log?.info('Spider Pools dropped')
@@ -866,9 +925,13 @@ class SpiderPools extends BaseCompatibleModel {
             const existingRelevantCookies = existingCookies.filter((cookie) =>
                 this.matchCookieDomain(cookie.domain, targetDomains),
             )
+            const existingRequiredCookieNames = summarizeRequiredCookieNames(
+                platformHint,
+                existingRelevantCookies.map((cookie) => cookie.name),
+            )
             if (
                 options.seedConfiguredCookieFile !== false &&
-                existingRelevantCookies.length === 0 &&
+                (existingRelevantCookies.length === 0 || existingRequiredCookieNames.missing.length > 0) &&
                 crawler.cfg_crawler?.cookie_file
             ) {
                 try {

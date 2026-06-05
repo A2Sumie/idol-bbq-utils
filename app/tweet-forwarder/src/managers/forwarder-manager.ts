@@ -654,6 +654,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private summaryCardLastSentAt = new Map<string, number>()
     private summaryCardFlushTimer?: ReturnType<typeof setInterval>
     private dispatchListener: (payload: unknown) => Promise<void>
+    private shuttingDown = false
 
     // private workers:
     constructor(
@@ -680,6 +681,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
     async init() {
         this.log?.info('Forwarder Pools initializing...')
+        this.shuttingDown = false
         this.emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
         this.summaryCardFlushTimer = setInterval(() => {
             this.flushDueSummaryCardQueues().catch((error) => {
@@ -720,6 +722,15 @@ class ForwarderPools extends BaseCompatibleModel {
                 `Failed to restore summary-card queues: ${error instanceof Error ? error.message : String(error)}`,
             )
         })
+    }
+
+    async stop(..._args: any[]): Promise<void> {
+        this.shuttingDown = true
+        this.emitter.off(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
+        if (this.summaryCardFlushTimer) {
+            clearInterval(this.summaryCardFlushTimer)
+            this.summaryCardFlushTimer = undefined
+        }
     }
 
     private async restoreSummaryCardQueues() {
@@ -893,6 +904,14 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
         const ctx = payload
+        if (this.shuttingDown) {
+            this.log?.warn(`Cancelling forwarder task ${ctx.taskId}: pool is shutting down`)
+            this.emitter.emit(`forwarder:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
+                taskId: ctx.taskId,
+                status: TaskScheduler.TaskStatus.CANCELLED,
+            })
+            return
+        }
         try {
             await this.onTaskReceived(ctx)
         } catch (error) {
@@ -1059,11 +1078,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
     async drop(...args: any[]): Promise<void> {
         this.log?.info('Dropping Pools...')
-        this.emitter.off(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
-        if (this.summaryCardFlushTimer) {
-            clearInterval(this.summaryCardFlushTimer)
-            this.summaryCardFlushTimer = undefined
-        }
+        await this.stop(...args)
         if (this.summaryCardQueues.size > 0) {
             this.log?.info(
                 `Keeping ${this.summaryCardQueues.size} durable summary-card queue(s) unsent during pool drop`,
@@ -1082,6 +1097,14 @@ class ForwarderPools extends BaseCompatibleModel {
         this.summaryCardQueues.clear()
         this.summaryCardLastSentAt.clear()
         this.log?.info('Pools dropped')
+    }
+
+    private shouldStopForShutdown(log?: Logger, scope = 'forwarder task') {
+        if (!this.shuttingDown) {
+            return false
+        }
+        log?.warn(`Stopping ${scope}: forwarder pool is shutting down`)
+        return true
     }
 
     async processArticleTask(ctx: TaskScheduler.TaskCtx) {
@@ -1110,6 +1133,9 @@ class ForwarderPools extends BaseCompatibleModel {
             .digest('hex')
 
         for (const website of websites) {
+            if (this.shouldStopForShutdown(ctx.log, 'article forwarding loop')) {
+                return
+            }
             // 单次爬虫任务
             const url = new URL(website)
 
@@ -1135,6 +1161,9 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             for (const path of allPaths) {
+                if (this.shouldStopForShutdown(ctx.log, 'article forwarding path loop')) {
+                    return
+                }
                 ctx.log?.info(
                     `Processing via path [${path.source}]: ${path.formatterName} for ${path.targets.length} targets`,
                 )
@@ -1189,6 +1218,9 @@ class ForwarderPools extends BaseCompatibleModel {
 
         const normalizedArticles = await this.normalizeForwardingArticles([article])
         for (const path of paths) {
+            if (this.shouldStopForShutdown(taskLog, 'manual resend path loop')) {
+                return
+            }
             await this.sendArticles(
                 taskLog,
                 `manual-${article.a_id}`,
@@ -1236,6 +1268,9 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         articles = await this.normalizeForwardingArticles(articles)
+        if (this.shouldStopForShutdown(ctx.log, 'single article forwarding task')) {
+            return
+        }
         ctx.log?.info(`[Trace] Found ${articles.length} articles for ${url}`)
         await this.sendArticles(ctx.log, ctx.taskId, articles, forwarders, cfg_forwarder, undefined, {
             routeKey: routeKeyValue,
@@ -1455,8 +1490,14 @@ class ForwarderPools extends BaseCompatibleModel {
             routeKey?: string
         },
     ) {
+        if (this.shouldStopForShutdown(log, 'sendArticles before dispatch')) {
+            return
+        }
         let articles_forwarders = [] as Array<ArticleForwarderDispatch>
         for (const article of articles) {
+            if (this.shouldStopForShutdown(log, 'sendArticles prefilter')) {
+                return
+            }
             const to = [] as Array<ForwardTargetInstanceWithRuntimeConfig>
             for (const forwarder of forwarders) {
                 if (options?.forceSend) {
@@ -1490,11 +1531,17 @@ class ForwarderPools extends BaseCompatibleModel {
 
         log?.info(`[Trace] Ready to send ${articles_forwarders.length} articles`)
         articles_forwarders = await this.applyDispatchDigests(log, articles_forwarders, options, context)
+        if (this.shouldStopForShutdown(log, 'sendArticles after digest handling')) {
+            return
+        }
         if (articles_forwarders.length === 0) {
             log?.debug(`[Trace] No articles remain after digest handling`)
             return
         }
         for (const { article, to } of articles_forwarders) {
+            if (this.shouldStopForShutdown(log, 'sendArticles article loop')) {
+                return
+            }
             const platform = article.platform
             const article_is_blocked = options?.forceSend
                 ? false
@@ -1537,6 +1584,11 @@ class ForwarderPools extends BaseCompatibleModel {
             renderResult.cardMediaFiles ||= []
             renderResult.originalMediaFiles ||= []
 
+            if (this.shouldStopForShutdown(log, 'sendArticles after render')) {
+                this.renderService.cleanup(renderResult.mediaFiles)
+                return
+            }
+
             if (renderResult.shouldSkipSend) {
                 log?.info(`Skipping article ${article.a_id}: ${renderResult.skipReason || 'deduplicated media'}`)
                 for (const { forwarder: target } of to) {
@@ -1570,6 +1622,10 @@ class ForwarderPools extends BaseCompatibleModel {
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     try {
+                        if (this.shouldStopForShutdown(log, `sendArticles target ${target.id}`)) {
+                            hadNonErrorOutcome = true
+                            return
+                        }
                         const routeKeyForTarget = targetRouteKey(
                             context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
                             target.id,
@@ -1699,8 +1755,17 @@ class ForwarderPools extends BaseCompatibleModel {
                                 hadNonErrorOutcome = true
                                 return
                             }
+                            if (this.shouldStopForShutdown(log, `sendArticles after claim ${target.id}`)) {
+                                await this.releaseArticleChain(article, platform, target.id)
+                                hadNonErrorOutcome = true
+                                return
+                            }
                         }
 
+                        if (this.shouldStopForShutdown(log, `sendArticles before outbound ${target.id}`)) {
+                            hadNonErrorOutcome = true
+                            return
+                        }
                         const outbound = await DB.OutboundMessage.claim({
                             idempotency_key: outboundIdempotencyKey,
                             route_key: routeKeyForTarget,
@@ -1717,6 +1782,17 @@ class ForwarderPools extends BaseCompatibleModel {
                             if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
                                 await DB.ForwardBy.save(article.id, platform, target.id, 'article')
                             } else if (claimed && !options?.forceSend) {
+                                await this.releaseArticleChain(article, platform, target.id)
+                            }
+                            hadNonErrorOutcome = true
+                            return
+                        }
+                        if (this.shouldStopForShutdown(log, `sendArticles after outbound claim ${target.id}`)) {
+                            await DB.OutboundMessage.markFailed(
+                                outboundIdempotencyKey,
+                                new Error('forwarder_pool_shutdown'),
+                            ).catch(() => undefined)
+                            if (claimed && !options?.forceSend) {
                                 await this.releaseArticleChain(article, platform, target.id)
                             }
                             hadNonErrorOutcome = true

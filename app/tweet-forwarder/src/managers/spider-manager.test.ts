@@ -1,5 +1,8 @@
 import { expect, test } from 'bun:test'
 import EventEmitter from 'events'
+import fs from 'fs'
+import os from 'os'
+import path from 'path'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import { TaskScheduler } from '@/utils/base'
@@ -573,6 +576,61 @@ test('SpiderPools exportCrawlerCookies rejects sessions missing required platfor
         }),
     ).rejects.toThrow(CrawlerCookieExportError)
     expect(pageRequests[0]?.device_profile).toBe('desktop_chrome')
+})
+
+test('SpiderPools exportCrawlerCookies seeds configured cookies when profile is only partially authenticated', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'idol-bbq-cookie-seed-'))
+    const cookieFile = path.join(tempRoot, 'x.cookies.txt')
+    fs.writeFileSync(
+        cookieFile,
+        [
+            '# Netscape HTTP Cookie File',
+            '.x.com\tTRUE\t/\tTRUE\t9999999999\tauth_token\tseed-auth-value',
+            '.x.com\tTRUE\t/\tTRUE\t9999999999\tct0\tseed-csrf-value',
+            '',
+        ].join('\n'),
+        'utf8',
+    )
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-cookie-export-partial', new EventEmitter())
+        const page = makeCookieExportPage([
+            {
+                name: 'guest_id',
+                value: 'guest-value',
+                domain: '.x.com',
+                path: '/',
+                expires: 9999999999,
+                secure: true,
+                httpOnly: false,
+            },
+        ])
+        ;(pools as any).browserPool = {
+            createPage: async () => page,
+        }
+
+        const snapshot = await pools.exportCrawlerCookies(
+            {
+                name: 'x-list',
+                origin: 'https://x.com',
+                cfg_crawler: {
+                    session_profile: 'x-main',
+                    cookie_file: cookieFile,
+                },
+            },
+            {
+                visit: false,
+            },
+        )
+
+        expect(snapshot.requiredCookieNames).toEqual({
+            present: ['auth_token', 'ct0'],
+            missing: [],
+        })
+        expect(snapshot.cookies.map((cookie) => cookie.name).sort()).toEqual(['auth_token', 'ct0', 'guest_id'])
+    } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true })
+    }
 })
 
 test('SpiderPools exportCrawlerCookies rejects X sessions that fail live auth validation', async () => {

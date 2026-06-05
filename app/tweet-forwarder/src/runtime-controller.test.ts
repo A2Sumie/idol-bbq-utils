@@ -2,8 +2,10 @@ import { afterEach, expect, test } from 'bun:test'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import EventEmitter from 'events'
 import YAML from 'yaml'
 import { RuntimeController, resolveRuntimeMode } from './runtime-controller'
+import { BaseCompatibleModel, TaskScheduler } from './utils/base'
 import DB from './db'
 
 const tempRoots: string[] = []
@@ -124,4 +126,63 @@ test('RuntimeController offline mode does not parse config or create runtime', a
     } finally {
         await controller.shutdown()
     }
+})
+
+test('RuntimeController signals compatible models before waiting for scheduler idle', async () => {
+    const events: string[] = []
+    let modelStopped = false
+
+    class SignalAwareScheduler extends TaskScheduler.TaskScheduler {
+        NAME = 'SignalAwareScheduler'
+        protected log?: any
+
+        async init() {}
+        async start() {}
+        async stop() {
+            events.push('scheduler.stop')
+        }
+        async drop() {
+            events.push('scheduler.drop')
+        }
+        updateTaskStatus() {}
+        finishTask() {}
+        getActiveTaskCount() {
+            return modelStopped ? 0 : 1
+        }
+    }
+
+    class SignalModel extends BaseCompatibleModel {
+        NAME = 'SignalModel'
+        protected log?: any
+
+        async init() {}
+        async stop(reason?: string) {
+            events.push(`model.stop:${reason}`)
+            modelStopped = true
+        }
+        async drop() {
+            events.push('model.drop')
+        }
+    }
+
+    const controller = new RuntimeController('/tmp/missing.yaml', '/tmp/idol-bbq-runtime-test', undefined, {
+        runtimeMode: 'online',
+    })
+    const scheduler = new SignalAwareScheduler(new EventEmitter())
+    const model = new SignalModel()
+
+    await (controller as any).stopRuntime(
+        {
+            taskSchedulers: [scheduler],
+            compatibleModels: [model],
+            emitter: new EventEmitter(),
+            config: {},
+            mode: 'online',
+            createdAt: Date.now(),
+            manifest: {},
+        },
+        'unit-test',
+    )
+
+    expect(events).toEqual(['scheduler.stop', 'model.stop:unit-test', 'scheduler.drop', 'model.drop'])
 })
