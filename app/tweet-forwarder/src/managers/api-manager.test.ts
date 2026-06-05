@@ -742,10 +742,24 @@ test('APIManager cookie sync response avoids returning full cookie paths', async
                                     secure: true,
                                     httpOnly: true,
                                 },
+                                {
+                                    name: 'ct0',
+                                    value: 'csrf-value',
+                                    domain: '.x.com',
+                                    path: '/',
+                                    expires: 9999999999,
+                                    secure: true,
+                                    httpOnly: false,
+                                },
                             ],
                             sessionProfile: 'profile-a',
                             visitedUrl: 'https://x.com/X',
                             domains: ['x.com'],
+                            platformHint: 'x',
+                            requiredCookieNames: {
+                                present: ['auth_token', 'ct0'],
+                                missing: [],
+                            },
                         }),
                     },
                 }) as any,
@@ -777,9 +791,78 @@ test('APIManager cookie sync response avoids returning full cookie paths', async
             configured: true,
             filename: 'synced.cookies.txt',
         })
+        expect(payload.platformHint).toBe('x')
+        expect(payload.requiredCookieNames).toEqual({
+            present: ['auth_token', 'ct0'],
+            missing: [],
+        })
         expect(serialized).not.toContain(cookieFile)
         expect(serialized).not.toContain(dir)
         expect(serialized).not.toContain('auth-value')
+        expect(serialized).not.toContain('csrf-value')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+})
+
+test('APIManager cookie sync returns safe conflict when session lacks required cookies', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-api-cookie-sync-missing-'))
+    const cookieFile = join(dir, 'missing.cookies.txt')
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            name: 'x-list',
+                            origin: 'https://x.com',
+                            cfg_crawler: {
+                                cookie_file: cookieFile,
+                            },
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    spiderPools: {
+                        exportCrawlerCookies: async () => {
+                            const error = new Error('Browser session x-main is missing required x cookies: auth_token, ct0')
+                            ;(error as any).statusCode = 409
+                            ;(error as any).publicMessage =
+                                'Browser session x-main is missing required x cookies: auth_token, ct0'
+                            throw error
+                        },
+                    },
+                }) as any,
+            getRuntimeMeta: () =>
+                ({
+                    mode: 'online',
+                }) as any,
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/cookies/sync', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+                body: JSON.stringify({ finder: 'x-list' }),
+            }),
+            {
+                timeout: () => undefined,
+            },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(409)
+        const text = await response.text()
+        expect(text).toContain('missing required x cookies')
+        expect(text).not.toContain(cookieFile)
+        expect(text).not.toContain(dir)
+        expect(existsSync(cookieFile)).toBeFalse()
     } finally {
         rmSync(dir, { recursive: true, force: true })
     }

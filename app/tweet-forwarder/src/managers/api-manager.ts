@@ -506,7 +506,7 @@ export class APIManager extends BaseCompatibleModel {
             }
 
             fs.writeFileSync(cookieFile, cookie)
-            this.log?.info(`Cookie updated for ${finder} at ${cookieFile}`)
+            this.log?.info(`Cookie updated for ${finder} (${publicCookieFileMetadata(cookieFile).filename || 'unknown'})`)
             return new Response('Cookie updated successfully', { status: 200 })
         } catch (error) {
             this.log?.error('Cookie update error:', error)
@@ -547,7 +547,7 @@ export class APIManager extends BaseCompatibleModel {
 
             fs.writeFileSync(cookieFile, serializeCookiesToNetscape(snapshot.cookies), 'utf8')
             this.log?.info(
-                `Cookie synced for ${finder} from session ${snapshot.sessionProfile || 'unknown'} to ${cookieFile} (${snapshot.cookies.length} cookies)`,
+                `Cookie synced for ${finder} from session ${snapshot.sessionProfile || 'unknown'} to ${publicCookieFileMetadata(cookieFile).filename || 'unknown'} (${snapshot.cookies.length} cookies)`,
             )
 
             return jsonResponse({
@@ -557,14 +557,20 @@ export class APIManager extends BaseCompatibleModel {
                 sessionProfile: snapshot.sessionProfile,
                 visitedUrl: snapshot.visitedUrl,
                 domains: snapshot.domains,
+                platformHint: snapshot.platformHint,
+                requiredCookieNames: snapshot.requiredCookieNames,
                 count: snapshot.cookies.length,
                 lastModified: new Date().toISOString(),
             })
         } catch (error) {
             this.log?.error('Cookie sync error:', error)
-            return new Response(`Failed to sync cookie: ${error instanceof Error ? error.message : String(error)}`, {
-                status: 500,
-            })
+            const statusCode = Number((error as any)?.statusCode)
+            const safeStatusCode = Number.isSafeInteger(statusCode) && statusCode >= 400 && statusCode < 500 ? statusCode : 500
+            const publicMessage =
+                typeof (error as any)?.publicMessage === 'string'
+                    ? (error as any).publicMessage
+                    : 'browser session cookie export failed'
+            return new Response(`Failed to sync cookie: ${publicMessage}`, { status: safeStatusCode })
         }
     }
 

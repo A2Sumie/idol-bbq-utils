@@ -3,7 +3,7 @@ import EventEmitter from 'events'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import { TaskScheduler } from '@/utils/base'
-import { SpiderPools, SpiderTaskScheduler } from './spider-manager'
+import { CrawlerCookieExportError, SpiderPools, SpiderTaskScheduler } from './spider-manager'
 
 test('SpiderTaskScheduler treats same crawler pending or running tasks as active until completion', () => {
     const scheduler = new SpiderTaskScheduler({ crawlers: [] }, new EventEmitter())
@@ -470,4 +470,101 @@ test('SpiderPools reuses existing article ids for configured non-list crawlers',
         ;(DB.Article as any).checkExist = originalCheckExist
         ;(DB.Article as any).trySave = originalTrySave
     }
+})
+
+function makeCookieExportPage(cookies: Array<any>) {
+    return {
+        browserContext: () => ({
+            cookies: async () => cookies,
+            setCookie: async (...seededCookies: Array<any>) => {
+                cookies.push(...seededCookies)
+            },
+        }),
+        goto: async () => undefined,
+        close: async () => undefined,
+    }
+}
+
+test('SpiderPools exportCrawlerCookies returns only relevant cookies and required-name metadata', async () => {
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-cookie-export', new EventEmitter())
+    ;(pools as any).browserPool = {
+        createPage: async () =>
+            makeCookieExportPage([
+                {
+                    name: 'auth_token',
+                    value: 'auth-value',
+                    domain: '.x.com',
+                    path: '/',
+                    expires: 9999999999,
+                    secure: true,
+                    httpOnly: true,
+                },
+                {
+                    name: 'ct0',
+                    value: 'csrf-value',
+                    domain: '.x.com',
+                    path: '/',
+                    expires: 9999999999,
+                    secure: true,
+                    httpOnly: false,
+                },
+                {
+                    name: 'sessionid',
+                    value: 'instagram-value',
+                    domain: '.instagram.com',
+                    path: '/',
+                    expires: 9999999999,
+                    secure: true,
+                    httpOnly: true,
+                },
+            ]),
+    }
+
+    const snapshot = await pools.exportCrawlerCookies({
+        name: 'x-list',
+        origin: 'https://x.com',
+        paths: ['/i/lists/1936785344072151389'],
+        cfg_crawler: {
+            session_profile: 'x-main',
+        },
+    })
+
+    expect(snapshot.platformHint).toBe('x')
+    expect(snapshot.requiredCookieNames).toEqual({
+        present: ['auth_token', 'ct0'],
+        missing: [],
+    })
+    expect(snapshot.cookies.map((cookie) => cookie.name).sort()).toEqual(['auth_token', 'ct0'])
+})
+
+test('SpiderPools exportCrawlerCookies rejects sessions missing required platform cookies', async () => {
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-cookie-export-missing', new EventEmitter())
+    const pageRequests: Array<any> = []
+    ;(pools as any).browserPool = {
+        createPage: async (request: any) => {
+            pageRequests.push(request)
+            return makeCookieExportPage([
+                {
+                    name: 'sessionid',
+                    value: 'instagram-value',
+                    domain: '.instagram.com',
+                    path: '/',
+                    expires: 9999999999,
+                    secure: true,
+                    httpOnly: true,
+                },
+            ])
+        },
+    }
+
+    await expect(
+        pools.exportCrawlerCookies({
+            name: 'x-list',
+            origin: 'https://x.com',
+            cfg_crawler: {
+                session_profile: 'x-main',
+            },
+        }),
+    ).rejects.toThrow(CrawlerCookieExportError)
+    expect(pageRequests[0]?.device_profile).toBe('desktop_chrome')
 })

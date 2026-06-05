@@ -4,6 +4,11 @@ import { auditNetscapeCookieFile, type NetscapeCookieFileAudit } from '@idol-bbq
 import type { AppConfig } from '@/types'
 import { buildRouteGraph, type RouteGraphDiagnostic, type RouteGraphRoute } from './route-graph-service'
 import { collectSensitiveConfigPaths, redactSecrets } from './redaction-service'
+import {
+    inferCookieHealthPlatform,
+    summarizeRequiredCookieNames,
+    type CookieHealthPlatform,
+} from './crawler-cookie-policy'
 
 type ConfigAuditRoute = Pick<
     RouteGraphRoute,
@@ -19,12 +24,10 @@ type ConfigAuditRoute = Pick<
 
 type ConfigAuditDiagnostic = Pick<RouteGraphDiagnostic, 'severity' | 'code' | 'route_key'>
 
-type CookieAuditPlatform = 'x' | 'instagram' | 'tiktok' | 'youtube' | 'unknown'
-
 type ConfigAuditCookieCrawler = {
     crawler_id: string
     crawler_name: string
-    platform_hint: CookieAuditPlatform
+    platform_hint: CookieHealthPlatform
     exists: boolean
     status: 'ok' | 'warn' | 'missing' | 'unreadable'
     usable_cookie_count: number
@@ -76,14 +79,6 @@ type ConfigAudit = {
         diagnostics: Array<ConfigAuditCookieDiagnostic>
         crawlers: Array<ConfigAuditCookieCrawler>
     }
-}
-
-const REQUIRED_COOKIE_NAMES: Record<CookieAuditPlatform, Array<string>> = {
-    x: ['auth_token', 'ct0'],
-    instagram: ['sessionid', 'csrftoken'],
-    tiktok: ['sessionid'],
-    youtube: [],
-    unknown: [],
 }
 
 function stableSerialize(value: unknown): string {
@@ -152,32 +147,6 @@ function nodeName(value: { id?: string; name?: string } | undefined, fallback: s
     return String(value?.name || value?.id || fallback).trim()
 }
 
-function inferCookiePlatform(crawler: any): CookieAuditPlatform {
-    const candidates = [crawler?.origin, ...(Array.isArray(crawler?.websites) ? crawler.websites : [])]
-
-    for (const candidate of candidates) {
-        try {
-            const hostname = new URL(candidate).hostname.replace(/^www\./, '').toLowerCase()
-            if (hostname === 'x.com' || hostname === 'twitter.com') {
-                return 'x'
-            }
-            if (hostname === 'instagram.com') {
-                return 'instagram'
-            }
-            if (hostname === 'tiktok.com') {
-                return 'tiktok'
-            }
-            if (hostname === 'youtube.com' || hostname === 'youtu.be') {
-                return 'youtube'
-            }
-        } catch {
-            continue
-        }
-    }
-
-    return 'unknown'
-}
-
 function emptyCookieMetadata(): NetscapeCookieFileAudit {
     return {
         total_cookie_rows: 0,
@@ -203,8 +172,7 @@ function buildCookieAudit(config: AppConfig, options: ConfigAuditOptions = {}): 
 
         const crawlerId = nodeId(crawler, `crawler-${index}`)
         const crawlerName = nodeName(crawler, crawlerId)
-        const platform = inferCookiePlatform(crawler)
-        const requiredCookieNames = REQUIRED_COOKIE_NAMES[platform]
+        const platform = inferCookieHealthPlatform(crawler)
         let metadata = emptyCookieMetadata()
         let exists = false
         let status: ConfigAuditCookieCrawler['status'] = 'missing'
@@ -222,8 +190,7 @@ function buildCookieAudit(config: AppConfig, options: ConfigAuditOptions = {}): 
             status = 'unreadable'
         }
 
-        const present = requiredCookieNames.filter((name) => metadata.cookie_names.includes(name))
-        const missing = requiredCookieNames.filter((name) => !metadata.cookie_names.includes(name))
+        const { present, missing } = summarizeRequiredCookieNames(platform, metadata.cookie_names)
         if (status === 'ok' && (metadata.usable_cookie_count === 0 || missing.length > 0 || metadata.malformed_cookie_count > 0)) {
             status = 'warn'
         }

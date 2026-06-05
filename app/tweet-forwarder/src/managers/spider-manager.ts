@@ -27,6 +27,13 @@ import dayjs from 'dayjs'
 import { BrowserSessionPool } from '@/services/browser-session-pool'
 import { InstagramLiveRelayService } from '@/services/instagram-live-relay-service'
 import { normalizeCronSecond } from '@/utils/cron'
+import {
+    inferCookieHealthPlatform,
+    summarizeRequiredCookieNames,
+    toCookieHealthPlatformFromSpiderPlatform,
+    toSpiderPlatformFromCookieHealthPlatform,
+    type CookieHealthPlatform,
+} from '@/services/crawler-cookie-policy'
 
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
@@ -79,6 +86,19 @@ interface BrowserCookieSnapshot {
     expires?: number
     secure?: boolean
     httpOnly?: boolean
+}
+
+class CrawlerCookieExportError extends Error {
+    readonly statusCode = 409
+    readonly publicMessage: string
+    readonly code: string
+
+    constructor(message: string, code = 'crawler_cookie_export_failed') {
+        super(message)
+        this.name = 'CrawlerCookieExportError'
+        this.code = code
+        this.publicMessage = message
+    }
 }
 
 function toErrorMessage(error: unknown) {
@@ -731,6 +751,11 @@ class SpiderPools extends BaseCompatibleModel {
         visitedUrl: string
         sessionProfile: string | null
         domains: Array<string>
+        platformHint: CookieHealthPlatform
+        requiredCookieNames: {
+            present: Array<string>
+            missing: Array<string>
+        }
     }> {
         const websites = sanitizeWebsites({
             websites: crawler.websites,
@@ -743,11 +768,18 @@ class SpiderPools extends BaseCompatibleModel {
         }
 
         const url = new URL(visitedUrl)
+        const crawlerPlatformHint = inferCookieHealthPlatform(crawler)
         const spiderPlugin = spiderRegistry.findByUrl(url.href)
-        const platform = spiderPlugin?.platform || Platform.Website
+        const platform =
+            spiderPlugin?.platform || toSpiderPlatformFromCookieHealthPlatform(crawlerPlatformHint) || Platform.Website
+        const platformHint =
+            crawlerPlatformHint === 'unknown' ? toCookieHealthPlatformFromSpiderPlatform(platform) : crawlerPlatformHint
         const browserRequest = this.resolveBrowserRequest(crawler.cfg_crawler, url, platform)
         if (!browserRequest.session_profile) {
-            throw new Error(`Crawler ${crawler.name || visitedUrl} is missing session_profile`)
+            throw new CrawlerCookieExportError(
+                `Crawler ${crawler.name || visitedUrl} is missing session_profile`,
+                'crawler_cookie_session_profile_missing',
+            )
         }
 
         const targetDomains = this.resolveCookieDomains(websites, platform)
@@ -767,7 +799,7 @@ class SpiderPools extends BaseCompatibleModel {
                         .browserContext()
                         .setCookie(...parseNetscapeCookieToPuppeteerCookie(crawler.cfg_crawler.cookie_file))
                     this.log?.info(
-                        `Seeded browser session ${browserRequest.session_profile} from ${crawler.cfg_crawler.cookie_file} before cookie export.`,
+                        `Seeded browser session ${browserRequest.session_profile} from configured cookie file before cookie export.`,
                     )
                 } catch (error) {
                     this.log?.warn(`Failed to seed browser session for ${crawler.name || visitedUrl}: ${error}`)
@@ -798,12 +830,24 @@ class SpiderPools extends BaseCompatibleModel {
                     secure: cookie.secure,
                     httpOnly: cookie.httpOnly,
                 }))
+            const requiredCookieNames = summarizeRequiredCookieNames(
+                platformHint,
+                filteredCookies.map((cookie) => cookie.name),
+            )
+            if (requiredCookieNames.missing.length > 0) {
+                throw new CrawlerCookieExportError(
+                    `Browser session ${browserRequest.session_profile} is missing required ${platformHint} cookies: ${requiredCookieNames.missing.join(', ')}`,
+                    'crawler_cookie_required_names_missing',
+                )
+            }
 
             return {
-                cookies: filteredCookies.length > 0 ? filteredCookies : cookies,
+                cookies: filteredCookies,
                 visitedUrl,
                 sessionProfile: browserRequest.session_profile || null,
                 domains: targetDomains,
+                platformHint,
+                requiredCookieNames,
             }
         } finally {
             await page.close().catch(() => null)
@@ -1215,4 +1259,4 @@ class SpiderPools extends BaseCompatibleModel {
     }
 }
 
-export { SpiderTaskScheduler, SpiderPools }
+export { SpiderTaskScheduler, SpiderPools, CrawlerCookieExportError }

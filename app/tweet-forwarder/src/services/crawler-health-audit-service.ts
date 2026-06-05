@@ -7,8 +7,13 @@ import {
 } from '@idol-bbq-utils/spider'
 import type { CookieData } from 'puppeteer-core'
 import type { AppConfig } from '@/types'
+import {
+    inferCookieHealthPlatform,
+    summarizeRequiredCookieNames,
+    type CookieHealthPlatform,
+} from './crawler-cookie-policy'
 
-type CrawlerHealthPlatform = 'x' | 'instagram' | 'tiktok' | 'youtube' | 'unknown'
+type CrawlerHealthPlatform = Exclude<CookieHealthPlatform, 'website'>
 type CrawlerHealthStatus = 'ok' | 'warn' | 'fail' | 'skipped'
 
 type CrawlerHealthResult = {
@@ -59,14 +64,6 @@ type CrawlerHealthAuditOptions = {
     fetch?: typeof fetch
 }
 
-const REQUIRED_COOKIE_NAMES: Record<CrawlerHealthPlatform, Array<string>> = {
-    x: ['auth_token', 'ct0'],
-    instagram: ['sessionid', 'csrftoken'],
-    tiktok: ['sessionid'],
-    youtube: [],
-    unknown: [],
-}
-
 const LIVE_PROBE_PLATFORMS = new Set<CrawlerHealthPlatform>(['x', 'instagram', 'tiktok'])
 const X_PUBLIC_BEARER =
     'Bearer AAAAAAAAAAAAAAAAAAAAAFQODgEAAAAAVHTp76lzh3rFzcHbmHVvQxYYpTw%3DckAlMINMjmCwxUcaXbAN4XqJVdgMJaHqNOFgPMK0zN1qLqLQCF'
@@ -93,21 +90,8 @@ function nodeName(value: { id?: string; name?: string } | undefined, fallback: s
 }
 
 function inferCrawlerPlatform(crawler: any): CrawlerHealthPlatform {
-    const candidates = [crawler?.origin, ...(Array.isArray(crawler?.websites) ? crawler.websites : [])]
-
-    for (const candidate of candidates) {
-        try {
-            const hostname = new URL(candidate).hostname.replace(/^www\./, '').toLowerCase()
-            if (hostname === 'x.com' || hostname === 'twitter.com') return 'x'
-            if (hostname === 'instagram.com') return 'instagram'
-            if (hostname === 'tiktok.com') return 'tiktok'
-            if (hostname === 'youtube.com' || hostname === 'youtu.be') return 'youtube'
-        } catch {
-            continue
-        }
-    }
-
-    return 'unknown'
+    const platform = inferCookieHealthPlatform(crawler)
+    return platform === 'website' ? 'unknown' : platform
 }
 
 function cookieValue(cookies: Array<CookieData>, name: string) {
@@ -349,7 +333,6 @@ async function buildCrawlerLiveHealthAudit(
         const crawlerId = nodeId(crawler, `crawler-${index}`)
         const crawlerName = nodeName(crawler, crawlerId)
         const cookieFile = crawler.cfg_crawler?.cookie_file
-        const requiredNames = REQUIRED_COOKIE_NAMES[platform]
         let exists = false
         let metadata = emptyCookieMetadata()
         let cookies: Array<CookieData> = []
@@ -378,8 +361,7 @@ async function buildCrawlerLiveHealthAudit(
         if (metadata.malformed_cookie_count > 0) {
             diagnosticCodes.push('cookie_file_has_malformed_rows')
         }
-        const present = requiredNames.filter((name) => metadata.cookie_names.includes(name))
-        const missing = requiredNames.filter((name) => !metadata.cookie_names.includes(name))
+        const { present, missing } = summarizeRequiredCookieNames(platform, metadata.cookie_names)
         if (missing.length > 0) {
             diagnosticCodes.push('cookie_required_names_missing')
         }
