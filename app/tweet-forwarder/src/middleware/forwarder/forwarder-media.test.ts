@@ -1,6 +1,9 @@
 import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { QQForwarder } from './qq'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 test('QQForwarder treats video thumbnails as images', async () => {
     const forwarder = new QQForwarder(
@@ -116,6 +119,77 @@ test('QQForwarder dry-run send mode blocks the actual provider exit', async () =
         } else {
             process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = originalMode
         }
+    }
+})
+
+test('QQForwarder capture send mode records a virtual receiver payload without provider exit', async () => {
+    const originalMode = process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
+    const originalCaptureFile = process.env.IDOL_BBQ_OUTBOUND_CAPTURE_FILE
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-capture-receiver-'))
+    const captureFile = path.join(tempRoot, 'capture.jsonl')
+    process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = 'capture'
+    process.env.IDOL_BBQ_OUTBOUND_CAPTURE_FILE = captureFile
+    try {
+        const forwarder = new QQForwarder(
+            {
+                group_id: '123',
+                url: 'http://127.0.0.1:3001',
+                token: '',
+                media_batch_threshold: 6,
+            } as any,
+            'qq-capture-test',
+        )
+        ;(forwarder as any).minInterval = 0
+
+        const payloads: any[] = []
+        ;(forwarder as any).sendWithPayload = async (segments: any) => {
+            payloads.push(segments)
+            return { ok: true }
+        }
+
+        const result = await forwarder.send('captured payload', {
+            media: [{ media_type: 'photo', path: '/tmp/captured.jpg' }],
+            article: {
+                platform: Platform.X,
+                id: 1,
+                a_id: 'capture-article',
+                url: 'https://x.example/capture-article',
+            } as any,
+            outboundKey: 'article:qq-capture-test:1:capture-article',
+        })
+
+        expect(result.status).toBe('dry_run')
+        expect(result.status === 'dry_run' ? result.details.send_mode : '').toBe('capture')
+        expect(result.status === 'dry_run' ? result.details.capture_result?.ok : false).toBe(true)
+        expect(forwarder.drainPendingMediaBatches()).toHaveLength(0)
+        expect(payloads).toHaveLength(0)
+
+        const captures = (await readFile(captureFile, 'utf8'))
+            .trim()
+            .split('\n')
+            .map((line) => JSON.parse(line))
+        expect(captures).toHaveLength(1)
+        expect(captures[0].target_id).toBe('qq-capture-test')
+        expect(captures[0].forwarder).toBe('qq')
+        expect(captures[0].texts).toEqual(['captured payload'])
+        expect(captures[0].media[0]).toMatchObject({
+            media_type: 'photo',
+            path: '/tmp/captured.jpg',
+            file_name: 'captured.jpg',
+        })
+        expect(captures[0].outbound_key).toBe('article:qq-capture-test:1:capture-article')
+    } finally {
+        if (originalMode === undefined) {
+            delete process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
+        } else {
+            process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = originalMode
+        }
+        if (originalCaptureFile === undefined) {
+            delete process.env.IDOL_BBQ_OUTBOUND_CAPTURE_FILE
+        } else {
+            process.env.IDOL_BBQ_OUTBOUND_CAPTURE_FILE = originalCaptureFile
+        }
+        await rm(tempRoot, { recursive: true, force: true })
     }
 })
 

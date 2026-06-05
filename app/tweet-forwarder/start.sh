@@ -181,14 +181,20 @@ case "$outbound_send_mode" in
     blocked | block | dry-run | dryrun | disabled | off | no-send | nosend)
         outbound_send_mode="blocked"
         ;;
+    capture | captured | test-receiver | testreceiver | receiver | fake-receiver | fakereceiver | fake | sink)
+        outbound_send_mode="capture"
+        ;;
     *)
-        echo "Invalid IDOL_BBQ_OUTBOUND_SEND_MODE: $outbound_send_mode (expected live or blocked)" >&2
+        echo "Invalid IDOL_BBQ_OUTBOUND_SEND_MODE: $outbound_send_mode (expected live, blocked, or capture)" >&2
         exit 64
         ;;
 esac
 export IDOL_BBQ_OUTBOUND_SEND_MODE="$outbound_send_mode"
 if [ "$runtime_mode" = "online" ] && [ "$outbound_send_mode" = "blocked" ]; then
     echo "IDOL_BBQ_OUTBOUND_SEND_MODE=blocked: runtime will crawl/process but external send APIs are disabled."
+fi
+if [ "$runtime_mode" = "online" ] && [ "$outbound_send_mode" = "capture" ]; then
+    echo "IDOL_BBQ_OUTBOUND_SEND_MODE=capture: runtime will crawl/process but external send APIs are replaced by an internal capture receiver."
 fi
 
 mkdir -p /tmp/tweet-forwarder /tmp/tweet-forwarder/logs /tmp/tweet-forwarder/media "$BROWSER_PROFILE_DIR"

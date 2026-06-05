@@ -103,6 +103,8 @@ HELP
         'persistent startup migration backup default'
     require_contains "$start" 'IDOL_BBQ_OUTBOUND_SEND_MODE' \
         'startup outbound send-mode guard'
+    require_contains "$start" 'outbound_send_mode="capture"' \
+        'startup outbound capture mode guard'
     require_contains "$start" 'PRAGMA quick_check' \
         'startup sqlite quick_check'
     require_contains "$start" 'backup_method=%s' \
@@ -114,6 +116,10 @@ HELP
         'compose persistent migration backup env'
     require_contains "docker-compose.yaml" 'IDOL_BBQ_OUTBOUND_SEND_MODE=${IDOL_BBQ_OUTBOUND_SEND_MODE:-live}' \
         'compose outbound send-mode env'
+    require_contains "docker-compose.yaml" 'IDOL_BBQ_OUTBOUND_CAPTURE_URL=${IDOL_BBQ_OUTBOUND_CAPTURE_URL:-}' \
+        'compose outbound capture receiver env'
+    require_contains "docker-compose.yaml" 'IDOL_BBQ_OUTBOUND_CAPTURE_FILE=${IDOL_BBQ_OUTBOUND_CAPTURE_FILE:-}' \
+        'compose outbound capture file env'
     require_contains "$preflight" 'backup_container_dir' \
         'preflight backup container env resolution'
     require_contains "$preflight" 'db_backup_host_dir' \

@@ -12,7 +12,10 @@ import { Platform, type MediaType } from '@idol-bbq-utils/spider/types'
 import { pRetry } from '@idol-bbq-utils/utils'
 import {
     OutboundSendDryRunError,
+    captureOutboundSend,
+    isNonLiveOutboundSendMode,
     resolveOutboundSendMode,
+    type OutboundCapturePayload,
     type OutboundSendDryRunDetails,
 } from '@/services/outbound-send-mode'
 import {
@@ -283,7 +286,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
 
         _log?.debug(`trying to send prepared payload with text length ${textLength}`)
 
-        this.assertActualSendAllowed(normalizedTexts, props)
+        await this.assertActualSendAllowed(normalizedTexts, props)
 
         if (this.minInterval > 0) {
             const now = Date.now()
@@ -522,7 +525,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         props: SendProps | undefined,
         mergedConfig: ForwardTargetPlatformCommonConfig,
     ): Promise<ForwarderSendResult | null> {
-        if (props?.forceSend || props?.bypassMediaBatch || resolveOutboundSendMode() === 'blocked') {
+        if (props?.forceSend || props?.bypassMediaBatch || isNonLiveOutboundSendMode()) {
             return null
         }
 
@@ -576,17 +579,32 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         }
     }
 
-    private assertActualSendAllowed(texts: string[], props?: SendProps) {
-        const sendMode = resolveOutboundSendMode()
-        if (sendMode === 'live') {
-            return
-        }
+    private summarizeCaptureMedia(items: MediaFile[]) {
+        return items.map((item) => ({
+            media_type: item.media_type,
+            path: item.path,
+            file_name: item.path.split('/').pop() || item.path,
+            ...(item.sourceArticleId ? { source_article_id: item.sourceArticleId } : {}),
+            ...(item.sourceUserId ? { source_user_id: item.sourceUserId } : {}),
+            ...((item as { content_hash?: string }).content_hash
+                ? { content_hash: (item as { content_hash?: string }).content_hash }
+                : {}),
+            ...((item as { size_bytes?: number }).size_bytes
+                ? { size_bytes: (item as { size_bytes?: number }).size_bytes }
+                : {}),
+        }))
+    }
 
+    private buildOutboundDryRunDetails(
+        sendMode: ReturnType<typeof resolveOutboundSendMode>,
+        texts: string[],
+        props?: SendProps,
+    ): OutboundSendDryRunDetails {
         const media = props?.media || []
         const cardMedia = props?.cardMedia || []
         const contentMedia = props?.contentMedia || []
         const article = props?.article
-        throw new OutboundSendDryRunError({
+        return {
             send_mode: sendMode,
             target_id: this.id,
             forwarder: this.NAME,
@@ -597,7 +615,56 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             content_media_count: contentMedia.length,
             ...(article ? { article_key: `${article.platform}:${article.a_id}` } : {}),
             ...(props?.outboundKey ? { outbound_key: props.outboundKey } : {}),
-        })
+        }
+    }
+
+    private buildOutboundCapturePayload(
+        details: OutboundSendDryRunDetails,
+        texts: string[],
+        props?: SendProps,
+    ): OutboundCapturePayload {
+        const media = props?.media || []
+        const cardMedia = props?.cardMedia || []
+        const contentMedia = props?.contentMedia || []
+        const article = props?.article
+        return {
+            schema_version: 1,
+            send_mode: 'capture',
+            captured_at: new Date().toISOString(),
+            target_id: this.id,
+            forwarder: this.NAME,
+            text_count: details.text_count,
+            text_length: details.text_length,
+            texts,
+            media: this.summarizeCaptureMedia(media),
+            card_media: this.summarizeCaptureMedia(cardMedia),
+            content_media: this.summarizeCaptureMedia(contentMedia),
+            ...(article
+                ? {
+                      article: {
+                          id: article.id,
+                          a_id: article.a_id,
+                          platform: String(article.platform),
+                          ...(article.url ? { url: article.url } : {}),
+                      },
+                      article_key: details.article_key,
+                  }
+                : {}),
+            ...(details.outbound_key ? { outbound_key: details.outbound_key } : {}),
+        }
+    }
+
+    private async assertActualSendAllowed(texts: string[], props?: SendProps) {
+        const sendMode = resolveOutboundSendMode()
+        if (sendMode === 'live') {
+            return
+        }
+
+        const details = this.buildOutboundDryRunDetails(sendMode, texts, props)
+        if (sendMode === 'capture') {
+            details.capture_result = await captureOutboundSend(this.buildOutboundCapturePayload(details, texts, props))
+        }
+        throw new OutboundSendDryRunError(details)
     }
 
     protected abstract realSend(texts: string[], props?: SendProps): Promise<any>

@@ -16,6 +16,7 @@
         "converge:remote-source": "tools/forwarder-remote-converge.sh",
         "converge:forwarder-remote": "tools/forwarder-remote-converge.sh",
         "verify:forwarder": "tools/forwarder-green-gate.sh",
+        "receiver:forwarder-capture": "bun tools/forwarder-outbound-capture-receiver.ts",
         "format": "pnpm prettier --write . --ignore-path .prettierignore",
         "docs:dev": "bun --filter docs dev",
         "docs:build": "bun --filter docs build",

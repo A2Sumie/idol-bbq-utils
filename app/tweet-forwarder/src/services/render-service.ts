@@ -37,7 +37,7 @@ import {
     markVideoFingerprintSeen,
     persistMediaFile,
 } from './media-cache-service'
-import { resolveOutboundSendMode } from './outbound-send-mode'
+import { isNonLiveOutboundSendMode } from './outbound-send-mode'
 import { execFileSync } from 'child_process'
 
 export interface RenderedMediaFile {
@@ -128,7 +128,7 @@ export class RenderService {
         },
     ): Promise<RenderResult> {
         const { taskId, render_type, mediaConfig, deduplication } = config
-        const effectiveDeduplication = deduplication && resolveOutboundSendMode() !== 'blocked'
+        const effectiveDeduplication = deduplication && !isNonLiveOutboundSendMode()
         const cloned_article = cloneDeep(article)
 
         let maybe_media_files: Array<RenderedMediaFile> = []

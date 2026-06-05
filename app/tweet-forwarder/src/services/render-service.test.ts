@@ -1044,9 +1044,8 @@ describe('RenderService media deduplication', () => {
         DB.MediaHash.save = originalSave
     })
 
-    test('dry-run send mode does not mutate media dedup state or suppress media', async () => {
+    test('non-live send modes do not mutate media dedup state or suppress media', async () => {
         const originalMode = process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
-        process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = 'blocked'
         const calls = {
             checkExist: 0,
             save: 0,
@@ -1061,31 +1060,36 @@ describe('RenderService media deduplication', () => {
         }
 
         try {
-            const service = new RenderService()
-            const config = {
-                taskId: 'test-story-dry-run',
-                render_type: 'text-compact',
-                mediaConfig: {
-                    type: 'no-storage' as const,
-                    use: {
-                        tool: MediaToolEnum.DEFAULT,
+            for (const sendMode of ['blocked', 'capture']) {
+                process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = sendMode
+                calls.checkExist = 0
+                calls.save = 0
+                const service = new RenderService()
+                const config = {
+                    taskId: `test-story-${sendMode}`,
+                    render_type: 'text-compact',
+                    mediaConfig: {
+                        type: 'no-storage' as const,
+                        use: {
+                            tool: MediaToolEnum.DEFAULT,
+                        },
                     },
-                },
-                deduplication: true,
+                    deduplication: true,
+                }
+
+                const first = await service.process(buildMediaArticle(`story-${sendMode}-a`) as any, config)
+                const second = await service.process(buildMediaArticle(`story-${sendMode}-b`) as any, {
+                    ...config,
+                    taskId: `test-story-${sendMode}-2`,
+                })
+
+                expect(first.mediaFiles).toHaveLength(1)
+                expect(second.mediaFiles).toHaveLength(1)
+                expect(second.shouldSkipSend).toBeFalsy()
+                expect(calls).toEqual({ checkExist: 0, save: 0 })
+
+                service.cleanup([...first.mediaFiles, ...second.mediaFiles])
             }
-
-            const first = await service.process(buildMediaArticle('story-dry-a') as any, config)
-            const second = await service.process(buildMediaArticle('story-dry-b') as any, {
-                ...config,
-                taskId: 'test-story-dry-run-2',
-            })
-
-            expect(first.mediaFiles).toHaveLength(1)
-            expect(second.mediaFiles).toHaveLength(1)
-            expect(second.shouldSkipSend).toBeFalsy()
-            expect(calls).toEqual({ checkExist: 0, save: 0 })
-
-            service.cleanup([...first.mediaFiles, ...second.mediaFiles])
         } finally {
             DB.MediaHash.checkExist = originalCheckExist
             DB.MediaHash.save = originalSave
