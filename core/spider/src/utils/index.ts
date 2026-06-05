@@ -6,6 +6,17 @@ type NetscapeCookieParseOptions = {
     now?: number
 }
 
+type NetscapeCookieFileAudit = {
+    total_cookie_rows: number
+    usable_cookie_count: number
+    expired_cookie_count: number
+    session_cookie_count: number
+    malformed_cookie_count: number
+    http_only_cookie_count: number
+    domains: Array<string>
+    cookie_names: Array<string>
+}
+
 function splitNetscapeCookieLine(line: string) {
     if (line.includes('\t')) {
         const fields = line.split('\t')
@@ -24,6 +35,44 @@ function isExpiredCookie(expires: number, now: number) {
     return Number.isFinite(expires) && expires > 0 && expires <= now
 }
 
+function normalizeNetscapeCookieLine(line: string) {
+    const trimmed = line.trimEnd()
+    if (!trimmed.trim()) {
+        return null
+    }
+
+    const trimmedLine = trimmed.trimStart()
+    const httpOnly = trimmedLine.startsWith('#HttpOnly_')
+    const cookieLine = httpOnly ? trimmedLine.replace('#HttpOnly_', '') : trimmedLine
+    if (cookieLine.trimStart().startsWith('#')) {
+        return null
+    }
+
+    return {
+        line: cookieLine,
+        httpOnly,
+    }
+}
+
+function parseNetscapeCookieFields(line: string) {
+    const { fields } = splitNetscapeCookieLine(line)
+    const [domain = '', _includeSubdomain, path, secure, expiresRaw, name = '', value = ''] = fields
+    if (!domain || !path || !name || !expiresRaw) {
+        return null
+    }
+
+    return {
+        cookie: {
+            name,
+            value: value.trim(),
+            domain,
+            path,
+            expires: Number(expiresRaw),
+            secure: secure === 'TRUE',
+        },
+    }
+}
+
 /**
  * @description convert netscape cookie file to puppeteer cookie like https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc?hl=en
  * @param cookie_file path to cookie file
@@ -37,43 +86,79 @@ function parseNetscapeCookieToPuppeteerCookie(
     const lines = fs.readFileSync(cookie_file, 'utf8').split('\n')
     const cookies = []
     for (let line of lines) {
-        line = line.trimEnd()
-        if (!line.trim()) {
+        const normalized = normalizeNetscapeCookieLine(line)
+        if (!normalized) {
             continue
         }
 
-        //  ref: https://github.com/Moustachauve/cookie-editor
-        const trimmedLine = line.trimStart()
-        const httpOnly = trimmedLine.startsWith('#HttpOnly_')
-        if (httpOnly) {
-            line = trimmedLine.replace('#HttpOnly_', '')
-        }
-        if (line.trimStart().startsWith('#')) {
+        const parsed = parseNetscapeCookieFields(normalized.line)
+        if (!parsed) {
             continue
         }
 
-        const { fields } = splitNetscapeCookieLine(line)
-        const [domain = '', _includeSubdomain, path, secure, expiresRaw, name = '', value = ''] = fields
-        if (!domain || !path || !name || !expiresRaw) {
-            continue
-        }
-
-        const expires = Number(expiresRaw)
-        if (!options.includeExpired && isExpiredCookie(expires, now)) {
+        if (!options.includeExpired && isExpiredCookie(parsed.cookie.expires, now)) {
             continue
         }
 
         cookies.push({
-            name,
-            value: value.trim(),
-            domain,
-            path,
-            expires,
-            httpOnly,
-            secure: secure === 'TRUE',
+            ...parsed.cookie,
+            httpOnly: normalized.httpOnly,
         })
     }
     return cookies
+}
+
+function auditNetscapeCookieFile(
+    cookie_file: string,
+    options: Pick<NetscapeCookieParseOptions, 'now'> = {},
+): NetscapeCookieFileAudit {
+    const now = options.now ?? Math.floor(Date.now() / 1000)
+    const lines = fs.readFileSync(cookie_file, 'utf8').split('\n')
+    const domains = new Set<string>()
+    const cookieNames = new Set<string>()
+    const audit: NetscapeCookieFileAudit = {
+        total_cookie_rows: 0,
+        usable_cookie_count: 0,
+        expired_cookie_count: 0,
+        session_cookie_count: 0,
+        malformed_cookie_count: 0,
+        http_only_cookie_count: 0,
+        domains: [],
+        cookie_names: [],
+    }
+
+    for (const line of lines) {
+        const normalized = normalizeNetscapeCookieLine(line)
+        if (!normalized) {
+            continue
+        }
+        audit.total_cookie_rows += 1
+
+        const parsed = parseNetscapeCookieFields(normalized.line)
+        if (!parsed) {
+            audit.malformed_cookie_count += 1
+            continue
+        }
+
+        if (normalized.httpOnly) {
+            audit.http_only_cookie_count += 1
+        }
+        if (isExpiredCookie(parsed.cookie.expires, now)) {
+            audit.expired_cookie_count += 1
+            continue
+        }
+
+        audit.usable_cookie_count += 1
+        if (!Number.isFinite(parsed.cookie.expires) || parsed.cookie.expires <= 0) {
+            audit.session_cookie_count += 1
+        }
+        domains.add(parsed.cookie.domain.replace(/^\./, '').toLowerCase())
+        cookieNames.add(parsed.cookie.name)
+    }
+
+    audit.domains = Array.from(domains).filter(Boolean).sort()
+    audit.cookie_names = Array.from(cookieNames).filter(Boolean).sort()
+    return audit
 }
 
 function getCookieString(cookies: Array<CookieData>): string {
@@ -120,6 +205,7 @@ class SimpleExpiringCache {
     }
 }
 
-export { parseNetscapeCookieToPuppeteerCookie, getCookieString, SimpleExpiringCache }
+export { parseNetscapeCookieToPuppeteerCookie, auditNetscapeCookieFile, getCookieString, SimpleExpiringCache }
+export type { NetscapeCookieFileAudit }
 export * from './http'
 export * from './browser'

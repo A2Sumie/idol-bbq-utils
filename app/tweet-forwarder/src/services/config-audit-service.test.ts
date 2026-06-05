@@ -1,4 +1,7 @@
 import { expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
 import { buildConfigAudit } from './config-audit-service'
 import { buildRuntimeManifest } from './runtime-manifest-service'
 
@@ -67,6 +70,11 @@ test('buildConfigAudit exposes policy evidence without secret values', () => {
         'forward_targets[0].cfg_platform.token',
     ])
     expect(audit.route_graph.counts.routes).toBe(1)
+    expect(audit.cookie_audit.counts).toMatchObject({
+        crawlers_with_cookie_files: 1,
+        missing_files: 1,
+        unhealthy_crawlers: 1,
+    })
     expect(audit.route_graph.summary_card_routes[0]?.policy.summary_card).toMatchObject({
         interval_seconds: 7200,
         send_first_native: true,
@@ -81,6 +89,62 @@ test('buildConfigAudit exposes policy evidence without secret values', () => {
     expect(serialized).not.toContain('bot-token')
     expect(serialized).not.toContain('/tmp/private-cookies.txt')
     expect(serialized).toContain('api.secret')
+})
+
+test('buildConfigAudit reports cookie health without cookie paths or values', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-config-cookie-audit-'))
+    try {
+        const cookieFile = join(dir, 'instagram.cookies.txt')
+        writeFileSync(
+            cookieFile,
+            [
+                '.instagram.com\tTRUE\t/\tTRUE\t1000\tsessionid\told-session',
+                '.instagram.com\tTRUE\t/\tTRUE\t3000\tcsrftoken\tcsrf-value',
+                '.instagram.com\tTRUE\t/\tFALSE\t0\trur\tsession-value',
+            ].join('\n'),
+        )
+        const config = makeConfig()
+        config.crawlers[0].origin = 'https://www.instagram.com'
+
+        const audit = buildConfigAudit(config, {
+            now: 2000,
+            resolveCookieFile: () => cookieFile,
+        })
+        const serialized = JSON.stringify(audit)
+
+        expect(audit.cookie_audit.counts).toMatchObject({
+            crawlers_with_cookie_files: 1,
+            existing_files: 1,
+            unhealthy_crawlers: 1,
+        })
+        expect(audit.cookie_audit.diagnostics).toEqual([
+            {
+                severity: 'warn',
+                code: 'cookie_required_names_missing',
+                crawler_id: 'crawler-x',
+            },
+        ])
+        expect(audit.cookie_audit.crawlers[0]).toMatchObject({
+            crawler_id: 'crawler-x',
+            platform_hint: 'instagram',
+            status: 'warn',
+            usable_cookie_count: 2,
+            expired_cookie_count: 1,
+            session_cookie_count: 1,
+            domains: ['instagram.com'],
+            cookie_names: ['csrftoken', 'rur'],
+            required_cookie_names: {
+                present: ['csrftoken'],
+                missing: ['sessionid'],
+            },
+        })
+        expect(serialized).not.toContain(cookieFile)
+        expect(serialized).not.toContain('old-session')
+        expect(serialized).not.toContain('csrf-value')
+        expect(serialized).not.toContain('session-value')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
 })
 
 test('buildConfigAudit policy hash is stable and changes with route policy', () => {

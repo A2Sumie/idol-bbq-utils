@@ -1,4 +1,6 @@
 import crypto from 'crypto'
+import fs from 'fs'
+import { auditNetscapeCookieFile, type NetscapeCookieFileAudit } from '@idol-bbq-utils/spider'
 import type { AppConfig } from '@/types'
 import { buildRouteGraph, type RouteGraphDiagnostic, type RouteGraphRoute } from './route-graph-service'
 import { collectSensitiveConfigPaths, redactSecrets } from './redaction-service'
@@ -17,6 +19,37 @@ type ConfigAuditRoute = Pick<
 
 type ConfigAuditDiagnostic = Pick<RouteGraphDiagnostic, 'severity' | 'code' | 'route_key'>
 
+type CookieAuditPlatform = 'x' | 'instagram' | 'tiktok' | 'youtube' | 'unknown'
+
+type ConfigAuditCookieCrawler = {
+    crawler_id: string
+    crawler_name: string
+    platform_hint: CookieAuditPlatform
+    exists: boolean
+    status: 'ok' | 'warn' | 'missing' | 'unreadable'
+    usable_cookie_count: number
+    expired_cookie_count: number
+    session_cookie_count: number
+    malformed_cookie_count: number
+    domains: Array<string>
+    cookie_names: Array<string>
+    required_cookie_names: {
+        present: Array<string>
+        missing: Array<string>
+    }
+}
+
+type ConfigAuditCookieDiagnostic = {
+    severity: 'warn'
+    code: string
+    crawler_id: string
+}
+
+type ConfigAuditOptions = {
+    now?: number
+    resolveCookieFile?: (cookieFile: string) => string | null | undefined
+}
+
 type ConfigAudit = {
     generated_at: string
     redacted_config_hash: string
@@ -32,6 +65,25 @@ type ConfigAudit = {
         policy_routes: Array<ConfigAuditRoute>
         summary_card_routes: Array<ConfigAuditRoute>
     }
+    cookie_audit: {
+        counts: {
+            crawlers_with_cookie_files: number
+            existing_files: number
+            missing_files: number
+            unreadable_files: number
+            unhealthy_crawlers: number
+        }
+        diagnostics: Array<ConfigAuditCookieDiagnostic>
+        crawlers: Array<ConfigAuditCookieCrawler>
+    }
+}
+
+const REQUIRED_COOKIE_NAMES: Record<CookieAuditPlatform, Array<string>> = {
+    x: ['auth_token', 'ct0'],
+    instagram: ['sessionid', 'csrftoken'],
+    tiktok: ['sessionid'],
+    youtube: [],
+    unknown: [],
 }
 
 function stableSerialize(value: unknown): string {
@@ -92,12 +144,147 @@ function buildPolicyHashInput(routes: Array<ConfigAuditRoute>, diagnostics: Arra
     }
 }
 
-function buildConfigAudit(config: AppConfig): ConfigAudit {
+function nodeId(value: { id?: string; name?: string } | undefined, fallback: string) {
+    return String(value?.id || value?.name || fallback).trim()
+}
+
+function nodeName(value: { id?: string; name?: string } | undefined, fallback: string) {
+    return String(value?.name || value?.id || fallback).trim()
+}
+
+function inferCookiePlatform(crawler: any): CookieAuditPlatform {
+    const candidates = [crawler?.origin, ...(Array.isArray(crawler?.websites) ? crawler.websites : [])]
+
+    for (const candidate of candidates) {
+        try {
+            const hostname = new URL(candidate).hostname.replace(/^www\./, '').toLowerCase()
+            if (hostname === 'x.com' || hostname === 'twitter.com') {
+                return 'x'
+            }
+            if (hostname === 'instagram.com') {
+                return 'instagram'
+            }
+            if (hostname === 'tiktok.com') {
+                return 'tiktok'
+            }
+            if (hostname === 'youtube.com' || hostname === 'youtu.be') {
+                return 'youtube'
+            }
+        } catch {
+            continue
+        }
+    }
+
+    return 'unknown'
+}
+
+function emptyCookieMetadata(): NetscapeCookieFileAudit {
+    return {
+        total_cookie_rows: 0,
+        usable_cookie_count: 0,
+        expired_cookie_count: 0,
+        session_cookie_count: 0,
+        malformed_cookie_count: 0,
+        http_only_cookie_count: 0,
+        domains: [],
+        cookie_names: [],
+    }
+}
+
+function buildCookieAudit(config: AppConfig, options: ConfigAuditOptions = {}): ConfigAudit['cookie_audit'] {
+    const crawlers = [] as Array<ConfigAuditCookieCrawler>
+    const diagnostics = [] as Array<ConfigAuditCookieDiagnostic>
+
+    for (const [index, crawler] of (config.crawlers || []).entries()) {
+        const cookieFile = crawler.cfg_crawler?.cookie_file
+        if (!cookieFile) {
+            continue
+        }
+
+        const crawlerId = nodeId(crawler, `crawler-${index}`)
+        const crawlerName = nodeName(crawler, crawlerId)
+        const platform = inferCookiePlatform(crawler)
+        const requiredCookieNames = REQUIRED_COOKIE_NAMES[platform]
+        let metadata = emptyCookieMetadata()
+        let exists = false
+        let status: ConfigAuditCookieCrawler['status'] = 'missing'
+
+        try {
+            const resolvedCookieFile = options.resolveCookieFile?.(cookieFile) ?? cookieFile
+            if (resolvedCookieFile) {
+                exists = fs.existsSync(resolvedCookieFile)
+                if (exists) {
+                    metadata = auditNetscapeCookieFile(resolvedCookieFile, { now: options.now })
+                    status = 'ok'
+                }
+            }
+        } catch {
+            status = 'unreadable'
+        }
+
+        const present = requiredCookieNames.filter((name) => metadata.cookie_names.includes(name))
+        const missing = requiredCookieNames.filter((name) => !metadata.cookie_names.includes(name))
+        if (status === 'ok' && (metadata.usable_cookie_count === 0 || missing.length > 0 || metadata.malformed_cookie_count > 0)) {
+            status = 'warn'
+        }
+
+        if (status !== 'ok') {
+            const code =
+                status === 'missing'
+                    ? 'cookie_file_missing'
+                    : status === 'unreadable'
+                      ? 'cookie_file_unreadable'
+                      : missing.length > 0
+                        ? 'cookie_required_names_missing'
+                        : metadata.usable_cookie_count === 0
+                          ? 'cookie_file_has_no_usable_rows'
+                          : 'cookie_file_has_malformed_rows'
+            diagnostics.push({
+                severity: 'warn',
+                code,
+                crawler_id: crawlerId,
+            })
+        }
+
+        crawlers.push({
+            crawler_id: crawlerId,
+            crawler_name: crawlerName,
+            platform_hint: platform,
+            exists,
+            status,
+            usable_cookie_count: metadata.usable_cookie_count,
+            expired_cookie_count: metadata.expired_cookie_count,
+            session_cookie_count: metadata.session_cookie_count,
+            malformed_cookie_count: metadata.malformed_cookie_count,
+            domains: metadata.domains,
+            cookie_names: metadata.cookie_names,
+            required_cookie_names: {
+                present,
+                missing,
+            },
+        })
+    }
+
+    return {
+        counts: {
+            crawlers_with_cookie_files: crawlers.length,
+            existing_files: crawlers.filter((crawler) => crawler.exists).length,
+            missing_files: crawlers.filter((crawler) => crawler.status === 'missing').length,
+            unreadable_files: crawlers.filter((crawler) => crawler.status === 'unreadable').length,
+            unhealthy_crawlers: crawlers.filter((crawler) => crawler.status !== 'ok').length,
+        },
+        diagnostics,
+        crawlers,
+    }
+}
+
+function buildConfigAudit(config: AppConfig, options: ConfigAuditOptions = {}): ConfigAudit {
     const redactedConfig = redactSecrets(config)
     const routeGraph = buildRouteGraph(config)
     const policyRoutes = routeGraph.routes.map(projectRoute)
     const summaryCardRoutes = policyRoutes.filter((route) => route.mode.summary_card)
     const sensitivePaths = collectSensitiveConfigPaths(config)
+    const cookieAudit = buildCookieAudit(config, options)
 
     return {
         generated_at: new Date().toISOString(),
@@ -114,6 +301,7 @@ function buildConfigAudit(config: AppConfig): ConfigAudit {
             policy_routes: policyRoutes,
             summary_card_routes: summaryCardRoutes,
         },
+        cookie_audit: cookieAudit,
     }
 }
 

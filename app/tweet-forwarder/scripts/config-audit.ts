@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import fs from 'fs'
+import path from 'path'
 import YAML from 'yaml'
 import { buildConfigAudit, type ConfigAudit } from '../src/services/config-audit-service'
 import { SENSITIVE_KEY_PATTERN } from '../src/services/redaction-service'
@@ -70,6 +71,24 @@ function readConfig(configPath: string): AppConfig {
     return normalizePipelinesForRuntime(parsed)
 }
 
+function resolveCookieFile(cookieFile: string, configPath: string) {
+    if (!cookieFile.trim()) {
+        return null
+    }
+
+    if (path.isAbsolute(cookieFile)) {
+        if (fs.existsSync(cookieFile)) {
+            return cookieFile
+        }
+        if (cookieFile.startsWith('/app/')) {
+            return path.resolve(process.cwd(), cookieFile.slice('/app/'.length))
+        }
+        return cookieFile
+    }
+
+    return path.resolve(path.dirname(configPath), cookieFile)
+}
+
 function collectSensitiveValues(value: unknown) {
     const values = new Set<string>()
 
@@ -106,6 +125,7 @@ function assertNoSensitiveValues(output: string, config: AppConfig) {
 
 function buildSummary(configPath: string, audit: ConfigAudit) {
     const diagnosticCodes = audit.route_graph.diagnostics.map((diagnostic) => diagnostic.code).sort()
+    const cookieDiagnosticCodes = audit.cookie_audit.diagnostics.map((diagnostic) => diagnostic.code).sort()
 
     return {
         ok: audit.route_graph.counts.errors === 0,
@@ -120,13 +140,19 @@ function buildSummary(configPath: string, audit: ConfigAudit) {
             operational_crawlers: audit.route_graph.operational_crawlers,
             summary_card_routes: audit.route_graph.summary_card_routes.length,
         },
+        cookie_audit: {
+            counts: audit.cookie_audit.counts,
+            diagnostic_codes: cookieDiagnosticCodes,
+        },
     }
 }
 
 function main() {
     const args = parseArgs(process.argv.slice(2))
     const config = readConfig(args.configPath)
-    const audit = buildConfigAudit(config)
+    const audit = buildConfigAudit(config, {
+        resolveCookieFile: (cookieFile) => resolveCookieFile(cookieFile, args.configPath),
+    })
     const payload = args.format === 'json' ? audit : buildSummary(args.configPath, audit)
     const output = `${JSON.stringify(payload, null, 2)}\n`
     assertNoSensitiveValues(output, config)

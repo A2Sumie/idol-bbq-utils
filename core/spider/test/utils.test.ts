@@ -2,7 +2,12 @@ import { expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
-import { getCookieString, parseNetscapeCookieToPuppeteerCookie, SimpleExpiringCache } from '../src/utils'
+import {
+    auditNetscapeCookieFile,
+    getCookieString,
+    parseNetscapeCookieToPuppeteerCookie,
+    SimpleExpiringCache,
+} from '../src/utils'
 
 function withCookieFile(content: string, run: (file: string) => void) {
     const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-cookie-test-'))
@@ -72,6 +77,34 @@ test('Netscape cookie parser preserves HttpOnly cookies and can include expired 
                     secure: false,
                 },
             ])
+        },
+    )
+})
+
+test('Netscape cookie audit returns no-value metadata', () => {
+    withCookieFile(
+        [
+            '# Netscape HTTP Cookie File',
+            '#HttpOnly_.x.com\tTRUE\t/\tTRUE\t3000\tct0\tcsrf-token',
+            '.x.com\tTRUE\t/\tTRUE\t1000\tgt\told-guest-token',
+            '.x.com\tTRUE\t/\tFALSE\t0\tlang\tja',
+            'malformed row',
+        ].join('\n'),
+        (file) => {
+            const audit = auditNetscapeCookieFile(file, { now: 2000 })
+
+            expect(audit).toEqual({
+                total_cookie_rows: 4,
+                usable_cookie_count: 2,
+                expired_cookie_count: 1,
+                session_cookie_count: 1,
+                malformed_cookie_count: 1,
+                http_only_cookie_count: 1,
+                domains: ['x.com'],
+                cookie_names: ['ct0', 'lang'],
+            })
+            expect(JSON.stringify(audit)).not.toContain('csrf-token')
+            expect(JSON.stringify(audit)).not.toContain('old-guest-token')
         },
     )
 })
