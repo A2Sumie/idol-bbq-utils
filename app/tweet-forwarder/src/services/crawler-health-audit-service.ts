@@ -194,6 +194,16 @@ function inferXProbeTarget(crawler: any): XLiveProbeTarget | undefined {
     return undefined
 }
 
+function serializeXProbeTarget(target?: XLiveProbeTarget) {
+    if (!target) {
+        return 'fallback'
+    }
+    if (target.kind === 'list') {
+        return `list:${target.id}`
+    }
+    return `user:${target.screen_name.toLowerCase()}`
+}
+
 function mergeStatus(staticStatus: CrawlerHealthStatus, liveStatus: CrawlerHealthStatus): CrawlerHealthStatus {
     if (staticStatus === 'fail' || liveStatus === 'fail') return 'fail'
     if (staticStatus === 'warn' || liveStatus === 'warn') return 'warn'
@@ -645,7 +655,7 @@ async function runLiveProbe(
 async function probeCrawlerCookieLiveHealth(
     platform: CookieHealthPlatform,
     cookies: Array<CookieData>,
-    options: Pick<CrawlerHealthAuditOptions, 'fetch' | 'timeoutMs'> = {},
+    options: Pick<CrawlerHealthAuditOptions, 'fetch' | 'timeoutMs' | 'xProbeTarget'> = {},
 ): Promise<CrawlerCookieLiveProbeResult> {
     const auditPlatform: CrawlerHealthPlatform = platform === 'website' ? 'unknown' : platform
     const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs || 15_000)))
@@ -669,6 +679,7 @@ async function buildCrawlerLiveHealthAudit(
     const timeoutMs = Math.max(1000, Math.floor(Number(options.timeoutMs || 15_000)))
     const platformFilter = new Set(options.platforms || Array.from(LIVE_PROBE_PLATFORMS))
     const results: Array<CrawlerHealthResult> = []
+    const liveProbeCache = new Map<string, Promise<CrawlerCookieLiveProbeResult>>()
 
     for (const [index, crawler] of (config.crawlers || []).entries()) {
         const platform = inferCrawlerPlatform(crawler)
@@ -682,17 +693,18 @@ async function buildCrawlerLiveHealthAudit(
         let exists = false
         let metadata = emptyCookieMetadata()
         let cookies: Array<CookieData> = []
+        let resolvedCookieFile: string | null | undefined
         const diagnosticCodes = [] as Array<string>
 
         if (!cookieFile) {
             diagnosticCodes.push('cookie_file_not_configured')
         } else {
             try {
-                const resolved = options.resolveCookieFile?.(cookieFile) ?? cookieFile
-                exists = Boolean(resolved && fs.existsSync(resolved))
-                if (resolved && exists) {
-                    metadata = auditNetscapeCookieFile(resolved, { now: options.now })
-                    cookies = parseNetscapeCookieToPuppeteerCookie(resolved, { now: options.now })
+                resolvedCookieFile = options.resolveCookieFile?.(cookieFile) ?? cookieFile
+                exists = Boolean(resolvedCookieFile && fs.existsSync(resolvedCookieFile))
+                if (resolvedCookieFile && exists) {
+                    metadata = auditNetscapeCookieFile(resolvedCookieFile, { now: options.now })
+                    cookies = parseNetscapeCookieToPuppeteerCookie(resolvedCookieFile, { now: options.now })
                 } else {
                     diagnosticCodes.push('cookie_file_missing')
                 }
@@ -721,9 +733,20 @@ async function buildCrawlerLiveHealthAudit(
             http_status: null,
         }
         if (staticStatus !== 'fail' && LIVE_PROBE_PLATFORMS.has(platform)) {
-            liveProbe = await runLiveProbe(platform, cookies, fetchImpl, timeoutMs, {
-                xProbeTarget: platform === 'x' ? inferXProbeTarget(crawler) : undefined,
-            })
+            const xProbeTarget = platform === 'x' ? inferXProbeTarget(crawler) : undefined
+            const cacheKey = [
+                platform,
+                resolvedCookieFile || cookieFile || '<none>',
+                platform === 'x' ? serializeXProbeTarget(xProbeTarget) : 'default',
+            ].join('|')
+            let pendingProbe = liveProbeCache.get(cacheKey)
+            if (!pendingProbe) {
+                pendingProbe = runLiveProbe(platform, cookies, fetchImpl, timeoutMs, {
+                    xProbeTarget,
+                })
+                liveProbeCache.set(cacheKey, pendingProbe)
+            }
+            liveProbe = await pendingProbe
         }
 
         results.push({

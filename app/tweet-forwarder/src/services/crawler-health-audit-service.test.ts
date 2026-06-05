@@ -265,3 +265,66 @@ test('buildCrawlerLiveHealthAudit probes TikTok with crawler-compatible headers'
         rmSync(dir, { recursive: true, force: true })
     }
 })
+
+test('buildCrawlerLiveHealthAudit reuses live probes for shared cookie files', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
+    try {
+        const cookieFile = join(dir, 'instagram.cookies.txt')
+        writeFileSync(
+            cookieFile,
+            [
+                '.instagram.com\tTRUE\t/\tTRUE\t9999999999\tsessionid\tsession-value',
+                '.instagram.com\tTRUE\t/\tTRUE\t9999999999\tcsrftoken\tcsrf-value',
+            ].join('\n'),
+            'utf8',
+        )
+        let fetchCalls = 0
+        const audit = await buildCrawlerLiveHealthAudit(
+            {
+                crawlers: [
+                    {
+                        id: 'instagram-a',
+                        name: 'Instagram A',
+                        origin: 'https://www.instagram.com',
+                        cfg_crawler: { cookie_file: cookieFile },
+                    },
+                    {
+                        id: 'instagram-b',
+                        name: 'Instagram B',
+                        origin: 'https://www.instagram.com',
+                        cfg_crawler: { cookie_file: cookieFile },
+                    },
+                    {
+                        id: 'instagram-c',
+                        name: 'Instagram C',
+                        origin: 'https://www.instagram.com',
+                        cfg_crawler: { cookie_file: cookieFile },
+                    },
+                ],
+            } as any,
+            {
+                fetch: (async () => {
+                    fetchCalls += 1
+                    return new Response(JSON.stringify({ data: { user: { username: 'instagram' } } }), {
+                        status: 200,
+                        headers: { 'content-type': 'application/json' },
+                    })
+                }) as any,
+            },
+        )
+
+        expect(fetchCalls).toBe(1)
+        expect(audit.counts).toMatchObject({
+            checked: 3,
+            ok: 3,
+            fail: 0,
+        })
+        expect(audit.results.map((result) => result.live_probe)).toEqual([
+            { checked: true, status: 'ok', http_status: 200 },
+            { checked: true, status: 'ok', http_status: 200 },
+            { checked: true, status: 'ok', http_status: 200 },
+        ])
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+})
