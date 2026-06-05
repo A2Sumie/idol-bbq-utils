@@ -40,6 +40,10 @@ import { buildNotificationSignalRecord, type NotificationSignalInput } from '@/s
 import { buildNotificationSignalSummary } from '@/services/notification-signal-summary-service'
 import { redactTaskQueueEntriesForApi } from '@/services/task-queue-redaction-service'
 import { redactProcessorRunsForApi } from '@/services/processor-run-redaction-service'
+import {
+    redactOutboundMessagesForApi,
+    redactTargetHealthEntriesForApi,
+} from '@/services/outbound-state-redaction-service'
 
 interface ApiConfig {
     port?: number
@@ -971,11 +975,11 @@ export class APIManager extends BaseCompatibleModel {
     private async handleOutboundMessages(url: URL): Promise<Response> {
         const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '100'), 200))
         const status = url.searchParams.get('status') || undefined
-        return jsonResponse(await DB.OutboundMessage.list(limit, status))
+        return jsonResponse(redactOutboundMessagesForApi(await DB.OutboundMessage.list(limit, status)))
     }
 
     private async handleTargetHealth(): Promise<Response> {
-        return jsonResponse(await DB.TargetHealth.list())
+        return jsonResponse(redactTargetHealthEntriesForApi(await DB.TargetHealth.list()))
     }
 
     private async handleProcessorRuns(url: URL): Promise<Response> {

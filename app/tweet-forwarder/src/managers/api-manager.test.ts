@@ -574,6 +574,177 @@ test('APIManager processor run list redacts input output and source refs', async
     }
 })
 
+test('APIManager outbound message list redacts delivery identifiers and provider details', async () => {
+    const originalOutboundList = DB.OutboundMessage.list
+    const calls: any[] = []
+
+    ;(DB.OutboundMessage as any).list = async (limit: number, status?: string) => {
+        calls.push({ limit, status })
+        return [
+            {
+                id: 1,
+                idempotency_key: 'article:remote-private-target:1:remote-private-article',
+                route_key: 'graph:remote-private-crawler:formatter:remote-private-target',
+                target_id: 'remote-private-target',
+                target_platform: 'QQ',
+                task_kind: 'article',
+                article_key: '1:remote-private-article',
+                synthetic_key: 'remote-private-window',
+                payload_hash: 'remote-private-payload-hash',
+                status: 'dry_run',
+                provider_message_ids: {
+                    send_mode: 'capture',
+                    target_id: 'remote-private-target',
+                    text_count: 1,
+                    text_length: 31,
+                    media_count: 1,
+                    article_key: '1:remote-private-article',
+                    outbound_key: 'article:remote-private-target:1:remote-private-article',
+                    capture_result: {
+                        kind: 'file',
+                        destination: '/tmp/remote-private-capture.jsonl',
+                        ok: true,
+                    },
+                },
+                segment_results: {
+                    diagnostic: 'suppressed_payload_drift',
+                    previous_segment_results: [{ message_id: 'remote-private-message-id' }],
+                },
+                last_error: 'remote-private-send-error',
+            },
+        ]
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).handleOutboundMessages(
+            new URL('http://localhost/api/outbound-messages?limit=999&status=dry_run'),
+        )
+        expect(response.status).toBe(200)
+        const messages = await response.json()
+        const serialized = JSON.stringify(messages)
+
+        expect(calls).toEqual([{ limit: 200, status: 'dry_run' }])
+        expect(messages[0]).toMatchObject({
+            idempotency_key: '[redacted]',
+            route_key: '[redacted]',
+            target_id: '[redacted]',
+            article_key: '[redacted]',
+            synthetic_key: '[redacted]',
+            payload_hash: '[redacted]',
+            provider_message_ids: {
+                redacted_value: true,
+                send_mode: 'capture',
+                text_count: 1,
+                text_length: 31,
+                media_count: 1,
+                target_id_present: true,
+                article_key_present: true,
+                outbound_key_present: true,
+                capture_result: {
+                    redacted_value: true,
+                    kind: 'file',
+                    ok: true,
+                    destination_present: true,
+                },
+            },
+            segment_results: {
+                redacted_value: true,
+                diagnostic_present: true,
+            },
+            last_error: {
+                redacted_text: true,
+                text_present: true,
+                text_length: 'remote-private-send-error'.length,
+            },
+        })
+        expect(serialized).not.toContain('remote-private-target')
+        expect(serialized).not.toContain('remote-private-article')
+        expect(serialized).not.toContain('remote-private-window')
+        expect(serialized).not.toContain('remote-private-payload-hash')
+        expect(serialized).not.toContain('remote-private-capture')
+        expect(serialized).not.toContain('remote-private-message-id')
+        expect(serialized).not.toContain('remote-private-send-error')
+    } finally {
+        ;(DB.OutboundMessage as any).list = originalOutboundList
+    }
+})
+
+test('APIManager target health redacts target ids and send details', async () => {
+    const originalTargetHealthList = DB.TargetHealth.list
+
+    ;(DB.TargetHealth as any).list = async () => [
+        {
+            target_id: 'remote-private-target',
+            provider: 'QQ',
+            status: 'error',
+            last_send_status: 'failed',
+            last_provider_code: '500',
+            disabled_reason: 'remote-private-disabled-reason',
+            details: {
+                route_key: 'graph:remote-private-target',
+                article_key: '1:remote-private-article',
+                target_id: 'remote-private-target',
+                status: 'failed',
+                data: {
+                    code: 500,
+                    message: 'remote-private-provider-message',
+                },
+            },
+        },
+    ]
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).handleTargetHealth()
+        expect(response.status).toBe(200)
+        const health = await response.json()
+        const serialized = JSON.stringify(health)
+
+        expect(health[0]).toMatchObject({
+            target_id: '[redacted]',
+            provider: 'QQ',
+            status: 'error',
+            disabled_reason: {
+                redacted_text: true,
+                text_present: true,
+                text_length: 'remote-private-disabled-reason'.length,
+            },
+            details: {
+                redacted_value: true,
+                status: 'failed',
+                provider_code: 500,
+                target_id_present: true,
+                article_key_present: true,
+            },
+        })
+        expect(serialized).not.toContain('remote-private-target')
+        expect(serialized).not.toContain('remote-private-article')
+        expect(serialized).not.toContain('remote-private-disabled-reason')
+        expect(serialized).not.toContain('remote-private-provider-message')
+    } finally {
+        ;(DB.TargetHealth as any).list = originalTargetHealthList
+    }
+})
+
 test('APIManager notification signal summary returns no-secret observation metrics', async () => {
     const originalTaskList = DB.TaskQueue.list
     const calls: any[] = []
