@@ -44,6 +44,17 @@ import {
     redactOutboundMessagesForApi,
     redactTargetHealthEntriesForApi,
 } from '@/services/outbound-state-redaction-service'
+import {
+    publicRuntimeLogFileMetadata,
+    redactRuntimeLogLinesForApi,
+} from '@/services/runtime-log-redaction-service'
+import {
+    normalizeRedactedArchiveUploadRequest,
+    redactArchiveDetailForApi,
+    redactArchiveErrorMessageForApi,
+    redactArchiveListForApi,
+    redactArchiveUploadResultForApi,
+} from '@/services/archive-admin-redaction-service'
 
 interface ApiConfig {
     port?: number
@@ -904,12 +915,12 @@ export class APIManager extends BaseCompatibleModel {
         const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '200'), 1000))
         const file = latestLogFile()
         if (!file) {
-            return jsonResponse({ lines: [], file: null })
+            return jsonResponse({ ...publicRuntimeLogFileMetadata(null), lines: [] })
         }
         const text = fs.readFileSync(file, 'utf8')
         return jsonResponse({
-            file,
-            lines: tailLines(text, limit),
+            ...publicRuntimeLogFileMetadata(file),
+            lines: redactRuntimeLogLinesForApi(tailLines(text, limit)),
         })
     }
 
@@ -992,10 +1003,10 @@ export class APIManager extends BaseCompatibleModel {
         try {
             const limit = Math.max(1, Math.min(Number(url.searchParams.get('limit') || '80'), 200))
             const query = String(url.searchParams.get('q') || '').trim()
-            return jsonResponse(listArchives(this.config, { limit, query }))
+            return jsonResponse(redactArchiveListForApi(listArchives(this.config, { limit, query })))
         } catch (error) {
             this.log?.error('Archive list error:', error)
-            return new Response(`Failed to list archives: ${error instanceof Error ? error.message : String(error)}`, {
+            return new Response(`Failed to list archives: ${redactArchiveErrorMessageForApi(error)}`, {
                 status: 500,
             })
         }
@@ -1003,9 +1014,9 @@ export class APIManager extends BaseCompatibleModel {
 
     private async handleArchiveDetail(archiveId: string): Promise<Response> {
         try {
-            return jsonResponse(getArchiveDetail(this.config, decodeURIComponent(archiveId)))
+            return jsonResponse(redactArchiveDetailForApi(getArchiveDetail(this.config, decodeURIComponent(archiveId))))
         } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = redactArchiveErrorMessageForApi(error)
             return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
         }
     }
@@ -1022,7 +1033,7 @@ export class APIManager extends BaseCompatibleModel {
                 },
             })
         } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = redactArchiveErrorMessageForApi(error)
             return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
         }
     }
@@ -1038,7 +1049,7 @@ export class APIManager extends BaseCompatibleModel {
                 },
             })
         } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = redactArchiveErrorMessageForApi(error)
             return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
         }
     }
@@ -1074,7 +1085,7 @@ export class APIManager extends BaseCompatibleModel {
                 }),
             })
         } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
+            const message = redactArchiveErrorMessageForApi(error)
             return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
         }
     }
@@ -1085,11 +1096,16 @@ export class APIManager extends BaseCompatibleModel {
 
         try {
             const body = (await req.json()) as any
-            const result = await uploadArchiveToBilibili(this.config, decodeURIComponent(archiveId), body, this.log)
-            return jsonResponse(result)
+            const result = await uploadArchiveToBilibili(
+                this.config,
+                decodeURIComponent(archiveId),
+                normalizeRedactedArchiveUploadRequest(body),
+                this.log,
+            )
+            return jsonResponse(redactArchiveUploadResultForApi(result))
         } catch (error) {
             this.log?.error('Archive upload error:', error)
-            return new Response(`Failed to upload archive: ${error instanceof Error ? error.message : String(error)}`, {
+            return new Response(`Failed to upload archive: ${redactArchiveErrorMessageForApi(error)}`, {
                 status: 500,
             })
         }

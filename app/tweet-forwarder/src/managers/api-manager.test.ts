@@ -2,7 +2,8 @@ import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import { APIManager } from './api-manager'
-import { existsSync, mkdtempSync, rmSync } from 'fs'
+import { CACHE_DIR_ROOT } from '@/config'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -826,6 +827,56 @@ test('APIManager notification signal summary returns no-secret observation metri
         expect(serialized).not.toContain('private-member')
     } finally {
         ;(DB.TaskQueue as any).list = originalTaskList
+    }
+})
+
+test('APIManager runtime logs exposes only redacted log metadata and lines', async () => {
+    const logsDir = join(CACHE_DIR_ROOT, 'logs')
+    mkdirSync(logsDir, { recursive: true })
+    const fileName = `codex-runtime-log-redaction-${Date.now()}-${Math.random().toString(36).slice(2)}.log`
+    const filePath = join(logsDir, fileName)
+    writeFileSync(
+        filePath,
+        [
+            'safe startup line',
+            `Authorization: Bearer private-token api_key=private-api-key source_ref=notification:x:private-member target_id=remote-private-target url=https://example.test/private ${filePath}`,
+        ].join('\n'),
+        'utf8',
+    )
+    const future = new Date(Date.now() + 60_000)
+    utimesSync(filePath, future, future)
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).handleRuntimeLogs(new URL('http://localhost/api/runtime/logs?limit=5'))
+        expect(response.status).toBe(200)
+        const payload = await response.json()
+        const serialized = JSON.stringify(payload)
+
+        expect(payload).toMatchObject({
+            file: fileName,
+            file_path: '[redacted]',
+            redacted: true,
+        })
+        expect(serialized).toContain('[redacted-url]')
+        expect(serialized).toContain('[redacted-path]')
+        expect(serialized).not.toContain('private-token')
+        expect(serialized).not.toContain('private-api-key')
+        expect(serialized).not.toContain('private-member')
+        expect(serialized).not.toContain('remote-private-target')
+        expect(serialized).not.toContain('example.test/private')
+        expect(serialized).not.toContain(filePath)
+    } finally {
+        rmSync(filePath, { force: true })
     }
 })
 
