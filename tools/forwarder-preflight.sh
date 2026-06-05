@@ -13,6 +13,7 @@ EXPECTED_RESTART_POLICY="${EXPECTED_RESTART_POLICY:-no}"
 EXPECTED_STOP_TIMEOUT_SECONDS="${EXPECTED_STOP_TIMEOUT_SECONDS:-90}"
 STRICT_MIGRATIONS="${STRICT_MIGRATIONS:-0}"
 STRICT_COMMIT="${STRICT_COMMIT:-0}"
+STRICT_PROCESSOR_ENV="${STRICT_PROCESSOR_ENV:-0}"
 
 if [ -n "${SSH_OPTS:-}" ]; then
     # shellcheck disable=SC2206
@@ -23,7 +24,7 @@ fi
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE EXPECTED_OUTBOUND_SEND_MODE EXPECTED_RUNNING EXPECTED_RESTART_POLICY EXPECTED_STOP_TIMEOUT_SECONDS STRICT_MIGRATIONS STRICT_COMMIT; do
+    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE EXPECTED_OUTBOUND_SEND_MODE EXPECTED_RUNNING EXPECTED_RESTART_POLICY EXPECTED_STOP_TIMEOUT_SECONDS STRICT_MIGRATIONS STRICT_COMMIT STRICT_PROCESSOR_ENV; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -53,6 +54,7 @@ Environment:
   EXPECTED_STOP_TIMEOUT_SECONDS=90
   STRICT_MIGRATIONS=0      # set 1 to fail when DB migrations are pending/failed
   STRICT_COMMIT=0         # set 1 to fail when image commit != expected commit
+  STRICT_PROCESSOR_ENV=0   # set 1 to fail when env: processor keys are absent from the container
 HELP
         return
     fi
@@ -77,6 +79,8 @@ outbound_send_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Confi
 backup_container_dir="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_DB_BACKUP_DIR" { print $2; found=1 } END { if (!found) print "/app/backups/db-migrations" }')"
 binds_tmp="$(mktemp)"
 docker inspect "$CONTAINER_NAME" --format '{{ range .HostConfig.Binds }}{{ println . }}{{ end }}' > "$binds_tmp"
+container_env_tmp="$(mktemp)"
+docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' > "$container_env_tmp"
 mount_source() {
     awk -v target="$1" -F ':' '$2 == target { print $1; found=1; exit } END { if (!found) print "" }' "$binds_tmp"
 }
@@ -110,6 +114,35 @@ migration_head="$(printf '%s\n' "$migration_names" | tail -1)"
 audit_json="$(docker run --rm --entrypoint bun -v "$config_path:/app/config.yaml:ro" "$container_image" /app/tools/config-audit.js --config /app/config.yaml --fail-on-diagnostics)"
 audit_tmp="$(mktemp)"
 printf '%s\n' "$audit_json" > "$audit_tmp"
+processor_env_tmp="$(mktemp)"
+python3 - "$config_path" "$container_env_tmp" > "$processor_env_tmp" <<'PY'
+import sys
+import yaml
+
+config_path, env_path = sys.argv[1:3]
+with open(config_path, "r", encoding="utf-8") as handle:
+    config = yaml.safe_load(handle) or {}
+env = {}
+with open(env_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        key, _, value = line.rstrip("\n").partition("=")
+        if key:
+            env[key] = value
+
+required = []
+for processor in config.get("processors") or []:
+    api_key = str(processor.get("api_key") or "").strip()
+    if api_key.startswith("env:"):
+        name = api_key[len("env:"):].strip()
+        if name:
+            required.append(name)
+
+required = sorted(set(required))
+missing = [name for name in required if not env.get(name)]
+print(f'processor_env_required={",".join(required)}')
+print(f'processor_env_missing={",".join(missing)}')
+print(f'processor_env_status={"missing" if missing else "ok"}')
+PY
 
 cd "$repo"
 remote_dirty_tracked="$(git status --porcelain=v1 --untracked-files=no | wc -l | tr -d ' ')"
@@ -294,8 +327,10 @@ print(f'route_warnings={counts["warnings"]}')
 print(f'operational_crawlers={counts["operational_crawlers"]}')
 print(f'summary_card_routes={data["route_graph"]["summary_card_routes"]}')
 PY
+cat "$processor_env_tmp"
+processor_env_status="$(awk -F= '$1 == "processor_env_status" { print $2 }' "$processor_env_tmp")"
 rm -f "$audit_tmp"
-rm -f "$binds_tmp"
+rm -f "$binds_tmp" "$container_env_tmp" "$processor_env_tmp"
 printf 'migration_head=%s\n' "$migration_head"
 cat "$db_status_tmp"
 rm -f "$migration_names_tmp" "$db_status_tmp"
@@ -332,6 +367,10 @@ if [ "$STRICT_MIGRATIONS" = "1" ] && { [ -z "$backup_host_dir" ] || [ ! -d "$bac
 fi
 if [ "$STRICT_COMMIT" = "1" ] && { [ -z "${EXPECTED_COMMIT:-}" ] || [ "$image_build_commit" != "$EXPECTED_COMMIT" ] || [ "$build_commit_file" != "$EXPECTED_COMMIT" ]; }; then
     printf 'preflight failed: image commit does not match expected commit\n' >&2
+    exit 1
+fi
+if [ "$STRICT_PROCESSOR_ENV" = "1" ] && [ "$processor_env_status" != "ok" ]; then
+    printf 'preflight failed: processor env keys are missing\n' >&2
     exit 1
 fi
 REMOTE

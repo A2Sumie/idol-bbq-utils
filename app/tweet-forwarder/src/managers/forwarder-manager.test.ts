@@ -4575,6 +4575,7 @@ test('sendArticles fills missing translations before rendering translated summar
 
     const processCalls: string[] = []
     const originalCreateProcessor = (processorRegistry as any).create
+    const originalArticleUpdate = (DB.Article as any).update
     const articleUpdates: Array<{ id: number; platform: Platform; patch: any }> = []
     ;(processorRegistry as any).create = async () => ({
         NAME: 'fake-22/7-translator',
@@ -4696,6 +4697,7 @@ test('sendArticles fills missing translations before rendering translated summar
         await (pools as any).flushDueSummaryCardQueues()
     } finally {
         ;(processorRegistry as any).create = originalCreateProcessor
+        ;(DB.Article as any).update = originalArticleUpdate
     }
 
     expect(processCalls).toEqual(['この後19:00〜 バースデーSHOWROOM配信スタート'])
@@ -4719,6 +4721,140 @@ test('sendArticles fills missing translations before rendering translated summar
     expect(originalText).toContain('この後19:00〜 バースデーSHOWROOM配信スタート')
     expect(originalText).not.toContain('译:')
     expect(translatedText).toContain('译:この後19:00〜 バースデーSHOWROOM配信スタート')
+})
+
+test('sendArticles suppresses empty translated summary companion when processor is unavailable', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const originalCreateProcessor = (processorRegistry as any).create
+    let createCalls = 0
+    ;(processorRegistry as any).create = async () => {
+        createCalls += 1
+        throw new Error('Processor API key env var not set: DEEPSEEK_API_KEY')
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.Deepseek,
+                    api_key: 'env:DEEPSEEK_API_KEY',
+                    cfg_processor: {
+                        action: 'translate',
+                    },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                    processor_id: '22_7-social-ja-zh',
+                },
+            },
+        } as any,
+        'target-summary-card-translated-missing-key',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const packedArticles: Array<any> = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            if (article.id < 0) {
+                packedArticles.push(article)
+                const suffix = config?.card_features?.includes('translated-corner-badge') ? 'translated' : 'original'
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: `/tmp/missing-key-${suffix}.png` }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: `/tmp/missing-key-${suffix}.png` }],
+                }
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-translated-missing-key',
+            [
+                {
+                    id: 916,
+                    a_id: 'translated-missing-key',
+                    platform: Platform.X,
+                    username: '22/7',
+                    u_id: '227_staff',
+                    content: 'この後20:00〜 配信スタート',
+                    translation: null,
+                    translated_by: null,
+                    url: 'https://x.com/227_staff/status/916',
+                    type: 'tweet',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+
+        backdateSummaryCardQueues(pools as any, 1800)
+        await (pools as any).flushDueSummaryCardQueues()
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+    }
+
+    expect(createCalls).toBe(1)
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.props?.cardMedia).toEqual([{ media_type: 'photo', path: '/tmp/missing-key-original.png' }])
+    expect(packedArticles).toHaveLength(1)
+    expect(packedArticles[0]?.extra?.data?.translated_badge_label).toBeUndefined()
 })
 
 test('sendArticles promotes queued summary-card hashtag items after a storm activates', async () => {

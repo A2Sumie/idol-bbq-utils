@@ -8,6 +8,9 @@ services:
     build:
       context: .
       dockerfile: app/tweet-forwarder/Dockerfile
+      args:
+        BUILD_COMMIT: ${IDOL_BBQ_BUILD_COMMIT:-unknown}
+        BUILD_DATE: ${IDOL_BBQ_BUILD_DATE:-unknown}
     # 为您的容器命名
     container_name: 'forwarder-new'
     # 直接使用主机的网络，完美解决访问主机 127.0.0.1 的问题
@@ -31,8 +34,10 @@ services:
       - IDOL_BBQ_OUTBOUND_CAPTURE_FILE=${IDOL_BBQ_OUTBOUND_CAPTURE_FILE:-}
       # Store migration backups on the persistent host assets/backups mount.
       - IDOL_BBQ_DB_BACKUP_DIR=${IDOL_BBQ_DB_BACKUP_DIR:-/app/backups/db-migrations}
-      # Optional LLM key for on-demand translated summary cards.
+      # Optional LLM keys for on-demand translated summary cards.
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       # TV 存档上传单独走天津风 biliup cookies，不影响其他 bilibili 任务
       - ARCHIVE_UPLOAD_COOKIE_SOURCE=/app/assets/cookies/biliup.tianjinfeng.cookies.json
     volumes:
