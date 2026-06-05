@@ -73,6 +73,7 @@ const X_UNIFIED_LIST_MAX_HYDRATED_USERS = 10
 const X_UNIFIED_LIST_DEFAULT_CONCURRENCY = 2
 const X_UNIFIED_LIST_MAX_CONCURRENCY = 4
 const X_UNIFIED_LIST_MEMBER_CURSORS = new Map<string, number>()
+const X_FETCH_TIMEOUT_MS = 20_000
 
 interface XOperationProfile {
     queryId: string
@@ -122,6 +123,25 @@ function isNotFoundError(error: unknown) {
     return /not found|(^|\s)404(\s|$)/i.test(formatHydrationError(error))
 }
 
+async function fetchWithTimeout(input: string | URL, init: RequestInit = {}, timeoutMs = X_FETCH_TIMEOUT_MS) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+
+    try {
+        return await fetch(input, {
+            ...init,
+            signal: init.signal || controller.signal,
+        })
+    } catch (error) {
+        if (controller.signal.aborted) {
+            throw new Error(`X fetch timed out after ${timeoutMs}ms`)
+        }
+        throw error
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
 class XUserTimeLineSpider extends BaseSpider {
     // extends from XBaseSpider regex
     static _VALID_URL = new RegExp(X_BASE_VALID_URL.source + /(?<id>\w+)$/.source)
@@ -163,6 +183,7 @@ class XUserTimeLineSpider extends BaseSpider {
 
         const { crawl_engine, task_type, sub_task_type, cookieString, requestHeaders } = config
         const apiClient = new XApiClient(requestHeaders, page, this.log)
+        let apiError: unknown
 
         if (crawl_engine === 'api') {
             this.log?.warn(`[Engine Api] API engine will be banned by X if you use it too much`)
@@ -217,13 +238,22 @@ class XUserTimeLineSpider extends BaseSpider {
                     return [await apiClient.grabFollowsNumber(id, cookie_string)] as TaskTypeResult<T, Platform.X>
                 }
             } catch (e) {
-                this.log?.error(`[Engine Api] Failed to crawl with for ${id}: ${e}, fallback to browser`)
+                apiError = e
+                this.log?.error(
+                    `[Engine Api] Failed to crawl for ${id}: ${e}${page ? ', fallback to browser' : ''}`,
+                )
+                if (!page) {
+                    throw e
+                }
             } finally {
                 noop()
             }
         }
 
         if (!page) {
+            if (apiError instanceof Error) {
+                throw apiError
+            }
             throw new Error('Browser mode requires a Page instance')
         }
 
@@ -694,7 +724,7 @@ class XListSpider extends BaseSpider {
             include_ext_media_color: 'true',
         })
         // TODO: keep http header case sensitive
-        const res = await fetch(`${url}?${params.toString()}`, {
+        const res = await fetchWithTimeout(`${url}?${params.toString()}`, {
             headers: {
                 ...normalizeRequestHeaders(requestHeaders),
                 authorization: this.PUBLIC_TOKEN,
@@ -731,7 +761,7 @@ class XListSpider extends BaseSpider {
             include_ext_alt_text: 'true',
             include_ext_media_color: 'true',
         })
-        const res = await fetch(`${url}?${params.toString()}`, {
+        const res = await fetchWithTimeout(`${url}?${params.toString()}`, {
             headers: {
                 authorization: this.PUBLIC_TOKEN,
                 'user-agent': UserAgent.CHROME,
@@ -763,7 +793,7 @@ class XListSpider extends BaseSpider {
             list_id: id,
             count: '99',
         })
-        const res = await fetch(`${url}?${params.toString()}`, {
+        const res = await fetchWithTimeout(`${url}?${params.toString()}`, {
             headers: {
                 authorization: this.PUBLIC_TOKEN,
                 'user-agent': UserAgent.CHROME,
@@ -865,7 +895,7 @@ class XApiClient {
             const match = resolvedHtml.match(lists_graphql_js_pattern)
             if (match) {
                 const js_url = `${this.ASSETS_BASE_URL}/${match[1]}.${match[2]}a.js`
-                const js_code = await (await fetch(js_url, { headers: this.BASE_HEADER })).text()
+                const js_code = await (await fetchWithTimeout(js_url, { headers: this.BASE_HEADER })).text()
                 const queryId = this.getQueryId(js_code, XApis.ListLatestTweetsTimeline)
                 if (queryId) {
                     this.api_with_queryid[XApis.ListLatestTweetsTimeline] = queryId
@@ -1079,7 +1109,7 @@ class XApiClient {
 
         const jsUrls = this.extractJavascriptUrls(html)
         for (const jsUrl of jsUrls) {
-            const jsCode = await fetch(jsUrl, { headers: this.BASE_HEADER })
+            const jsCode = await fetchWithTimeout(jsUrl, { headers: this.BASE_HEADER })
                 .then((res) => res.text())
                 .catch(() => '')
             if (!jsCode) {
@@ -1122,7 +1152,7 @@ class XApiClient {
             }
         }
 
-        const webpage = await fetch(this.BASE_URL, {
+        const webpage = await fetchWithTimeout(this.BASE_URL, {
             headers: this.BASE_HEADER,
         })
         return await webpage.text()
@@ -1226,7 +1256,7 @@ class XApiClient {
 
         const query = this.generateParams(features, variables, fieldToggles)
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetch(url, {
+        const res = await fetchWithTimeout(url, {
             headers: this.buildOperationHeaders(XApis.UserByScreenName, cookie, {
                 includeGuestToken: true,
                 referer: `${this.BASE_URL}/${id}`,
@@ -1339,7 +1369,7 @@ class XApiClient {
         const query = this.generateParams(features, variables, fieldToggles)
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetch(url, {
+        const res = await fetchWithTimeout(url, {
             headers: this.buildOperationHeaders(XApis.UserTweets, cookie, {
                 extraHeaders: { 'x-client-uuid': uuid },
                 referer: `${this.BASE_URL}/${id}`,
@@ -1408,7 +1438,7 @@ class XApiClient {
         const fieldToggles = { withArticlePlainText: false }
         const query = this.generateParams(features, variables, fieldToggles)
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetch(url, {
+        const res = await fetchWithTimeout(url, {
             headers: this.buildOperationHeaders(XApis.UserTweetsAndReplies, cookie, {
                 extraHeaders: { 'x-client-uuid': uuid },
                 fallbackOperations: [XApis.UserTweets],
@@ -1480,7 +1510,7 @@ class XApiClient {
         const query = this.generateParams(features, variables)
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetch(url, {
+        const res = await fetchWithTimeout(url, {
             headers: this.buildOperationHeaders(XApis.ListLatestTweetsTimeline, cookie, {
                 referer: `${this.BASE_URL}/i/lists/${list_id}`,
             }),
@@ -1541,7 +1571,7 @@ class XApiClient {
         const query = this.generateParams(features, variables)
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetch(url, {
+        const res = await fetchWithTimeout(url, {
             headers: this.buildOperationHeaders(XApis.ListMembers, cookie, {
                 fallbackOperations: [XApis.ListLatestTweetsTimeline],
                 referer: `${this.BASE_URL}/i/lists/${list_id}`,
@@ -2207,7 +2237,7 @@ namespace XApiJsonParser {
      * @param url https://x.com/username
      */
     export async function grabFollowsNumber(page: Page, url: string): Promise<GenericFollows> {
-        const { promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
+        const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
             if (url.includes('UserByScreenName') && response.request().method() === 'GET') {
                 if (response.status() >= 400) {
@@ -2221,11 +2251,18 @@ namespace XApiJsonParser {
                     })
                     .catch((error) => {
                         fail(error)
-                    })
+                })
             }
         })
-        await page.setViewport(defaultViewport)
-        await page.goto(url)
+        try {
+            await page.setViewport(defaultViewport)
+            await page.goto(url)
+            await checkLogin(page)
+            await checkSomethingWrong(page)
+        } catch (error) {
+            cleanup()
+            throw error
+        }
 
         const data = await waitForTweets
         if (!data.success) {

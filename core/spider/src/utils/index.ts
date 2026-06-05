@@ -1,37 +1,75 @@
 import type { CookieData } from 'puppeteer-core'
 import fs from 'fs'
 
+type NetscapeCookieParseOptions = {
+    includeExpired?: boolean
+    now?: number
+}
+
+function splitNetscapeCookieLine(line: string) {
+    if (line.includes('\t')) {
+        const fields = line.split('\t')
+        return {
+            fields: fields.slice(0, 6).concat(fields.slice(6).join('\t')),
+        }
+    }
+
+    const fields = line.trim().split(/[ ]+/)
+    return {
+        fields: fields.slice(0, 6).concat(fields.slice(6).join(' ')),
+    }
+}
+
+function isExpiredCookie(expires: number, now: number) {
+    return Number.isFinite(expires) && expires > 0 && expires <= now
+}
+
 /**
  * @description convert netscape cookie file to puppeteer cookie like https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc?hl=en
  * @param cookie_file path to cookie file
  * @returns CookieParam[]
  */
-function parseNetscapeCookieToPuppeteerCookie(cookie_file: string): Array<CookieData> {
-    let lines = fs.readFileSync(cookie_file, 'utf8').split('\n')
+function parseNetscapeCookieToPuppeteerCookie(
+    cookie_file: string,
+    options: NetscapeCookieParseOptions = {},
+): Array<CookieData> {
+    const now = options.now ?? Math.floor(Date.now() / 1000)
+    const lines = fs.readFileSync(cookie_file, 'utf8').split('\n')
     const cookies = []
     for (let line of lines) {
-        //  ref: https://github.com/Moustachauve/cookie-editor
-        if (line.startsWith('#HttpOnly_')) {
-            line = line.replace('#HttpOnly_', '')
-        }
-        if (line.startsWith('#') || line === '') {
+        line = line.trimEnd()
+        if (!line.trim()) {
             continue
         }
-        let fileds = line.split(new RegExp('[\t ]+'))
-        let domain = fileds[0] || '',
-            includeSubdomain = fileds[1],
-            path = fileds[2],
-            secure = fileds[3],
-            expires = fileds[4],
-            name = fileds[5] || '',
-            value = fileds[6]?.trim() || ''
+
+        //  ref: https://github.com/Moustachauve/cookie-editor
+        const trimmedLine = line.trimStart()
+        const httpOnly = trimmedLine.startsWith('#HttpOnly_')
+        if (httpOnly) {
+            line = trimmedLine.replace('#HttpOnly_', '')
+        }
+        if (line.trimStart().startsWith('#')) {
+            continue
+        }
+
+        const { fields } = splitNetscapeCookieLine(line)
+        const [domain = '', _includeSubdomain, path, secure, expiresRaw, name = '', value = ''] = fields
+        if (!domain || !path || !name || !expiresRaw) {
+            continue
+        }
+
+        const expires = Number(expiresRaw)
+        if (!options.includeExpired && isExpiredCookie(expires, now)) {
+            continue
+        }
+
         cookies.push({
             name,
-            value,
+            value: value.trim(),
             domain,
             path,
-            expires: Number(expires),
-            httpOnly: false,
+            expires,
+            httpOnly,
             secure: secure === 'TRUE',
         })
     }

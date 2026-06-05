@@ -43,6 +43,12 @@ test('TikTok Spider URL Extraction', () => {
     expect(info?.platform).toBeDefined()
 })
 
+test('TikTok Spider rotates web identity cache on a three minute ttl', () => {
+    const spider = new TiktokSpider()
+
+    expect((spider as any).expire).toBe(60 * 3)
+})
+
 /**
  * require network access & headless browser
  */

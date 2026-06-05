@@ -21,7 +21,7 @@ class TiktokSpider extends BaseSpider {
     NAME: string = 'Tiktok Generic Spider'
 
     private cache: SimpleExpiringCache = new SimpleExpiringCache()
-    private expire: number = 60 * 3 * 1000 // 3 minutes
+    private expire: number = 60 * 3 // 3 minutes
 
     async _crawl<T extends TaskType>(
         url: string,

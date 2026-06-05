@@ -18,6 +18,17 @@ test('X Spider', async () => {
     }
 })
 
+test('X API mode without a browser preserves the API failure reason', async () => {
+    const spider = new X.XUserTimeLineSpider().init()
+
+    await expect(
+        spider.crawl('https://x.com/X', undefined, 'api-error-regression', {
+            task_type: 'follows',
+            crawl_engine: 'api',
+        }),
+    ).rejects.toThrow('Cookie string is required for API mode')
+})
+
 /**
  * require network access & headless browser
  */
@@ -210,6 +221,28 @@ test('X replies parser keeps direct reply timeline entries', async () => {
     expect(replies[0]?.a_id).toBe('201')
     expect(replies[0]?.type).toBe(X.ArticleTypeEnum.CONVERSATION)
     expect(replies[0]?.ref).toBe('200')
+})
+
+test('X follows browser parser fails fast on login pages', async () => {
+    const listeners = new Map<string, (data: any) => void>()
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(eventName, handler)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            if (listeners.get(eventName) === handler) {
+                listeners.delete(eventName)
+            }
+        },
+        setViewport: async () => undefined,
+        goto: async () => undefined,
+        waitForSelector: async () => ({}),
+    } as any
+
+    await expect(X.XApiJsonParser.grabFollowsNumber(page, 'https://x.com/expired')).rejects.toThrow(
+        'You need to login first',
+    )
+    expect(listeners.has('response')).toBeFalse()
 })
 
 test('X parser keeps video variants without bitrate', async () => {
