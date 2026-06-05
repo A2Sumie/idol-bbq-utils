@@ -1044,6 +1044,59 @@ describe('RenderService media deduplication', () => {
         DB.MediaHash.save = originalSave
     })
 
+    test('dry-run send mode does not mutate media dedup state or suppress media', async () => {
+        const originalMode = process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
+        process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = 'blocked'
+        const calls = {
+            checkExist: 0,
+            save: 0,
+        }
+        DB.MediaHash.checkExist = async () => {
+            calls.checkExist += 1
+            return null
+        }
+        DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+            calls.save += 1
+            return { platform, hash, a_id } as any
+        }
+
+        try {
+            const service = new RenderService()
+            const config = {
+                taskId: 'test-story-dry-run',
+                render_type: 'text-compact',
+                mediaConfig: {
+                    type: 'no-storage' as const,
+                    use: {
+                        tool: MediaToolEnum.DEFAULT,
+                    },
+                },
+                deduplication: true,
+            }
+
+            const first = await service.process(buildMediaArticle('story-dry-a') as any, config)
+            const second = await service.process(buildMediaArticle('story-dry-b') as any, {
+                ...config,
+                taskId: 'test-story-dry-run-2',
+            })
+
+            expect(first.mediaFiles).toHaveLength(1)
+            expect(second.mediaFiles).toHaveLength(1)
+            expect(second.shouldSkipSend).toBeFalsy()
+            expect(calls).toEqual({ checkExist: 0, save: 0 })
+
+            service.cleanup([...first.mediaFiles, ...second.mediaFiles])
+        } finally {
+            DB.MediaHash.checkExist = originalCheckExist
+            DB.MediaHash.save = originalSave
+            if (originalMode === undefined) {
+                delete process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
+            } else {
+                process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = originalMode
+            }
+        }
+    })
+
     test('skips the whole article when an exact image was already sent from another platform', async () => {
         const hashStore = new Map<string, { platform: string; hash: string; a_id: string }>()
         DB.MediaHash.checkExist = async (platform: string, hash: string) => hashStore.get(`${platform}:${hash}`) as any

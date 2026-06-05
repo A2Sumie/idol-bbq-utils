@@ -37,6 +37,7 @@ import {
     markVideoFingerprintSeen,
     persistMediaFile,
 } from './media-cache-service'
+import { resolveOutboundSendMode } from './outbound-send-mode'
 import { execFileSync } from 'child_process'
 
 export interface RenderedMediaFile {
@@ -127,6 +128,7 @@ export class RenderService {
         },
     ): Promise<RenderResult> {
         const { taskId, render_type, mediaConfig, deduplication } = config
+        const effectiveDeduplication = deduplication && resolveOutboundSendMode() !== 'blocked'
         const cloned_article = cloneDeep(article)
 
         let maybe_media_files: Array<RenderedMediaFile> = []
@@ -135,7 +137,7 @@ export class RenderService {
 
         // 1. Download/Handle Media Files
         if (mediaConfig) {
-            const mediaResult = await this.handleMedia(taskId, cloned_article, mediaConfig, deduplication)
+            const mediaResult = await this.handleMedia(taskId, cloned_article, mediaConfig, effectiveDeduplication)
             maybe_media_files = mediaResult.files
             skipReason = mediaResult.skipReason
         }
@@ -269,7 +271,7 @@ export class RenderService {
             textCollapseMode = 'article'
         }
 
-        if (!skipReason && deduplication) {
+        if (!skipReason && effectiveDeduplication) {
             const shortVideoCandidate = buildShortVideoDedupCandidate(article as any, maybe_media_files)
             if (shortVideoCandidate) {
                 const existing = await checkShortVideoCrossPlatformDuplicate(shortVideoCandidate)
