@@ -23,6 +23,7 @@ const originalOutboundMessage = { ...DB.OutboundMessage }
 const originalAggregationWindow = { ...DB.AggregationWindow }
 const originalTargetHealth = { ...DB.TargetHealth }
 const originalForwardBy = { ...DB.ForwardBy }
+const originalMediaHash = { ...DB.MediaHash }
 
 beforeEach(() => {
     const outboundRecords = new Map<string, any>()
@@ -30,11 +31,13 @@ beforeEach(() => {
     const aggregationWindows = new Map<number, any>()
     const aggregationItems = new Map<string, any>()
     const forwardByRecords = new Map<string, any>()
+    const mediaHashRecords = new Map<string, any>()
     let nextWindowId = 1
     let nextItemId = 1
 
     const forwardByKey = (refId: number, platform: string | number, botId: string, taskType: string) =>
         `${platform}:${refId}:${botId}:${taskType}`
+    const mediaHashKey = (platform: string, hash: string) => `${platform}:${hash}`
 
     ;(DB.ForwardBy as any).checkExist = async (
         refId: number,
@@ -68,6 +71,66 @@ beforeEach(() => {
     ) => {
         forwardByRecords.delete(forwardByKey(refId, platform, botId, taskType))
     }
+    ;(DB.MediaHash as any).checkExist = async (platform: string, hash: string) =>
+        mediaHashRecords.get(mediaHashKey(platform, hash)) || null
+    ;(DB.MediaHash as any).save = async (platform: string, hash: string, a_id = '') => {
+        const key = mediaHashKey(platform, hash)
+        const record =
+            mediaHashRecords.get(key) || {
+                id: mediaHashRecords.size + 1,
+                platform,
+                hash,
+                a_id,
+                created_at: Math.floor(Date.now() / 1000),
+            }
+        mediaHashRecords.set(key, record)
+        return record
+    }
+    ;(DB.MediaHash as any).claimVisibleSlot = async (options: any) => {
+        const maxVisible = Math.max(1, Math.floor(Number(options.maxVisible || 1)))
+        const windowSeconds = Math.max(1, Math.floor(Number(options.windowSeconds || 1)))
+        const now = Math.floor(Number(options.now || Date.now() / 1000))
+        const cutoff = now - windowSeconds
+        let activeCount = 0
+        let inactiveSlot: number | undefined
+
+        for (let slot = 0; slot < maxVisible; slot += 1) {
+            const platform = `${options.namespace}:slot:${slot}`
+            const record = mediaHashRecords.get(mediaHashKey(platform, options.hash))
+            if (record && record.created_at >= cutoff) {
+                activeCount += 1
+            } else {
+                inactiveSlot ??= slot
+            }
+        }
+
+        if (activeCount >= maxVisible || inactiveSlot === undefined) {
+            return { allowed: false, seenCount: activeCount }
+        }
+
+        const platform = `${options.namespace}:slot:${inactiveSlot}`
+        mediaHashRecords.set(mediaHashKey(platform, options.hash), {
+            id: mediaHashRecords.size + 1,
+            platform,
+            hash: options.hash,
+            a_id: options.a_id || '',
+            created_at: now,
+        })
+        return { allowed: true, seenCount: activeCount + 1, slot: inactiveSlot }
+    }
+    ;(DB.MediaHash as any).releaseVisibleSlots = async (options: any) => {
+        let released = 0
+        for (const claim of options.claims || []) {
+            const key = mediaHashKey(claim.platform, claim.hash)
+            const record = mediaHashRecords.get(key)
+            if (record && (!claim.a_id || record.a_id === claim.a_id)) {
+                mediaHashRecords.delete(key)
+                released += 1
+            }
+        }
+        return released
+    }
+    ;(DB.MediaHash as any).__records = mediaHashRecords
     ;(DB.OutboundMessage as any).claim = async (data: any) => {
         const existing = outboundRecords.get(data.idempotency_key)
         if (existing && existing.status !== 'failed') {
@@ -224,6 +287,7 @@ afterEach(() => {
     Object.assign(DB.AggregationWindow, originalAggregationWindow)
     Object.assign(DB.TargetHealth, originalTargetHealth)
     Object.assign(DB.ForwardBy, originalForwardBy)
+    Object.assign(DB.MediaHash, originalMediaHash)
 })
 
 function backdateSummaryCardQueues(pools: any, seconds: number) {
@@ -4810,6 +4874,241 @@ test('sendArticles sends summary-card media immediately while keeping text queue
     expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(2)
 })
 
+test('summary-card realtime media visibility skips repeats without dropping new media', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                flush_on_threshold: false,
+            },
+            media_visibility: {
+                enabled: true,
+                window_seconds: 432000,
+                max_visible: 1,
+                duplicate_behavior: 'skip',
+            },
+        } as any,
+        'target-summary-card-realtime-media-visibility',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            const files =
+                article.id === 901
+                    ? [
+                          {
+                              media_type: 'photo',
+                              path: `/tmp/realtime-same-${article.id}.jpg`,
+                              sourceArticleId: article.a_id,
+                              sourceUrl: 'https://example.com/realtime-same.jpg',
+                              content_hash: 'realtime-same-hash',
+                          },
+                          {
+                              media_type: 'photo',
+                              path: `/tmp/realtime-fresh-${article.id}.jpg`,
+                              sourceArticleId: article.a_id,
+                              sourceUrl: `https://example.com/realtime-fresh-${article.id}.jpg`,
+                              content_hash: `realtime-fresh-hash-${article.id}`,
+                          },
+                      ]
+                    : [
+                          {
+                              media_type: 'photo',
+                              path: `/tmp/realtime-same-${article.id}.jpg`,
+                              sourceArticleId: article.a_id,
+                              sourceUrl: 'https://example.com/realtime-same.jpg',
+                              content_hash: 'realtime-same-hash',
+                          },
+                      ]
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: files,
+                mediaFiles: files,
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    for (const id of [900, 901, 902]) {
+        await (pools as any).sendArticles(
+            undefined,
+            `summary-realtime-media-visibility-${id}`,
+            [
+                {
+                    id,
+                    a_id: `summary-realtime-media-visibility-${id}`,
+                    platform: Platform.X,
+                    username: 'media member',
+                    u_id: 'media_member',
+                    content: `summary visibility text ${id}`,
+                    url: `https://x.com/media_member/status/${id}`,
+                    type: 'tweet',
+                    created_at: now + id,
+                    ref: null,
+                    has_media: true,
+                    media: [{ type: 'photo', url: 'https://example.com/realtime-same.jpg' }],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    }
+
+    expect(target.sent).toHaveLength(2)
+    expect(target.sent[0]?.props?.media?.map((file: any) => file.path)).toEqual(['/tmp/realtime-same-900.jpg'])
+    expect(target.sent[1]?.props?.media?.map((file: any) => file.path)).toEqual(['/tmp/realtime-fresh-901.jpg'])
+    expect(target.sent.every((send) => (send.props?.media || []).length > 0)).toBeTrue()
+    expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(3)
+})
+
+test('summary-card realtime media visibility releases reservations after failed sends', async () => {
+    class FlakyForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            if (props?.article?.id === 903) {
+                throw new Error('simulated provider failure')
+            }
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new FlakyForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                flush_on_threshold: false,
+            },
+            media_visibility: {
+                enabled: true,
+                window_seconds: 432000,
+                max_visible: 1,
+                duplicate_behavior: 'skip',
+            },
+        } as any,
+        'target-summary-card-realtime-media-visibility-release',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            const file = {
+                media_type: 'photo',
+                path: `/tmp/realtime-release-${article.id}.jpg`,
+                sourceArticleId: article.a_id,
+                sourceUrl: 'https://example.com/realtime-release-same.jpg',
+                content_hash: 'realtime-release-same-hash',
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [file],
+                mediaFiles: [file],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    for (const id of [903, 904]) {
+        await (pools as any).sendArticles(
+            undefined,
+            `summary-realtime-media-visibility-release-${id}`,
+            [
+                {
+                    id,
+                    a_id: `summary-realtime-media-visibility-release-${id}`,
+                    platform: Platform.X,
+                    username: 'media member',
+                    u_id: 'media_member',
+                    content: `summary visibility release text ${id}`,
+                    url: `https://x.com/media_member/status/${id}`,
+                    type: 'tweet',
+                    created_at: now + id,
+                    ref: null,
+                    has_media: true,
+                    media: [{ type: 'photo', url: 'https://example.com/realtime-release-same.jpg' }],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.props?.media?.map((file: any) => file.path)).toEqual(['/tmp/realtime-release-904.jpg'])
+    expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(2)
+})
+
 test('summary-card realtime media can include basic text for Bilibili-style targets', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'bilibili'
@@ -4922,6 +5221,218 @@ test('summary-card realtime media can include basic text for Bilibili-style targ
     expect(target.sent[0]?.props?.bypassMediaBatch).toBeTrue()
     expect(target.sent[0]?.props?.media?.[0]?.media_type).toBe('video_thumbnail')
     expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(1)
+})
+
+test('summary-card realtime media metadata text stays one line without body or URL', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'metadata',
+                flush_on_threshold: false,
+                align_to_interval: true,
+                flush_delay_seconds: 300,
+            },
+        } as any,
+        'target-summary-card-realtime-media-metadata',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content || '',
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-metadata-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-metadata-${article.id}.jpg`,
+                },
+            ],
+            mediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-metadata-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-metadata-${article.id}.jpg`,
+                },
+            ],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-realtime-media-metadata',
+        [
+            {
+                id: 813,
+                a_id: 'summary-realtime-media-metadata',
+                platform: Platform.X,
+                username: 'Bili Nick',
+                u_id: 'bili_uid',
+                content: 'full body should not be in realtime metadata text',
+                url: 'https://x.com/bili_uid/status/813',
+                type: 'tweet',
+                created_at: now,
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: 'https://example.com/realtime-metadata-813.jpg' }],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    const text = target.sent[0]?.texts[0] || ''
+    expect(target.sent).toHaveLength(1)
+    expect(text).toContain('@bili_uid')
+    expect(text).toContain('Bili Nick')
+    expect(text).not.toContain('\n')
+    expect(text).not.toContain('full body should not be in realtime metadata text')
+    expect(text).not.toContain('https://x.com/bili_uid/status/813')
+    expect(target.sent[0]?.props?.media?.[0]?.media_type).toBe('photo')
+})
+
+test('target media visibility text-collapses media after the second visible occurrence', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            media_visibility: {
+                enabled: true,
+                window_seconds: 86400,
+                max_visible: 2,
+                duplicate_behavior: 'text_only',
+            },
+        } as any,
+        'target-media-visibility-text-only',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            const file = {
+                media_type: 'photo',
+                path: `/tmp/high-realtime-${article.id}.jpg`,
+                sourceArticleId: article.a_id,
+                sourceUrl: 'https://example.com/high-realtime-same.jpg',
+                content_hash: 'high-realtime-same-hash',
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [{ media_type: 'photo', path: `/tmp/high-realtime-card-${article.id}.jpg` }],
+                originalMediaFiles: [file],
+                mediaFiles: [file],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    for (const id of [930, 931, 932]) {
+        await (pools as any).sendArticles(
+            undefined,
+            `media-visibility-text-only-${id}`,
+            [
+                {
+                    id,
+                    a_id: `media-visibility-text-only-${id}`,
+                    platform: Platform.X,
+                    username: 'high realtime member',
+                    u_id: 'high_realtime_member',
+                    content: `high realtime text ${id}`,
+                    url: `https://x.com/high_realtime_member/status/${id}`,
+                    type: 'tweet',
+                    created_at: now + id,
+                    ref: null,
+                    has_media: true,
+                    media: [{ type: 'photo', url: 'https://example.com/high-realtime-same.jpg' }],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+    }
+
+    expect(target.sent).toHaveLength(3)
+    expect(target.sent[0]?.props?.media).toHaveLength(1)
+    expect(target.sent[1]?.props?.media).toHaveLength(1)
+    expect(target.sent[2]?.props?.media).toEqual([])
+    expect(target.sent[2]?.props?.contentMedia).toEqual([])
+    expect(target.sent[2]?.props?.cardMedia).toEqual([])
+    expect(target.sent[2]?.texts[0]).toContain('high realtime text 932')
+    expect(target.sent[2]?.texts[0]).toContain('重复媒体已文字缩略')
+    expect(target.sent[2]?.texts[0]).toContain('24小时')
 })
 
 test('summary-card aligned windows wait for the configured five-minute delay', async () => {

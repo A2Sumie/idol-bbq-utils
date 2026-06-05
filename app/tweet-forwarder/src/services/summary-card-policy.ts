@@ -10,7 +10,7 @@ type ResolvedSummaryCardConfig = {
     sendFirstImmediately: boolean
     sendFirstNative: boolean
     mediaRealtime: boolean
-    mediaRealtimeText: 'none' | 'basic' | 'rendered'
+    mediaRealtimeText: 'none' | 'basic' | 'metadata' | 'rendered'
     flushOnThreshold: boolean
     flushDelaySeconds: number
     windowAlignment: SummaryCardWindowAlignment
@@ -26,7 +26,7 @@ type SummaryCardRoutePolicy = {
     send_first_immediately: boolean
     send_first_native: boolean
     media_realtime: boolean
-    media_realtime_text: 'none' | 'basic' | 'rendered'
+    media_realtime_text: 'none' | 'basic' | 'metadata' | 'rendered'
     flush_on_threshold: boolean
     flush_delay_seconds: number
     window_alignment: SummaryCardWindowAlignment
@@ -69,8 +69,8 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
             : (objectConfig as any).align_to_hour === true
               ? 'hour'
               : 'none'
-    const mediaRealtimeText = ['basic', 'rendered'].includes(String((objectConfig as any).media_realtime_text))
-        ? ((objectConfig as any).media_realtime_text as 'basic' | 'rendered')
+    const mediaRealtimeText = ['basic', 'metadata', 'rendered'].includes(String((objectConfig as any).media_realtime_text))
+        ? ((objectConfig as any).media_realtime_text as 'basic' | 'metadata' | 'rendered')
         : 'none'
 
     return {

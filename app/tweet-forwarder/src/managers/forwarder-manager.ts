@@ -19,7 +19,14 @@ import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } fr
 import { getForwarder } from '@/middleware/forwarder'
 import crypto from 'crypto'
 import { RenderService, type RenderResult } from '@/services/render-service'
-import { extractArticleHeadline, followsToText, formatArticleHeaderLine } from '@idol-bbq-utils/render'
+import {
+    extractArticleHeadline,
+    followsToText,
+    formatArticleHeaderLine,
+    formatArticleSourceActionAttribution,
+    formatArticleTimeToken,
+    formatArticleUserId,
+} from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
 import {
@@ -42,6 +49,7 @@ import {
     targetRouteKey,
 } from '@/services/outbound-message-service'
 import { resolveSummaryCardConfig, type ResolvedSummaryCardConfig } from '@/services/summary-card-policy'
+import { isNonLiveOutboundSendMode } from '@/services/outbound-send-mode'
 
 type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
 type ForwarderTemplate = NonNullable<AppConfig['forwarders']>[number]
@@ -95,6 +103,26 @@ type SummaryCardGroup = {
     items: SummaryCardQueueItem[]
 }
 type SummaryCardMediaUsage = Map<string, number>
+type RenderedMediaFile = RenderResult['originalMediaFiles'][number]
+type MediaVisibilityDuplicateBehavior = 'skip' | 'text_only'
+type ResolvedMediaVisibilityPolicy = {
+    windowSeconds: number
+    maxVisible: number
+    duplicateBehavior: MediaVisibilityDuplicateBehavior
+}
+type MediaVisibilityResult = {
+    policy: ResolvedMediaVisibilityPolicy | null
+    originalCount: number
+    visibleFiles: RenderedMediaFile[]
+    hiddenFiles: RenderedMediaFile[]
+    visibleHashes: Set<string>
+    hiddenHashes: Set<string>
+    visibleClaims: Array<{
+        platform: string
+        hash: string
+        a_id: string
+    }>
+}
 
 const DEFAULT_TAG_DIGEST_THRESHOLD = 3
 const DEFAULT_TAG_DIGEST_MIN_AUTHORS = 2
@@ -118,6 +146,42 @@ function toErrorMessage(error: unknown) {
 
 function uniquePreserveOrder(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean)))
+}
+
+function resolveMediaVisibilityPolicy(
+    config: ForwardTargetPlatformCommonConfig | undefined,
+): ResolvedMediaVisibilityPolicy | null {
+    const raw = config?.media_visibility
+    const enabled = raw === true || (typeof raw === 'object' && raw?.enabled !== false)
+    if (!enabled) {
+        return null
+    }
+
+    const objectConfig = typeof raw === 'object' && raw ? raw : {}
+    const rawWindowSeconds = Math.floor(Number((objectConfig as any).window_seconds || 0))
+    if (!Number.isFinite(rawWindowSeconds) || rawWindowSeconds <= 0) {
+        return null
+    }
+
+    const rawMaxVisible = Math.floor(Number((objectConfig as any).max_visible || 1))
+    return {
+        windowSeconds: Math.max(60, rawWindowSeconds),
+        maxVisible: Math.max(1, Number.isFinite(rawMaxVisible) ? rawMaxVisible : 1),
+        duplicateBehavior: (objectConfig as any).duplicate_behavior === 'text_only' ? 'text_only' : 'skip',
+    }
+}
+
+function formatMediaVisibilityWindow(seconds: number) {
+    if (seconds === 86400) {
+        return '24小时'
+    }
+    if (seconds % 86400 === 0) {
+        return `${seconds / 86400}天`
+    }
+    if (seconds % 3600 === 0) {
+        return `${seconds / 3600}小时`
+    }
+    return `${seconds}秒`
 }
 
 function mergeFeatureFlags(...values: Array<Array<string> | undefined>) {
@@ -1621,6 +1685,7 @@ class ForwarderPools extends BaseCompatibleModel {
             const errorCounterKey = `${platform}:${cloned_article.a_id}`
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
+                    let visibilityForRelease: MediaVisibilityResult | null = null
                     try {
                         if (this.shouldStopForShutdown(log, `sendArticles target ${target.id}`)) {
                             hadNonErrorOutcome = true
@@ -1723,7 +1788,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             }
                         }
 
-                        const text = await this.resolveTargetTextForArticle(
+                        const baseText = await this.resolveTargetTextForArticle(
                             article,
                             renderResult,
                             cfg_forwarder,
@@ -1733,18 +1798,6 @@ class ForwarderPools extends BaseCompatibleModel {
 
                         const outboundIdempotencyKey = articleOutboundKey(target.id, article, {
                             forceKey: options?.forceSend ? taskId : undefined,
-                        })
-                        const outboundPayloadHash = payloadHash({
-                            routeKey: routeKeyForTarget,
-                            targetId: target.id,
-                            taskKind: options?.forceSend ? 'manual_article' : 'article',
-                            text,
-                            articleKeys: [articleKey(article)],
-                            media: [
-                                ...renderResult.mediaFiles,
-                                ...renderResult.cardMediaFiles,
-                                ...renderResult.originalMediaFiles,
-                            ],
                         })
 
                         let claimed = true
@@ -1762,7 +1815,99 @@ class ForwarderPools extends BaseCompatibleModel {
                             }
                         }
 
+                        const visibility = options?.forceSend
+                            ? ({
+                                  policy: null,
+                                  originalCount: renderResult.originalMediaFiles.length,
+                                  visibleFiles: [...renderResult.originalMediaFiles],
+                                  hiddenFiles: [],
+                                  visibleHashes: new Set<string>(),
+                                  hiddenHashes: new Set<string>(),
+                                  visibleClaims: [],
+                              } satisfies MediaVisibilityResult)
+                            : await this.applyTargetMediaVisibility(
+                                  article,
+                                  target,
+                                  runtime_config,
+                                  renderResult.originalMediaFiles,
+                              )
+                        visibilityForRelease = visibility
+                        let text = baseText
+                        let mediaFiles = renderResult.mediaFiles
+                        let cardMediaFiles = renderResult.cardMediaFiles
+                        let contentMediaFiles = renderResult.originalMediaFiles
+
+                        if (visibility.policy && visibility.hiddenHashes.size > 0) {
+                            mediaFiles = this.filterMediaFilesByVisibility(renderResult.mediaFiles, visibility)
+                            contentMediaFiles = this.filterMediaFilesByVisibility(
+                                renderResult.originalMediaFiles,
+                                visibility,
+                            )
+                            cardMediaFiles =
+                                visibility.policy.duplicateBehavior === 'text_only'
+                                    ? []
+                                    : this.filterMediaFilesByVisibility(renderResult.cardMediaFiles, visibility)
+                            if (visibility.policy.duplicateBehavior === 'text_only') {
+                                text = uniquePreserveOrder([
+                                    baseText,
+                                    this.buildMediaVisibilityTextNotice(visibility.policy),
+                                ]).join('\n\n')
+                            }
+                        }
+
+                        if (
+                            visibility.policy?.duplicateBehavior === 'skip' &&
+                            visibility.hiddenFiles.length > 0 &&
+                            contentMediaFiles.length === 0
+                        ) {
+                            const outboundPayloadHash = payloadHash({
+                                routeKey: routeKeyForTarget,
+                                targetId: target.id,
+                                taskKind: options?.forceSend ? 'manual_article' : 'article',
+                                text,
+                                articleKeys: [articleKey(article)],
+                                media: [],
+                                extra: { skipped: 'media_visibility_duplicate' },
+                            })
+                            const outbound = await DB.OutboundMessage.claim({
+                                idempotency_key: outboundIdempotencyKey,
+                                route_key: routeKeyForTarget,
+                                target_id: target.id,
+                                target_platform: target.NAME,
+                                task_kind: options?.forceSend ? 'manual_article' : 'article',
+                                article_key: articleKey(article),
+                                payload_hash: outboundPayloadHash,
+                            })
+                            if (outbound.claimed) {
+                                await DB.OutboundMessage.markSkipped(
+                                    outboundIdempotencyKey,
+                                    'media_visibility_duplicate',
+                                    {
+                                        hidden_media_count: visibility.hiddenFiles.length,
+                                        window_seconds: visibility.policy.windowSeconds,
+                                        max_visible: visibility.policy.maxVisible,
+                                    },
+                                )
+                            }
+                            log?.debug(
+                                `Skipping article ${article.a_id} for ${target.id}: target media visibility duplicate left no visible media`,
+                            )
+                            error_for_all = false
+                            hadNonErrorOutcome = true
+                            return
+                        }
+
+                        const outboundPayloadHash = payloadHash({
+                            routeKey: routeKeyForTarget,
+                            targetId: target.id,
+                            taskKind: options?.forceSend ? 'manual_article' : 'article',
+                            text,
+                            articleKeys: [articleKey(article)],
+                            media: [...mediaFiles, ...cardMediaFiles, ...contentMediaFiles],
+                        })
+
                         if (this.shouldStopForShutdown(log, `sendArticles before outbound ${target.id}`)) {
+                            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                             hadNonErrorOutcome = true
                             return
                         }
@@ -1784,6 +1929,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             } else if (claimed && !options?.forceSend) {
                                 await this.releaseArticleChain(article, platform, target.id)
                             }
+                            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                             hadNonErrorOutcome = true
                             return
                         }
@@ -1795,15 +1941,16 @@ class ForwarderPools extends BaseCompatibleModel {
                             if (claimed && !options?.forceSend) {
                                 await this.releaseArticleChain(article, platform, target.id)
                             }
+                            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                             hadNonErrorOutcome = true
                             return
                         }
 
                         await DB.OutboundMessage.markSending(outboundIdempotencyKey)
                         const sendResult = await target.send(text, {
-                            media: renderResult.mediaFiles,
-                            cardMedia: renderResult.cardMediaFiles,
-                            contentMedia: renderResult.originalMediaFiles,
+                            media: mediaFiles,
+                            cardMedia: cardMediaFiles,
+                            contentMedia: contentMediaFiles,
                             timestamp: article.created_at,
                             runtime_config,
                             article: cloned_article,
@@ -1820,6 +1967,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             if (claimed && !options?.forceSend) {
                                 await this.releaseArticleChain(article, platform, target.id)
                             }
+                            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                             await DB.TargetHealth.mark({
                                 target_id: target.id,
                                 provider: target.NAME,
@@ -1833,6 +1981,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
                         if (sendResult.status === 'blocked') {
                             await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
+                            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                             await DB.TargetHealth.mark({
                                 target_id: target.id,
                                 provider: target.NAME,
@@ -1846,6 +1995,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
                         if (sendResult.status === 'dry_run') {
                             await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
+                            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                             await DB.TargetHealth.mark({
                                 target_id: target.id,
                                 provider: target.NAME,
@@ -1875,6 +2025,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         if (options?.forceSend) {
                             await DB.ForwardBy.save(article.id, platform, target.id, 'article')
                         }
+                        visibilityForRelease = null
                         error_for_all = false
                         hadNonErrorOutcome = true
                     } catch (error) {
@@ -1906,6 +2057,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             hadNonErrorOutcome = true
                             return
                         }
+                        await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                         await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
                         await DB.TargetHealth.mark({
                             target_id: target.id,
@@ -2308,6 +2460,14 @@ class ForwarderPools extends BaseCompatibleModel {
         if (config.mediaRealtimeText === 'rendered') {
             return renderResult.text || ''
         }
+        if (config.mediaRealtimeText === 'metadata') {
+            return uniquePreserveOrder([
+                formatArticleUserId(article as any).trim(),
+                String(article.username || '').trim(),
+                formatArticleTimeToken(article.created_at).trim(),
+                formatArticleSourceActionAttribution(article as any).trim(),
+            ]).join(' ')
+        }
         if (config.mediaRealtimeText !== 'basic') {
             return ''
         }
@@ -2317,16 +2477,128 @@ class ForwarderPools extends BaseCompatibleModel {
         return uniquePreserveOrder([header, headline, article.url || '']).join('\n')
     }
 
-    private buildRenderedMediaIdentity(file: RenderResult['originalMediaFiles'][number]) {
+    private buildRenderedMediaIdentity(file: RenderedMediaFile) {
         return file.content_hash || file.sourceUrl || file.path
     }
 
-    private buildRenderedMediaIdentityKeys(file: RenderResult['originalMediaFiles'][number]) {
-        return uniquePreserveOrder([file.content_hash, file.sourceUrl, file.path].filter(Boolean))
+    private buildRenderedMediaIdentityKeys(file: RenderedMediaFile) {
+        return uniquePreserveOrder(
+            [file.content_hash, file.sourceUrl, file.path].filter((value): value is string => Boolean(value)),
+        )
     }
 
-    private buildRenderedMediaIdentityList(mediaFiles: Array<RenderResult['originalMediaFiles'][number]>) {
+    private buildRenderedMediaIdentityList(mediaFiles: Array<RenderedMediaFile>) {
         return mediaFiles.map((file) => this.buildRenderedMediaIdentity(file)).filter(Boolean)
+    }
+
+    private buildTargetMediaVisibilityHash(file: RenderedMediaFile) {
+        const identity = this.buildRenderedMediaIdentity(file)
+        if (!identity) {
+            return null
+        }
+        return hashValue({
+            media_type: file.media_type || '',
+            identity,
+        })
+    }
+
+    private buildTargetMediaVisibilityNamespace(target: BaseForwarder) {
+        return `target-media:${hashValue({ target_id: target.id }).slice(0, 32)}`
+    }
+
+    private async applyTargetMediaVisibility(
+        article: ArticleWithId,
+        target: BaseForwarder,
+        runtime_config: ForwardTargetPlatformCommonConfig | undefined,
+        mediaFiles: Array<RenderedMediaFile>,
+    ): Promise<MediaVisibilityResult> {
+        const effectiveConfig = target.getEffectiveConfig(runtime_config)
+        const policy = resolveMediaVisibilityPolicy(effectiveConfig)
+        const emptyResult = {
+            policy,
+            originalCount: mediaFiles.length,
+            visibleFiles: [...mediaFiles],
+            hiddenFiles: [],
+            visibleHashes: new Set<string>(),
+            hiddenHashes: new Set<string>(),
+            visibleClaims: [],
+        }
+        if (!policy || mediaFiles.length === 0 || isNonLiveOutboundSendMode()) {
+            return emptyResult
+        }
+
+        const namespace = this.buildTargetMediaVisibilityNamespace(target)
+        const visibleFiles: RenderedMediaFile[] = []
+        const hiddenFiles: RenderedMediaFile[] = []
+        const visibleHashes = new Set<string>()
+        const hiddenHashes = new Set<string>()
+        const visibleClaims: MediaVisibilityResult['visibleClaims'] = []
+        const a_id = articleKey(article)
+
+        for (const file of mediaFiles) {
+            const mediaHash = this.buildTargetMediaVisibilityHash(file)
+            if (!mediaHash) {
+                visibleFiles.push(file)
+                continue
+            }
+            const claim = await DB.MediaHash.claimVisibleSlot({
+                namespace,
+                hash: mediaHash,
+                a_id,
+                maxVisible: policy.maxVisible,
+                windowSeconds: policy.windowSeconds,
+            })
+            if (claim.allowed) {
+                visibleFiles.push(file)
+                visibleHashes.add(mediaHash)
+                if (claim.slot !== undefined) {
+                    visibleClaims.push({
+                        platform: `${namespace}:slot:${claim.slot}`,
+                        hash: mediaHash,
+                        a_id,
+                    })
+                }
+            } else {
+                hiddenFiles.push(file)
+                hiddenHashes.add(mediaHash)
+            }
+        }
+
+        return {
+            policy,
+            originalCount: mediaFiles.length,
+            visibleFiles,
+            hiddenFiles,
+            visibleHashes,
+            hiddenHashes,
+            visibleClaims,
+        }
+    }
+
+    private filterMediaFilesByVisibility(
+        files: Array<RenderedMediaFile>,
+        visibility: MediaVisibilityResult,
+    ): Array<RenderedMediaFile> {
+        if (!visibility.policy || visibility.hiddenHashes.size === 0) {
+            return files
+        }
+        return files.filter((file) => {
+            const mediaHash = this.buildTargetMediaVisibilityHash(file)
+            return !mediaHash || !visibility.hiddenHashes.has(mediaHash)
+        })
+    }
+
+    private buildMediaVisibilityTextNotice(policy: ResolvedMediaVisibilityPolicy) {
+        return `【重复媒体已文字缩略】${formatMediaVisibilityWindow(policy.windowSeconds)}内该媒体已出现${policy.maxVisible}次，已省略重复媒体。`
+    }
+
+    private async releaseTargetMediaVisibilityClaims(visibility: MediaVisibilityResult | null | undefined) {
+        if (!visibility?.policy || visibility.visibleClaims.length === 0 || isNonLiveOutboundSendMode()) {
+            return
+        }
+        await DB.MediaHash.releaseVisibleSlots({
+            claims: visibility.visibleClaims,
+        })
     }
 
     private async sendSummaryCardRealtimeMedia(
@@ -2347,13 +2619,50 @@ class ForwarderPools extends BaseCompatibleModel {
         const mediaIdentities = this.buildRenderedMediaIdentityList(mediaFiles)
         const syntheticKey = `${routeKeyValue}:${articleKey(article)}:${hashValue(mediaIdentities)}`
         const outboundIdempotencyKey = syntheticOutboundKey(target.id, 'summary_realtime_media', syntheticKey)
+        const visibility = await this.applyTargetMediaVisibility(article, target, runtime_config, mediaFiles)
+        const visibleMediaFiles = visibility.visibleFiles
+        if (visibility.policy?.duplicateBehavior === 'skip' && visibleMediaFiles.length === 0) {
+            const outboundPayloadHash = payloadHash({
+                routeKey: routeKeyValue,
+                targetId: target.id,
+                taskKind: 'summary_realtime_media',
+                text,
+                articleKeys: [articleKey(article)],
+                media: [],
+                extra: { skipped: 'media_visibility_duplicate' },
+            })
+            const outbound = await DB.OutboundMessage.claim({
+                idempotency_key: outboundIdempotencyKey,
+                route_key: routeKeyValue,
+                target_id: target.id,
+                target_platform: target.NAME,
+                task_kind: 'summary_realtime_media',
+                article_key: articleKey(article),
+                synthetic_key: syntheticKey,
+                payload_hash: outboundPayloadHash,
+            })
+            if (outbound.claimed) {
+                await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, 'media_visibility_duplicate', {
+                    hidden_media_count: visibility.hiddenFiles.length,
+                    window_seconds: visibility.policy.windowSeconds,
+                    max_visible: visibility.policy.maxVisible,
+                })
+            }
+            log?.debug(
+                `Skipping summary realtime media for ${article.a_id} to ${target.id}: target media visibility duplicate`,
+            )
+            return true
+        }
+        if (visibleMediaFiles.length === 0) {
+            return true
+        }
         const outboundPayloadHash = payloadHash({
             routeKey: routeKeyValue,
             targetId: target.id,
             taskKind: 'summary_realtime_media',
             text,
             articleKeys: [articleKey(article)],
-            media: mediaFiles,
+            media: visibleMediaFiles,
         })
 
         try {
@@ -2371,13 +2680,14 @@ class ForwarderPools extends BaseCompatibleModel {
                 log?.debug(
                     `Summary realtime media outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible media send`,
                 )
+                await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
                 return isOutboundVisibleCompletionStatus(outbound.record.status)
             }
 
             await DB.OutboundMessage.markSending(outboundIdempotencyKey)
             const sendResult = await target.send(text, {
-                media: mediaFiles,
-                contentMedia: mediaFiles,
+                media: visibleMediaFiles,
+                contentMedia: visibleMediaFiles,
                 timestamp: article.created_at,
                 runtime_config,
                 article: cloneDeep(article),
@@ -2385,6 +2695,7 @@ class ForwarderPools extends BaseCompatibleModel {
             })
             if (sendResult.status === 'queued') {
                 await DB.OutboundMessage.markQueued(outboundIdempotencyKey, sendResult)
+                await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
                 await DB.TargetHealth.mark({
                     target_id: target.id,
                     provider: target.NAME,
@@ -2396,6 +2707,7 @@ class ForwarderPools extends BaseCompatibleModel {
             }
             if (sendResult.status === 'blocked') {
                 await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
+                await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
                 await DB.TargetHealth.mark({
                     target_id: target.id,
                     provider: target.NAME,
@@ -2407,6 +2719,7 @@ class ForwarderPools extends BaseCompatibleModel {
             }
             if (sendResult.status === 'dry_run') {
                 await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
+                await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
                 await DB.TargetHealth.mark({
                     target_id: target.id,
                     provider: target.NAME,
@@ -2446,6 +2759,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 }).catch(() => undefined)
                 return true
             }
+            await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
             await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
             await DB.TargetHealth.mark({
                 target_id: target.id,

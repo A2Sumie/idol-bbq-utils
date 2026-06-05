@@ -156,7 +156,7 @@ interface ForwardTargetPlatformCommonConfig {
               send_first_immediately?: boolean
               send_first_native?: boolean
               media_realtime?: boolean
-              media_realtime_text?: 'none' | 'basic' | 'rendered'
+              media_realtime_text?: 'none' | 'basic' | 'metadata' | 'rendered'
               flush_on_threshold?: boolean
               flush_delay_seconds?: number
               align_to_hour?: boolean
@@ -165,6 +165,19 @@ interface ForwardTargetPlatformCommonConfig {
                * Defaults to 2 when realtime media or original media is enabled.
                */
               media_duplicate_limit?: number
+          }
+    /**
+     * Target-level visible media memory. This suppresses or text-collapses repeated
+     * media before a message reaches the provider, independent from summary-card
+     * in-card duplicate budgets.
+     */
+    media_visibility?:
+        | boolean
+        | {
+              enabled?: boolean
+              window_seconds?: number
+              max_visible?: number
+              duplicate_behavior?: 'skip' | 'text_only'
           }
     /**
      * Collapse the text body of referenced/replied-to articles that were already forwarded to this target.

@@ -839,6 +839,95 @@ namespace DB {
                 update: {}, // No op if exists
             })
         }
+
+        export async function claimVisibleSlot(options: {
+            namespace: string
+            hash: string
+            a_id?: string
+            maxVisible: number
+            windowSeconds: number
+            now?: number
+        }): Promise<{ allowed: boolean; seenCount: number; slot?: number }> {
+            const maxVisible = Math.max(1, Math.floor(Number(options.maxVisible || 1)))
+            const windowSeconds = Math.max(1, Math.floor(Number(options.windowSeconds || 1)))
+            const now = Math.floor(Number(options.now || Date.now() / 1000))
+            const cutoff = now - windowSeconds
+            const slots = Array.from({ length: maxVisible }, (_, index) => `${options.namespace}:slot:${index}`)
+            const existing = await prisma.media_hashes.findMany({
+                where: {
+                    hash: options.hash,
+                    platform: {
+                        in: slots,
+                    },
+                },
+            })
+            const byPlatform = new Map(existing.map((record) => [record.platform, record]))
+            let activeCount = 0
+            let inactiveSlot: number | undefined
+
+            for (const [index, platform] of slots.entries()) {
+                const record = byPlatform.get(platform)
+                if (record && record.created_at >= cutoff) {
+                    activeCount += 1
+                    continue
+                }
+                inactiveSlot ??= index
+            }
+
+            if (activeCount >= maxVisible || inactiveSlot === undefined) {
+                return {
+                    allowed: false,
+                    seenCount: activeCount,
+                }
+            }
+
+            const platform = slots[inactiveSlot]!
+            await prisma.media_hashes.upsert({
+                where: {
+                    platform_hash: {
+                        platform,
+                        hash: options.hash,
+                    },
+                },
+                create: {
+                    platform,
+                    hash: options.hash,
+                    a_id: options.a_id || '',
+                    created_at: now,
+                },
+                update: {
+                    a_id: options.a_id || '',
+                    created_at: now,
+                },
+            })
+
+            return {
+                allowed: true,
+                seenCount: activeCount + 1,
+                slot: inactiveSlot,
+            }
+        }
+
+        export async function releaseVisibleSlots(options: {
+            claims: Array<{
+                platform: string
+                hash: string
+                a_id?: string
+            }>
+        }): Promise<number> {
+            let released = 0
+            for (const claim of options.claims) {
+                const result = await prisma.media_hashes.deleteMany({
+                    where: {
+                        platform: claim.platform,
+                        hash: claim.hash,
+                        ...(claim.a_id ? { a_id: claim.a_id } : {}),
+                    },
+                })
+                released += result.count
+            }
+            return released
+        }
     }
 
     export namespace OutboundMessage {
