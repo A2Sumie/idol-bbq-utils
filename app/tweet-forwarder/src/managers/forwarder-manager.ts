@@ -2104,16 +2104,20 @@ class ForwarderPools extends BaseCompatibleModel {
             )
         }
 
-        const queue = existingQueue || {
-            routeKey: summaryRouteKey,
-            target,
-            runtime_config,
-            config: summaryConfig,
-            items: new Map<number, SummaryCardQueueItem>(),
-            firstQueuedAt: now,
-            lastQueuedAt: now,
-            windowStart: this.resolveSummaryCardWindowStart(now, summaryConfig),
-            windowEnd: this.resolveSummaryCardWindowStart(now, summaryConfig) + summaryConfig.intervalSeconds,
+        let queue = existingQueue
+        if (!queue) {
+            const queueWindowStart = this.resolveSummaryCardWindowStart(now, summaryConfig)
+            queue = {
+                routeKey: summaryRouteKey,
+                target,
+                runtime_config,
+                config: summaryConfig,
+                items: new Map<number, SummaryCardQueueItem>(),
+                firstQueuedAt: now,
+                lastQueuedAt: now,
+                windowStart: queueWindowStart,
+                windowEnd: queueWindowStart + summaryConfig.intervalSeconds,
+            }
         }
 
         if (!queue.windowId) {

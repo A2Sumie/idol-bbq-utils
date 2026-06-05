@@ -4612,6 +4612,120 @@ test('sendArticles sends summary-card media immediately while keeping text queue
     expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(2)
 })
 
+test('summary-card realtime media can include basic text for Bilibili-style targets', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'basic',
+                flush_on_threshold: false,
+                align_to_interval: true,
+                flush_delay_seconds: 300,
+            },
+        } as any,
+        'target-summary-card-realtime-media-basic',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content || '',
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [
+                {
+                    media_type: 'video_thumbnail',
+                    path: `/tmp/realtime-basic-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-basic-${article.id}.jpg`,
+                },
+            ],
+            mediaFiles: [
+                {
+                    media_type: 'video_thumbnail',
+                    path: `/tmp/realtime-basic-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-basic-${article.id}.jpg`,
+                },
+            ],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    const now = Math.floor(Date.now() / 1000)
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-realtime-media-basic',
+            [
+                {
+                    id: 812,
+                    a_id: 'summary-realtime-media-basic',
+                    platform: Platform.X,
+                    username: 'media basic member',
+                    u_id: 'media_basic_member',
+                    content: 'summary basic media text',
+                    url: 'https://x.com/media_basic_member/status/812',
+                    type: 'tweet',
+                    created_at: now,
+                    ref: null,
+                    has_media: true,
+                    media: [{ type: 'video_thumbnail', url: 'https://example.com/realtime-basic-812.jpg' }],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('summary basic media text')
+    expect(target.sent[0]?.texts[0]).toContain('https://x.com/media_basic_member/status/812')
+    expect(target.sent[0]?.props?.bypassMediaBatch).toBeTrue()
+    expect(target.sent[0]?.props?.media?.[0]?.media_type).toBe('video_thumbnail')
+    expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(1)
+})
+
 test('summary-card aligned windows wait for the configured five-minute delay', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
