@@ -94,6 +94,8 @@ interface BrowserCookieSnapshot {
 
 interface CrawlerCookieExportOptions {
     validateLiveProbe?: boolean
+    seedConfiguredCookieFile?: boolean
+    visit?: boolean
     fetch?: typeof fetch
     timeoutMs?: number
 }
@@ -809,7 +811,11 @@ class SpiderPools extends BaseCompatibleModel {
             const existingRelevantCookies = existingCookies.filter((cookie) =>
                 this.matchCookieDomain(cookie.domain, targetDomains),
             )
-            if (existingRelevantCookies.length === 0 && crawler.cfg_crawler?.cookie_file) {
+            if (
+                options.seedConfiguredCookieFile !== false &&
+                existingRelevantCookies.length === 0 &&
+                crawler.cfg_crawler?.cookie_file
+            ) {
                 try {
                     await page
                         .browserContext()
@@ -822,17 +828,19 @@ class SpiderPools extends BaseCompatibleModel {
                 }
             }
 
-            await page
-                .goto(visitedUrl, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 15000,
-                })
-                .catch(async () => {
-                    await page.goto(url.origin, {
+            if (options.visit !== false) {
+                await page
+                    .goto(visitedUrl, {
                         waitUntil: 'domcontentloaded',
                         timeout: 15000,
                     })
-                })
+                    .catch(async () => {
+                        await page.goto(url.origin, {
+                            waitUntil: 'domcontentloaded',
+                            timeout: 15000,
+                        })
+                    })
+            }
 
             const cookies = await page.browserContext().cookies()
             const filteredCookies = cookies

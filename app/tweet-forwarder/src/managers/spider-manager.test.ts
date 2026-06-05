@@ -622,3 +622,42 @@ test('SpiderPools exportCrawlerCookies rejects X sessions that fail live auth va
     ).rejects.toThrow(CrawlerCookieExportError)
     expect(probeUrls).toEqual(['https://x.com/i/api/1.1/account/settings.json'])
 })
+
+test('SpiderPools exportCrawlerCookies can audit without seeding configured cookies or visiting pages', async () => {
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-cookie-export-readonly', new EventEmitter())
+    let setCookieCalls = 0
+    let gotoCalls = 0
+    ;(pools as any).browserPool = {
+        createPage: async () => ({
+            browserContext: () => ({
+                cookies: async () => [],
+                setCookie: async () => {
+                    setCookieCalls += 1
+                },
+            }),
+            goto: async () => {
+                gotoCalls += 1
+            },
+            close: async () => undefined,
+        }),
+    }
+
+    await expect(
+        pools.exportCrawlerCookies(
+            {
+                name: 'x-list',
+                origin: 'https://x.com',
+                cfg_crawler: {
+                    session_profile: 'x-main',
+                    cookie_file: '/tmp/seed-would-be-used.txt',
+                },
+            },
+            {
+                seedConfiguredCookieFile: false,
+                visit: false,
+            },
+        ),
+    ).rejects.toThrow(CrawlerCookieExportError)
+    expect(setCookieCalls).toBe(0)
+    expect(gotoCalls).toBe(0)
+})

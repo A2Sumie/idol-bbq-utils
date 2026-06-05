@@ -8,6 +8,7 @@
         "build:forwarder": "bun --filter @idol-bbq-utils/tweet-forwarder build",
         "audit:config": "bun app/tweet-forwarder/scripts/config-audit.ts --config assets/config.yaml",
         "audit:crawler-health": "bun app/tweet-forwarder/scripts/crawler-health-audit.ts --config assets/config.yaml",
+        "audit:crawler-cookie-export": "bun app/tweet-forwarder/scripts/crawler-cookie-export-audit.ts --config assets/config.yaml",
         "deploy:forwarder:stopped": "tools/deploy-forwarder-stopped.sh",
         "preflight:forwarder": "tools/forwarder-preflight.sh",
         "drill:db-backup": "tools/forwarder-db-backup-drill.sh",

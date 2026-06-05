@@ -48,6 +48,10 @@ HELP
         --outdir=/tmp/idol-bbq-crawler-health-audit-build \
         --target=bun \
         --minify
+    run bun build app/tweet-forwarder/scripts/crawler-cookie-export-audit.ts \
+        --outdir=/tmp/idol-bbq-crawler-cookie-export-audit-build \
+        --target=bun \
+        --minify
 
     if [ "$RUN_REMOTE_PREFLIGHT" = "1" ]; then
         run env STRICT_COMMIT=1 bun run preflight:forwarder
