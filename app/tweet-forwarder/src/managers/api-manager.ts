@@ -1132,6 +1132,20 @@ export class APIManager extends BaseCompatibleModel {
     private async handleNotificationSignalIngest(req: Request): Promise<Response> {
         const body = (await req.json()) as NotificationSignalInput
         const signal = buildNotificationSignalRecord(this.config, body)
+        if (signal.mode === 'disabled') {
+            return jsonResponse(
+                {
+                    success: false,
+                    mode: signal.mode,
+                    platform: signal.platform,
+                    source_ref: signal.source_ref,
+                    matched_crawlers: signal.matched_crawlers,
+                    would_trigger_crawlers: signal.would_trigger_crawlers,
+                },
+                202,
+            )
+        }
+
         const taskType = DB.TaskQueue.TYPE.NotificationSignal
         const queueTask = await DB.TaskQueue.add(taskType, signal, signal.received_at, {
             source_ref: signal.source_ref,

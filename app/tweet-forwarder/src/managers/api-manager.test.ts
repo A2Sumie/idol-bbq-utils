@@ -374,6 +374,98 @@ test('APIManager records notification signals in api-only shadow mode without di
     }
 })
 
+test('APIManager ignores notification signals when notification shadow intake is disabled', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const taskAdds: any[] = []
+    const statusUpdates: any[] = []
+
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        taskAdds.push({ type, payload, executeAt, meta })
+        return { id: 92, status: 'pending' }
+    }
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    notification_signals: {
+                        mode: 'disabled',
+                    },
+                    crawlers: [
+                        {
+                            id: 'x-staff',
+                            name: 'X staff',
+                            origin: 'https://x.com',
+                            paths: ['/227_staff'],
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    emitter: {
+                        emit: () => {
+                            throw new Error('disabled notification signal must not dispatch')
+                        },
+                    },
+                }) as any,
+            getRuntimeMeta: () =>
+                ({
+                    generation: 0,
+                    configPath: 'config.yaml',
+                    mode: 'api-only',
+                    startedAt: new Date(0).toISOString(),
+                    lastReloadedAt: new Date(0).toISOString(),
+                    reloading: false,
+                }) as any,
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/actions/notification-signals/ingest', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+                body: JSON.stringify({
+                    platform: 'x',
+                    username: '227_staff',
+                    notificationId: 'x-notification-1',
+                    title: 'private notification title',
+                }),
+            }),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(202)
+        expect(await response.json()).toMatchObject({
+            success: false,
+            mode: 'disabled',
+            platform: 'x',
+            source_ref: 'notification:x:227_staff',
+            matched_crawlers: [
+                {
+                    crawler_id: 'x-staff',
+                    crawler_name: 'X staff',
+                    reason: 'identity',
+                },
+            ],
+            would_trigger_crawlers: false,
+        })
+        expect(taskAdds).toEqual([])
+        expect(statusUpdates).toEqual([])
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
 test('APIManager marks manual crawler run task failed when dispatch throws', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus

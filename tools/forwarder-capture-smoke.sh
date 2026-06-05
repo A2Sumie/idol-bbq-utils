@@ -13,6 +13,7 @@ CAPTURE_SMOKE_KEEP_ROOT="${CAPTURE_SMOKE_KEEP_ROOT:-1}"
 CAPTURE_SMOKE_REQUIRE_PRODUCTION_STOPPED="${CAPTURE_SMOKE_REQUIRE_PRODUCTION_STOPPED:-1}"
 CAPTURE_SMOKE_CONTAINER_PREFIX="${CAPTURE_SMOKE_CONTAINER_PREFIX:-idol-bbq-capture-smoke}"
 CAPTURE_SMOKE_ROOT="${CAPTURE_SMOKE_ROOT:-}"
+CAPTURE_SMOKE_TARGET_IDS="${CAPTURE_SMOKE_TARGET_IDS:-}"
 
 if [ -n "${SSH_OPTS:-}" ]; then
     # shellcheck disable=SC2206
@@ -23,7 +24,7 @@ fi
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME CAPTURE_SMOKE_API_PORT CAPTURE_SMOKE_CRAWLER_NAME CAPTURE_SMOKE_PLATFORM CAPTURE_SMOKE_TIMEOUT_SECONDS CAPTURE_SMOKE_KEEP_ROOT CAPTURE_SMOKE_REQUIRE_PRODUCTION_STOPPED CAPTURE_SMOKE_CONTAINER_PREFIX CAPTURE_SMOKE_ROOT; do
+    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME CAPTURE_SMOKE_API_PORT CAPTURE_SMOKE_CRAWLER_NAME CAPTURE_SMOKE_PLATFORM CAPTURE_SMOKE_TIMEOUT_SECONDS CAPTURE_SMOKE_KEEP_ROOT CAPTURE_SMOKE_REQUIRE_PRODUCTION_STOPPED CAPTURE_SMOKE_CONTAINER_PREFIX CAPTURE_SMOKE_ROOT CAPTURE_SMOKE_TARGET_IDS; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -56,6 +57,7 @@ Environment:
   CAPTURE_SMOKE_REQUIRE_PRODUCTION_STOPPED=1
   CAPTURE_SMOKE_CONTAINER_PREFIX=idol-bbq-capture-smoke
   CAPTURE_SMOKE_ROOT=                # optional remote evidence root
+  CAPTURE_SMOKE_TARGET_IDS=          # optional comma-separated target ids/names/group ids
 
 The temporary API secret is never printed. Secret-bearing temporary files are
 removed before exit. Production sends remain blocked by
@@ -172,13 +174,14 @@ PY
 }
 
 write_temp_config() {
-    local repo="$1" root="$2" image="$3" api_port="$4" api_secret="$5"
+    local repo="$1" root="$2" image="$3" api_port="$4" api_secret="$5" target_filter="$6"
     docker run --rm --pull never \
         --entrypoint bun \
         --user "$(id -u):$(id -g)" \
         -e HOME=/tmp \
         -e TEMP_API_PORT="$api_port" \
         -e TEMP_API_SECRET="$api_secret" \
+        -e TEMP_TARGET_IDS="$target_filter" \
         -v "$repo/assets/config.yaml:/app/config.yaml:ro" \
         -v "$root:/out" \
         "$image" \
@@ -188,6 +191,12 @@ import YAML from "yaml"
 
 const quietCron = "0 0 0 1 1 *"
 const config = YAML.parse(readFileSync("/app/config.yaml", "utf8"))
+const targetFilter = new Set(
+    String(process.env.TEMP_TARGET_IDS || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+)
 config.api = {
     ...(config.api || {}),
     port: Number(process.env.TEMP_API_PORT),
@@ -228,8 +237,63 @@ for (const forwarder of config.forwarders || []) {
     }
 }
 
+function targetIdentityValues(target) {
+    const cfg = target?.cfg_platform || {}
+    return [
+        target?.id,
+        target?.name,
+        target?.group,
+        cfg?.group_id,
+        cfg?.group,
+        cfg?.target_id,
+        cfg?.id,
+    ]
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean)
+}
+
+function subscriberId(subscriber) {
+    if (typeof subscriber === "string") return subscriber
+    if (subscriber && typeof subscriber === "object") return String(subscriber.id || subscriber.name || "").trim()
+    return ""
+}
+
+let allowedTargetIds = []
+if (targetFilter.size > 0) {
+    const keptTargets = (config.forward_targets || []).filter((target) =>
+        targetIdentityValues(target).some((identity) => targetFilter.has(identity)),
+    )
+    if (keptTargets.length === 0) {
+        throw new Error("CAPTURE_SMOKE_TARGET_IDS did not match any forward target")
+    }
+
+    allowedTargetIds = keptTargets.map((target, index) => String(target.id || target.name || `target-${index}`).trim())
+    const allowedSet = new Set(allowedTargetIds)
+    config.forward_targets = keptTargets
+
+    const connections = config.connections || {}
+    for (const connectionName of ["formatter-target", "forwarder-target"]) {
+        const connection = connections[connectionName]
+        if (!connection || typeof connection !== "object") continue
+        for (const [nodeId, subscribers] of Object.entries(connection)) {
+            if (Array.isArray(subscribers)) {
+                connection[nodeId] = subscribers.filter((subscriber) => allowedSet.has(subscriberId(subscriber)))
+            }
+        }
+    }
+
+    for (const forwarder of config.forwarders || []) {
+        if (!Array.isArray(forwarder.subscribers)) continue
+        forwarder.subscribers = forwarder.subscribers.filter((subscriber) => allowedSet.has(subscriberId(subscriber)))
+    }
+}
+
+writeFileSync("/out/allowed-targets.txt", `${allowedTargetIds.join("\n")}${allowedTargetIds.length ? "\n" : ""}`, {
+    mode: 0o600,
+})
 writeFileSync("/out/config.yaml", YAML.stringify(config), { mode: 0o600 })
 chmodSync("/out/config.yaml", 0o600)
+chmodSync("/out/allowed-targets.txt", 0o600)
 '
 }
 
@@ -250,18 +314,21 @@ PY
 }
 
 count_capture_and_outbound() {
-    local capture_file="$1" db_path="$2" article_id="$3" metrics_path="$4"
-    python3 - "$capture_file" "$db_path" "$article_id" "$metrics_path" <<'PY'
+    local capture_file="$1" db_path="$2" article_id="$3" allowed_target_ids="$4" metrics_path="$5"
+    python3 - "$capture_file" "$db_path" "$article_id" "$allowed_target_ids" "$metrics_path" <<'PY'
 import json
 import os
 import sqlite3
 import sys
 
-capture_file, db_path, article_id, metrics_path = sys.argv[1:5]
+capture_file, db_path, article_id, allowed_target_ids_raw, metrics_path = sys.argv[1:6]
+allowed_target_ids = {item.strip() for item in allowed_target_ids_raw.split(",") if item.strip()}
 
 capture_count = 0
 matching_capture_count = 0
 malformed_capture_count = 0
+disallowed_capture_count = 0
+captured_target_ids = set()
 if os.path.exists(capture_file):
     with open(capture_file, "r", encoding="utf-8") as handle:
         for line in handle:
@@ -284,29 +351,41 @@ if os.path.exists(capture_file):
                 or article_id in outbound_key
             ):
                 matching_capture_count += 1
+                target_id = str(payload.get("target_id") or "") if isinstance(payload, dict) else ""
+                if target_id:
+                    captured_target_ids.add(target_id)
+                if allowed_target_ids and target_id not in allowed_target_ids:
+                    disallowed_capture_count += 1
 
 status_counts = {}
+matching_outbound_target_ids = set()
+disallowed_outbound_count = 0
 dry_run_count = 0
 matching_outbound_count = 0
 connection = sqlite3.connect(db_path)
 try:
     rows = connection.execute(
         """
-        select status, count(*)
+        select coalesce(target_id, ''), status, count(*)
           from outbound_messages
          where idempotency_key like ?
             or coalesce(article_key, '') like ?
             or coalesce(synthetic_key, '') like ?
-         group by status
-         order by status
+         group by target_id, status
+         order by target_id, status
         """,
         (f"%{article_id}%", f"%{article_id}%", f"%{article_id}%"),
     ).fetchall()
 finally:
     connection.close()
 
-for status, count in rows:
-    status_counts[str(status)] = int(count)
+for target_id, status, count in rows:
+    target_id = str(target_id or "")
+    if target_id:
+        matching_outbound_target_ids.add(target_id)
+    if allowed_target_ids and target_id not in allowed_target_ids:
+        disallowed_outbound_count += int(count)
+    status_counts[str(status)] = status_counts.get(str(status), 0) + int(count)
     matching_outbound_count += int(count)
 dry_run_count = int(status_counts.get("dry_run", 0))
 
@@ -317,6 +396,10 @@ with open(metrics_path, "w", encoding="utf-8") as handle:
     handle.write(f"malformed_capture_count={malformed_capture_count}\n")
     handle.write(f"matching_outbound_count={matching_outbound_count}\n")
     handle.write(f"dry_run_count={dry_run_count}\n")
+    handle.write(f"disallowed_capture_count={disallowed_capture_count}\n")
+    handle.write(f"disallowed_outbound_count={disallowed_outbound_count}\n")
+    handle.write(f"captured_target_ids={','.join(sorted(captured_target_ids))}\n")
+    handle.write(f"matching_outbound_target_ids={','.join(sorted(matching_outbound_target_ids))}\n")
     handle.write(
         "outbound_status_counts="
         + ",".join(f"{key}:{value}" for key, value in sorted(status_counts.items()))
@@ -335,11 +418,13 @@ timeout_seconds="${CAPTURE_SMOKE_TIMEOUT_SECONDS:-240}"
 keep_root="$(bool_lower "${CAPTURE_SMOKE_KEEP_ROOT:-1}")"
 require_production_stopped="$(bool_lower "${CAPTURE_SMOKE_REQUIRE_PRODUCTION_STOPPED:-1}")"
 prefix="${CAPTURE_SMOKE_CONTAINER_PREFIX:-idol-bbq-capture-smoke}"
+target_filter="${CAPTURE_SMOKE_TARGET_IDS:-}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 root="${CAPTURE_SMOKE_ROOT:-/tmp/idol-bbq-capture-smoke-$stamp}"
 smoke_container="$prefix-$stamp"
 tmp_root="$root/tmp"
 tmp_config="$root/config.yaml"
+allowed_targets_file="$root/allowed-targets.txt"
 tmp_db="$root/refactor.db"
 capture_file="$tmp_root/outbound-capture.jsonl"
 log_file="$root/container.log"
@@ -351,6 +436,7 @@ metrics_file="$root/metrics.env"
 db_prepare_file="$root/db-prepare.env"
 article_id="capture-smoke-$stamp"
 api_secret=""
+allowed_target_ids=""
 cleanup_started="false"
 
 cleanup() {
@@ -393,7 +479,13 @@ import secrets
 print("capture-smoke-" + secrets.token_urlsafe(24))
 PY
 )"
-write_temp_config "$repo" "$root" "$image" "$api_port" "$api_secret"
+write_temp_config "$repo" "$root" "$image" "$api_port" "$api_secret" "$target_filter"
+if [ -f "$allowed_targets_file" ]; then
+    allowed_target_ids="$(tr '\n' ',' < "$allowed_targets_file" | sed 's/,$//')"
+fi
+if [ -n "$target_filter" ] && [ -z "$allowed_target_ids" ]; then
+    die "target filter matched no allowed target ids"
+fi
 printf 'Authorization: Bearer %s\n' "$api_secret" > "$auth_header"
 chmod 600 "$auth_header"
 
@@ -490,7 +582,7 @@ if str(article.get("a_id") or "") != article_id:
 PY
 
 for _ in $(seq 1 "$timeout_seconds"); do
-    count_capture_and_outbound "$capture_file" "$tmp_db" "$article_id" "$metrics_file"
+    count_capture_and_outbound "$capture_file" "$tmp_db" "$article_id" "$allowed_target_ids" "$metrics_file"
     # shellcheck disable=SC1090
     . "$metrics_file"
     if [ "${matching_capture_count:-0}" -gt 0 ] && [ "${dry_run_count:-0}" -gt 0 ]; then
@@ -506,6 +598,11 @@ done
 [ "${unmatched_capture_count:-0}" = "0" ] || die "unexpected non-smoke capture records: $unmatched_capture_count"
 [ "${malformed_capture_count:-0}" = "0" ] || die "malformed capture records: $malformed_capture_count"
 [ "${dry_run_count:-0}" -gt 0 ] || die "no matching dry_run outbound records were written"
+if [ -n "$allowed_target_ids" ]; then
+    [ "${captured_target_ids:-}" != "" ] || die "target allowlist produced no captured target ids"
+    [ "${disallowed_capture_count:-0}" = "0" ] || die "capture records escaped target allowlist: $disallowed_capture_count"
+    [ "${disallowed_outbound_count:-0}" = "0" ] || die "outbound records escaped target allowlist: $disallowed_outbound_count"
+fi
 
 docker logs "$smoke_container" > "$log_file" 2>&1 || true
 docker stop -t 30 "$smoke_container" >/dev/null || true
@@ -541,6 +638,8 @@ printf 'secret_artifacts_removed=%s\n' "$secret_artifacts_removed"
 printf 'evidence_root=%s\n' "$root"
 printf 'article_id=%s\n' "$article_id"
 printf 'crawler_name=%s\n' "$crawler_name"
+printf 'target_filter=%s\n' "$target_filter"
+printf 'allowed_target_ids=%s\n' "$allowed_target_ids"
 printf 'simulate_http_code=%s\n' "$simulate_http_code"
 printf 'capture_file=%s\n' "$capture_file"
 printf 'capture_count=%s\n' "$capture_count"
@@ -548,6 +647,10 @@ printf 'matching_capture_count=%s\n' "$matching_capture_count"
 printf 'unmatched_capture_count=%s\n' "$unmatched_capture_count"
 printf 'matching_outbound_count=%s\n' "$matching_outbound_count"
 printf 'dry_run_count=%s\n' "$dry_run_count"
+printf 'captured_target_ids=%s\n' "${captured_target_ids:-}"
+printf 'matching_outbound_target_ids=%s\n' "${matching_outbound_target_ids:-}"
+printf 'disallowed_capture_count=%s\n' "${disallowed_capture_count:-0}"
+printf 'disallowed_outbound_count=%s\n' "${disallowed_outbound_count:-0}"
 printf 'outbound_status_counts=%s\n' "${outbound_status_counts:-}"
 printf 'db_prepare_summary=%s\n' "$db_prepare_file"
 printf 'container_log=%s\n' "$log_file"

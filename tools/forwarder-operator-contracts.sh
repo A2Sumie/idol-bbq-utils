@@ -163,6 +163,12 @@ HELP
 
     require_contains "$capture_smoke" 'CAPTURE_SMOKE_REQUIRE_PRODUCTION_STOPPED' \
         'capture smoke production-stopped guard'
+    require_contains "$capture_smoke" 'CAPTURE_SMOKE_TARGET_IDS' \
+        'capture smoke target allowlist option'
+    require_contains "$capture_smoke" 'TEMP_TARGET_IDS' \
+        'capture smoke temporary config target filter'
+    require_contains "$capture_smoke" 'allowed-targets.txt' \
+        'capture smoke allowed target evidence file'
     require_contains "$capture_smoke" 'IDOL_BBQ_OUTBOUND_SEND_MODE=capture' \
         'capture smoke outbound send-mode override'
     require_contains "$capture_smoke" 'sqlite_backup "$repo/assets/refactor.db" "$tmp_db"' \
@@ -179,6 +185,10 @@ HELP
         'capture smoke production stop refusal'
     require_contains "$capture_smoke" 'unmatched_capture_count' \
         'capture smoke no unrelated capture assertion'
+    require_contains "$capture_smoke" 'disallowed_capture_count' \
+        'capture smoke target allowlist capture assertion'
+    require_contains "$capture_smoke" 'disallowed_outbound_count' \
+        'capture smoke target allowlist outbound assertion'
 
     python3 - "$dockerfile" <<'PY'
 import sys
