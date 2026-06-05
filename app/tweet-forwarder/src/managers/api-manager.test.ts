@@ -169,7 +169,28 @@ test('APIManager runtime status uses full task status counts', async () => {
     const originalTaskCountsByStatus = DB.TaskQueue.countsByStatus
 
     ;(DB.TaskQueue as any).list = async () => [
-        { id: 1, status: 'completed' },
+        {
+            id: 1,
+            type: DB.TaskQueue.TYPE.NotificationSignal,
+            status: 'completed',
+            source_ref: 'notification:instagram:private-member',
+            idempotency_key: 'private-idempotency-key',
+            payload: {
+                schema_version: 1,
+                mode: 'shadow',
+                platform: 'instagram',
+                event_key: 'private-event-key',
+                source_ref: 'notification:instagram:private-member',
+                received_at: 1_800_000_000,
+                notification: {
+                    username: 'private-member',
+                    title_hash: 'private-title-hash',
+                    title_length: 12,
+                },
+                matched_crawlers: [],
+                would_trigger_crawlers: false,
+            },
+        },
         { id: 2, status: 'completed' },
     ]
     ;(DB.TaskQueue as any).countsByStatus = async () => ({
@@ -215,6 +236,12 @@ test('APIManager runtime status uses full task status counts', async () => {
             completed: 80,
         })
         expect(payload.latest_tasks).toHaveLength(2)
+        const serialized = JSON.stringify(payload.latest_tasks)
+        expect(payload.latest_tasks[0].source_ref).toBe('[redacted]')
+        expect(payload.latest_tasks[0].idempotency_key).toBe('[redacted]')
+        expect(serialized).not.toContain('private-member')
+        expect(serialized).not.toContain('private-event-key')
+        expect(serialized).not.toContain('private-title-hash')
     } finally {
         ;(DB.TaskQueue as any).list = originalTaskList
         ;(DB.TaskQueue as any).countsByStatus = originalTaskCountsByStatus
@@ -260,6 +287,92 @@ test('APIManager task list forwards operator filters safely', async () => {
                 },
             },
         ])
+    } finally {
+        ;(DB.TaskQueue as any).list = originalTaskList
+    }
+})
+
+test('APIManager task list redacts notification signal payload identity fields', async () => {
+    const originalTaskList = DB.TaskQueue.list
+
+    ;(DB.TaskQueue as any).list = async () => [
+        {
+            id: 1,
+            type: DB.TaskQueue.TYPE.NotificationSignal,
+            status: 'completed',
+            source_ref: 'notification:instagram:private-member',
+            idempotency_key: 'private-idempotency-key',
+            last_error: 'private last error',
+            payload: {
+                schema_version: 1,
+                mode: 'shadow',
+                platform: 'instagram',
+                event_key: 'private-event-key',
+                source_ref: 'notification:instagram:private-member',
+                received_at: 1_800_000_000,
+                notification: {
+                    notification_id: 'private-notification-id',
+                    post_id: 'private-post-id',
+                    url: 'https://www.instagram.com/private-member/p/private-post-id/',
+                    source_user_id: 'private-source-user',
+                    username: 'private-member',
+                    title_hash: 'private-title-hash',
+                    title_length: 12,
+                },
+                matched_crawlers: [
+                    {
+                        crawler_id: 'ig-a',
+                        crawler_name: 'Instagram A',
+                        reason: 'identity',
+                    },
+                ],
+                would_trigger_crawlers: false,
+            },
+        },
+    ]
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).handleTasks(new URL('http://localhost/api/tasks?type=notification_signal'))
+        expect(response.status).toBe(200)
+        const tasks = await response.json()
+        const serialized = JSON.stringify(tasks)
+
+        expect(tasks[0]).toMatchObject({
+            source_ref: '[redacted]',
+            idempotency_key: '[redacted]',
+            last_error: '[redacted]',
+            payload: {
+                schema_version: 1,
+                platform: 'instagram',
+                event_key_present: true,
+                source_ref_present: true,
+                matched_crawler_count: 1,
+                notification: {
+                    has_url: true,
+                    has_notification_id: true,
+                    has_post_id: true,
+                    has_source_user_id: true,
+                    has_username: true,
+                    title_length: 12,
+                },
+            },
+        })
+        expect(serialized).not.toContain('private-member')
+        expect(serialized).not.toContain('private-event-key')
+        expect(serialized).not.toContain('private-notification-id')
+        expect(serialized).not.toContain('private-post-id')
+        expect(serialized).not.toContain('private-source-user')
+        expect(serialized).not.toContain('private-title-hash')
     } finally {
         ;(DB.TaskQueue as any).list = originalTaskList
     }

@@ -38,6 +38,7 @@ import { buildRuntimeManifest } from '@/services/runtime-manifest-service'
 import { redactSecrets } from '@/services/redaction-service'
 import { buildNotificationSignalRecord, type NotificationSignalInput } from '@/services/notification-signal-service'
 import { buildNotificationSignalSummary } from '@/services/notification-signal-summary-service'
+import { redactTaskQueueEntriesForApi } from '@/services/task-queue-redaction-service'
 
 interface ApiConfig {
     port?: number
@@ -878,7 +879,7 @@ export class APIManager extends BaseCompatibleModel {
             failed_tasks: taskCounts.failed || 0,
             completed_tasks: taskCounts.completed || 0,
             task_counts: taskCounts,
-            latest_tasks: tasks.slice(0, 10),
+            latest_tasks: redactTaskQueueEntriesForApi(tasks.slice(0, 10)),
             runtime,
         })
     }
@@ -948,15 +949,14 @@ export class APIManager extends BaseCompatibleModel {
 
     private async handleTasks(url: URL): Promise<Response> {
         const limit = DB.TaskQueue.clampListLimit(Number(url.searchParams.get('limit') || '100'))
-        return jsonResponse(
-            await DB.TaskQueue.list(limit, {
-                status: url.searchParams.get('status') || undefined,
-                type: url.searchParams.get('type') || undefined,
-                source_ref: url.searchParams.get('source_ref') || undefined,
-                action_type: url.searchParams.get('action_type') || undefined,
-                idempotency_key: url.searchParams.get('idempotency_key') || undefined,
-            }),
-        )
+        const tasks = await DB.TaskQueue.list(limit, {
+            status: url.searchParams.get('status') || undefined,
+            type: url.searchParams.get('type') || undefined,
+            source_ref: url.searchParams.get('source_ref') || undefined,
+            action_type: url.searchParams.get('action_type') || undefined,
+            idempotency_key: url.searchParams.get('idempotency_key') || undefined,
+        })
+        return jsonResponse(redactTaskQueueEntriesForApi(tasks))
     }
 
     private async handleNotificationSignalSummary(url: URL): Promise<Response> {
