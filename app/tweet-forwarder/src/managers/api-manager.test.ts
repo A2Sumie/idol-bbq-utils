@@ -265,6 +265,90 @@ test('APIManager task list forwards operator filters safely', async () => {
     }
 })
 
+test('APIManager notification signal summary returns no-secret observation metrics', async () => {
+    const originalTaskList = DB.TaskQueue.list
+    const calls: any[] = []
+
+    ;(DB.TaskQueue as any).list = async (limit: number, filters: unknown) => {
+        calls.push({ limit, filters })
+        return [
+            {
+                id: 1,
+                status: 'completed',
+                created_at: 1000,
+                payload: {
+                    schema_version: 1,
+                    mode: 'shadow',
+                    platform: 'instagram',
+                    event_key: 'private-event-key',
+                    source_ref: 'notification:instagram:private-member',
+                    received_at: 995,
+                    notification: {
+                        title: 'private notification title',
+                    },
+                    matched_crawlers: [
+                        {
+                            crawler_id: 'ig-a',
+                            crawler_name: 'Instagram A',
+                            reason: 'identity',
+                        },
+                    ],
+                    would_trigger_crawlers: false,
+                },
+            },
+        ]
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).handleNotificationSignalSummary(
+            new URL('http://localhost/api/notification-signals/summary?limit=999'),
+        )
+        expect(response.status).toBe(200)
+        const payload = await response.json()
+        const serialized = JSON.stringify(payload)
+
+        expect(calls).toEqual([
+            {
+                limit: 200,
+                filters: {
+                    type: 'notification_signal',
+                },
+            },
+        ])
+        expect(payload.sample).toMatchObject({
+            limit: 200,
+            task_count: 1,
+            parsed_record_count: 1,
+        })
+        expect(payload.platform_counts).toEqual({ instagram: 1 })
+        expect(payload.match_reason_counts).toEqual({ identity: 1 })
+        expect(payload.counts.raw_text_field_count).toBe(1)
+        expect(payload.matched_crawlers).toEqual([
+            {
+                crawler_id: 'ig-a',
+                crawler_name: 'Instagram A',
+                count: 1,
+            },
+        ])
+        expect(payload.diagnostic_codes).toContain('notification_signal_raw_text_fields_present')
+        expect(serialized).not.toContain('private notification title')
+        expect(serialized).not.toContain('private-event-key')
+        expect(serialized).not.toContain('private-member')
+    } finally {
+        ;(DB.TaskQueue as any).list = originalTaskList
+    }
+})
+
 test('APIManager records notification signals in api-only shadow mode without dispatching crawlers', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus

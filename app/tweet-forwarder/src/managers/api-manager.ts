@@ -37,6 +37,7 @@ import { buildRouteGraph } from '@/services/route-graph-service'
 import { buildRuntimeManifest } from '@/services/runtime-manifest-service'
 import { redactSecrets } from '@/services/redaction-service'
 import { buildNotificationSignalRecord, type NotificationSignalInput } from '@/services/notification-signal-service'
+import { buildNotificationSignalSummary } from '@/services/notification-signal-summary-service'
 
 interface ApiConfig {
     port?: number
@@ -373,6 +374,8 @@ export class APIManager extends BaseCompatibleModel {
         if (req.method === 'GET' && url.pathname === '/api/articles') return this.handleArticleList(url)
         if (req.method === 'GET' && url.pathname.startsWith('/api/articles/')) return this.handleArticleView(url)
         if (req.method === 'GET' && url.pathname === '/api/tasks') return this.handleTasks(url)
+        if (req.method === 'GET' && url.pathname === '/api/notification-signals/summary')
+            return this.handleNotificationSignalSummary(url)
         if (req.method === 'GET' && url.pathname === '/api/outbound-messages') return this.handleOutboundMessages(url)
         if (req.method === 'GET' && url.pathname === '/api/target-health') return this.handleTargetHealth()
         if (req.method === 'GET' && url.pathname === '/api/processor-runs') return this.handleProcessorRuns(url)
@@ -954,6 +957,14 @@ export class APIManager extends BaseCompatibleModel {
                 idempotency_key: url.searchParams.get('idempotency_key') || undefined,
             }),
         )
+    }
+
+    private async handleNotificationSignalSummary(url: URL): Promise<Response> {
+        const limit = DB.TaskQueue.clampListLimit(Number(url.searchParams.get('limit') || '200'))
+        const tasks = await DB.TaskQueue.list(limit, {
+            type: DB.TaskQueue.TYPE.NotificationSignal,
+        })
+        return jsonResponse(buildNotificationSignalSummary(tasks, { limit }))
     }
 
     private async handleOutboundMessages(url: URL): Promise<Response> {
