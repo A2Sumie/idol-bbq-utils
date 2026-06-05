@@ -209,3 +209,59 @@ test('buildCrawlerLiveHealthAudit fails missing TikTok ttwid before live probe',
         rmSync(dir, { recursive: true, force: true })
     }
 })
+
+test('buildCrawlerLiveHealthAudit probes TikTok with crawler-compatible headers', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
+    try {
+        const cookieFile = join(dir, 'tiktok.cookies.txt')
+        writeFileSync(
+            cookieFile,
+            [
+                '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\tttwid\twid-value',
+                '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\ttt_csrf_token\tcsrf-value',
+            ].join('\n'),
+            'utf8',
+        )
+        const requests: Array<{ url: string; headers: Record<string, string> }> = []
+        const audit = await buildCrawlerLiveHealthAudit(
+            {
+                crawlers: [
+                    {
+                        id: 'crawler-tiktok',
+                        name: 'crawler tiktok',
+                        origin: 'https://www.tiktok.com',
+                        cfg_crawler: {
+                            cookie_file: cookieFile,
+                        },
+                    },
+                ],
+            } as any,
+            {
+                fetch: (async (url: string, init?: RequestInit) => {
+                    requests.push({ url, headers: init?.headers as Record<string, string> })
+                    return new Response(
+                        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{"ok":true}</script>',
+                        { status: 200 },
+                    )
+                }) as any,
+            },
+        )
+
+        expect(audit.counts).toMatchObject({
+            checked: 1,
+            ok: 1,
+            fail: 0,
+        })
+        expect(audit.results[0]).toMatchObject({
+            crawler_id: 'crawler-tiktok',
+            platform: 'tiktok',
+            status: 'ok',
+            diagnostic_codes: ['tiktok_live_probe_ok'],
+        })
+        expect(requests).toHaveLength(1)
+        expect(requests[0]?.url).toBe('https://www.tiktok.com/@tiktok')
+        expect(requests[0]?.headers['user-agent']).toBeUndefined()
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+})

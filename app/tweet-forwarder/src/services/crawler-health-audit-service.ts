@@ -590,8 +590,6 @@ async function probeTikTok(
             headers: {
                 cookie: getCookieString(cookies),
                 referer: 'https://www.tiktok.com/',
-                'user-agent':
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
                 'accept-language': 'en-US,en;q=0.9',
             },
         },
