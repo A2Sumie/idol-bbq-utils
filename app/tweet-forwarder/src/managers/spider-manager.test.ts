@@ -602,8 +602,9 @@ test('SpiderPools exportCrawlerCookies rejects X sessions that fail live auth va
             ]),
     }
 
-    await expect(
-        pools.exportCrawlerCookies(
+    let exportError: any
+    try {
+        await pools.exportCrawlerCookies(
             {
                 name: 'x-list',
                 origin: 'https://x.com',
@@ -618,8 +619,25 @@ test('SpiderPools exportCrawlerCookies rejects X sessions that fail live auth va
                     return new Response('', { status: 401 })
                 }) as any,
             },
-        ),
-    ).rejects.toThrow(CrawlerCookieExportError)
+        )
+    } catch (error) {
+        exportError = error
+    }
+    expect(exportError).toBeInstanceOf(CrawlerCookieExportError)
+    expect(exportError.code).toBe('crawler_cookie_live_probe_failed')
+    expect(exportError.publicDetails).toMatchObject({
+        cookie_count: 2,
+        required_cookie_names: {
+            present: ['auth_token', 'ct0'],
+            missing: [],
+        },
+        live_probe: {
+            checked: true,
+            status: 'fail',
+            diagnostic_codes: ['x_live_auth_rejected'],
+            http_status: 401,
+        },
+    })
     expect(probeUrls).toEqual(['https://x.com/i/api/1.1/account/settings.json'])
 })
 

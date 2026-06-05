@@ -104,12 +104,14 @@ class CrawlerCookieExportError extends Error {
     readonly statusCode = 409
     readonly publicMessage: string
     readonly code: string
+    readonly publicDetails?: Record<string, unknown>
 
-    constructor(message: string, code = 'crawler_cookie_export_failed') {
+    constructor(message: string, code = 'crawler_cookie_export_failed', publicDetails?: Record<string, unknown>) {
         super(message)
         this.name = 'CrawlerCookieExportError'
         this.code = code
         this.publicMessage = message
+        this.publicDetails = publicDetails
     }
 }
 
@@ -862,6 +864,17 @@ class SpiderPools extends BaseCompatibleModel {
                 throw new CrawlerCookieExportError(
                     `Browser session ${browserRequest.session_profile} is missing required ${platformHint} cookies: ${requiredCookieNames.missing.join(', ')}`,
                     'crawler_cookie_required_names_missing',
+                    {
+                        cookie_count: filteredCookies.length,
+                        domains: targetDomains,
+                        required_cookie_names: requiredCookieNames,
+                        live_probe: {
+                            checked: false,
+                            status: 'skipped',
+                            diagnostic_codes: ['live_probe_static_cookie_unhealthy'],
+                            http_status: null,
+                        },
+                    },
                 )
             }
             let liveProbe: CrawlerCookieLiveProbeResult = {
@@ -878,6 +891,17 @@ class SpiderPools extends BaseCompatibleModel {
                     throw new CrawlerCookieExportError(
                         `Browser session ${browserRequest.session_profile} failed live ${platformHint} cookie probe: ${liveProbe.diagnostic_codes.join(', ')}`,
                         'crawler_cookie_live_probe_failed',
+                        {
+                            cookie_count: filteredCookies.length,
+                            domains: targetDomains,
+                            required_cookie_names: requiredCookieNames,
+                            live_probe: {
+                                checked: true,
+                                status: liveProbe.status,
+                                diagnostic_codes: liveProbe.diagnostic_codes,
+                                http_status: liveProbe.http_status,
+                            },
+                        },
                     )
                 }
             }

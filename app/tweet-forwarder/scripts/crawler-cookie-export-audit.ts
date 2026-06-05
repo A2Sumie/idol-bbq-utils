@@ -166,6 +166,11 @@ function publicErrorCode(error: unknown) {
     return 'crawler_cookie_export_failed'
 }
 
+function publicErrorDetails(error: unknown) {
+    const details = (error as any)?.publicDetails
+    return details && typeof details === 'object' ? (details as Record<string, any>) : {}
+}
+
 function collectSensitiveValues(value: unknown) {
     const values = new Set<string>()
 
@@ -235,25 +240,30 @@ async function main() {
                     live_probe: snapshot.liveProbe,
                 })
             } catch (error) {
+                const details = publicErrorDetails(error)
+                const liveProbe = details.live_probe || {
+                    checked: false,
+                    status: 'skipped',
+                    diagnostic_codes: ['live_probe_not_completed'],
+                    http_status: null,
+                }
+                const diagnosticCodes = Array.from(
+                    new Set([publicErrorCode(error), ...(Array.isArray(liveProbe.diagnostic_codes) ? liveProbe.diagnostic_codes : [])]),
+                ).sort()
                 results.push({
                     crawler_id: id,
                     crawler_name: name,
                     platform,
                     status: 'fail',
-                    diagnostic_codes: [publicErrorCode(error)],
-                    cookie_count: 0,
+                    diagnostic_codes: diagnosticCodes,
+                    cookie_count: Number(details.cookie_count || 0),
                     session_profile: crawler.cfg_crawler?.session_profile || null,
-                    domains: [],
-                    required_cookie_names: {
+                    domains: Array.isArray(details.domains) ? details.domains : [],
+                    required_cookie_names: details.required_cookie_names || {
                         present: [],
                         missing: [],
                     },
-                    live_probe: {
-                        checked: false,
-                        status: 'skipped',
-                        diagnostic_codes: ['live_probe_not_completed'],
-                        http_status: null,
-                    },
+                    live_probe: liveProbe,
                 })
             }
         }
