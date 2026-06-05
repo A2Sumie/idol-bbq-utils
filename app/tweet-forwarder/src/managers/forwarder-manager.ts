@@ -950,8 +950,7 @@ class ForwarderPools extends BaseCompatibleModel {
             current.flushOnThreshold === persisted.flushOnThreshold &&
             current.flushDelaySeconds === persisted.flushDelaySeconds &&
             current.windowAlignment === persisted.windowAlignment &&
-            current.mediaDuplicateLimit === persisted.mediaDuplicateLimit &&
-            (current.translatedCard?.badgeLabel || null) === (persisted.translatedCard?.badgeLabel || null)
+            current.mediaDuplicateLimit === persisted.mediaDuplicateLimit
         )
     }
 

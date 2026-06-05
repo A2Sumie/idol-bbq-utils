@@ -3984,6 +3984,127 @@ test('restoreSummaryCardQueues cancels open windows when summary-card is current
     expect(target.sent).toHaveLength(0)
 })
 
+test('restoreSummaryCardQueues keeps windows when only translated companion config changed', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                max_items: 14,
+                include_original_media: false,
+                send_first_immediately: false,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                },
+            },
+        } as any,
+        'target-summary-card-translated-config-restore',
+    )
+    ;(pools as any).forward_to.set(target.id, target)
+
+    const now = Math.floor(Date.now() / 1000)
+    const article = {
+        id: 743,
+        a_id: 'summary-translated-config-restore',
+        platform: Platform.X,
+        username: 'translated restore',
+        u_id: 'translated_restore',
+        content: 'translated-card config change should keep old window',
+        url: 'https://x.com/translated_restore/status/743',
+        type: 'tweet',
+        created_at: now - 60,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const items = (DB.AggregationWindow as any).__items as Map<string, any>
+    windows.set(1, {
+        id: 1,
+        idempotency_key: 'translated-config-summary-window',
+        route_key: `route-translated-config:target:${target.id}`,
+        target_id: target.id,
+        mode: 'summary_card',
+        window_start: now - 300,
+        window_end: now + 1500,
+        status: 'open',
+        created_at: now - 300,
+        updated_at: now - 300,
+        finished_at: null,
+        payload_hash: null,
+    })
+    items.set('1:translated-config-summary-item', {
+        id: 1,
+        window_id: 1,
+        article_key: 'translated-config-summary-item',
+        article_row_id: article.id,
+        platform: article.platform,
+        payload: {
+            queuedAt: now - 120,
+            summaryConfig: {
+                intervalSeconds: 1800,
+                threshold: 8,
+                maxItems: 14,
+                includeOriginalMedia: false,
+                sendFirstImmediately: false,
+                sendFirstNative: false,
+                mediaRealtime: false,
+                mediaRealtimeText: 'none',
+                flushOnThreshold: true,
+                flushDelaySeconds: 0,
+                windowAlignment: 'none',
+                mediaDuplicateLimit: null,
+                translatedCard: null,
+            },
+        },
+        created_at: now - 120,
+    })
+
+    const originalGetSingleArticle = DB.Article.getSingleArticle
+    ;(DB.Article as any).getSingleArticle = async () => article
+    try {
+        await (pools as any).restoreSummaryCardQueues()
+    } finally {
+        ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
+    }
+
+    expect(windows.get(1)?.status).toBe('open')
+    const queue = getSummaryCardQueueForTarget(pools, target.id)
+    expect(queue?.items.size).toBe(1)
+    expect(queue?.config.translatedCard?.badgeLabel).toBe('译文')
+    expect(target.sent).toHaveLength(0)
+})
+
 test('restoreSummaryCardQueues cancels open windows when summary-card config changed', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

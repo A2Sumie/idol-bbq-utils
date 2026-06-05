@@ -69,6 +69,35 @@ test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads
     expect(candidate?.description).toContain('原链接: https://www.instagram.com/p/example/')
 })
 
+test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.TikTok,
+            type: 'video',
+            u_id: 'tiktok_member',
+            username: 'TikTok Member',
+            a_id: 'tt-video-1',
+            content: 'TT短视频正文',
+            created_at: 1773985020,
+            url: 'https://www.tiktok.com/@tiktok_member/video/123',
+        } as any,
+        ['TT短视频正文'],
+        [
+            { media_type: 'video_thumbnail', path: '/tmp/tt-cover.jpg' },
+            { media_type: 'video', path: '/tmp/tt-video.mp4' },
+        ],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate).toBeTruthy()
+    expect(candidate?.title).toBe('【TikTok视频】TikTok Member TT短视频正文')
+    expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
+    expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
+    expect(candidate?.config.tags).toContain('TikTok')
+})
+
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
     const candidate = buildBiliupUploadCandidate(
         {
