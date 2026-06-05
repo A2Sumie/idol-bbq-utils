@@ -10,12 +10,22 @@ import {
     normalizeForwarderImageAttachments,
     resolveForwarderImageMaxBytes,
 } from '@/services/forwarder-image-attachment-service'
+import DB, { type Article } from '@/db'
+import { createHash } from 'crypto'
+
+const BILI_VIDEO_UPLOAD_HASH_NAMESPACE = 'bilibili-video-upload'
 
 interface BiliImageUploaded {
     img_src: string
     img_width: number
     img_height: number
     img_size: number
+}
+
+type BiliVideoUploadResult = 'uploaded' | 'duplicate' | 'dedupe_blocked'
+type BiliVideoUploadHashRecord = {
+    hash: string
+    path: string
 }
 
 class BiliForwarder extends Forwarder {
@@ -47,8 +57,17 @@ class BiliForwarder extends Forwarder {
 
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
         const normalizedTexts = this.normalizeTextsForBilibili(texts)
-        if (await this.tryVideoUpload(normalizedTexts, props)) {
-            return [{ ok: true, mode: 'biliup' }]
+        const videoUploadResult = await this.tryVideoUpload(normalizedTexts, props)
+        if (videoUploadResult) {
+            return [
+                {
+                    ok: true,
+                    mode:
+                        videoUploadResult === true || videoUploadResult === 'uploaded'
+                            ? 'biliup'
+                            : `biliup_${videoUploadResult}`,
+                },
+            ]
         }
         return this.sendDynamicContent(normalizedTexts, props)
     }
@@ -62,24 +81,98 @@ class BiliForwarder extends Forwarder {
         )
     }
 
-    private async tryVideoUpload(texts: string[], props?: SendProps) {
+    private buildVideoUploadMarker(article: Article | undefined, props?: SendProps) {
+        if (article) {
+            return `${String(article.platform)}:${article.a_id}`
+        }
+        return props?.outboundKey || 'unknown'
+    }
+
+    private hashVideoFile(filePath: string) {
+        const buffer = fs.readFileSync(filePath)
+        return createHash('sha256').update(buffer).digest('hex')
+    }
+
+    private resolveVideoUploadHashRecords(videoPaths: string[], props?: SendProps): BiliVideoUploadHashRecord[] {
+        const records = new Map<string, BiliVideoUploadHashRecord>()
+        for (const videoPath of videoPaths) {
+            const mediaFile = (props?.media || []).find(
+                (item) => item.media_type === 'video' && item.path === videoPath,
+            )
+            const hash = mediaFile?.content_hash || this.hashVideoFile(videoPath)
+            records.set(hash, {
+                hash,
+                path: videoPath,
+            })
+        }
+        return Array.from(records.values())
+    }
+
+    private async findDuplicateBiliVideoUpload(records: BiliVideoUploadHashRecord[]) {
+        for (const record of records) {
+            const existing = await DB.MediaHash.checkExist(BILI_VIDEO_UPLOAD_HASH_NAMESPACE, record.hash)
+            if (existing) {
+                return { record, existing }
+            }
+        }
+        return null
+    }
+
+    private async markBiliVideoUploadSeen(records: BiliVideoUploadHashRecord[], marker: string) {
+        for (const record of records) {
+            await DB.MediaHash.save(BILI_VIDEO_UPLOAD_HASH_NAMESPACE, record.hash, marker)
+        }
+    }
+
+    private async performBiliupUpload(
+        article: Article | undefined,
+        candidate: NonNullable<ReturnType<typeof buildBiliupUploadCandidate>>,
+    ) {
+        await runBiliupUpload(
+            article || ({ a_id: 'unknown' } as any),
+            candidate,
+            {
+                sessdata: this.sessdata,
+                bili_jct: this.bili_jct,
+            },
+            this.log,
+        )
+    }
+
+    private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | boolean> {
         const media = props?.media || []
         const candidate = buildBiliupUploadCandidate(props?.article, texts, media, this.video_upload)
         if (!candidate) {
             return false
         }
 
+        let hashRecords: BiliVideoUploadHashRecord[]
         try {
-            await runBiliupUpload(
-                props?.article || { a_id: 'unknown' } as any,
-                candidate,
-                {
-                    sessdata: this.sessdata,
-                    bili_jct: this.bili_jct,
-                },
-                this.log,
+            hashRecords = this.resolveVideoUploadHashRecords(candidate.videoPaths, props)
+            const duplicate = await this.findDuplicateBiliVideoUpload(hashRecords)
+            if (duplicate) {
+                this.log?.warn(
+                    `Skipping duplicate Bilibili video upload for ${props?.article?.a_id || 'unknown'}: ${duplicate.record.hash.substring(0, 8)} already uploaded as ${duplicate.existing.a_id || 'previous article'}`,
+                )
+                return 'duplicate'
+            }
+        } catch (error) {
+            this.log?.error(
+                `Bilibili video upload dedupe check failed for ${props?.article?.a_id || 'unknown'}; suppressing upload and dynamic fallback: ${error}`,
             )
-            return true
+            return 'dedupe_blocked'
+        }
+
+        try {
+            await this.performBiliupUpload(props?.article, candidate)
+            await this.markBiliVideoUploadSeen(hashRecords, this.buildVideoUploadMarker(props?.article, props)).catch(
+                (error) => {
+                    this.log?.error(
+                        `Failed to mark Bilibili video upload hash for ${props?.article?.a_id || 'unknown'}: ${error}`,
+                    )
+                },
+            )
+            return 'uploaded'
         } catch (error) {
             this.log?.error(`biliup upload failed for ${props?.article?.a_id || 'unknown'}, fallback to dynamic: ${error}`)
             return false

@@ -4,6 +4,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { BiliForwarder } from './bilibili'
+import DB from '@/db'
 import {
     buildBiliupUploadCandidate,
     buildCookieDocument,
@@ -405,6 +406,122 @@ test('BiliForwarder skips dynamic posting when biliup upload succeeds', async ()
 
     expect(dynamicCalls).toBe(0)
     expect(result).toEqual([{ ok: true, mode: 'biliup' }])
+})
+
+test('BiliForwarder records successful video uploads for strict Bilibili dedupe', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    const saved: Array<{ platform: string; hash: string; a_id: string }> = []
+    DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        saved.push({ platform, hash, a_id })
+        return { platform, hash, a_id } as any
+    }
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-test',
+    )
+
+    let uploadCalls = 0
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async () => {
+        uploadCalls += 1
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return []
+    }
+
+    try {
+        const result = await (forwarder as any).realSend(['hello'], {
+            article: {
+                platform: Platform.TikTok,
+                a_id: 'tt-video-strict-dedupe',
+                u_id: 'tt_member',
+                username: 'TT Member',
+                type: 'video',
+                created_at: 1773985020,
+                url: 'https://www.tiktok.com/@tt_member/video/1',
+            },
+            media: [{ media_type: 'video', path: '/tmp/video.mp4', content_hash: 'same-video-hash' }],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'biliup' }])
+        expect(uploadCalls).toBe(1)
+        expect(dynamicCalls).toBe(0)
+        expect(saved).toEqual([
+            {
+                platform: 'bilibili-video-upload',
+                hash: 'same-video-hash',
+                a_id: `${Platform.TikTok}:tt-video-strict-dedupe`,
+            },
+        ])
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    }
+})
+
+test('BiliForwarder suppresses duplicate video uploads without dynamic fallback', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    DB.MediaHash.checkExist = async (platform: string, hash: string) =>
+        platform === 'bilibili-video-upload' && hash === 'same-video-hash'
+            ? ({ platform, hash, a_id: `${Platform.Instagram}:ig-video-previous` } as any)
+            : null
+    DB.MediaHash.save = async () => {
+        throw new Error('duplicate upload should not save')
+    }
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-test',
+    )
+
+    let uploadCalls = 0
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async () => {
+        uploadCalls += 1
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    try {
+        const result = await (forwarder as any).realSend(['hello'], {
+            article: {
+                platform: Platform.TikTok,
+                a_id: 'tt-video-repeat',
+                u_id: 'tt_member',
+                username: 'TT Member',
+                type: 'video',
+                created_at: 1773985020,
+                url: 'https://www.tiktok.com/@tt_member/video/2',
+            },
+            media: [{ media_type: 'video', path: '/tmp/video.mp4', content_hash: 'same-video-hash' }],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'biliup_duplicate' }])
+        expect(uploadCalls).toBe(0)
+        expect(dynamicCalls).toBe(0)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    }
 })
 
 test('BiliForwarder falls back to dynamic posting when biliup upload is skipped', async () => {
