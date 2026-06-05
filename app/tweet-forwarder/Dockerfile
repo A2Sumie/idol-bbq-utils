@@ -13,7 +13,6 @@ COPY ./app/tweet-forwarder ./app/tweet-forwarder
 COPY ./core ./core
 COPY ./assets/fonts ./assets/fonts
 COPY ./assets/branding ./assets/branding
-COPY ./assets/knowledge ./assets/knowledge
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 ENV DATABASE_URL="file:/app/data.db"
@@ -25,6 +24,7 @@ RUN bun build app/tweet-forwarder/scripts/export-biliup-browser-cookies.ts --out
 RUN bun build app/tweet-forwarder/scripts/config-audit.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
 RUN bun build app/tweet-forwarder/scripts/crawler-health-audit.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
 RUN bun build app/tweet-forwarder/scripts/crawler-cookie-export-audit.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
+COPY ./assets/knowledge ./assets/knowledge
 
 FROM base AS runner
 
