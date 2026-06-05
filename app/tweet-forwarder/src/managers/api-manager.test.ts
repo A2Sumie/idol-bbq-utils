@@ -2,6 +2,9 @@ import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import { APIManager } from './api-manager'
+import { existsSync, mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 test('APIManager adds CIC CORS headers to control responses', () => {
     const manager = new APIManager({
@@ -596,6 +599,190 @@ test('APIManager returns redacted config for audit endpoints', async () => {
     expect(config.forward_targets[0].cfg_platform.token).toBe('[redacted]')
     expect(config.crawlers[0].cfg_crawler.cookie_file).toBe('[redacted]')
     expect(config.forward_targets[0].cfg_platform.group_id).toBe('123')
+})
+
+test('APIManager defaults /api/config to redacted config', async () => {
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+                crawlers: [
+                    {
+                        name: 'x-list',
+                        cfg_crawler: {
+                            cookie_file: '/tmp/private-x.cookies.txt',
+                        },
+                    },
+                ],
+                forward_targets: [
+                    {
+                        id: 'qq-1',
+                        platform: 'qq',
+                        cfg_platform: {
+                            token: 'bot-token',
+                        },
+                    },
+                ],
+            }) as any,
+        getDeps: () => ({}),
+    })
+
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/config', {
+            headers: {
+                Authorization: 'Bearer test-secret',
+            },
+        }),
+        {
+            timeout: () => undefined,
+        },
+        'test-secret',
+    )
+
+    expect(response.status).toBe(200)
+    const config = await response.json()
+    const serialized = JSON.stringify(config)
+    expect(config.api.secret).toBe('[redacted]')
+    expect(config.forward_targets[0].cfg_platform.token).toBe('[redacted]')
+    expect(config.crawlers[0].cfg_crawler.cookie_file).toBe('[redacted]')
+    expect(serialized).not.toContain('test-secret')
+    expect(serialized).not.toContain('bot-token')
+    expect(serialized).not.toContain('/tmp/private-x.cookies.txt')
+})
+
+test('APIManager crawler list exposes cookie metadata without cookie paths', async () => {
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+                crawlers: [
+                    {
+                        name: 'x-list',
+                        task_type: 'article',
+                        cfg_crawler: {
+                            cron: '5 */1 * * *',
+                            cookie_file: '/tmp/private-x.cookies.txt',
+                        },
+                    },
+                    {
+                        name: 'website-list',
+                        task_type: 'article',
+                    },
+                ],
+            }) as any,
+        getDeps: () => ({}),
+    })
+
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/config/crawlers', {
+            headers: {
+                Authorization: 'Bearer test-secret',
+            },
+        }),
+        {
+            timeout: () => undefined,
+        },
+        'test-secret',
+    )
+
+    expect(response.status).toBe(200)
+    const crawlers = await response.json()
+    expect(crawlers[0]).toMatchObject({
+        name: 'x-list',
+        cookieFile: {
+            configured: true,
+            filename: 'private-x.cookies.txt',
+        },
+    })
+    expect(crawlers[1]).toMatchObject({
+        name: 'website-list',
+        cookieFile: {
+            configured: false,
+            filename: null,
+        },
+    })
+    expect(JSON.stringify(crawlers)).not.toContain('/tmp/private-x.cookies.txt')
+})
+
+test('APIManager cookie sync response avoids returning full cookie paths', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-api-cookie-sync-'))
+    const cookieFile = join(dir, 'synced.cookies.txt')
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            name: 'x-list',
+                            origin: 'https://x.com',
+                            cfg_crawler: {
+                                cookie_file: cookieFile,
+                            },
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    spiderPools: {
+                        exportCrawlerCookies: async () => ({
+                            cookies: [
+                                {
+                                    name: 'auth_token',
+                                    value: 'auth-value',
+                                    domain: '.x.com',
+                                    path: '/',
+                                    expires: 9999999999,
+                                    secure: true,
+                                    httpOnly: true,
+                                },
+                            ],
+                            sessionProfile: 'profile-a',
+                            visitedUrl: 'https://x.com/X',
+                            domains: ['x.com'],
+                        }),
+                    },
+                }) as any,
+            getRuntimeMeta: () =>
+                ({
+                    mode: 'online',
+                }) as any,
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/cookies/sync', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+                body: JSON.stringify({ finder: 'x-list' }),
+            }),
+            {
+                timeout: () => undefined,
+            },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(200)
+        expect(existsSync(cookieFile)).toBeTrue()
+        const payload = await response.json()
+        const serialized = JSON.stringify(payload)
+        expect(payload.cookieFile).toEqual({
+            configured: true,
+            filename: 'synced.cookies.txt',
+        })
+        expect(serialized).not.toContain(cookieFile)
+        expect(serialized).not.toContain(dir)
+        expect(serialized).not.toContain('auth-value')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
 })
 
 test('APIManager returns no-secret config audit for route policy checks', async () => {

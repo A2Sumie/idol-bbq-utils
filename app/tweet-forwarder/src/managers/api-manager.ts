@@ -93,6 +93,14 @@ function jsonResponse(payload: unknown, status = 200) {
 const MAX_BUN_IDLE_TIMEOUT_SECONDS = 255
 const DEFAULT_CIC_ORIGIN = 'https://cic.n2nj.moe'
 
+function publicCookieFileMetadata(cookieFile?: string | null) {
+    const normalized = String(cookieFile || '').trim()
+    return {
+        configured: Boolean(normalized),
+        filename: normalized ? path.basename(normalized) : null,
+    }
+}
+
 function resolvePlatform(value?: string | null): Platform | null {
     if (!value) {
         return null
@@ -545,7 +553,7 @@ export class APIManager extends BaseCompatibleModel {
             return jsonResponse({
                 success: true,
                 crawlerName: crawler.name || finder,
-                cookieFile,
+                cookieFile: publicCookieFileMetadata(cookieFile),
                 sessionProfile: snapshot.sessionProfile,
                 visitedUrl: snapshot.visitedUrl,
                 domains: snapshot.domains,
@@ -662,7 +670,7 @@ export class APIManager extends BaseCompatibleModel {
                 name: crawler.name,
                 type: crawler.task_type,
                 schedule: crawler.cfg_crawler?.cron || null,
-                cookieFile: crawler.cfg_crawler?.cookie_file || null,
+                cookieFile: publicCookieFileMetadata(crawler.cfg_crawler?.cookie_file),
                 deviceProfile: crawler.cfg_crawler?.device_profile || null,
                 sessionProfile: crawler.cfg_crawler?.session_profile || null,
                 enabled: true,
@@ -829,7 +837,7 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleConfigGet(): Promise<Response> {
-        return jsonResponse(this.config)
+        return jsonResponse(redactSecrets(this.config))
     }
 
     private async handleConfigRedacted(): Promise<Response> {

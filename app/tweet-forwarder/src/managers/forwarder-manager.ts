@@ -735,14 +735,6 @@ class ForwarderPools extends BaseCompatibleModel {
                 continue
             }
 
-            const baseConfig = resolveSummaryCardConfig(target.getEffectiveConfig(undefined))
-            if (baseConfig && this.isSummaryCardWindowStale(window, baseConfig, now)) {
-                await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
-                    payload_hash: 'stale-window',
-                }).catch(() => undefined)
-                continue
-            }
-
             const items = await DB.AggregationWindow.listItems(window.id)
             const queueItems = new Map<number, SummaryCardQueueItem>()
             let runtime_config: ForwardTargetPlatformCommonConfig | undefined
@@ -770,23 +762,22 @@ class ForwarderPools extends BaseCompatibleModel {
             }
 
             if (queueItems.size === 0) {
+                const baseConfig = resolveSummaryCardConfig(target.getEffectiveConfig(undefined))
+                const payload_hash =
+                    baseConfig && this.isSummaryCardWindowStale(window, baseConfig, now)
+                        ? 'stale-window'
+                        : 'empty-window'
                 await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
-                    payload_hash: 'empty-window',
+                    payload_hash,
                 }).catch(() => undefined)
                 continue
             }
 
-            const config = resolveSummaryCardConfig(target.getEffectiveConfig(undefined))
+            const restoreConfig = this.resolveSummaryCardConfigForRestore(target, runtime_config, persistedConfig)
+            const config = restoreConfig.config
             if (!config) {
                 await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
-                    payload_hash: 'summary-card-disabled',
-                }).catch(() => undefined)
-                continue
-            }
-
-            if (persistedConfig && !this.isSummaryCardConfigCompatibleForRestore(config, persistedConfig)) {
-                await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
-                    payload_hash: 'summary-card-config-changed',
+                    payload_hash: restoreConfig.cancelReason,
                 }).catch(() => undefined)
                 continue
             }
@@ -825,6 +816,45 @@ class ForwarderPools extends BaseCompatibleModel {
         }
         if (restoredCount > 0) {
             this.log?.info(`Restored ${restoredCount} summary-card queue(s) from durable aggregation windows`)
+        }
+    }
+
+    private isSummaryCardExplicitlyDisabled(config: ForwardTargetPlatformCommonConfig) {
+        const raw = config.summary_card
+        return raw === false || (typeof raw === 'object' && raw?.enabled === false)
+    }
+
+    private resolveSummaryCardConfigForRestore(
+        target: BaseForwarder,
+        runtime_config: ForwardTargetPlatformCommonConfig | undefined,
+        persistedConfig: ResolvedSummaryCardConfig | undefined,
+    ) {
+        const baseEffectiveConfig = target.getEffectiveConfig(undefined)
+        if (this.isSummaryCardExplicitlyDisabled(baseEffectiveConfig)) {
+            return { config: null, cancelReason: 'summary-card-disabled' }
+        }
+
+        const candidates = uniquePreserveOrder([
+            resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config)),
+            resolveSummaryCardConfig(baseEffectiveConfig),
+        ].filter((config): config is ResolvedSummaryCardConfig => Boolean(config)))
+
+        if (!persistedConfig) {
+            return {
+                config: candidates[0] || null,
+                cancelReason: candidates[0] ? undefined : 'summary-card-disabled',
+            }
+        }
+
+        const compatibleConfig = candidates.find((config) =>
+            this.isSummaryCardConfigCompatibleForRestore(config, persistedConfig),
+        )
+        if (compatibleConfig) {
+            return { config: compatibleConfig, cancelReason: undefined }
+        }
+        return {
+            config: null,
+            cancelReason: candidates.length > 0 ? 'summary-card-config-changed' : 'summary-card-disabled',
         }
     }
 
