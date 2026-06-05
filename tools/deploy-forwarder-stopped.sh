@@ -7,6 +7,7 @@ IMAGE_NAME="${IMAGE_NAME:-idol-bbq-utils-spider:latest}"
 COMPOSE_SERVICE="${COMPOSE_SERVICE:-spider}"
 CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
 DEPLOY_RUNTIME_MODE="${DEPLOY_RUNTIME_MODE:-offline}"
+DEPLOY_OUTBOUND_SEND_MODE="${DEPLOY_OUTBOUND_SEND_MODE:-live}"
 BUILD_DIR_PREFIX="${BUILD_DIR_PREFIX:-/tmp/idol-bbq-utils-build}"
 SKIP_UPSTREAM_CHECK="${SKIP_UPSTREAM_CHECK:-0}"
 
@@ -54,7 +55,7 @@ require_pushed_head() {
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO BUILD_DIR DEPLOY_COMMIT IMAGE_NAME COMPOSE_SERVICE CONTAINER_NAME DEPLOY_RUNTIME_MODE; do
+    for name in REMOTE_REPO BUILD_DIR DEPLOY_COMMIT IMAGE_NAME COMPOSE_SERVICE CONTAINER_NAME DEPLOY_RUNTIME_MODE DEPLOY_OUTBOUND_SEND_MODE; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -98,6 +99,7 @@ Environment:
   COMPOSE_SERVICE=spider
   CONTAINER_NAME=forwarder-new
   DEPLOY_RUNTIME_MODE=offline
+  DEPLOY_OUTBOUND_SEND_MODE=live
   BUILD_DIR_PREFIX=/tmp/idol-bbq-utils-build
   SKIP_UPSTREAM_CHECK=0
 
@@ -128,6 +130,7 @@ HELP
     COMPOSE_SERVICE="$COMPOSE_SERVICE" \
     CONTAINER_NAME="$CONTAINER_NAME" \
     DEPLOY_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" \
+    DEPLOY_OUTBOUND_SEND_MODE="$DEPLOY_OUTBOUND_SEND_MODE" \
         ssh_remote <<'REMOTE'
 set -euo pipefail
 repo="${REMOTE_REPO:-$HOME/idol-bbq-utils}"
@@ -148,9 +151,10 @@ services:
     restart: "no"
     environment:
       IDOL_BBQ_RUNTIME_MODE: "$DEPLOY_RUNTIME_MODE"
+      IDOL_BBQ_OUTBOUND_SEND_MODE: "$DEPLOY_OUTBOUND_SEND_MODE"
 OVERRIDE
 cd "$repo"
-IDOL_BBQ_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" IDOL_BBQ_RESTART_POLICY=no \
+IDOL_BBQ_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" IDOL_BBQ_OUTBOUND_SEND_MODE="$DEPLOY_OUTBOUND_SEND_MODE" IDOL_BBQ_RESTART_POLICY=no \
     docker compose \
         --project-directory "$repo" \
         -f "$BUILD_DIR/docker-compose.yaml" \
@@ -159,8 +163,10 @@ IDOL_BBQ_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" IDOL_BBQ_RESTART_POLICY=no \
 docker update --restart=no "$CONTAINER_NAME" >/dev/null
 status="$(docker inspect "$CONTAINER_NAME" --format 'status={{.State.Status}} running={{.State.Running}} restart={{.HostConfig.RestartPolicy.Name}} image={{.Image}}')"
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
+outbound_send_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_OUTBOUND_SEND_MODE" { print $2; found=1 } END { if (!found) print "" }')"
 printf '%s\n' "$status"
 printf 'runtime_mode=%s\n' "$runtime_mode"
+printf 'outbound_send_mode=%s\n' "$outbound_send_mode"
 case "$status" in
     *'running=false'*'restart=no'*)
         ;;
@@ -171,6 +177,10 @@ case "$status" in
 esac
 if [ "$runtime_mode" != "$DEPLOY_RUNTIME_MODE" ]; then
     printf 'container runtime mode mismatch after recreate: expected=%s actual=%s\n' "$DEPLOY_RUNTIME_MODE" "$runtime_mode" >&2
+    exit 1
+fi
+if [ "$outbound_send_mode" != "$DEPLOY_OUTBOUND_SEND_MODE" ]; then
+    printf 'container outbound send mode mismatch after recreate: expected=%s actual=%s\n' "$DEPLOY_OUTBOUND_SEND_MODE" "$outbound_send_mode" >&2
     exit 1
 fi
 printf 'commit=%s\n' "$DEPLOY_COMMIT"

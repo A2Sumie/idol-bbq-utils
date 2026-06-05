@@ -13,6 +13,7 @@ import { normalizeCronSecond } from '@/utils/cron'
 import { getForwarderProviderResult, PartialForwarderSendError } from '@/middleware/forwarder/base'
 import {
     isOutboundFailedStatus,
+    isOutboundDryRunStatus,
     isOutboundInProgressStatus,
     isOutboundQueuedStatus,
     isOutboundSuppressedCompletionStatus,
@@ -42,6 +43,7 @@ type AggregateSendStatus =
     | 'sent'
     | 'queued'
     | 'blocked'
+    | 'dry_run'
     | 'partial'
     | 'already_completed'
     | 'in_progress'
@@ -470,6 +472,9 @@ export class TaskManager extends BaseCompatibleModel {
         if (isOutboundQueuedStatus(status)) {
             return { targetId, status: 'queued', retryable: false, outboundStatus: status }
         }
+        if (isOutboundDryRunStatus(status)) {
+            return { targetId, status: 'dry_run', retryable: true, outboundStatus: status }
+        }
         if (isOutboundInProgressStatus(status)) {
             return { targetId, status: 'in_progress', retryable: true, outboundStatus: status }
         }
@@ -567,6 +572,17 @@ export class TaskManager extends BaseCompatibleModel {
                     details: sendResult,
                 })
                 return { targetId, status: 'blocked', retryable: false }
+            }
+            if (sendResult.status === 'dry_run') {
+                await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: targetId,
+                    provider: forwarder.NAME,
+                    status: 'ok',
+                    last_send_status: 'dry_run',
+                    details: sendResult,
+                })
+                return { targetId, status: 'dry_run', retryable: true }
             }
 
             const providerResult = getForwarderProviderResult(sendResult)

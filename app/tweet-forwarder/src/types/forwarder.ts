@@ -161,6 +161,9 @@ interface ForwardTargetPlatformCommonConfig {
               flush_delay_seconds?: number
               align_to_hour?: boolean
               align_to_interval?: boolean
+              /**
+               * Defaults to 2 when realtime media or original media is enabled.
+               */
               media_duplicate_limit?: number
           }
     /**

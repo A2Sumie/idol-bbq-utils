@@ -21,6 +21,8 @@ services:
       - LOG_LEVEL=info
       # Set IDOL_BBQ_RUNTIME_MODE=online explicitly when production start is intended.
       - IDOL_BBQ_RUNTIME_MODE=${IDOL_BBQ_RUNTIME_MODE:-offline}
+      # Set to blocked for online smoke trials that must not call external send APIs.
+      - IDOL_BBQ_OUTBOUND_SEND_MODE=${IDOL_BBQ_OUTBOUND_SEND_MODE:-live}
       # Store migration backups on the persistent host assets/backups mount.
       - IDOL_BBQ_DB_BACKUP_DIR=${IDOL_BBQ_DB_BACKUP_DIR:-/app/backups/db-migrations}
       # TV 存档上传单独走天津风 biliup cookies，不影响其他 bilibili 任务

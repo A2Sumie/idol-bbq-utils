@@ -12,6 +12,7 @@ const OUTBOUND_STATUS = {
     Planned: 'planned',
     Sending: 'sending',
     Queued: 'queued',
+    DryRun: 'dry_run',
     Skipped: 'skipped',
     Sent: 'sent',
     Partial: 'partial',
@@ -25,6 +26,7 @@ const OUTBOUND_STALE_RETRYABLE_STATUSES = new Set<string>([
     OUTBOUND_STATUS.Planned,
     OUTBOUND_STATUS.Sending,
     OUTBOUND_STATUS.Queued,
+    OUTBOUND_STATUS.DryRun,
 ])
 const OUTBOUND_IN_PROGRESS_STATUSES = new Set<string>([OUTBOUND_STATUS.Planned, OUTBOUND_STATUS.Sending])
 const OUTBOUND_VISIBLE_COMPLETION_STATUSES = new Set<string>([
@@ -43,6 +45,10 @@ function isOutboundFailedStatus(status: string | null | undefined) {
 
 function isOutboundQueuedStatus(status: string | null | undefined) {
     return status === OUTBOUND_STATUS.Queued
+}
+
+function isOutboundDryRunStatus(status: string | null | undefined) {
+    return status === OUTBOUND_STATUS.DryRun
 }
 
 function isOutboundInProgressStatus(status: string | null | undefined) {
@@ -198,6 +204,7 @@ export {
     articleRowKey,
     hashValue,
     isOutboundFailedStatus,
+    isOutboundDryRunStatus,
     isOutboundInProgressStatus,
     isOutboundQueuedStatus,
     isOutboundStaleRetryableStatus,

@@ -7,6 +7,9 @@ IMAGE_NAME="${IMAGE_NAME:-idol-bbq-utils-spider:latest}"
 CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
 EXPECTED_COMMIT="${EXPECTED_COMMIT:-$(git rev-parse HEAD 2>/dev/null || true)}"
 EXPECTED_RUNTIME_MODE="${EXPECTED_RUNTIME_MODE:-offline}"
+EXPECTED_OUTBOUND_SEND_MODE="${EXPECTED_OUTBOUND_SEND_MODE:-}"
+EXPECTED_RUNNING="${EXPECTED_RUNNING:-false}"
+EXPECTED_RESTART_POLICY="${EXPECTED_RESTART_POLICY:-no}"
 STRICT_MIGRATIONS="${STRICT_MIGRATIONS:-0}"
 STRICT_COMMIT="${STRICT_COMMIT:-0}"
 
@@ -19,7 +22,7 @@ fi
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE STRICT_MIGRATIONS STRICT_COMMIT; do
+    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE EXPECTED_OUTBOUND_SEND_MODE EXPECTED_RUNNING EXPECTED_RESTART_POLICY STRICT_MIGRATIONS STRICT_COMMIT; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -43,6 +46,9 @@ Environment:
   CONTAINER_NAME=forwarder-new
   EXPECTED_COMMIT=<local HEAD>
   EXPECTED_RUNTIME_MODE=offline
+  EXPECTED_OUTBOUND_SEND_MODE=  # set to blocked/live to assert the send exit guard
+  EXPECTED_RUNNING=false
+  EXPECTED_RESTART_POLICY=no
   STRICT_MIGRATIONS=0      # set 1 to fail when DB migrations are pending/failed
   STRICT_COMMIT=0         # set 1 to fail when image commit != expected commit
 HELP
@@ -64,6 +70,7 @@ image_build_commit="$(docker image inspect "$container_image" --format '{{ index
 image_oci_revision="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' 2>/dev/null || true)"
 image_created_label="$(docker image inspect "$container_image" --format '{{ index .Config.Labels "org.opencontainers.image.created" }}' 2>/dev/null || true)"
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
+outbound_send_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_OUTBOUND_SEND_MODE" { print $2; found=1 } END { if (!found) print "live" }')"
 backup_container_dir="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_DB_BACKUP_DIR" { print $2; found=1 } END { if (!found) print "/app/backups/db-migrations" }')"
 binds_tmp="$(mktemp)"
 docker inspect "$CONTAINER_NAME" --format '{{ range .HostConfig.Binds }}{{ println . }}{{ end }}' > "$binds_tmp"
@@ -242,6 +249,7 @@ printf 'container_status=%s\n' "$container_status"
 printf 'container_running=%s\n' "$container_running"
 printf 'restart_policy=%s\n' "$restart_policy"
 printf 'runtime_mode=%s\n' "$runtime_mode"
+printf 'outbound_send_mode=%s\n' "$outbound_send_mode"
 printf 'container_image=%s\n' "$container_image"
 printf 'image_build_commit=%s\n' "$image_build_commit"
 printf 'image_oci_revision=%s\n' "$image_oci_revision"
@@ -255,6 +263,9 @@ printf 'mount_app_backups_exists=%s\n' "$(mount_exists /app/backups)"
 printf 'mount_app_backups_source=%s\n' "$mount_app_backups"
 printf 'expected_commit=%s\n' "${EXPECTED_COMMIT:-}"
 printf 'expected_runtime_mode=%s\n' "${EXPECTED_RUNTIME_MODE:-}"
+printf 'expected_outbound_send_mode=%s\n' "${EXPECTED_OUTBOUND_SEND_MODE:-}"
+printf 'expected_running=%s\n' "${EXPECTED_RUNNING:-}"
+printf 'expected_restart_policy=%s\n' "${EXPECTED_RESTART_POLICY:-}"
 if [ -n "${EXPECTED_COMMIT:-}" ] && [ "$image_build_commit" = "$EXPECTED_COMMIT" ] && [ "$build_commit_file" = "$EXPECTED_COMMIT" ]; then
     printf 'commit_match=true\n'
 else
@@ -286,12 +297,20 @@ rm -f "$migration_names_tmp" "$db_status_tmp"
 printf 'remote_dirty_tracked=%s\n' "$remote_dirty_tracked"
 printf 'remote_dirty_untracked=%s\n' "$remote_dirty_untracked"
 
-if [ "$container_running" != "false" ] || [ "$restart_policy" != "no" ]; then
-    printf 'preflight failed: container is not safely stopped\n' >&2
+if [ -n "${EXPECTED_RUNNING:-}" ] && [ "$container_running" != "$EXPECTED_RUNNING" ]; then
+    printf 'preflight failed: running mismatch expected=%s actual=%s\n' "$EXPECTED_RUNNING" "$container_running" >&2
+    exit 1
+fi
+if [ -n "${EXPECTED_RESTART_POLICY:-}" ] && [ "$restart_policy" != "$EXPECTED_RESTART_POLICY" ]; then
+    printf 'preflight failed: restart policy mismatch expected=%s actual=%s\n' "$EXPECTED_RESTART_POLICY" "$restart_policy" >&2
     exit 1
 fi
 if [ -n "${EXPECTED_RUNTIME_MODE:-}" ] && [ "$runtime_mode" != "$EXPECTED_RUNTIME_MODE" ]; then
     printf 'preflight failed: runtime mode mismatch expected=%s actual=%s\n' "$EXPECTED_RUNTIME_MODE" "$runtime_mode" >&2
+    exit 1
+fi
+if [ -n "${EXPECTED_OUTBOUND_SEND_MODE:-}" ] && [ "$outbound_send_mode" != "$EXPECTED_OUTBOUND_SEND_MODE" ]; then
+    printf 'preflight failed: outbound send mode mismatch expected=%s actual=%s\n' "$EXPECTED_OUTBOUND_SEND_MODE" "$outbound_send_mode" >&2
     exit 1
 fi
 if [ "$STRICT_MIGRATIONS" = "1" ] && [ "$migration_status" != "up-to-date" ]; then

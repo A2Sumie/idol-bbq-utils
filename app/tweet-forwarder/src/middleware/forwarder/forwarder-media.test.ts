@@ -80,6 +80,45 @@ test('QQForwarder keeps long text as a single payload instead of chunking', asyn
     expect(payloads[0][0]?.data?.text).toBe('保留标题')
 })
 
+test('QQForwarder dry-run send mode blocks the actual provider exit', async () => {
+    const originalMode = process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
+    process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = 'blocked'
+    try {
+        const forwarder = new QQForwarder(
+            {
+                group_id: '123',
+                url: 'http://127.0.0.1:3001',
+                token: '',
+                media_batch_threshold: 6,
+            } as any,
+            'qq-dry-run-test',
+        )
+        ;(forwarder as any).minInterval = 0
+
+        const payloads: any[] = []
+        ;(forwarder as any).sendWithPayload = async (segments: any) => {
+            payloads.push(segments)
+            return { ok: true }
+        }
+
+        const result = await forwarder.send('blocked payload', {
+            media: [{ media_type: 'photo', path: '/tmp/blocked.jpg' }],
+            outboundKey: 'article:qq-dry-run-test:1:blocked',
+        })
+
+        expect(result.status).toBe('dry_run')
+        expect(result.status === 'dry_run' ? result.details.outbound_key : '').toBe('article:qq-dry-run-test:1:blocked')
+        expect(forwarder.drainPendingMediaBatches()).toHaveLength(0)
+        expect(payloads).toHaveLength(0)
+    } finally {
+        if (originalMode === undefined) {
+            delete process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
+        } else {
+            process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = originalMode
+        }
+    }
+})
+
 test('QQForwarder batches image-like units until the configured threshold is reached', async () => {
     const forwarder = new QQForwarder(
         {

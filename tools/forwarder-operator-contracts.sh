@@ -67,6 +67,8 @@ HELP
         'post-recreate restart guard'
     require_contains "$deploy" 'IDOL_BBQ_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE"' \
         'stopped deploy runtime-mode override'
+    require_contains "$deploy" 'IDOL_BBQ_OUTBOUND_SEND_MODE="$DEPLOY_OUTBOUND_SEND_MODE"' \
+        'stopped deploy outbound send-mode override'
     require_not_contains "$deploy" '-f docker-compose.yaml' \
         'remote checkout compose fallback'
 
@@ -76,6 +78,12 @@ HELP
         'backup bind preflight visibility'
     require_contains "$preflight" 'EXPECTED_RUNTIME_MODE' \
         'runtime-mode preflight expectation'
+    require_contains "$preflight" 'EXPECTED_OUTBOUND_SEND_MODE' \
+        'outbound send-mode preflight expectation'
+    require_contains "$preflight" 'EXPECTED_RUNNING' \
+        'container running-state preflight expectation'
+    require_contains "$preflight" 'EXPECTED_RESTART_POLICY' \
+        'container restart-policy preflight expectation'
     require_contains "$preflight" 'STRICT_COMMIT' \
         'strict commit preflight gate'
     require_contains "$preflight" 'STRICT_MIGRATIONS' \
@@ -93,6 +101,8 @@ HELP
         'existing DB migration guard'
     require_contains "$start" 'IDOL_BBQ_DB_BACKUP_DIR:-/app/backups/db-migrations' \
         'persistent startup migration backup default'
+    require_contains "$start" 'IDOL_BBQ_OUTBOUND_SEND_MODE' \
+        'startup outbound send-mode guard'
     require_contains "$start" 'PRAGMA quick_check' \
         'startup sqlite quick_check'
     require_contains "$start" 'backup_method=%s' \
@@ -102,6 +112,8 @@ HELP
 
     require_contains "docker-compose.yaml" 'IDOL_BBQ_DB_BACKUP_DIR=${IDOL_BBQ_DB_BACKUP_DIR:-/app/backups/db-migrations}' \
         'compose persistent migration backup env'
+    require_contains "docker-compose.yaml" 'IDOL_BBQ_OUTBOUND_SEND_MODE=${IDOL_BBQ_OUTBOUND_SEND_MODE:-live}' \
+        'compose outbound send-mode env'
     require_contains "$preflight" 'backup_container_dir' \
         'preflight backup container env resolution'
     require_contains "$preflight" 'db_backup_host_dir' \

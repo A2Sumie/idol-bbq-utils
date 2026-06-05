@@ -54,7 +54,15 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         3,
         Math.min(Math.floor(Number(objectConfig.max_items || DEFAULT_SUMMARY_CARD_MAX_ITEMS)), 30),
     )
-    const duplicateLimit = Math.floor(Number((objectConfig as any).media_duplicate_limit || 0))
+    const explicitDuplicateLimit = Math.floor(Number((objectConfig as any).media_duplicate_limit || 0))
+    const includeOriginalMedia = objectConfig.include_original_media === true
+    const mediaRealtime = (objectConfig as any).media_realtime === true
+    const duplicateLimit =
+        Number.isFinite(explicitDuplicateLimit) && explicitDuplicateLimit > 0
+            ? explicitDuplicateLimit
+            : includeOriginalMedia || mediaRealtime
+              ? 2
+              : 0
     const windowAlignment: SummaryCardWindowAlignment =
         (objectConfig as any).align_to_interval === true
             ? 'interval'
@@ -69,15 +77,15 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         intervalSeconds,
         threshold,
         maxItems,
-        includeOriginalMedia: objectConfig.include_original_media === true,
+        includeOriginalMedia,
         sendFirstImmediately: objectConfig.send_first_immediately !== false,
         sendFirstNative: (objectConfig as any).send_first_native === true,
-        mediaRealtime: (objectConfig as any).media_realtime === true,
+        mediaRealtime,
         mediaRealtimeText,
         flushOnThreshold: (objectConfig as any).flush_on_threshold !== false,
         flushDelaySeconds: Math.max(0, Math.floor(Number((objectConfig as any).flush_delay_seconds || 0))),
         windowAlignment,
-        mediaDuplicateLimit: Number.isFinite(duplicateLimit) && duplicateLimit > 0 ? duplicateLimit : null,
+        mediaDuplicateLimit: duplicateLimit > 0 ? duplicateLimit : null,
     }
 }
 

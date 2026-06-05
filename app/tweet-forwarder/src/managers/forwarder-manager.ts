@@ -1738,6 +1738,22 @@ class ForwarderPools extends BaseCompatibleModel {
                             hadNonErrorOutcome = true
                             return
                         }
+                        if (sendResult.status === 'dry_run') {
+                            await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
+                            await DB.TargetHealth.mark({
+                                target_id: target.id,
+                                provider: target.NAME,
+                                status: 'ok',
+                                last_send_status: 'dry_run',
+                                details: sendResult,
+                            })
+                            if (claimed && !options?.forceSend) {
+                                await this.releaseArticleChain(article, platform, target.id)
+                            }
+                            error_for_all = false
+                            hadNonErrorOutcome = true
+                            return
+                        }
                         const providerResult = getForwarderProviderResult(sendResult)
                         const providerSummary = summarizeProviderResult(providerResult)
                         await DB.OutboundMessage.markSent(outboundIdempotencyKey, providerSummary)
@@ -2255,7 +2271,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 timestamp: article.created_at,
                 runtime_config,
                 article: cloneDeep(article),
-                forceSend: true,
+                bypassMediaBatch: true,
             })
             if (sendResult.status === 'queued') {
                 await DB.OutboundMessage.markQueued(outboundIdempotencyKey, sendResult)
@@ -2275,6 +2291,17 @@ class ForwarderPools extends BaseCompatibleModel {
                     provider: target.NAME,
                     status: 'ok',
                     last_send_status: 'blocked',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return false
+            }
+            if (sendResult.status === 'dry_run') {
+                await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: target.id,
+                    provider: target.NAME,
+                    status: 'ok',
+                    last_send_status: 'dry_run',
                     details: sendResult,
                 }).catch(() => undefined)
                 return false
@@ -2689,6 +2716,17 @@ class ForwarderPools extends BaseCompatibleModel {
                     details: sendResult,
                 }).catch(() => undefined)
                 return true
+            }
+            if (sendResult.status === 'dry_run') {
+                await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'dry_run',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return false
             }
             const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
@@ -3497,6 +3535,20 @@ class ForwarderPools extends BaseCompatibleModel {
                     details: sendResult,
                 }).catch(() => undefined)
                 return claimedArticles.map((article) => article.id)
+            }
+            if (sendResult.status === 'dry_run') {
+                await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
+                await DB.TargetHealth.mark({
+                    target_id: targetId,
+                    provider: group.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'dry_run',
+                    details: sendResult,
+                }).catch(() => undefined)
+                for (const article of claimedArticles) {
+                    await this.releaseArticleChain(article, article.platform, targetId)
+                }
+                return []
             }
             const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
     isOutboundFailedStatus,
+    isOutboundDryRunStatus,
     isOutboundInProgressStatus,
     isOutboundQueuedStatus,
     isOutboundStaleRetryableStatus,
@@ -20,12 +21,14 @@ test('outbound status helpers keep visible completion distinct from suppressed c
     expect(isOutboundSuppressedCompletionStatus(OUTBOUND_STATUS.FailedAfterPartial)).toBeTrue()
     expect(isOutboundSuppressedCompletionStatus(OUTBOUND_STATUS.Skipped)).toBeTrue()
     expect(isOutboundSuppressedCompletionStatus(OUTBOUND_STATUS.Failed)).toBeFalse()
+    expect(isOutboundSuppressedCompletionStatus(OUTBOUND_STATUS.DryRun)).toBeFalse()
 })
 
 test('outbound status helpers classify retryable in-flight and failed states', () => {
     expect(isOutboundStaleRetryableStatus(OUTBOUND_STATUS.Planned)).toBeTrue()
     expect(isOutboundStaleRetryableStatus(OUTBOUND_STATUS.Sending)).toBeTrue()
     expect(isOutboundStaleRetryableStatus(OUTBOUND_STATUS.Queued)).toBeTrue()
+    expect(isOutboundStaleRetryableStatus(OUTBOUND_STATUS.DryRun)).toBeTrue()
     expect(isOutboundStaleRetryableStatus(OUTBOUND_STATUS.Sent)).toBeFalse()
 
     expect(isOutboundInProgressStatus(OUTBOUND_STATUS.Planned)).toBeTrue()
@@ -34,6 +37,8 @@ test('outbound status helpers classify retryable in-flight and failed states', (
 
     expect(isOutboundQueuedStatus(OUTBOUND_STATUS.Queued)).toBeTrue()
     expect(isOutboundQueuedStatus(OUTBOUND_STATUS.Sending)).toBeFalse()
+    expect(isOutboundDryRunStatus(OUTBOUND_STATUS.DryRun)).toBeTrue()
+    expect(isOutboundDryRunStatus(OUTBOUND_STATUS.Failed)).toBeFalse()
     expect(isOutboundFailedStatus(OUTBOUND_STATUS.Failed)).toBeTrue()
     expect(isOutboundFailedStatus(OUTBOUND_STATUS.Partial)).toBeFalse()
 })

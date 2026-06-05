@@ -172,6 +172,25 @@ case "$runtime_mode" in
 esac
 export IDOL_BBQ_RUNTIME_MODE="$runtime_mode"
 
+outbound_send_mode="${IDOL_BBQ_OUTBOUND_SEND_MODE:-live}"
+outbound_send_mode="$(printf '%s' "$outbound_send_mode" | tr '[:upper:]' '[:lower:]' | tr '_' '-')"
+case "$outbound_send_mode" in
+    live | online)
+        outbound_send_mode="live"
+        ;;
+    blocked | block | dry-run | dryrun | disabled | off | no-send | nosend)
+        outbound_send_mode="blocked"
+        ;;
+    *)
+        echo "Invalid IDOL_BBQ_OUTBOUND_SEND_MODE: $outbound_send_mode (expected live or blocked)" >&2
+        exit 64
+        ;;
+esac
+export IDOL_BBQ_OUTBOUND_SEND_MODE="$outbound_send_mode"
+if [ "$runtime_mode" = "online" ] && [ "$outbound_send_mode" = "blocked" ]; then
+    echo "IDOL_BBQ_OUTBOUND_SEND_MODE=blocked: runtime will crawl/process but external send APIs are disabled."
+fi
+
 mkdir -p /tmp/tweet-forwarder /tmp/tweet-forwarder/logs /tmp/tweet-forwarder/media "$BROWSER_PROFILE_DIR"
 
 if [ "$runtime_mode" = "offline" ]; then

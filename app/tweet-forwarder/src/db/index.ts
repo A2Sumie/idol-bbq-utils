@@ -959,8 +959,9 @@ namespace DB {
                     isOutboundFailedStatus(existing.status) &&
                     failedAttempts < FAILED_RETRY_LIMIT &&
                     existing.updated_at <= now - failedBackoffSeconds(failedAttempts)
+                const dryRunRetryable = existing.status === OUTBOUND_STATUS.DryRun
                 const retryable =
-                    failedRetryable || (isOutboundStaleRetryableStatus(existing.status) && stale)
+                    dryRunRetryable || failedRetryable || (isOutboundStaleRetryableStatus(existing.status) && stale)
                 if (!retryable) {
                     return { claimed: false, record: await recordSuppressedPayloadDrift(existing, data, now) }
                 }
@@ -1032,6 +1033,21 @@ namespace DB {
                 where: { idempotency_key },
                 data: {
                     status: OUTBOUND_STATUS.Queued,
+                    provider_message_ids: (details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    segment_results: Prisma.JsonNull,
+                    updated_at: now,
+                    finished_at: null,
+                    last_error: null,
+                },
+            })
+        }
+
+        export async function markDryRun(idempotency_key: string, details?: unknown) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.outbound_messages.update({
+                where: { idempotency_key },
+                data: {
+                    status: OUTBOUND_STATUS.DryRun,
                     provider_message_ids: (details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     updated_at: now,

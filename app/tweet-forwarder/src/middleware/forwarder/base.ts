@@ -70,6 +70,7 @@ export interface SendProps {
     runtime_config?: ForwardTargetPlatformCommonConfig
     article?: Article
     forceSend?: boolean
+    bypassMediaBatch?: boolean
     outboundKey?: string
 }
 
@@ -92,12 +93,60 @@ export type ForwarderSendResult =
           status: 'blocked'
           reason: string
       }
+    | {
+          status: 'dry_run'
+          reason: string
+          details: OutboundSendDryRunDetails
+      }
+
+type OutboundSendMode = 'live' | 'blocked'
+
+interface OutboundSendDryRunDetails {
+    send_mode: OutboundSendMode
+    target_id: string
+    forwarder: string
+    text_count: number
+    text_length: number
+    media_count: number
+    card_media_count: number
+    content_media_count: number
+    article_key?: string
+    outbound_key?: string
+}
+
+function normalizeOutboundSendModeValue(value: string | undefined): OutboundSendMode {
+    const normalized = String(value || 'live')
+        .trim()
+        .toLowerCase()
+        .replace(/_/g, '-')
+    if (!normalized || normalized === 'live' || normalized === 'online') {
+        return 'live'
+    }
+    if (['blocked', 'block', 'dry-run', 'dryrun', 'disabled', 'off', 'no-send', 'nosend'].includes(normalized)) {
+        return 'blocked'
+    }
+    throw new Error(`Invalid IDOL_BBQ_OUTBOUND_SEND_MODE: ${value}`)
+}
+
+function resolveOutboundSendMode(env: Record<string, string | undefined> = process.env): OutboundSendMode {
+    return normalizeOutboundSendModeValue(env.IDOL_BBQ_OUTBOUND_SEND_MODE || env.IDOL_BBQ_SEND_MODE)
+}
+
+class OutboundSendDryRunError extends Error {
+    readonly details: OutboundSendDryRunDetails
+
+    constructor(details: OutboundSendDryRunDetails) {
+        super(`outbound send blocked by ${details.send_mode} mode for ${details.forwarder}:${details.target_id}`)
+        this.name = 'OutboundSendDryRunError'
+        this.details = details
+    }
+}
 
 export function isForwarderSendResult(value: unknown): value is ForwarderSendResult {
     if (!value || typeof value !== 'object') {
         return false
     }
-    return ['sent', 'queued', 'blocked'].includes(String((value as { status?: unknown }).status))
+    return ['sent', 'queued', 'blocked', 'dry_run'].includes(String((value as { status?: unknown }).status))
 }
 
 export function isForwarderSentResult(value: unknown): value is Extract<ForwarderSendResult, { status: 'sent' }> {
@@ -241,16 +290,28 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             return { status: 'blocked', reason }
         }
 
-        const chunks = (context.metadata.get('chunks') as string[]) || [context.text]
-        const batchResult = await this.maybeHandleMediaBatch(chunks, props, mergedConfig)
-        if (batchResult) {
-            this.blockRuleMiddleware.commitPending(context)
-            return batchResult
-        }
+        try {
+            const chunks = (context.metadata.get('chunks') as string[]) || [context.text]
+            const batchResult = await this.maybeHandleMediaBatch(chunks, props, mergedConfig)
+            if (batchResult) {
+                this.blockRuleMiddleware.commitPending(context)
+                return batchResult
+            }
 
-        const result = await this.sendPrepared(chunks, props)
-        this.blockRuleMiddleware.commitPending(context)
-        return { status: 'sent', providerResult: result }
+            const result = await this.sendPrepared(chunks, props)
+            this.blockRuleMiddleware.commitPending(context)
+            return { status: 'sent', providerResult: result }
+        } catch (error) {
+            if (error instanceof OutboundSendDryRunError) {
+                this.log?.warn(error.message)
+                return {
+                    status: 'dry_run',
+                    reason: error.message,
+                    details: error.details,
+                }
+            }
+            throw error
+        }
     }
 
     protected async sendPrepared(texts: string[], props?: SendProps): Promise<any> {
@@ -259,6 +320,8 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         const _log = this.log
 
         _log?.debug(`trying to send prepared payload with text length ${textLength}`)
+
+        this.assertActualSendAllowed(normalizedTexts, props)
 
         if (this.minInterval > 0) {
             const now = Date.now()
@@ -497,7 +560,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         props: SendProps | undefined,
         mergedConfig: ForwardTargetPlatformCommonConfig,
     ): Promise<ForwarderSendResult | null> {
-        if (props?.forceSend) {
+        if (props?.forceSend || props?.bypassMediaBatch || resolveOutboundSendMode() === 'blocked') {
             return null
         }
 
@@ -549,6 +612,30 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             threshold: batchConfig.threshold,
             outboundKey: item.outboundKey,
         }
+    }
+
+    private assertActualSendAllowed(texts: string[], props?: SendProps) {
+        const sendMode = resolveOutboundSendMode()
+        if (sendMode === 'live') {
+            return
+        }
+
+        const media = props?.media || []
+        const cardMedia = props?.cardMedia || []
+        const contentMedia = props?.contentMedia || []
+        const article = props?.article
+        throw new OutboundSendDryRunError({
+            send_mode: sendMode,
+            target_id: this.id,
+            forwarder: this.NAME,
+            text_count: texts.length,
+            text_length: texts.join('\n').length,
+            media_count: media.length,
+            card_media_count: cardMedia.length,
+            content_media_count: contentMedia.length,
+            ...(article ? { article_key: `${article.platform}:${article.a_id}` } : {}),
+            ...(props?.outboundKey ? { outbound_key: props.outboundKey } : {}),
+        })
     }
 
     protected abstract realSend(texts: string[], props?: SendProps): Promise<any>
@@ -603,4 +690,4 @@ abstract class Forwarder extends BaseForwarder {
     }
 }
 
-export { BaseForwarder, Forwarder, PartialForwarderSendError }
+export { BaseForwarder, Forwarder, OutboundSendDryRunError, PartialForwarderSendError, resolveOutboundSendMode }

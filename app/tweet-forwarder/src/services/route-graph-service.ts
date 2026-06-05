@@ -140,7 +140,7 @@ function addSummaryCardDiagnostics(
         })
     }
 
-    if (policy.media_realtime && policy.include_original_media) {
+    if (policy.media_realtime && policy.include_original_media && !policy.media_duplicate_limit) {
         diagnostics.push({
             severity: 'warn',
             code: 'summary_card_media_duplicate_risk',

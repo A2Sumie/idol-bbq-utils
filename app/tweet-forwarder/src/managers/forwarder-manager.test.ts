@@ -150,6 +150,11 @@ beforeEach(() => {
         Object.assign(record, { status: 'queued', provider_message_ids: details ?? null })
         return record
     }
+    ;(DB.OutboundMessage as any).markDryRun = async (idempotencyKey: string, details?: unknown) => {
+        const record = outboundRecords.get(idempotencyKey)
+        Object.assign(record, { status: 'dry_run', provider_message_ids: details ?? null })
+        return record
+    }
     ;(DB.OutboundMessage as any).markSkipped = async (idempotencyKey: string, reason: string, details?: unknown) => {
         const record = outboundRecords.get(idempotencyKey)
         Object.assign(record, { status: 'skipped', provider_message_ids: { reason, details } })
@@ -348,6 +353,22 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         windowAlignment: 'interval',
         mediaDuplicateLimit: 2,
     })
+    expect(
+        resolveSummaryCardConfig({
+            summary_card: {
+                enabled: true,
+                include_original_media: true,
+            },
+        } as any)?.mediaDuplicateLimit,
+    ).toBe(2)
+    expect(
+        resolveSummaryCardConfig({
+            summary_card: {
+                enabled: true,
+                media_realtime: true,
+            },
+        } as any)?.mediaDuplicateLimit,
+    ).toBe(2)
     expect(resolveSummaryCardConfig({ summary_card: { enabled: false } } as any)).toBeNull()
 })
 
@@ -1242,6 +1263,82 @@ test('sendArticles keeps ForwardBy for terminal blocked target sends', async () 
     expect(outboundRecord?.status).toBe('skipped')
     expect(outboundRecord?.provider_message_ids?.reason).toBe('target_middleware_block')
     expect(await DB.ForwardBy.checkExist(article.id, article.platform, target.id, 'article')).not.toBeNull()
+})
+
+test('sendArticles releases ForwardBy and keeps outbound retryable on dry-run send blocking', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = {
+        id: 'target-dry-run-send',
+        NAME: 'recording',
+        getEffectiveConfig: (runtimeConfig?: any) => runtimeConfig || {},
+        check_blocked: async () => false,
+        send: async () => ({
+            status: 'dry_run',
+            reason: 'outbound send blocked by blocked mode for recording:target-dry-run-send',
+            details: {
+                send_mode: 'blocked',
+                target_id: 'target-dry-run-send',
+                forwarder: 'recording',
+                text_count: 1,
+                text_length: 22,
+                media_count: 0,
+                card_media_count: 0,
+                content_media_count: 0,
+            },
+        }),
+    }
+    const article = {
+        id: 205,
+        a_id: 'dry-run-send-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+    }
+
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'dry run target payload',
+            mediaFiles: [],
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'dry-run-send-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: undefined,
+            },
+        ],
+        {
+            render_type: 'text',
+        } as any,
+    )
+
+    const outboundKey = articleOutboundKey('target-dry-run-send', article as any)
+    const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
+    expect(outboundRecord?.status).toBe('dry_run')
+    expect(outboundRecord?.provider_message_ids?.status).toBe('dry_run')
+    expect(await DB.ForwardBy.checkExist(article.id, article.platform, target.id, 'article')).toBeNull()
 })
 
 test('sendArticles skips delivery when render service marks a cross-platform duplicate', async () => {
@@ -4509,7 +4606,8 @@ test('sendArticles sends summary-card media immediately while keeping text queue
 
     expect(target.sent).toHaveLength(2)
     expect(target.sent[0]?.texts).toEqual([''])
-    expect(target.sent[0]?.props?.forceSend).toBeTrue()
+    expect(target.sent[0]?.props?.forceSend).toBeUndefined()
+    expect(target.sent[0]?.props?.bypassMediaBatch).toBeTrue()
     expect(target.sent[0]?.props?.media?.[0]?.path).toBe('/tmp/realtime-810.jpg')
     expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(2)
 })
