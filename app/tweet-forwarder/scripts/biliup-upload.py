@@ -6,8 +6,8 @@ import os
 import re
 import sys
 import time
+from dataclasses import dataclass
 
-from biliup.engine.upload import UploadBase
 from biliup.plugins.bili_webup import BiliBili, BiliWeb, Data
 
 DEFAULT_BROWSER_UA = (
@@ -15,6 +15,12 @@ DEFAULT_BROWSER_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/146.0.0.0 Safari/537.36"
 )
+
+
+@dataclass
+class FileInfo:
+    video: str
+    danmaku: object = None
 
 
 def patch_biliup_headers(user_agent: str):
@@ -76,7 +82,7 @@ def main():
         cover_path=args.cover or None,
         description=args.desc,
     )
-    file_list = [UploadBase.FileInfo(video=video_path, danmaku=None) for video_path in args.files]
+    file_list = [FileInfo(video=video_path) for video_path in args.files]
     submit_result = upload_and_submit(uploader, file_list)
     print(
         json.dumps(

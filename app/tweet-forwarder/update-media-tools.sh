@@ -6,7 +6,7 @@ BIN_DIR="${TOOLS_DIR}/bin"
 BILIUP_VENV="${TOOLS_DIR}/biliup-venv"
 GALLERY_DL_VENV="${TOOLS_DIR}/gallery-dl-venv"
 YT_DLP_URL="${YT_DLP_URL:-https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux}"
-BILIUP_VERSION="${BILIUP_VERSION:-1.1.29}"
+BILIUP_PACKAGE="${BILIUP_PACKAGE:-biliup}"
 
 mkdir -p "$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
@@ -41,14 +41,13 @@ if [ ! -x "$BILIUP_VENV/bin/python" ]; then
     python3 -m venv "$BILIUP_VENV"
 fi
 "$BILIUP_VENV/bin/python" -m pip install --upgrade pip setuptools wheel
-"$BILIUP_VENV/bin/python" -m pip install --upgrade "biliup==${BILIUP_VERSION}"
+"$BILIUP_VENV/bin/python" -m pip install --upgrade "$BILIUP_PACKAGE"
 ln -sf ../biliup-venv/bin/biliup "$BIN_DIR/biliup"
 printf '%s\n' '#!/bin/sh' "exec \"$BILIUP_VENV/bin/python\" \"\$@\"" > "$BIN_DIR/biliup-python"
 chmod +x "$BIN_DIR/biliup-python"
 "$BILIUP_VENV/bin/python" - <<'PY'
-from biliup.engine.upload import UploadBase
 from biliup.plugins.bili_webup import BiliBili, BiliWeb, Data
 
-assert UploadBase and BiliBili and BiliWeb and Data
+assert BiliBili and BiliWeb and Data
 PY
 "$BIN_DIR/biliup" --help >/dev/null
