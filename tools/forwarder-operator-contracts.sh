@@ -128,6 +128,11 @@ HELP
         'compose stop grace period'
     require_contains "$preflight" 'backup_container_dir' \
         'preflight backup container env resolution'
+
+    require_contains "app/tweet-forwarder/update-media-tools.sh" 'BILIUP_VERSION="${BILIUP_VERSION:-1.1.29}"' \
+        'pinned biliup helper-compatible version'
+    require_contains "app/tweet-forwarder/update-media-tools.sh" 'from biliup.engine.upload import UploadBase' \
+        'biliup helper import self-test'
     require_contains "$preflight" 'db_backup_host_dir' \
         'preflight backup host path visibility'
     require_contains "$drill" '?mode=ro' \
