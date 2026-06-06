@@ -705,6 +705,56 @@ describe('RenderService text-card', () => {
         service.cleanup(result.mediaFiles)
     })
 
+    test('retries text-card rendering without remote media when a remote thumbnail breaks card render', async () => {
+        const service = new RenderService()
+        const renderCalls: Array<any> = []
+        ;(service as any).ArticleConverter = {
+            articleToImg: async (article: any) => {
+                renderCalls.push(article)
+                const hasRemoteMedia = (article.media || []).some((media: any) =>
+                    String(media.url || '').startsWith('https://'),
+                )
+                if (hasRemoteMedia) {
+                    throw new Error('Unsupported image type: image/webp')
+                }
+                return Buffer.from(SAMPLE_PNG_DATA_URL.split(',')[1] || '', 'base64')
+            },
+        }
+
+        const result = await service.process(
+            {
+                id: 18,
+                a_id: 'remote-webp-thumbnail-card',
+                u_id: '227SMEJ',
+                username: '22/7 OFFICIAL YouTube CHANNEL',
+                created_at: 1710000000,
+                content: 'remote webp thumbnail should not drop the whole card',
+                translation: null,
+                translated_by: null,
+                url: 'https://www.youtube.com/shorts/remote-webp-thumbnail-card',
+                type: 'shorts',
+                ref: null,
+                has_media: true,
+                media: [{ type: 'video_thumbnail', url: 'https://i.ytimg.com/vi/example/oardefault.jpg' }],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.YouTube,
+            } as any,
+            {
+                taskId: 'test-remote-webp-thumbnail-card',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(renderCalls).toHaveLength(2)
+        expect(renderCalls[0]?.media).toHaveLength(1)
+        expect(renderCalls[1]?.media).toEqual([])
+        expect(renderCalls[1]?.has_media).toBe(false)
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
+
     test('renders progressive jpeg media inside the card instead of a gray tile', async () => {
         const service = new RenderService()
         const result = await service.process(

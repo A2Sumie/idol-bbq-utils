@@ -149,26 +149,39 @@ export class RenderService {
         let textCollapseMode: RenderResult['textCollapseMode'] = 'none'
 
         // Helper: Generate Rendered Image
+        const renderArticleImage = async (cardArticle: Article) => {
+            return await this.ArticleConverter.articleToImg(cardArticle, {
+                features: this.resolveCardFeatures(config.card_features),
+            })
+        }
         const generateRenderedImage = async () => {
+            const hydratedArticle = this.hydrateArticleMediaForCard(article, maybe_media_files)
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
-                const imgBuffer = await this.ArticleConverter.articleToImg(
-                    this.hydrateArticleMediaForCard(article, maybe_media_files),
-                    {
-                        features: this.resolveCardFeatures(config.card_features),
-                    },
-                )
+                const imgBuffer = await renderArticleImage(hydratedArticle)
                 const path = writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
                 this.log?.debug(`Generated rendered image at ${path}`)
                 return path
             } catch (e) {
-                const errorText = e instanceof Error ? e.stack || e.message : String(e)
-                this.log?.error(
-                    `Error while converting article ${article.platform}:${article.a_id} (${article.type}) to img ` +
-                        `for task ${taskId} render=${render_type || 'default'} features=${JSON.stringify(
-                            this.resolveCardFeatures(config.card_features),
-                        )}: ${errorText}`,
-                )
+                const fallback = this.stripRemoteCardMediaForRender(hydratedArticle)
+                if (fallback.removed > 0) {
+                    try {
+                        this.log?.warn(
+                            `Retrying article ${article.platform}:${article.a_id} card render without ` +
+                                `${fallback.removed} remote media item(s) after render failure: ${this.formatRenderError(
+                                    e,
+                                )}`,
+                        )
+                        const imgBuffer = await renderArticleImage(fallback.article)
+                        const path = writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
+                        this.log?.debug(`Generated rendered image at ${path}`)
+                        return path
+                    } catch (fallbackError) {
+                        this.logRenderImageError(article, taskId, render_type, config.card_features, fallbackError, e)
+                        return null
+                    }
+                }
+                this.logRenderImageError(article, taskId, render_type, config.card_features, e)
                 return null
             }
         }
@@ -385,6 +398,60 @@ export class RenderService {
 
     private resolveCardFeatures(features?: Array<string>) {
         return Array.from(new Set(features || []))
+    }
+
+    private formatRenderError(error: unknown) {
+        return error instanceof Error ? error.stack || error.message : String(error)
+    }
+
+    private logRenderImageError(
+        article: Article,
+        taskId: string,
+        renderType: string | undefined,
+        cardFeatures: Array<string> | undefined,
+        error: unknown,
+        firstError?: unknown,
+    ) {
+        const firstErrorText = firstError ? ` first_error=${this.formatRenderError(firstError)}` : ''
+        this.log?.error(
+            `Error while converting article ${article.platform}:${article.a_id} (${article.type}) to img ` +
+                `for task ${taskId} render=${renderType || 'default'} features=${JSON.stringify(
+                    this.resolveCardFeatures(cardFeatures),
+                )}: ${this.formatRenderError(error)}${firstErrorText}`,
+        )
+    }
+
+    private isRemoteCardMediaUrl(value: unknown) {
+        return typeof value === 'string' && /^https?:\/\//i.test(value)
+    }
+
+    private stripRemoteCardMediaForRender(article: Article) {
+        const cloned = cloneDeep(article)
+        let removed = 0
+        const visit = (currentArticle: Article | null) => {
+            if (!currentArticle) {
+                return
+            }
+            if (Array.isArray(currentArticle.media)) {
+                const kept = currentArticle.media.filter((mediaItem) => {
+                    if (
+                        (mediaItem.type === 'photo' || mediaItem.type === 'video_thumbnail') &&
+                        this.isRemoteCardMediaUrl(mediaItem.url)
+                    ) {
+                        removed += 1
+                        return false
+                    }
+                    return true
+                })
+                currentArticle.media = kept as Article['media']
+                currentArticle.has_media = kept.length > 0
+            }
+            if (currentArticle.ref && typeof currentArticle.ref === 'object') {
+                visit(currentArticle.ref as Article)
+            }
+        }
+        visit(cloned)
+        return { article: cloned, removed }
     }
 
     private resolveArticleTextCollapseMode(renderType?: string): 'article' | 'compact-article' {
