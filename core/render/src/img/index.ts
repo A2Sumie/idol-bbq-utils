@@ -137,7 +137,7 @@ const SYSTEM_FALLBACK_FONTS: Array<FontConfig & { paths: Array<string> }> = [
     },
 ]
 const BASE_FONT_EXCLUDED_NAMES = new Set(['Unifont'])
-const UNIFONT_FALLBACK_CODES = new Set(['unknown', 'symbol', 'math'])
+const UNIFONT_FALLBACK_CODES = new Set(['unknown', 'symbol', 'math', 'zh-CN'])
 
 // Our own encoding of multiple fonts and their code, so we can fetch them in one request. The structure is:
 // [1 byte = X, length of language code][X bytes of language code string][4 bytes = Y, length of font][Y bytes of font data]

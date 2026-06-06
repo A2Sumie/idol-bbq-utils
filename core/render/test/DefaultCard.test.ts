@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import {
     CARD_FONT_FAMILY,
+    CARD_TRANSLATION_FONT_FAMILY,
     CARD_UI_FONT_FAMILY,
     articleParser,
     estimateTextLinesHeight,
@@ -140,7 +141,17 @@ test('card font family keeps CJK before broad fallback fonts', () => {
 
     expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Noto Sans'))
     expect(families).toContain('Noto Sans JP')
+    expect(families.indexOf('Noto Sans SC')).toBeLessThan(families.indexOf('Noto Sans'))
     expect(families).not.toContain('Unifont')
+})
+
+test('translation font family prefers simplified Chinese before Japanese fallback', () => {
+    const families = CARD_TRANSLATION_FONT_FAMILY.split(',').map((font) => font.trim())
+
+    expect(families[0]).toBe('Noto Sans SC')
+    expect(families.indexOf('Noto Sans CJK SC')).toBeLessThan(families.indexOf('Noto Sans CJK JP'))
+    expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Noto Sans'))
+    expect(families.at(-1)).toBe('Unifont')
 })
 
 test('card UI metadata font prefers modern sans before simplified CJK fallback', () => {
@@ -210,12 +221,13 @@ test('translated-corner-badge feature renders sparse multicolor geometry waterma
     expect(pattern).toBeTruthy()
     expect(clusters.length).toBe(0)
     expect(geometryShapes.length).toBe(7)
-    expect(geometryShapes.slice(0, 4).map((shape) => shape.props.style.left)).toEqual([28, 196, 364, 532])
-    expect(geometryShapes.slice(4, 7).map((shape) => shape.props.style.left)).toEqual([112, 280, 448])
+    expect(geometryShapes.slice(0, 4).map((shape) => shape.props.style.left)).toEqual([28, 180, 332, 484])
+    expect(geometryShapes.slice(4, 7).map((shape) => shape.props.style.left)).toEqual([104, 256, 408])
     expect(geometryShapes.slice(0, 4).map((shape) => shape.props.style.top)).toEqual([34, 34, 34, 34])
     expect(geometryShapes[0]?.props.style.width).toBe(48)
     expect(geometryShapes[0]?.props.style.height).toBe(48)
     expect(geometryShapes[0]?.props?.['data-translated-pattern-stroke-width']).toBe(4)
+    expect(geometryShapes[0]?.props?.['data-translated-pattern-stroke-opacity']).toBe(0.25)
     expect(geometryShapes.map((shape) => shape.props?.['data-translated-pattern-color'])).toEqual([
         '#facc15',
         '#38bdf8',
@@ -277,10 +289,10 @@ test('translated-corner-badge watermark uses a staggered polka-dot grid on long 
 
     expect(geometryShapes.length).toBeGreaterThan(16)
     expect(new Set(geometryShapes.map((shape) => shape.props?.['data-translated-pattern-shape'])).size).toBe(4)
-    expect(firstRow.map((shape) => shape.props.style.left)).toEqual([28, 196, 364, 532])
-    expect(secondRow.map((shape) => shape.props.style.left)).toEqual([112, 280, 448])
-    expect(secondRow[0]?.props.style.left - firstRow[0]?.props.style.left).toBe(84)
-    expect(secondRow[0]?.props.style.top - firstRow[0]?.props.style.top).toBe(84)
+    expect(firstRow.map((shape) => shape.props.style.left)).toEqual([28, 180, 332, 484])
+    expect(secondRow.map((shape) => shape.props.style.left)).toEqual([104, 256, 408])
+    expect(secondRow[0]?.props.style.left - firstRow[0]?.props.style.left).toBe(76)
+    expect(secondRow[0]?.props.style.top - firstRow[0]?.props.style.top).toBe(76)
     expect(new Set(geometryShapes.map((shape) => shape.props?.['data-translated-pattern-color']))).toEqual(
         new Set(['#facc15', '#38bdf8', '#fde047', '#22c55e', '#ec4899']),
     )
@@ -424,6 +436,9 @@ test('dynamic asset loader can run in deterministic no-remote mode', async () =>
     try {
         expect(await loadDynamicAsset('twemoji', 'emoji', '🧪')).toStartWith('data:image/svg+xml;base64,')
         expect(await loadDynamicAsset('twemoji', 'ja-JP', 'テスト')).toEqual([])
+        const zhFallbackFonts = await loadDynamicAsset('twemoji', 'zh-CN', '测试')
+        expect(zhFallbackFonts).toBeArray()
+        expect((zhFallbackFonts as any[])[0]?.name).toBe('Unifont')
         const fallbackFonts = await loadDynamicAsset('twemoji', 'unknown', 'ᓚᘏᗢ')
         expect(fallbackFonts).toBeArray()
         expect((fallbackFonts as any[])[0]?.name).toBe('Unifont')

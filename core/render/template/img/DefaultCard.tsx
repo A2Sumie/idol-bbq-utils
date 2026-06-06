@@ -36,6 +36,8 @@ const CARD_TEXT_IGNORABLE_PATTERN = /[\uFE0E\u200B\u200C\u200E\u200F\u202A-\u202
 export const CARD_FONT_FAMILY = [
     'Noto Sans CJK JP',
     'Noto Sans JP',
+    'Noto Sans SC',
+    'Noto Sans CJK SC',
     'Noto Sans',
     'Noto Sans Lao',
     'Noto Sans Symbols 2',
@@ -51,6 +53,16 @@ export const CARD_FONT_FAMILY = [
 export function sanitizeCardText(value: string | null | undefined) {
     return (value || '').replace(/\u2764\uFE0E+/g, '\u2764\uFE0F').replace(CARD_TEXT_IGNORABLE_PATTERN, '')
 }
+export const CARD_TRANSLATION_FONT_FAMILY = [
+    'Noto Sans SC',
+    'Noto Sans CJK SC',
+    'Noto Sans CJK JP',
+    'Noto Sans JP',
+    'Noto Sans',
+    'Noto Sans Symbols 2',
+    'Noto Sans Symbols',
+    'Unifont',
+].join(', ')
 export const CARD_UI_FONT_FAMILY = [
     'Noto Sans',
     'Noto Sans CJK SC',
@@ -622,6 +634,9 @@ function MessagePackContent({
     if (!meta) {
         return null
     }
+    const textFontFamily = hasFeature(features, 'translated-corner-badge')
+        ? CARD_TRANSLATION_FONT_FAMILY
+        : CARD_FONT_FAMILY
 
     return (
         <div tw="flex flex-col" style={{ rowGap: '8px' }}>
@@ -647,8 +662,9 @@ function MessagePackContent({
                             {group.title && (
                                 <div
                                     tw="text-[#2563eb]"
+                                    lang={hasFeature(features, 'translated-corner-badge') ? 'zh-CN' : 'ja-JP'}
                                     style={{
-                                        fontFamily: CARD_UI_FONT_FAMILY,
+                                        fontFamily: textFontFamily,
                                         fontSize: CARD_TEXT_SIZE.xs,
                                         lineHeight: CARD_LINE_HEIGHT.xs,
                                         fontWeight: 700,
@@ -669,8 +685,9 @@ function MessagePackContent({
                                         {text && (
                                             <pre
                                                 tw="w-full text-[#202733] my-0"
+                                                lang={hasFeature(features, 'translated-corner-badge') ? 'zh-CN' : 'ja-JP'}
                                                 style={{
-                                                    fontFamily: CARD_UI_FONT_FAMILY,
+                                                    fontFamily: textFontFamily,
                                                     fontSize: CARD_TEXT_SIZE.sm,
                                                     lineHeight: CARD_LINE_HEIGHT.sm,
                                                     whiteSpace: 'pre-wrap',
@@ -698,8 +715,9 @@ function MessagePackContent({
                             {Number(group.omitted || 0) > 0 && (
                                 <div
                                     tw="text-[#64748b]"
+                                    lang="zh-CN"
                                     style={{
-                                        fontFamily: CARD_UI_FONT_FAMILY,
+                                        fontFamily: CARD_TRANSLATION_FONT_FAMILY,
                                         fontSize: CARD_TEXT_SIZE.xs,
                                         lineHeight: CARD_LINE_HEIGHT.xs,
                                     }}
@@ -773,7 +791,7 @@ function TranslatedPatternShape({
     left: number
     top: number
 }) {
-    const strokeOpacity = 0.18
+    const strokeOpacity = 0.25
     const strokeWidth = 4
     const svgByShape = {
         circle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><circle cx="24" cy="24" r="18" fill="none" stroke="${color}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
@@ -786,6 +804,7 @@ function TranslatedPatternShape({
         <div
             data-translated-pattern-shape={shape}
             data-translated-pattern-color={color}
+            data-translated-pattern-stroke-opacity={strokeOpacity}
             data-translated-pattern-stroke-width={strokeWidth}
             tw="absolute flex"
             style={{
@@ -813,7 +832,7 @@ function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
     const shapeSize = 48
     const leftStart = 28
     const topStart = 34
-    const diagonalGap = 84
+    const diagonalGap = 76
     const columnGap = diagonalGap * 2
     const rowGap = diagonalGap
     const rowCount = Math.max(1, Math.ceil((cardHeight - topStart) / rowGap))
@@ -1239,7 +1258,9 @@ function ArticleContent({
                 {article.translation && (
                     <pre
                         tw="w-full my-0 text-[#1f2937]"
+                        lang="zh-CN"
                         style={{
+                            fontFamily: CARD_TRANSLATION_FONT_FAMILY,
                             fontSize: CARD_TEXT_SIZE.base,
                             lineHeight: CARD_LINE_HEIGHT.base,
                             whiteSpace: 'pre-wrap',
@@ -1257,7 +1278,9 @@ function ArticleContent({
                 {article.content && !useInlineWebsiteBlocks && !useMessagePackBlocks && (
                     <pre
                         tw="w-full text-[#202733] my-0"
+                        lang="ja-JP"
                         style={{
+                            fontFamily: CARD_FONT_FAMILY,
                             fontSize: CARD_TEXT_SIZE.base,
                             lineHeight: CARD_LINE_HEIGHT.base,
                             whiteSpace: 'pre-wrap',
