@@ -771,16 +771,20 @@ function TranslatedPatternShape({
     left: number
     top: number
 }) {
-    const symbolByShape = {
-        circle: '○',
-        square: '□',
-        triangle: '△',
-        diamond: '◇',
+    const strokeColor = '#ec4899'
+    const strokeOpacity = 0.18
+    const strokeWidth = 4
+    const svgByShape = {
+        circle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><circle cx="24" cy="24" r="18" fill="none" stroke="${strokeColor}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
+        square: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="7" y="7" width="34" height="34" fill="none" stroke="${strokeColor}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
+        triangle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path d="M24 7 L42 39 H6 Z" fill="none" stroke="${strokeColor}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}" stroke-linejoin="round"/></svg>`,
+        diamond: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="10" y="10" width="28" height="28" transform="rotate(45 24 24)" fill="none" stroke="${strokeColor}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
     } satisfies Record<typeof shape, string>
 
     return (
         <div
             data-translated-pattern-shape={shape}
+            data-translated-pattern-stroke-width={strokeWidth}
             tw="absolute flex"
             style={{
                 left,
@@ -789,14 +793,14 @@ function TranslatedPatternShape({
                 height: 48,
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'rgba(236, 72, 153, 0.17)',
-                fontFamily: CARD_UI_FONT_FAMILY,
-                fontSize: 46,
-                fontWeight: 900,
-                lineHeight: '48px',
             }}
         >
-            {symbolByShape[shape]}
+            <img
+                data-translated-pattern-image={shape}
+                src={`data:image/svg+xml;utf8,${encodeURIComponent(svgByShape[shape])}`}
+                width={48}
+                height={48}
+            />
         </div>
     )
 }
@@ -804,14 +808,15 @@ function TranslatedPatternShape({
 function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
     const shapes: Array<'circle' | 'square' | 'triangle' | 'diamond'> = ['triangle', 'square', 'circle', 'diamond']
     const shapeSize = 48
-    const leftStart = 36
+    const leftStart = 28
     const topStart = 34
-    const columnGap = 104
-    const rowGap = 104
+    const diagonalGap = 84
+    const columnGap = diagonalGap * 2
+    const rowGap = diagonalGap
     const rowCount = Math.max(1, Math.ceil((cardHeight - topStart) / rowGap))
     const patternShapes = Array.from({ length: rowCount }).flatMap((_, rowIndex) => {
         const rowTop = topStart + rowIndex * rowGap
-        const rowOffset = rowIndex % 2 === 0 ? 0 : columnGap / 2
+        const rowOffset = rowIndex % 2 === 0 ? 0 : diagonalGap
         const columnCount = Math.ceil((CARD_WIDTH - leftStart + columnGap) / columnGap)
         return Array.from({ length: columnCount })
             .map((__, columnIndex) => {
