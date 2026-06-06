@@ -205,6 +205,41 @@ test('translated article divider hides external model name', () => {
     expect(providerLabel).toBeNull()
 })
 
+test('standard original plus translation card patterns only the translation block', () => {
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'combined-translation-card-test',
+        u_id: 'member',
+        username: 'Member',
+        created_at: 1710000000,
+        content: '原文ではなく日本語の本文です。',
+        translation: '这是同一张动态卡里的译文。',
+        translated_by: 'LLM',
+        url: 'https://x.com/member/status/1',
+        type: 'tweet',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    const { component } = articleParser(article as any, { features: ['translated-corner-badge'] } as any)
+    const fullCardPattern = findReactElement(component, (node) => node.props?.['data-translated-pattern'] === 'true')
+    const translationBlockPattern = findReactElement(
+        component,
+        (node) => node.props?.['data-translated-block-pattern'] === 'true',
+    )
+    const geometryShapes = findReactElements(component, (node) =>
+        ['circle', 'square', 'triangle', 'diamond'].includes(node.props?.['data-translated-pattern-shape']),
+    )
+
+    expect(fullCardPattern).toBeNull()
+    expect(translationBlockPattern).toBeTruthy()
+    expect(geometryShapes.length).toBeGreaterThan(0)
+})
+
 test('translated-corner-badge feature renders sparse multicolor geometry watermark without text badge', () => {
     const article = {
         id: -1,

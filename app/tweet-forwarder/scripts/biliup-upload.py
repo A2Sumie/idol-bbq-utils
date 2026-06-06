@@ -149,7 +149,7 @@ def sanitize_video_part_title(title, video_path: str) -> str:
     candidate = re.sub(r'[\r\n\t<>:"/\\|?*\x00-\x1f]+', " ", candidate)
     candidate = re.sub(r"\s+", " ", candidate).strip()
     if not re.search(r"[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]", candidate):
-        candidate = "补充"
+        candidate = "###"
     return candidate[:80]
 
 

@@ -130,6 +130,10 @@ function hasFeature(features: CardRenderFeatures, feature: string) {
     return features.has(feature)
 }
 
+function hasTranslatedCardPatternFeature(features: CardRenderFeatures) {
+    return hasFeature(features, 'translated-card-pattern') || hasFeature(features, 'translated-corner-badge')
+}
+
 const WEBSITE_BRAND_CONFIG = {
     official: {
         badgeIcon: Website227Official,
@@ -634,7 +638,7 @@ function MessagePackContent({
     if (!meta) {
         return null
     }
-    const textFontFamily = hasFeature(features, 'translated-corner-badge')
+    const textFontFamily = hasTranslatedCardPatternFeature(features)
         ? CARD_TRANSLATION_FONT_FAMILY
         : CARD_FONT_FAMILY
 
@@ -662,7 +666,7 @@ function MessagePackContent({
                             {group.title && (
                                 <div
                                     tw="text-[#2563eb]"
-                                    lang={hasFeature(features, 'translated-corner-badge') ? 'zh-CN' : 'ja-JP'}
+                                    lang={hasTranslatedCardPatternFeature(features) ? 'zh-CN' : 'ja-JP'}
                                     style={{
                                         fontFamily: textFontFamily,
                                         fontSize: CARD_TEXT_SIZE.xs,
@@ -686,7 +690,7 @@ function MessagePackContent({
                                             <pre
                                                 tw="w-full text-[#202733] my-0"
                                                 lang={
-                                                    hasFeature(features, 'translated-corner-badge') ? 'zh-CN' : 'ja-JP'
+                                                    hasTranslatedCardPatternFeature(features) ? 'zh-CN' : 'ja-JP'
                                                 }
                                                 style={{
                                                     fontFamily: textFontFamily,
@@ -769,17 +773,12 @@ function Metaline({ article }: { article: Article }) {
 }
 
 function isTranslatedMarkedCard(article: Article, features: CardRenderFeatures) {
-    if (!hasFeature(features, 'translated-corner-badge')) {
+    if (!hasTranslatedCardPatternFeature(features)) {
         return false
     }
 
     const translatedLabel = (article.extra?.data as MessagePackMeta | undefined)?.translated_badge_label
-    return Boolean(
-        translatedLabel ||
-            getMessagePackMeta(article)?.translated_badge_label ||
-            article.translation ||
-            isMessagePackArticle(article),
-    )
+    return Boolean(translatedLabel || getMessagePackMeta(article)?.translated_badge_label)
 }
 
 function TranslatedPatternShape({
@@ -862,6 +861,57 @@ function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
                 top: 0,
                 width: CARD_WIDTH,
                 height: cardHeight,
+                opacity: 1,
+            }}
+        >
+            {patternShapes.map((item, index) => (
+                <TranslatedPatternShape
+                    key={index}
+                    shape={item.shape}
+                    color={colors[index % colors.length]}
+                    left={item.left}
+                    top={item.top}
+                />
+            ))}
+        </div>
+    )
+}
+
+function TranslationTextBlockPattern({ width, height }: { width: number; height: number }) {
+    const shapes: Array<'circle' | 'square' | 'triangle' | 'diamond'> = ['triangle', 'square', 'circle', 'diamond']
+    const colors = ['#facc15', '#38bdf8', '#fde047', '#22c55e', '#ec4899']
+    const shapeSize = 48
+    const leftStart = 8
+    const topStart = 8
+    const diagonalGap = 68
+    const columnGap = diagonalGap * 2
+    const rowGap = diagonalGap
+    const rowCount = Math.max(1, Math.ceil((height - topStart) / rowGap))
+    const patternShapes = Array.from({ length: rowCount }).flatMap((_, rowIndex) => {
+        const rowTop = topStart + rowIndex * rowGap
+        const rowOffset = rowIndex % 2 === 0 ? 0 : diagonalGap
+        const columnCount = Math.ceil((width - leftStart + columnGap) / columnGap)
+        return Array.from({ length: columnCount })
+            .map((__, columnIndex) => {
+                const left = leftStart + rowOffset + columnIndex * columnGap
+                return {
+                    left,
+                    top: Math.min(rowTop, Math.max(topStart, height - shapeSize - 6)),
+                    shape: shapes[(rowIndex * 3 + columnIndex) % shapes.length],
+                }
+            })
+            .filter((item) => item.left <= width - shapeSize - 4)
+    })
+
+    return (
+        <div
+            data-translated-block-pattern="true"
+            tw="absolute flex"
+            style={{
+                left: 0,
+                top: 0,
+                width,
+                height,
                 opacity: 1,
             }}
         >
@@ -1228,6 +1278,12 @@ function ArticleContent({
     const useInlineWebsiteBlocks = inlineWebsiteBlocks.length > 0
     const messagePackMeta = getMessagePackMeta(article)
     const useMessagePackBlocks = Boolean(messagePackMeta)
+    const translationText = sanitizeCardText(parseTranslationContent(article))
+    const translationBlockWidth = getContentWidth(level)
+    const translationPatternHeight = Math.max(
+        62,
+        Math.ceil(estimateTextLinesHeight(translationText, BASE_FONT_SIZE, translationBlockWidth) + 8),
+    )
     const shouldRenderMedia = Boolean(
         article.media && article.media.length > 0 && !useInlineWebsiteBlocks && !useMessagePackBlocks,
     )
@@ -1257,21 +1313,32 @@ function ArticleContent({
                     </div>
                 )}
                 {article.translation && (
-                    <pre
-                        tw="w-full my-0 text-[#1f2937]"
-                        lang="zh-CN"
+                    <div
+                        tw="relative w-full overflow-hidden"
                         style={{
-                            fontFamily: CARD_TRANSLATION_FONT_FAMILY,
-                            fontSize: CARD_TEXT_SIZE.base,
-                            lineHeight: CARD_LINE_HEIGHT.base,
-                            whiteSpace: 'pre-wrap',
-                            fontWeight: 400,
-                            overflowWrap: 'anywhere',
-                            wordBreak: 'break-word',
+                            borderRadius: 6,
                         }}
                     >
-                        {sanitizeCardText(parseTranslationContent(article))}
-                    </pre>
+                        <TranslationTextBlockPattern
+                            width={translationBlockWidth}
+                            height={translationPatternHeight}
+                        />
+                        <pre
+                            tw="relative w-full my-0 text-[#1f2937]"
+                            lang="zh-CN"
+                            style={{
+                                fontFamily: CARD_TRANSLATION_FONT_FAMILY,
+                                fontSize: CARD_TEXT_SIZE.base,
+                                lineHeight: CARD_LINE_HEIGHT.base,
+                                whiteSpace: 'pre-wrap',
+                                fontWeight: 400,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                            }}
+                        >
+                            {translationText}
+                        </pre>
+                    </div>
                 )}
                 {article.translation && <Divider text="译文 / 原文" />}
                 {article.content && !useInlineWebsiteBlocks && !useMessagePackBlocks && (

@@ -1944,9 +1944,16 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
 
                         const suppressTranslations = this.shouldSuppressTargetTranslations(target, runtime_config)
-                        const targetArticle = suppressTranslations ? stripArticleTranslations(article) : article
+                        const stripNativeOriginalTranslations = this.shouldStripNativeOriginalCardTranslations(
+                            target,
+                            runtime_config,
+                        )
+                        const targetArticle =
+                            suppressTranslations || stripNativeOriginalTranslations
+                                ? stripArticleTranslations(article)
+                                : article
                         let targetRenderResult = renderResult
-                        if (suppressTranslations) {
+                        if (suppressTranslations || stripNativeOriginalTranslations) {
                             targetRenderResult = await this.renderService.process(targetArticle, {
                                 taskId: `${taskId}-${target.id}-no-translation`,
                                 render_type: cfg_forwarder?.render_type,
@@ -1971,6 +1978,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 {
                                     skipped: targetRenderResult.skipReason || 'deduplicated_media',
                                     suppress_translations: suppressTranslations,
+                                    strip_native_original_translations: stripNativeOriginalTranslations,
                                 },
                                 targetRenderResult,
                                 options?.forceSend ? taskId : undefined,
@@ -2423,6 +2431,14 @@ class ForwarderPools extends BaseCompatibleModel {
         runtime_config?: ForwardTargetPlatformCommonConfig,
     ) {
         return target.getEffectiveConfig(runtime_config).suppress_translations === true
+    }
+
+    private shouldStripNativeOriginalCardTranslations(
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ) {
+        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
+        return Boolean(summaryConfig?.sendFirstNative && summaryConfig.translatedCard)
     }
 
     private buildSummaryCardWindowKey(

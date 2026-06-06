@@ -250,7 +250,7 @@ test('resolveVideoUploadConfig keeps metadata template and collision placeholder
 
     expect(config?.metadata_templates?.title).toBe('【{{platform_type_label}}】{{display_name}} {{summary}}')
     expect(config?.collision_placeholder_part?.video_path).toBe(videoPath)
-    expect(config?.collision_placeholder_part?.title).toBe('补充')
+    expect(config?.collision_placeholder_part?.title).toBe('###')
     expect(config?.collision_placeholder_part?.background_color).toBe('#d1e5fc')
 })
 
@@ -306,7 +306,7 @@ test('prepareUploadVideoParts reuses persistent collision placeholder video when
                     enabled: true,
                     video_path: placeholderPath,
                     image_path: path.join(tempRoot, 'unused.png'),
-                    title: '补充',
+                    title: '###',
                     duration_seconds: 7,
                     width: 1920,
                     height: 1080,
@@ -319,7 +319,7 @@ test('prepareUploadVideoParts reuses persistent collision placeholder video when
         uploadDir,
     )
 
-    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '补充.mp4'])
+    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '###.mp4'])
     expect(fs.existsSync(parts[1]!.stagedPath)).toBe(true)
 })
 
@@ -365,7 +365,7 @@ printf 'placeholder' > "$out"
                 collision_placeholder_part: {
                     enabled: true,
                     image_path: logoPath,
-                    title: '补充',
+                    title: '###',
                     duration_seconds: 1,
                     width: 1280,
                     height: 720,
@@ -378,8 +378,8 @@ printf 'placeholder' > "$out"
         uploadDir,
     )
 
-    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '补充.mp4'])
-    expect(parts[1]?.partTitle).toBe('补充')
+    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '###.mp4'])
+    expect(parts[1]?.partTitle).toBe('###')
     expect(fs.existsSync(parts[1]!.stagedPath)).toBe(true)
 })
 
