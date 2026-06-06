@@ -785,15 +785,15 @@ function TranslatedPatternShape({
             style={{
                 left,
                 top,
-                width: 30,
-                height: 30,
+                width: 48,
+                height: 48,
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'rgba(236, 72, 153, 0.16)',
+                color: 'rgba(236, 72, 153, 0.12)',
                 fontFamily: CARD_UI_FONT_FAMILY,
-                fontSize: 31,
-                fontWeight: 700,
-                lineHeight: '30px',
+                fontSize: 46,
+                fontWeight: 900,
+                lineHeight: '48px',
             }}
         >
             {symbolByShape[shape]}
@@ -801,33 +801,28 @@ function TranslatedPatternShape({
     )
 }
 
-function TranslatedPatternCluster({ left, top }: { left: number; top: number }) {
-    return (
-        <div
-            data-translated-pattern-cluster="true"
-            tw="absolute flex"
-            style={{
-                left,
-                top,
-                width: 68,
-                height: 68,
-                opacity: 0.9,
-            }}
-        >
-            <TranslatedPatternShape shape="triangle" left={22} top={0} />
-            <TranslatedPatternShape shape="square" left={0} top={22} />
-            <TranslatedPatternShape shape="circle" left={44} top={22} />
-            <TranslatedPatternShape shape="diamond" left={22} top={44} />
-        </div>
-    )
-}
-
 function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
-    const clusterCount = Math.max(1, Math.ceil(cardHeight / 220))
-    const clusters = Array.from({ length: clusterCount }, (_, index) => ({
-        left: 336 + (index % 3) * 34,
-        top: Math.min(28 + index * 220, Math.max(24, cardHeight - 92)),
-    }))
+    const shapes: Array<'circle' | 'square' | 'triangle' | 'diamond'> = ['triangle', 'square', 'circle', 'diamond']
+    const shapeSize = 48
+    const leftStart = 190
+    const topStart = 34
+    const columnGap = 124
+    const rowGap = 140
+    const rowCount = Math.max(1, Math.ceil((cardHeight - topStart) / rowGap))
+    const patternShapes = Array.from({ length: rowCount }).flatMap((_, rowIndex) => {
+        const rowTop = topStart + rowIndex * rowGap
+        const rowOffset = rowIndex % 2 === 0 ? 0 : columnGap / 2
+        return Array.from({ length: 3 })
+            .map((__, columnIndex) => {
+                const left = leftStart + rowOffset + columnIndex * columnGap
+                return {
+                    left,
+                    top: Math.min(rowTop, Math.max(topStart, cardHeight - shapeSize - 22)),
+                    shape: shapes[(rowIndex * 3 + columnIndex) % shapes.length],
+                }
+            })
+            .filter((item) => item.left <= CARD_WIDTH - shapeSize - 18)
+    })
     return (
         <div
             data-translated-pattern="true"
@@ -840,8 +835,8 @@ function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
                 opacity: 1,
             }}
         >
-            {clusters.map((cluster, index) => (
-                <TranslatedPatternCluster key={index} left={cluster.left} top={cluster.top} />
+            {patternShapes.map((item, index) => (
+                <TranslatedPatternShape key={index} shape={item.shape} left={item.left} top={item.top} />
             ))}
         </div>
     )

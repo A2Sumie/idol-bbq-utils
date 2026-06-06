@@ -199,17 +199,76 @@ test('translated-corner-badge feature renders sparse pink geometry watermark wit
         component,
         (node) => node.props?.['data-translated-pattern-cluster'] === 'true',
     )
+    const geometryShapes = findReactElements(component, (node) =>
+        ['circle', 'square', 'triangle', 'diamond'].includes(node.props?.['data-translated-pattern-shape']),
+    )
     const xShape = findReactElement(component, (node) => node.props?.['data-translated-pattern-shape'] === 'x')
     const visibleTextBadge = findReactElement(component, (node) => node.props?.children === '译文')
 
     expect(card).toBeTruthy()
     expect(pinkFill).toBeNull()
     expect(pattern).toBeTruthy()
-    expect(clusters.length).toBe(1)
-    expect(clusters[0]?.props.style.width).toBe(68)
-    expect(clusters[0]?.props.style.height).toBe(68)
+    expect(clusters.length).toBe(0)
+    expect(geometryShapes.length).toBe(3)
+    expect(geometryShapes.map((shape) => shape.props.style.left)).toEqual([190, 314, 438])
+    expect(geometryShapes.map((shape) => shape.props.style.top)).toEqual([34, 34, 34])
+    expect(geometryShapes[0]?.props.style.width).toBe(48)
+    expect(geometryShapes[0]?.props.style.height).toBe(48)
     expect(xShape).toBeNull()
     expect(visibleTextBadge).toBeNull()
+})
+
+test('translated-corner-badge watermark uses a staggered polka-dot grid on long cards', () => {
+    const groups = Array.from({ length: 8 }, (_, index) => ({
+        title: `${index + 1}. 消息串 1900～2100`,
+        avatars: [{ name: `member-${index}` }],
+        items: [
+            {
+                index: 1,
+                text:
+                    `@member_${index} 190${index}⁹ X发推\n\n` +
+                    '今日はライブのお知らせと感想をまとめました。読みやすい長さの本文を保持します。\n' +
+                    '引用や補足も聚合卡里は省略しません。',
+            },
+        ],
+    }))
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'long-summary-card-watermark-grid-test',
+        u_id: 'message_pack',
+        username: '聚合',
+        created_at: 1710000000,
+        content: '聚合',
+        translation: null,
+        translated_by: null,
+        url: '',
+        type: 'message_pack',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: {
+            extra_type: 'message_pack_meta',
+            data: {
+                range: '8条 / 1900～2100',
+                translated_badge_label: '译文',
+                groups,
+            },
+        },
+        u_avatar: null,
+    }
+    const { component } = articleParser(article as any, { features: ['translated-corner-badge'] } as any)
+    const geometryShapes = findReactElements(component, (node) =>
+        ['circle', 'square', 'triangle', 'diamond'].includes(node.props?.['data-translated-pattern-shape']),
+    )
+    const firstRow = geometryShapes.slice(0, 3)
+    const secondRow = geometryShapes.slice(3, 5)
+
+    expect(geometryShapes.length).toBeGreaterThan(16)
+    expect(new Set(geometryShapes.map((shape) => shape.props?.['data-translated-pattern-shape'])).size).toBe(4)
+    expect(firstRow.map((shape) => shape.props.style.left)).toEqual([190, 314, 438])
+    expect(secondRow.map((shape) => shape.props.style.left)).toEqual([252, 376])
+    expect(geometryShapes[3]?.props.style.top - geometryShapes[0]?.props.style.top).toBe(140)
 })
 
 test('long message-pack cards keep only a small height safety margin', () => {
