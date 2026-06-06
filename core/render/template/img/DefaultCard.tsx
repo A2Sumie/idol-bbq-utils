@@ -748,40 +748,46 @@ function Metaline({ article }: { article: Article }) {
     )
 }
 
-function getTranslatedCornerBadgeLabel(article: Article, features: CardRenderFeatures) {
+function isTranslatedMarkedCard(article: Article, features: CardRenderFeatures) {
     if (!hasFeature(features, 'translated-corner-badge')) {
-        return null
+        return false
     }
 
-    const label = String(getMessagePackMeta(article)?.translated_badge_label || '译文').trim()
-    return label.slice(0, 6) || '译文'
+    const translatedLabel = (article.extra?.data as MessagePackMeta | undefined)?.translated_badge_label
+    return Boolean(
+        translatedLabel ||
+            getMessagePackMeta(article)?.translated_badge_label ||
+            article.translation ||
+            isMessagePackArticle(article),
+    )
 }
 
-function TranslatedCornerBadge({ label }: { label: string }) {
+function TranslatedCardTint() {
     return (
         <div
-            tw="absolute left-0 top-0 flex items-center justify-center"
+            tw="absolute"
             style={{
-                width: 62,
-                height: 30,
-                background: '#ec4899',
-                borderTopLeftRadius: 18,
-                borderBottomRightRadius: 10,
-                boxShadow: '0 2px 6px rgba(190, 24, 93, 0.25)',
-                zIndex: 20,
+                right: 18,
+                top: 16,
+                width: 78,
+                height: 78,
+                border: '2px solid rgba(236, 72, 153, 0.18)',
+                borderRadius: 16,
+                transform: 'rotate(12deg)',
+                zIndex: 0,
             }}
         >
-            <span
-                tw="text-white font-bold"
-                lang="zh-CN"
+            <div
+                tw="absolute"
                 style={{
-                    fontFamily: CARD_UI_FONT_FAMILY,
-                    fontSize: CARD_TEXT_SIZE.sm,
-                    lineHeight: CARD_LINE_HEIGHT.sm,
+                    left: 18,
+                    top: 18,
+                    width: 38,
+                    height: 38,
+                    border: '2px solid rgba(236, 72, 153, 0.13)',
+                    borderRadius: 999,
                 }}
-            >
-                {sanitizeCardText(label)}
-            </span>
+            />
         </div>
     )
 }
@@ -1252,7 +1258,7 @@ function BaseCard({
     const flattedArticle = flatArticle(article)
     const badge = getPlatformBadge(article)
     const hasVisualMedia = articleHasVisualMedia(article)
-    const translatedCornerBadgeLabel = getTranslatedCornerBadgeLabel(article, features)
+    const translatedMarkedCard = isTranslatedMarkedCard(article, features)
     return (
         <div
             tw={clsx('p-4 bg-white rounded-2xl shadow-sm h-full w-full flex flex-col relative', {
@@ -1263,9 +1269,10 @@ function BaseCard({
             style={{
                 fontFamily: CARD_FONT_FAMILY,
                 rowGap: '6px',
+                background: translatedMarkedCard ? '#fff7fb' : '#ffffff',
             }}
         >
-            {translatedCornerBadgeLabel && <TranslatedCornerBadge label={translatedCornerBadgeLabel} />}
+            {translatedMarkedCard && <TranslatedCardTint />}
             {badge.layers.map((layer, index) => (
                 <img
                     key={`${layer.icon}-${index}`}

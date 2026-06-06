@@ -159,6 +159,49 @@ function uniquePreserveOrder(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean)))
 }
 
+function articleTranslationIdentityKey(article: ArticleWithId | Article) {
+    const stableId = String((article as any).id ?? '').trim()
+    if (stableId) {
+        return `${article.platform}:id:${stableId}`
+    }
+    return articleKey(article as ArticleWithId)
+}
+
+function stripArticleTranslations<T extends ArticleWithId | Article>(article: T): T {
+    const cloned = cloneDeep(article)
+    const visit = (currentArticle?: ArticleWithId | Article | null) => {
+        if (!currentArticle) {
+            return
+        }
+
+        currentArticle.translation = null
+        currentArticle.translated_by = null
+
+        if (Array.isArray(currentArticle.media)) {
+            currentArticle.media = currentArticle.media.map((mediaItem) => {
+                const nextMedia = { ...(mediaItem as any) }
+                delete nextMedia.translation
+                delete nextMedia.translated_by
+                return nextMedia
+            }) as any
+        }
+
+        if (currentArticle.extra && typeof currentArticle.extra === 'object') {
+            const nextExtra = { ...(currentArticle.extra as any) }
+            delete nextExtra.translation
+            delete nextExtra.translated_by
+            currentArticle.extra = nextExtra as any
+        }
+
+        if (currentArticle.ref && typeof currentArticle.ref === 'object') {
+            visit(currentArticle.ref as ArticleWithId | Article)
+        }
+    }
+
+    visit(cloned)
+    return cloned
+}
+
 function normalizePlatformToken(value: unknown) {
     const normalized = String(value || '')
         .trim()
@@ -1761,6 +1804,7 @@ class ForwarderPools extends BaseCompatibleModel {
             await Promise.all(
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     let visibilityForRelease: MediaVisibilityResult | null = null
+                    let targetRenderResultForCleanup: RenderResult | null = null
                     try {
                         if (this.shouldStopForShutdown(log, `sendArticles target ${target.id}`)) {
                             hadNonErrorOutcome = true
@@ -1863,9 +1907,46 @@ class ForwarderPools extends BaseCompatibleModel {
                             }
                         }
 
+                        const suppressTranslations = this.shouldSuppressTargetTranslations(target, runtime_config)
+                        const targetArticle = suppressTranslations ? stripArticleTranslations(article) : article
+                        let targetRenderResult = renderResult
+                        if (suppressTranslations) {
+                            targetRenderResult = await this.renderService.process(targetArticle, {
+                                taskId: `${taskId}-${target.id}-no-translation`,
+                                render_type: cfg_forwarder?.render_type,
+                                render_features: cfg_forwarder?.render_features,
+                                card_features: cfg_forwarder?.card_features,
+                                mediaConfig: cfg_forwarder?.media,
+                                deduplication: options?.forceSend ? false : cfg_forwarder?.deduplication,
+                            })
+                            targetRenderResult.mediaFiles ||= []
+                            targetRenderResult.cardMediaFiles ||= []
+                            targetRenderResult.originalMediaFiles ||= []
+                            targetRenderResultForCleanup = targetRenderResult
+                        }
+
+                        if (targetRenderResult.shouldSkipSend) {
+                            await this.markArticleOutboundSkipped(
+                                log,
+                                article,
+                                target,
+                                routeKeyForTarget,
+                                targetRenderResult.skipReason || 'deduplicated_media',
+                                {
+                                    skipped: targetRenderResult.skipReason || 'deduplicated_media',
+                                    suppress_translations: suppressTranslations,
+                                },
+                                targetRenderResult,
+                                options?.forceSend ? taskId : undefined,
+                            )
+                            await this.claimArticleChain(article, platform, target.id)
+                            hadNonErrorOutcome = true
+                            return
+                        }
+
                         const baseText = await this.resolveTargetTextForArticle(
-                            article,
-                            renderResult,
+                            targetArticle,
+                            targetRenderResult,
                             cfg_forwarder,
                             target,
                             runtime_config,
@@ -1893,8 +1974,8 @@ class ForwarderPools extends BaseCompatibleModel {
                         const visibility = options?.forceSend
                             ? ({
                                   policy: null,
-                                  originalCount: renderResult.originalMediaFiles.length,
-                                  visibleFiles: [...renderResult.originalMediaFiles],
+                                  originalCount: targetRenderResult.originalMediaFiles.length,
+                                  visibleFiles: [...targetRenderResult.originalMediaFiles],
                                   hiddenFiles: [],
                                   visibleHashes: new Set<string>(),
                                   hiddenHashes: new Set<string>(),
@@ -1904,24 +1985,24 @@ class ForwarderPools extends BaseCompatibleModel {
                                   article,
                                   target,
                                   runtime_config,
-                                  renderResult.originalMediaFiles,
+                                  targetRenderResult.originalMediaFiles,
                               )
                         visibilityForRelease = visibility
                         let text = baseText
-                        let mediaFiles = renderResult.mediaFiles
-                        let cardMediaFiles = renderResult.cardMediaFiles
-                        let contentMediaFiles = renderResult.originalMediaFiles
+                        let mediaFiles = targetRenderResult.mediaFiles
+                        let cardMediaFiles = targetRenderResult.cardMediaFiles
+                        let contentMediaFiles = targetRenderResult.originalMediaFiles
 
                         if (visibility.policy && visibility.hiddenHashes.size > 0) {
-                            mediaFiles = this.filterMediaFilesByVisibility(renderResult.mediaFiles, visibility)
+                            mediaFiles = this.filterMediaFilesByVisibility(targetRenderResult.mediaFiles, visibility)
                             contentMediaFiles = this.filterMediaFilesByVisibility(
-                                renderResult.originalMediaFiles,
+                                targetRenderResult.originalMediaFiles,
                                 visibility,
                             )
                             cardMediaFiles =
                                 visibility.policy.duplicateBehavior === 'text_only'
                                     ? []
-                                    : this.filterMediaFilesByVisibility(renderResult.cardMediaFiles, visibility)
+                                    : this.filterMediaFilesByVisibility(targetRenderResult.cardMediaFiles, visibility)
                             if (visibility.policy.duplicateBehavior === 'text_only') {
                                 text = uniquePreserveOrder([
                                     baseText,
@@ -1972,15 +2053,17 @@ class ForwarderPools extends BaseCompatibleModel {
                             return
                         }
 
-                        const translatedCompanionCard = await this.buildTranslatedNativeCompanionCard(
-                            article,
-                            renderResult,
-                            cfg_forwarder,
-                            target,
-                            runtime_config,
-                            taskId,
-                            cardMediaFiles,
-                        )
+                        const translatedCompanionCard = suppressTranslations
+                            ? null
+                            : await this.buildTranslatedNativeCompanionCard(
+                                  article,
+                                  targetRenderResult,
+                                  cfg_forwarder,
+                                  target,
+                                  runtime_config,
+                                  taskId,
+                                  cardMediaFiles,
+                              )
                         if (translatedCompanionCard) {
                             companionMediaFilesForCleanup.push(...translatedCompanionCard.mediaFiles)
                             if (translatedCompanionCard.cardMediaFiles.length > 0) {
@@ -2045,7 +2128,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             contentMedia: contentMediaFiles,
                             timestamp: article.created_at,
                             runtime_config,
-                            article: cloned_article,
+                            article: cloneDeep(targetArticle),
                             forceSend: options?.forceSend,
                             outboundKey: outboundIdempotencyKey,
                         })
@@ -2164,6 +2247,10 @@ class ForwarderPools extends BaseCompatibleModel {
                         })
                         if (!options?.forceSend) {
                             await this.releaseArticleChain(article, platform, target.id)
+                        }
+                    } finally {
+                        if (targetRenderResultForCleanup) {
+                            this.renderService.cleanup(targetRenderResultForCleanup.mediaFiles)
                         }
                     }
                 }),
@@ -2288,6 +2375,13 @@ class ForwarderPools extends BaseCompatibleModel {
             render_type: renderResult.textCollapseMode === 'compact-article' ? 'text-compact' : 'text',
             collapsedArticleIds,
         })
+    }
+
+    private shouldSuppressTargetTranslations(
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ) {
+        return target.getEffectiveConfig(runtime_config).suppress_translations === true
     }
 
     private buildSummaryCardWindowKey(
@@ -3249,7 +3343,7 @@ class ForwarderPools extends BaseCompatibleModel {
             : []
         const mediaFiles = [...cardMediaFiles, ...originalMediaFiles]
         const hasRenderedCard = cardMediaFiles.length > 0
-        const sendText = title
+        const sendText = this.buildSummaryCardSendText(queue, allItems, title)
         const articleKeys = allItems.map((item) => articleKey(item.article)).sort((a, b) => a.localeCompare(b))
         const syntheticKey = `${queue.routeKey}:${queue.windowId || 'immediate'}:${articleKeys.join('|')}`
         const outboundIdempotencyKey = syntheticOutboundKey(queue.target.id, 'summary_card', syntheticKey)
@@ -3580,7 +3674,7 @@ class ForwarderPools extends BaseCompatibleModel {
         let updatedArticles = 0
         for (const item of articles) {
             for (const article of this.flattenSummaryArticleChain(item).reverse()) {
-                const key = `${article.platform}:${article.id}`
+                const key = articleTranslationIdentityKey(article)
                 if (seenArticles.has(key)) {
                     continue
                 }
@@ -3637,7 +3731,10 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
 
                 if (Object.keys(patch).length > 0) {
-                    await DB.Article.update(article.id, article.platform, patch)
+                    const articleId = Number((article as any).id)
+                    if (Number.isInteger(articleId) && articleId > 0) {
+                        await DB.Article.update(articleId, article.platform, patch)
+                    }
                     updatedArticles += 1
                 }
             }
@@ -3647,6 +3744,66 @@ class ForwarderPools extends BaseCompatibleModel {
             this.log?.info(`Translated ${updatedArticles} article(s) for ${contextLabel} using ${processor.NAME}`)
         }
         return this.hasArticleChainTranslatedContent(articles)
+    }
+
+    private formatSummaryCardSendTextUser(article: ArticleWithId | Article | null | undefined) {
+        const value = String(article?.u_id || article?.username || article?.a_id || 'unknown').trim()
+        return value.replace(/^@+/, '') || 'unknown'
+    }
+
+    private formatSummaryCardSendTextAction(article: ArticleWithId | Article) {
+        if (article.platform === Platform.X) {
+            const xActions: Record<string, string> = {
+                tweet: '发推',
+                retweet: '转推',
+                reply: '回复',
+                conversation: '回复',
+                quoted: '引用',
+            }
+            return xActions[article.type] || '更新'
+        }
+        if (article.platform === Platform.Instagram) {
+            return article.type === 'story' ? '发故事' : '发帖'
+        }
+        if (article.platform === Platform.TikTok) {
+            return '发视频'
+        }
+        if (article.platform === Platform.YouTube) {
+            return article.type === 'shorts' ? '发短视频' : '发视频'
+        }
+        if (article.platform === Platform.Website) {
+            return '更新'
+        }
+        return formatArticleSourceActionAttribution(article as any).replace(/^[^\s]+\s+/, '') || '更新'
+    }
+
+    private buildSummaryCardSendTextItem(article: ArticleWithId | Article) {
+        const actor = this.formatSummaryCardSendTextUser(article)
+        const action = this.formatSummaryCardSendTextAction(article)
+        const ref =
+            article.ref && typeof article.ref === 'object' && ['转推', '引用', '回复'].includes(action)
+                ? this.formatSummaryCardSendTextUser(article.ref as ArticleWithId | Article)
+                : ''
+        return `${actor}${action}${ref}`
+    }
+
+    private buildSummaryCardSendText(queue: SummaryCardQueue, items: SummaryCardQueueItem[], fallbackTitle: string) {
+        const range = this.formatSummaryCardRangeForQueue(
+            queue,
+            items.map((item) => item.article),
+            { spaced: true },
+        )
+        const shown = items.slice(0, 6)
+        const itemLine = shown
+            .map((item, index) => `${index + 1}. ${this.buildSummaryCardSendTextItem(item.article)}`)
+            .join(' ')
+        const omitted = items.length - shown.length
+        return [
+            `聚合 ${range || fallbackTitle.replace(/^聚合\s*/, '')}`.trim(),
+            [itemLine, omitted > 0 ? `另有${omitted}条` : ''].filter(Boolean).join(' '),
+        ]
+            .filter(Boolean)
+            .join('\n')
     }
 
     private async prepareSummaryCardTranslations(queue: SummaryCardQueue, items: SummaryCardQueueItem[]) {

@@ -207,6 +207,11 @@ interface ForwardTargetPlatformCommonConfig {
      */
     collapse_forwarded_ref_text?: boolean
     /**
+     * Render this target without stored article/media/extra translations even when
+     * another route has already translated the same article chain.
+     */
+    suppress_translations?: boolean
+    /**
      * Only collapse previously forwarded referenced articles newer than this many seconds. Defaults to 18 hours.
      */
     collapse_forwarded_ref_window_seconds?: number

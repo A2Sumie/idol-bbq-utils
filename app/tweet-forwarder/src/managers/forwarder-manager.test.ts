@@ -2824,6 +2824,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
     expect(target.sent[0]?.texts[0]).toContain('聚合')
+    expect(target.sent[0]?.texts[0]).toContain('1. member1发推')
     expect(target.sent[0]?.texts[0]).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
     expect(packedArticles[0]?.content).toContain('【聚合】1 条')
     expect(packedArticles[0]?.content).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
@@ -4547,6 +4548,8 @@ test('sendArticles renders a translated companion summary card with stable forwa
         { media_type: 'photo', path: '/tmp/summary-card-original.png' },
         { media_type: 'photo', path: '/tmp/summary-card-translated.png' },
     ])
+    expect(target.sent[0]?.texts[0]).toContain('1. first_member发推')
+    expect(target.sent[0]?.texts[0]).toContain('2. reply_member回复first_member')
     expect(renderProcessCalls[0]?.config?.card_features).toBeUndefined()
     expect(renderProcessCalls[1]?.config?.card_features).toEqual(['translated-corner-badge'])
     expect(packedArticles).toHaveLength(2)
@@ -4563,6 +4566,114 @@ test('sendArticles renders a translated companion summary card with stable forwa
     expect(
         renderTextCalls.filter((call) => call.article.id === 302).every((call) => call.collapsedArticleIds?.has(301)),
     ).toBeTrue()
+})
+
+test('sendArticles suppresses stored translations for no-translation targets', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const translatedTarget = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '161717573',
+        } as any,
+        'target-translation-allowed',
+    )
+    const suppressedTarget = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '742435777',
+            suppress_translations: true,
+        } as any,
+        'target-translation-suppressed',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const renderCalls: Array<{ article: any; config: any }> = []
+    const cleanupPaths: string[] = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            renderCalls.push({ article, config })
+            const translated = Boolean(article.translation)
+            const media = {
+                media_type: 'photo',
+                path: translated ? '/tmp/translated-card.png' : '/tmp/original-card.png',
+            }
+            return {
+                text: translated ? 'translated text should stay out of 742' : 'original text only',
+                textCollapseMode: 'article',
+                cardMediaFiles: [media],
+                originalMediaFiles: [],
+                mediaFiles: [media],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: (files: Array<{ path: string }>) => cleanupPaths.push(...files.map((file) => file.path)),
+    }
+
+    const article = {
+        id: 771,
+        a_id: 'suppress-translation-article',
+        platform: Platform.X,
+        username: 'member',
+        u_id: 'member',
+        content: 'original text only',
+        translation: 'translated text should stay out of 742',
+        translated_by: 'LLM',
+        url: 'https://x.com/member/status/771',
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'suppress-translation-task',
+        [article],
+        [
+            { forwarder: translatedTarget, runtime_config: undefined },
+            { forwarder: suppressedTarget, runtime_config: undefined },
+        ],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(translatedTarget.sent[0]?.texts[0]).toBe('translated text should stay out of 742')
+    expect(translatedTarget.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/translated-card.png' }])
+    expect(suppressedTarget.sent[0]?.texts[0]).toBe('original text only')
+    expect(suppressedTarget.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/original-card.png' }])
+    expect(suppressedTarget.sent[0]?.props?.article?.translation).toBeNull()
+    expect(renderCalls).toHaveLength(2)
+    expect(renderCalls[1]?.config?.taskId).toContain('target-translation-suppressed-no-translation')
+    expect(cleanupPaths).toContain('/tmp/original-card.png')
 })
 
 test('sendArticles fills missing translations before rendering translated summary companion card', async () => {
@@ -4725,6 +4836,131 @@ test('sendArticles fills missing translations before rendering translated summar
     expect(originalText).toContain('この後19:00〜 バースデーSHOWROOM配信スタート')
     expect(originalText).not.toContain('译:')
     expect(translatedText).toContain('译:この後19:00〜 バースデーSHOWROOM配信スタート')
+})
+
+test('summary-card translation handles multiple referenced articles without database ids', async () => {
+    const processCalls: string[] = []
+    const articleUpdates: Array<{ id: number; patch: any }> = []
+    const originalCreateProcessor = (processorRegistry as any).create
+    const originalArticleUpdate = (DB.Article as any).update
+    ;(processorRegistry as any).create = async () => ({
+        NAME: 'fake-ref-translator',
+        process: async (text: string) => {
+            processCalls.push(text)
+            const current =
+                text.match(/当前待译】\n([\s\S]*?)(?:\n\n【第|\n\n【当前待译字段】|$)/)?.[1]?.trim() ||
+                text.trim()
+            return `译:${current}`
+        },
+        drop: async () => undefined,
+    })
+    ;(DB.Article as any).update = async (id: number, _platform: Platform, patch: any) => {
+        articleUpdates.push({ id, patch })
+        return { id, ...patch }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.Deepseek,
+                    api_key: 'test-key',
+                    cfg_processor: {
+                        action: 'translate',
+                    },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const firstRef = {
+        a_id: 'ref-without-id-a',
+        platform: Platform.X,
+        username: '227 staff',
+        u_id: '227_staff',
+        content: 'base A body',
+        translation: null,
+        translated_by: null,
+        url: 'https://x.com/227_staff/status/ref-a',
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const secondRef = {
+        ...firstRef,
+        a_id: 'ref-without-id-b',
+        content: 'base B body',
+        url: 'https://x.com/227_staff/status/ref-b',
+    }
+    const articles = [
+        {
+            id: 801,
+            a_id: 'retweet-a',
+            platform: Platform.X,
+            username: 'member a',
+            u_id: 'member_a',
+            content: 'retweet A body',
+            translation: null,
+            translated_by: null,
+            url: 'https://x.com/member_a/status/801',
+            type: 'retweet',
+            created_at: Math.floor(Date.now() / 1000) + 1,
+            ref: firstRef,
+            has_media: false,
+            media: [],
+            extra: null,
+            u_avatar: null,
+        },
+        {
+            id: 802,
+            a_id: 'retweet-b',
+            platform: Platform.X,
+            username: 'member b',
+            u_id: 'member_b',
+            content: 'retweet B body',
+            translation: null,
+            translated_by: null,
+            url: 'https://x.com/member_b/status/802',
+            type: 'retweet',
+            created_at: Math.floor(Date.now() / 1000) + 2,
+            ref: secondRef,
+            has_media: false,
+            media: [],
+            extra: null,
+            u_avatar: null,
+        },
+    ] as any
+
+    try {
+        await (pools as any).prepareArticleChainTranslations(
+            '22_7-social-ja-zh',
+            articles,
+            'missing-ref-id-test',
+        )
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+        ;(DB.Article as any).update = originalArticleUpdate
+    }
+
+    expect(processCalls.length).toBe(4)
+    expect(articles[0].ref.translation).toBe('译:base A body')
+    expect(articles[1].ref.translation).toBe('译:base B body')
+    expect(articleUpdates.map((item) => item.id).sort()).toEqual([801, 802])
 })
 
 test('sendArticles prompts summary-card translation with chronological chain order', async () => {
@@ -5540,10 +5776,10 @@ test('sendArticles keeps summary-card fallback compact when card rendering fails
     }
 
     expect(target.sent).toHaveLength(1)
-    expect(target.sent[0]?.texts[0]).toContain('聚合 1条 /')
-    expect(target.sent[0]?.texts[0]).not.toContain('@media_member')
+    expect(target.sent[0]?.texts[0]).toContain('聚合 1 条 /')
+    expect(target.sent[0]?.texts[0]).toContain('1. media_member发推')
     expect(target.sent[0]?.texts[0]).not.toContain('图集: 1 张')
-    expect(target.sent[0]?.texts[0]).toBe(packedArticles[0]?.content?.split('\n')[0])
+    expect(target.sent[0]?.texts[0]).not.toBe(packedArticles[0]?.content?.split('\n')[0])
     expect(target.sent[0]?.props?.cardMedia).toEqual([])
     expect(packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('@media_member')
     expect(packedArticles[0]?.extra?.data?.groups?.[0]?.items?.[0]?.media).toEqual([

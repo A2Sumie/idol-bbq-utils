@@ -143,7 +143,7 @@ test('sanitizeCardText removes stray selectors from rino-style decorative text',
     expect(sanitizeCardText('今日も素敵🪄︎︎◝✩ ‌‌ ‌')).toBe('今日も素敵🪄◝✩  ')
 })
 
-test('translated-corner-badge feature renders a pink summary card badge', () => {
+test('translated-corner-badge feature renders a soft pink card tint without text badge', () => {
     const article = {
         id: -1,
         platform: Platform.X,
@@ -170,12 +170,18 @@ test('translated-corner-badge feature renders a pink summary card badge', () => 
         u_avatar: null,
     }
     const { component } = articleParser(article as any, { features: ['translated-corner-badge'] } as any)
-    const badge = findReactElement(component, (node) => node.props?.style?.background === '#ec4899')
+    const card = findReactElement(component, (node) => node.props?.style?.background === '#fff7fb')
+    const outline = findReactElement(
+        component,
+        (node) => node.props?.style?.border === '2px solid rgba(236, 72, 153, 0.18)',
+    )
+    const visibleTextBadge = findReactElement(component, (node) => node.props?.children === '译文')
 
-    expect(badge).toBeTruthy()
-    expect(badge.props.style.width).toBe(62)
-    expect(badge.props.style.height).toBe(30)
-    expect(JSON.stringify(badge.props.children)).toContain('译文')
+    expect(card).toBeTruthy()
+    expect(outline).toBeTruthy()
+    expect(outline.props.style.width).toBe(78)
+    expect(outline.props.style.height).toBe(78)
+    expect(visibleTextBadge).toBeNull()
 })
 
 test('font loader rejects TTC collections because satori cannot render them', () => {
