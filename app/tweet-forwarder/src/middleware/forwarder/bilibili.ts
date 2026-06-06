@@ -22,6 +22,14 @@ interface BiliImageUploaded {
     img_size: number
 }
 
+type BiliUploadPhotoResponse = {
+    image_url?: string
+    image_width?: number
+    image_height?: number
+    image_size?: number
+    img_size?: number
+}
+
 type BiliVideoUploadResult = 'uploaded' | 'duplicate' | 'dedupe_blocked' | 'upload_failed'
 type BiliVideoUploadHashRecord = {
     hash: string
@@ -207,6 +215,22 @@ class BiliForwarder extends Forwarder {
         return !(props?.media || []).some((item) => this.isDynamicImageMedia(item))
     }
 
+    private normalizeUploadedPhoto(value: BiliUploadPhotoResponse | undefined): BiliImageUploaded | null {
+        if (!value?.image_url || !value.image_width || !value.image_height) {
+            return null
+        }
+        const imageSize = Number(value.img_size ?? value.image_size ?? 0)
+        if (!Number.isFinite(imageSize) || imageSize <= 0) {
+            return null
+        }
+        return {
+            img_src: value.image_url,
+            img_width: value.image_width,
+            img_height: value.image_height,
+            img_size: imageSize,
+        }
+    }
+
     private async sendDynamicContent(texts: string[], props?: SendProps): Promise<any> {
         let { media } = props || {}
         media = media || []
@@ -242,12 +266,8 @@ class BiliForwarder extends Forwarder {
                 )
             )
                 .filter((i) => i !== undefined)
-                .map((i) => ({
-                    img_src: i.image_url,
-                    img_width: i.image_width,
-                    img_height: i.image_height,
-                    img_size: i.image_size,
-                }))
+                .map((i) => this.normalizeUploadedPhoto(i))
+                .filter((i): i is BiliImageUploaded => Boolean(i))
             const dynamicImageCount = media.filter((item) => this.isDynamicImageMedia(item)).length
             if ((mediaCheckLevel === 'loose' || requireMedia) && dynamicImageCount !== 0 && pics.length === 0) {
                 _log?.error(`No photos uploaded, throw error.`)

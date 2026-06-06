@@ -135,7 +135,7 @@ test('BiliForwarder compresses oversized dynamic images before upload', async ()
                 image_url: 'https://i0.hdslb.com/bfs/test/compressed.jpg',
                 image_width: 900,
                 image_height: 900,
-                image_size: uploadedSize,
+                img_size: uploadedSize,
             }
         }
         ;(forwarder as any).sendTextWithPhotos = async (_text: string, pics: any[]) => {
@@ -153,6 +153,37 @@ test('BiliForwarder compresses oversized dynamic images before upload', async ()
     } finally {
         await rm(tempRoot, { recursive: true, force: true })
     }
+})
+
+test('BiliForwarder rejects uploaded images without size metadata in strict mode', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            media_check_level: 'strict',
+            require_media: true,
+        } as any,
+        'bili-image-metadata-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    let sent = false
+    ;(forwarder as any).uploadPhoto = async () => ({
+        image_url: 'https://i0.hdslb.com/bfs/test/missing-size.jpg',
+        image_width: 900,
+        image_height: 1200,
+    })
+    ;(forwarder as any).sendTextWithPhotos = async () => {
+        sent = true
+        return { data: { code: 0, message: 'ok' } }
+    }
+
+    await expect(
+        (forwarder as any).realSend(['dynamic text'], {
+            media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
+        }),
+    ).rejects.toThrow('No photos uploaded')
+    expect(sent).toBeFalse()
 })
 
 test('QQForwarder keeps long text as a single payload instead of chunking', async () => {
