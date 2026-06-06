@@ -2515,7 +2515,7 @@ class ForwarderPools extends BaseCompatibleModel {
         if (
             !existingQueue &&
             summaryConfig.sendFirstImmediately &&
-            this.canSendSummaryCardNow(queueKey, summaryConfig, now)
+            (await this.canSendSummaryCardNow(queueKey, summaryConfig, now, summaryRouteKey, target.id))
         ) {
             if (summaryConfig.sendFirstNative) {
                 this.summaryCardLastSentAt.set(queueKey, now)
@@ -2651,8 +2651,33 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private canSendSummaryCardNow(queueKey: string, config: ResolvedSummaryCardConfig, now: number) {
-        const lastSentAt = this.summaryCardLastSentAt.get(queueKey)
+    private async canSendSummaryCardNow(
+        queueKey: string,
+        config: ResolvedSummaryCardConfig,
+        now: number,
+        routeKeyValue: string,
+        targetId: string,
+    ) {
+        const memoryLastSentAt = this.summaryCardLastSentAt.get(queueKey) || 0
+        const latestVisibleOutbound = await DB.OutboundMessage.findLatestVisibleCompletion({
+            route_key: routeKeyValue,
+            target_id: targetId,
+            task_kinds: ['summary_card', 'article'],
+        }).catch((error) => {
+            this.log?.warn(
+                `Failed to read durable summary-card cooldown for ${targetId}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            return null
+        })
+        const durableLastSentAt = Number(
+            latestVisibleOutbound?.finished_at || latestVisibleOutbound?.updated_at || latestVisibleOutbound?.created_at || 0,
+        )
+        const lastSentAt = Math.max(memoryLastSentAt, durableLastSentAt)
+        if (lastSentAt > 0) {
+            this.summaryCardLastSentAt.set(queueKey, lastSentAt)
+        }
         return !lastSentAt || now - lastSentAt >= config.intervalSeconds
     }
 
@@ -3837,7 +3862,11 @@ class ForwarderPools extends BaseCompatibleModel {
             textMode,
             translatedBadgeLabel,
         })
-        const embeddedMedia: NonNullable<Article['media']> = []
+        const embeddedMedia = this.collectSummaryCardEmbeddedMedia(
+            allItems,
+            DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA,
+            queue.config,
+        )
         const summaryArticle = this.buildSyntheticSummaryArticle(
             title,
             content,
@@ -4138,6 +4167,38 @@ class ForwarderPools extends BaseCompatibleModel {
             return fromRenderedFiles
         }
         return this.collectSummaryArticleMedia([item.article], maxItems, config, mediaUsage)
+    }
+
+    private collectSummaryCardEmbeddedMedia(
+        items: SummaryCardQueueItem[],
+        maxItems: number,
+        config: ResolvedSummaryCardConfig,
+    ): NonNullable<Article['media']> {
+        if (config.mediaDuplicateLimit) {
+            return []
+        }
+        const result: NonNullable<Article['media']> = []
+        const seen = new Set<string>()
+        for (const item of items) {
+            if (result.length >= maxItems) {
+                break
+            }
+            const mediaItems = this.buildSummaryCardItemMedia(item, maxItems - result.length, config)
+            for (const media of mediaItems) {
+                if (result.length >= maxItems) {
+                    break
+                }
+                const keys = uniquePreserveOrder([media.url, JSON.stringify(media)].filter(Boolean))
+                if (keys.some((key) => seen.has(key))) {
+                    continue
+                }
+                for (const key of keys) {
+                    seen.add(key)
+                }
+                result.push(cloneDeep(media))
+            }
+        }
+        return result
     }
 
     private countSummaryCardItemMedia(item: SummaryCardQueueItem) {

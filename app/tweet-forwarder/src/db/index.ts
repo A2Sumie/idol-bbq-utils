@@ -1222,6 +1222,33 @@ namespace DB {
                 take: Math.max(1, Math.min(limit, 200)),
             })
         }
+
+        export async function findLatestVisibleCompletion(options: {
+            route_key: string
+            target_id: string
+            task_kinds?: Array<string>
+        }): Promise<DBOutboundMessage | null> {
+            return await prisma.outbound_messages.findFirst({
+                where: {
+                    route_key: options.route_key,
+                    target_id: options.target_id,
+                    task_kind:
+                        options.task_kinds && options.task_kinds.length > 0
+                            ? {
+                                  in: options.task_kinds,
+                              }
+                            : undefined,
+                    status: {
+                        in: [
+                            OUTBOUND_STATUS.Sent,
+                            OUTBOUND_STATUS.Partial,
+                            OUTBOUND_STATUS.FailedAfterPartial,
+                        ],
+                    },
+                },
+                orderBy: [{ finished_at: 'desc' }, { updated_at: 'desc' }, { created_at: 'desc' }],
+            })
+        }
     }
 
     export namespace AggregationWindow {

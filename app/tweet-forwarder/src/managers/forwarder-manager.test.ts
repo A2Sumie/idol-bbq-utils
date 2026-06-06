@@ -14,7 +14,7 @@ import { Forwarder, PartialForwarderSendError } from '@/middleware/forwarder/bas
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { normalizeCronSecond } from '@/utils/cron'
-import { articleOutboundKey } from '@/services/outbound-message-service'
+import { articleOutboundKey, routeKey, targetRouteKey } from '@/services/outbound-message-service'
 import { processorRegistry } from '@/middleware/processor'
 import { ProcessorProvider } from '@/types/processor'
 
@@ -185,7 +185,14 @@ beforeEach(() => {
     }
     ;(DB.OutboundMessage as any).markSent = async (idempotencyKey: string, providerResult?: unknown) => {
         const record = outboundRecords.get(idempotencyKey)
-        Object.assign(record, { status: 'sent', provider_message_ids: providerResult ?? null })
+        const now = Math.floor(Date.now() / 1000)
+        Object.assign(record, {
+            status: 'sent',
+            provider_message_ids: providerResult ?? null,
+            updated_at: now,
+            finished_at: now,
+            last_error: null,
+        })
         return record
     }
     ;(DB.OutboundMessage as any).markPartial = async (
@@ -194,10 +201,13 @@ beforeEach(() => {
         error: unknown,
     ) => {
         const record = outboundRecords.get(idempotencyKey)
+        const now = Math.floor(Date.now() / 1000)
         Object.assign(record, {
             status: 'partial',
             segment_results: providerResult,
             last_error: error instanceof Error ? error.message : String(error),
+            updated_at: now,
+            finished_at: now,
         })
         return record
     }
@@ -225,6 +235,25 @@ beforeEach(() => {
         const record = outboundRecords.get(idempotencyKey)
         Object.assign(record, { status: 'skipped', provider_message_ids: { reason, details } })
         return record
+    }
+    ;(DB.OutboundMessage as any).findLatestVisibleCompletion = async (options: any) => {
+        const taskKinds = new Set(options.task_kinds || [])
+        const visibleStatuses = new Set(['sent', 'partial', 'failed_after_partial'])
+        return (
+            Array.from(outboundRecords.values())
+                .filter(
+                    (record: any) =>
+                        record.route_key === options.route_key &&
+                        record.target_id === options.target_id &&
+                        (taskKinds.size === 0 || taskKinds.has(record.task_kind)) &&
+                        visibleStatuses.has(record.status),
+                )
+                .sort(
+                    (a: any, b: any) =>
+                        Number(b.finished_at || b.updated_at || b.created_at || 0) -
+                        Number(a.finished_at || a.updated_at || a.created_at || 0),
+                )[0] || null
+        )
     }
     ;(DB.OutboundMessage as any).list = async () => Array.from(outboundRecords.values())
     ;(DB.TargetHealth as any).mark = async (data: any) => {
@@ -7115,6 +7144,120 @@ test('idle-first summary-card items can fall back to native article send', async
     expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
 })
 
+test('idle-first native summary-card send respects durable recent visible sends', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: true,
+                send_first_native: true,
+            },
+        } as any,
+        'target-summary-card-native-first-durable-cooldown',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    const durableRouteKey = targetRouteKey(routeKey({ source: 'system', crawlerId: 'unknown' }), target.id)
+    ;((DB.OutboundMessage as any).__records as Map<string, any>).set('recent-summary-card', {
+        id: 999,
+        idempotency_key: 'recent-summary-card',
+        route_key: durableRouteKey,
+        target_id: target.id,
+        target_platform: target.NAME,
+        task_kind: 'summary_card',
+        article_key: null,
+        synthetic_key: 'recent-summary',
+        payload_hash: 'recent-summary-hash',
+        status: 'sent',
+        provider_message_ids: null,
+        segment_results: null,
+        attempt_count: 1,
+        last_error: null,
+        created_at: now - 600,
+        updated_at: now - 600,
+        finished_at: now - 600,
+    })
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-native-first-durable-cooldown',
+            [
+                {
+                    id: 831,
+                    a_id: 'summary-native-first-durable-cooldown',
+                    platform: Platform.X,
+                    username: 'chiharu-like member',
+                    u_id: 'chiharu_okr',
+                    content: '',
+                    url: 'https://x.com/chiharu_okr/status/831',
+                    type: 'retweet',
+                    created_at: now,
+                    ref: null,
+                    has_media: false,
+                    media: [],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(0)
+    const queue = getSummaryCardQueueForTarget(pools, target.id)
+    expect(queue?.items.size).toBe(1)
+    expect(Array.from(queue?.items.values() || [])[0]?.article.a_id).toBe('summary-native-first-durable-cooldown')
+})
+
 test('idle-first translated summary-card targets append companion card to native sends', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -7555,6 +7698,13 @@ test('idle-first translated native companion is suppressed for text-only media v
         [{ forwarder: target, runtime_config: undefined }],
         { render_type: 'text-card' } as any,
     )
+    const expiredSentAt = Math.floor(Date.now() / 1000) - 7200
+    for (const record of ((DB.OutboundMessage as any).__records as Map<string, any>).values()) {
+        if (record.target_id === target.id && record.task_kind === 'article') {
+            record.updated_at = expiredSentAt
+            record.finished_at = expiredSentAt
+        }
+    }
     ;(pools as any).summaryCardLastSentAt.clear()
     await (pools as any).sendArticles(
         undefined,
