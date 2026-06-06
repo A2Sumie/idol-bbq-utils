@@ -764,26 +764,28 @@ function isTranslatedMarkedCard(article: Article, features: CardRenderFeatures) 
 
 function TranslatedPatternShape({
     shape,
+    color,
     left,
     top,
 }: {
     shape: 'circle' | 'square' | 'triangle' | 'diamond'
+    color: string
     left: number
     top: number
 }) {
-    const strokeColor = '#ec4899'
     const strokeOpacity = 0.18
     const strokeWidth = 4
     const svgByShape = {
-        circle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><circle cx="24" cy="24" r="18" fill="none" stroke="${strokeColor}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
-        square: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="7" y="7" width="34" height="34" fill="none" stroke="${strokeColor}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
-        triangle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path d="M24 7 L42 39 H6 Z" fill="none" stroke="${strokeColor}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}" stroke-linejoin="round"/></svg>`,
-        diamond: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="10" y="10" width="28" height="28" transform="rotate(45 24 24)" fill="none" stroke="${strokeColor}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
+        circle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><circle cx="24" cy="24" r="18" fill="none" stroke="${color}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
+        square: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="7" y="7" width="34" height="34" fill="none" stroke="${color}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
+        triangle: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><path d="M24 7 L42 39 H6 Z" fill="none" stroke="${color}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}" stroke-linejoin="round"/></svg>`,
+        diamond: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect x="10" y="10" width="28" height="28" transform="rotate(45 24 24)" fill="none" stroke="${color}" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"/></svg>`,
     } satisfies Record<typeof shape, string>
 
     return (
         <div
             data-translated-pattern-shape={shape}
+            data-translated-pattern-color={color}
             data-translated-pattern-stroke-width={strokeWidth}
             tw="absolute flex"
             style={{
@@ -807,6 +809,7 @@ function TranslatedPatternShape({
 
 function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
     const shapes: Array<'circle' | 'square' | 'triangle' | 'diamond'> = ['triangle', 'square', 'circle', 'diamond']
+    const colors = ['#facc15', '#38bdf8', '#fde047', '#22c55e', '#ec4899']
     const shapeSize = 48
     const leftStart = 28
     const topStart = 34
@@ -842,7 +845,13 @@ function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
             }}
         >
             {patternShapes.map((item, index) => (
-                <TranslatedPatternShape key={index} shape={item.shape} left={item.left} top={item.top} />
+                <TranslatedPatternShape
+                    key={index}
+                    shape={item.shape}
+                    color={colors[index % colors.length]}
+                    left={item.left}
+                    top={item.top}
+                />
             ))}
         </div>
     )

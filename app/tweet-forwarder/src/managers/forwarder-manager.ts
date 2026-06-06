@@ -3877,25 +3877,25 @@ class ForwarderPools extends BaseCompatibleModel {
     private formatSummaryCardSendTextAction(article: ArticleWithId | Article) {
         if (article.platform === Platform.X) {
             const xActions: Record<string, string> = {
-                tweet: '发推',
-                retweet: '转推',
-                reply: '回复',
-                conversation: '回复',
-                quoted: '引用',
+                tweet: 'x发推',
+                retweet: 'x转推',
+                reply: 'x回复',
+                conversation: 'x回复',
+                quoted: 'x引用',
             }
-            return xActions[article.type] || '更新'
+            return xActions[article.type] || 'x更新'
         }
         if (article.platform === Platform.Instagram) {
-            return article.type === 'story' ? '发故事' : '发帖'
+            return article.type === 'story' ? 'ig故事' : 'ig发帖'
         }
         if (article.platform === Platform.TikTok) {
-            return '发视频'
+            return 'tt视频'
         }
         if (article.platform === Platform.YouTube) {
-            return article.type === 'shorts' ? '发短视频' : '发视频'
+            return article.type === 'shorts' ? 'yt短视频' : 'yt视频'
         }
         if (article.platform === Platform.Website) {
-            return '更新'
+            return 'web更新'
         }
         return formatArticleSourceActionAttribution(article as any).replace(/^[^\s]+\s+/, '') || '更新'
     }
@@ -3904,10 +3904,13 @@ class ForwarderPools extends BaseCompatibleModel {
         const actor = this.formatSummaryCardSendTextUser(article)
         const action = this.formatSummaryCardSendTextAction(article)
         const ref =
-            article.ref && typeof article.ref === 'object' && ['转推', '引用', '回复'].includes(action)
+            article.platform === Platform.X &&
+            article.ref &&
+            typeof article.ref === 'object' &&
+            ['retweet', 'quoted', 'reply', 'conversation'].includes(String(article.type || ''))
                 ? this.formatSummaryCardSendTextUser(article.ref as ArticleWithId | Article)
                 : ''
-        return `${actor}${action}${ref}`
+        return `${actor} ${action}${ref}`
     }
 
     private buildSummaryCardSendText(queue: SummaryCardQueue, items: SummaryCardQueueItem[], fallbackTitle: string) {
@@ -3916,14 +3919,12 @@ class ForwarderPools extends BaseCompatibleModel {
             items.map((item) => item.article),
             { spaced: true },
         )
-        const shown = items.slice(0, 6)
-        const itemLine = shown
+        const itemLine = items
             .map((item, index) => `${index + 1}. ${this.buildSummaryCardSendTextItem(item.article)}`)
             .join(' ')
-        const omitted = items.length - shown.length
         return [
             `聚合 ${range || fallbackTitle.replace(/^聚合\s*/, '')}`.trim(),
-            [itemLine, omitted > 0 ? `另有 ${omitted} 条更新已合并` : ''].filter(Boolean).join(' '),
+            itemLine,
         ]
             .filter(Boolean)
             .join('\n')

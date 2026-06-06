@@ -165,7 +165,7 @@ test('sanitizeCardText removes stray selectors from rino-style decorative text',
     expect(sanitizeCardText('今日も素敵🪄︎︎◝✩ ‌‌ ‌')).toBe('今日も素敵🪄◝✩  ')
 })
 
-test('translated-corner-badge feature renders sparse pink geometry watermark without text badge', () => {
+test('translated-corner-badge feature renders sparse multicolor geometry watermark without text badge', () => {
     const article = {
         id: -1,
         platform: Platform.X,
@@ -216,6 +216,15 @@ test('translated-corner-badge feature renders sparse pink geometry watermark wit
     expect(geometryShapes[0]?.props.style.width).toBe(48)
     expect(geometryShapes[0]?.props.style.height).toBe(48)
     expect(geometryShapes[0]?.props?.['data-translated-pattern-stroke-width']).toBe(4)
+    expect(geometryShapes.map((shape) => shape.props?.['data-translated-pattern-color'])).toEqual([
+        '#facc15',
+        '#38bdf8',
+        '#fde047',
+        '#22c55e',
+        '#ec4899',
+        '#facc15',
+        '#38bdf8',
+    ])
     expect(xShape).toBeNull()
     expect(visibleTextBadge).toBeNull()
 })
@@ -272,6 +281,9 @@ test('translated-corner-badge watermark uses a staggered polka-dot grid on long 
     expect(secondRow.map((shape) => shape.props.style.left)).toEqual([112, 280, 448])
     expect(secondRow[0]?.props.style.left - firstRow[0]?.props.style.left).toBe(84)
     expect(secondRow[0]?.props.style.top - firstRow[0]?.props.style.top).toBe(84)
+    expect(new Set(geometryShapes.map((shape) => shape.props?.['data-translated-pattern-color']))).toEqual(
+        new Set(['#facc15', '#38bdf8', '#fde047', '#22c55e', '#ec4899']),
+    )
 })
 
 test('long message-pack cards keep only a small height safety margin', () => {

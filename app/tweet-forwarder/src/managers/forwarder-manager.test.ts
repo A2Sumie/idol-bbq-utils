@@ -2853,7 +2853,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
     expect(target.sent[0]?.texts[0]).toContain('聚合')
-    expect(target.sent[0]?.texts[0]).toContain('1. member1发推')
+    expect(target.sent[0]?.texts[0]).toContain('1. member1 x发推')
     expect(target.sent[0]?.texts[0]).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
     expect(packedArticles[0]?.content).toContain('【聚合】1 条')
     expect(packedArticles[0]?.content).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
@@ -2881,7 +2881,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })
 
-test('summary-card send text keeps omitted item count in the top digest', () => {
+test('summary-card send text lists every item in the top digest', () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
 
@@ -2909,18 +2909,35 @@ test('summary-card send text keeps omitted item count in the top digest', () => 
     const now = Math.floor(Date.now() / 1000)
     const items = Array.from({ length: 7 }, (_, index) => {
         const id = index + 1
+        const isInstagramStory = id === 2
+        const isRetweet = id === 3
         return {
             article: {
                 id,
                 a_id: `summary-send-text-${id}`,
-                platform: Platform.X,
-                username: `member${id}`,
-                u_id: `member${id}`,
+                platform: isInstagramStory ? Platform.Instagram : Platform.X,
+                username: isInstagramStory ? 'rino' : isRetweet ? 'iko' : `member${id}`,
+                u_id: isInstagramStory ? 'rino' : isRetweet ? 'iko' : `member${id}`,
                 content: `summary content ${id}`,
-                url: `https://x.com/member/status/${id}`,
-                type: 'tweet',
+                url: isInstagramStory
+                    ? `https://www.instagram.com/stories/rino/${id}`
+                    : `https://x.com/member/status/${id}`,
+                type: isInstagramStory ? 'story' : isRetweet ? 'retweet' : 'tweet',
                 created_at: now + index,
-                ref: null,
+                ref: isRetweet
+                    ? {
+                          id: 227,
+                          a_id: 'staff-source',
+                          platform: Platform.X,
+                          username: '227staff',
+                          u_id: '227staff',
+                          content: 'staff update',
+                          url: 'https://x.com/227staff/status/227',
+                          type: 'tweet',
+                          created_at: now,
+                          ref: null,
+                      }
+                    : null,
                 has_media: false,
                 media: [],
                 extra: null,
@@ -2948,10 +2965,13 @@ test('summary-card send text keeps omitted item count in the top digest', () => 
         '聚合 fallback',
     )
 
-    expect(text).toContain('1. member1发推')
-    expect(text).toContain('6. member6发推')
-    expect(text).not.toContain('7. member7发推')
-    expect(text).toContain('另有 1 条更新已合并')
+    expect(text).toContain('1. member1 x发推')
+    expect(text).toContain('2. rino ig故事')
+    expect(text).toContain('3. iko x转推227staff')
+    expect(text).toContain('6. member6 x发推')
+    expect(text).toContain('7. member7 x发推')
+    expect(text).not.toContain('发故事')
+    expect(text).not.toContain('另有 1 条更新已合并')
     expect(text).not.toContain('另有1条')
 })
 
@@ -4654,8 +4674,8 @@ test('sendArticles renders a translated companion summary card with stable forwa
         { media_type: 'photo', path: '/tmp/summary-card-original.png' },
         { media_type: 'photo', path: '/tmp/summary-card-translated.png' },
     ])
-    expect(target.sent[0]?.texts[0]).toContain('1. first_member发推')
-    expect(target.sent[0]?.texts[0]).toContain('2. reply_member回复first_member')
+    expect(target.sent[0]?.texts[0]).toContain('1. first_member x发推')
+    expect(target.sent[0]?.texts[0]).toContain('2. reply_member x回复first_member')
     expect(renderProcessCalls[0]?.config?.card_features).toBeUndefined()
     expect(renderProcessCalls[1]?.config?.card_features).toEqual(['translated-corner-badge'])
     expect(packedArticles).toHaveLength(2)
@@ -5883,7 +5903,7 @@ test('sendArticles keeps summary-card fallback compact when card rendering fails
 
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toContain('聚合 1 条 /')
-    expect(target.sent[0]?.texts[0]).toContain('1. media_member发推')
+    expect(target.sent[0]?.texts[0]).toContain('1. media_member x发推')
     expect(target.sent[0]?.texts[0]).not.toContain('图集: 1 张')
     expect(target.sent[0]?.texts[0]).not.toBe(packedArticles[0]?.content?.split('\n')[0])
     expect(target.sent[0]?.props?.cardMedia).toEqual([])
