@@ -22,7 +22,7 @@ interface BiliImageUploaded {
     img_size: number
 }
 
-type BiliVideoUploadResult = 'uploaded' | 'duplicate' | 'dedupe_blocked'
+type BiliVideoUploadResult = 'uploaded' | 'duplicate' | 'dedupe_blocked' | 'upload_failed'
 type BiliVideoUploadHashRecord = {
     hash: string
     path: string
@@ -68,6 +68,12 @@ class BiliForwarder extends Forwarder {
                             : `biliup_${videoUploadResult}`,
                 },
             ]
+        }
+        if (this.shouldSuppressMediaRequiredDynamic(props)) {
+            this.log?.warn(
+                `Suppressing Bilibili dynamic for ${props?.article?.a_id || 'unknown'}: target requires visible media but dynamic payload has no uploadable image media`,
+            )
+            return [{ ok: true, mode: 'dynamic_media_required_suppressed' }]
         }
         return this.sendDynamicContent(normalizedTexts, props)
     }
@@ -174,15 +180,39 @@ class BiliForwarder extends Forwarder {
             )
             return 'uploaded'
         } catch (error) {
-            this.log?.error(`biliup upload failed for ${props?.article?.a_id || 'unknown'}, fallback to dynamic: ${error}`)
+            this.log?.error(
+                `biliup upload failed for ${props?.article?.a_id || 'unknown'}; suppressing dynamic fallback: ${error}`,
+            )
+            return 'upload_failed'
+        }
+    }
+
+    private getMediaCheckLevel(props?: SendProps) {
+        return (
+            (this.getEffectiveConfig(props?.runtime_config) as any).media_check_level ||
+            this.media_check_level ||
+            'none'
+        )
+    }
+
+    private isDynamicImageMedia(item: NonNullable<SendProps['media']>[number]) {
+        return item.media_type === 'photo' || item.media_type === 'video_thumbnail'
+    }
+
+    private shouldSuppressMediaRequiredDynamic(props?: SendProps) {
+        const config = this.getEffectiveConfig(props?.runtime_config)
+        if (config.require_media !== true) {
             return false
         }
+        return !(props?.media || []).some((item) => this.isDynamicImageMedia(item))
     }
 
     private async sendDynamicContent(texts: string[], props?: SendProps): Promise<any> {
         let { media } = props || {}
         media = media || []
         const _log = this.log
+        const mediaCheckLevel = this.getMediaCheckLevel(props)
+        const requireMedia = this.getEffectiveConfig(props?.runtime_config).require_media === true
         const normalizedAttachments = normalizeForwarderImageAttachments(media, {
             maxImageBytes: resolveForwarderImageMaxBytes(this.getEffectiveConfig(props?.runtime_config)),
             log: _log,
@@ -218,11 +248,12 @@ class BiliForwarder extends Forwarder {
                     img_height: i.image_height,
                     img_size: i.image_size,
                 }))
-            if (this.media_check_level === 'loose' && media.length !== 0 && pics.length === 0) {
+            const dynamicImageCount = media.filter((item) => this.isDynamicImageMedia(item)).length
+            if ((mediaCheckLevel === 'loose' || requireMedia) && dynamicImageCount !== 0 && pics.length === 0) {
                 _log?.error(`No photos uploaded, throw error.`)
                 throw new Error(`No photos uploaded, please check your bili_jct and sessdata.`)
             }
-            if (this.media_check_level === 'strict' && media.length !== pics.length) {
+            if ((mediaCheckLevel === 'strict' || requireMedia) && dynamicImageCount !== pics.length) {
                 _log?.error(`Some photos upload failed.`)
                 throw new Error(`Some photos upload failed, please check your bili_jct and sessdata.`)
             }

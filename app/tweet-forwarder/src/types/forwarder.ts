@@ -212,6 +212,11 @@ interface ForwardTargetPlatformCommonConfig {
      */
     suppress_translations?: boolean
     /**
+     * Suppress provider sends that would have no visible media. Use for media-only
+     * destinations where text-only fallback is more harmful than dropping the send.
+     */
+    require_media?: boolean
+    /**
      * Only collapse previously forwarded referenced articles newer than this many seconds. Defaults to 18 hours.
      */
     collapse_forwarded_ref_window_seconds?: number

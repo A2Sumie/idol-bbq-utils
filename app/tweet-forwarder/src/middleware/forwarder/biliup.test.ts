@@ -524,6 +524,84 @@ test('BiliForwarder suppresses duplicate video uploads without dynamic fallback'
     }
 })
 
+test('BiliForwarder suppresses dynamic fallback when biliup upload fails', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.save = async () => {
+        throw new Error('failed upload should not save')
+    }
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-test',
+    )
+
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async () => {
+        throw new Error('simulated biliup failure')
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    try {
+        const result = await (forwarder as any).realSend(['hello'], {
+            article: {
+                platform: Platform.TikTok,
+                a_id: 'tt-video-upload-failed',
+                u_id: 'tt_member',
+                username: 'TT Member',
+                type: 'video',
+                created_at: 1773985020,
+                url: 'https://www.tiktok.com/@tt_member/video/3',
+            },
+            media: [{ media_type: 'video', path: '/tmp/video.mp4', content_hash: 'failed-video-hash' }],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'biliup_upload_failed' }])
+        expect(dynamicCalls).toBe(0)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    }
+})
+
+test('BiliForwarder suppresses media-required dynamic posts without uploadable image media', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            require_media: true,
+            video_upload: {
+                enabled: false,
+            },
+        } as any,
+        'bili-test',
+    )
+
+    let dynamicCalls = 0
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const result = await (forwarder as any).realSend(['metadata text'], {
+        media: [{ media_type: 'video', path: '/tmp/video.mp4', content_hash: 'video-only-hash' }],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic_media_required_suppressed' }])
+    expect(dynamicCalls).toBe(0)
+})
+
 test('BiliForwarder falls back to dynamic posting when biliup upload is skipped', async () => {
     const forwarder = new BiliForwarder(
         {
