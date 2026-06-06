@@ -78,14 +78,13 @@ beforeEach(() => {
         mediaHashRecords.get(mediaHashKey(platform, hash)) || null
     ;(DB.MediaHash as any).save = async (platform: string, hash: string, a_id = '') => {
         const key = mediaHashKey(platform, hash)
-        const record =
-            mediaHashRecords.get(key) || {
-                id: mediaHashRecords.size + 1,
-                platform,
-                hash,
-                a_id,
-                created_at: Math.floor(Date.now() / 1000),
-            }
+        const record = mediaHashRecords.get(key) || {
+            id: mediaHashRecords.size + 1,
+            platform,
+            hash,
+            a_id,
+            created_at: Math.floor(Date.now() / 1000),
+        }
         mediaHashRecords.set(key, record)
         return record
     }
@@ -1613,7 +1612,9 @@ test('sendArticles skips delivery when render service marks a cross-platform dup
     )
     const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
     expect(outboundRecord?.status).toBe('skipped')
-    expect(outboundRecord?.provider_message_ids?.reason).toBe('Cross-platform short video duplicate matched 2:ig-short-1')
+    expect(outboundRecord?.provider_message_ids?.reason).toBe(
+        'Cross-platform short video duplicate matched 2:ig-short-1',
+    )
 })
 
 test('sendArticles sends a target-level digest for lower-noise targets', async () => {
@@ -2975,6 +2976,128 @@ test('summary-card send text lists every item in the top digest', () => {
     expect(text).not.toContain('另有1条')
 })
 
+test('summary-card send text consolidates repeated and mixed retweet digest items', () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+
+        protected async realSend() {
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder({ block_until: '32h' } as any, 'target-summary-card-compact-digest')
+    const now = Math.floor(Date.now() / 1000)
+    const article = (id: number, u_id: string, type: string, ref?: any, platform = Platform.X) => ({
+        id,
+        a_id: `summary-compact-${id}`,
+        platform,
+        username: u_id,
+        u_id,
+        content: `summary content ${id}`,
+        url:
+            platform === Platform.Instagram
+                ? `https://www.instagram.com/stories/${u_id}/${id}`
+                : `https://x.com/${u_id}/status/${id}`,
+        type,
+        created_at: now + id,
+        ref: ref || null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    })
+    const refArticle = (u_id: string) => ({
+        id: 9000,
+        a_id: `${u_id}-source`,
+        platform: Platform.X,
+        username: u_id,
+        u_id,
+        content: 'source update',
+        url: `https://x.com/${u_id}/status/source`,
+        type: 'tweet',
+        created_at: now,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    })
+    const queueItems = (articles: any[]) =>
+        articles.map((item) => ({
+            article: item,
+            queuedAt: now,
+            cardSourceMediaFiles: [],
+            originalMediaFiles: [],
+            digestTags: [],
+        }))
+    const buildText = (items: ReturnType<typeof queueItems>, routeKey: string) =>
+        (pools as any).buildSummaryCardSendText(
+            {
+                routeKey,
+                target,
+                runtime_config: undefined,
+                config: {
+                    windowAlignment: 'none',
+                },
+                items: new Map(items.map((item) => [item.article.id, item])),
+                firstQueuedAt: now,
+                lastQueuedAt: now + items.length,
+            },
+            items,
+            '聚合 fallback',
+        )
+
+    const needygirl = refArticle('needygirl_anime')
+    const selfReply = refArticle('_nishiurasora')
+    const firstText = buildText(
+        queueItems([
+            article(1, 'nao_aikawa227', 'story', null, Platform.Instagram),
+            article(2, '_nishiurasora', 'reply', selfReply),
+            article(3, 'satsuki_shiina', 'tweet'),
+            article(4, '_fujimasakura', 'tweet'),
+            article(5, '_fujimasakura', 'tweet'),
+            article(6, 'satsuki_shiina', 'tweet'),
+            article(7, 'satsuki_shiina', 'tweet'),
+            article(8, 'satsuki_shiina', 'retweet', needygirl),
+        ]),
+        'summary-compact-first',
+    )
+    const secondText = buildText(
+        queueItems([
+            article(11, 'satsuki_shiina', 'quoted', needygirl),
+            article(12, 'satsuki_shiina', 'retweet', needygirl),
+            article(13, 'satsuki_shiina', 'retweet', needygirl),
+            article(14, 'satsuki_shiina', 'retweet', needygirl),
+            article(15, 'satsuki_shiina', 'quoted', needygirl),
+        ]),
+        'summary-compact-second',
+    )
+
+    expect(firstText).toContain('1. nao_aikawa227 ig故事')
+    expect(firstText).toContain('2. _nishiurasora x回复_nishiurasora')
+    expect(firstText).toContain('3,6~7. satsuki_shiina x发推')
+    expect(firstText).toContain('4~5. _fujimasakura x发推')
+    expect(firstText).toContain('8. satsuki_shiina x转推needygirl_anime')
+    expect(firstText).not.toContain('6. satsuki_shiina x发推')
+    expect(secondText).toContain('1~5. satsuki_shiina x转推/引用 needygirl_anime')
+    expect(secondText).not.toContain('2. satsuki_shiina x转推needygirl_anime')
+})
+
 test('sendArticles does not flush a fresh summary-card queue from stale last sent time', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -3231,7 +3354,6 @@ test('flushSummaryCardQueue cancels durable windows when no queued items are cla
     const queue = (pools as any).summaryCardQueues.get(queueKey)
     const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
     expect(windows.get(queue.windowId)?.status).toBe('open')
-
     ;(pools as any).claimArticleChain = async () => false
     await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
 
@@ -3489,9 +3611,7 @@ test('flushSummaryCardQueue keeps summary-card windows retryable after transient
 
     await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
 
-    const sentOutbound = Array.from(outboundRecords.values()).find(
-        (record: any) => record.task_kind === 'summary_card',
-    )
+    const sentOutbound = Array.from(outboundRecords.values()).find((record: any) => record.task_kind === 'summary_card')
     expect(target.calls).toHaveLength(2)
     expect(released).toEqual([718])
     expect(Array.from(claimed)).toEqual([718])
@@ -4974,8 +5094,7 @@ test('summary-card translation handles multiple referenced articles without data
         process: async (text: string) => {
             processCalls.push(text)
             const current =
-                text.match(/当前待译】\n([\s\S]*?)(?:\n\n【第|\n\n【当前待译字段】|$)/)?.[1]?.trim() ||
-                text.trim()
+                text.match(/当前待译】\n([\s\S]*?)(?:\n\n【第|\n\n【当前待译字段】|$)/)?.[1]?.trim() || text.trim()
             return `译:${current}`
         },
         drop: async () => undefined,
@@ -5073,11 +5192,7 @@ test('summary-card translation handles multiple referenced articles without data
     ] as any
 
     try {
-        await (pools as any).prepareArticleChainTranslations(
-            '22_7-social-ja-zh',
-            articles,
-            'missing-ref-id-test',
-        )
+        await (pools as any).prepareArticleChainTranslations('22_7-social-ja-zh', articles, 'missing-ref-id-test')
     } finally {
         ;(processorRegistry as any).create = originalCreateProcessor
         ;(DB.Article as any).update = originalArticleUpdate
@@ -6829,9 +6944,7 @@ test('summary-card realtime media and later aggregation do not suppress each oth
     expect(
         await DB.ForwardBy.checkExist(instagramArticle.id, instagramArticle.platform, target.id, 'article'),
     ).toBeNull()
-    expect(
-        await DB.ForwardBy.checkExist(tiktokArticle.id, tiktokArticle.platform, target.id, 'article'),
-    ).toBeNull()
+    expect(await DB.ForwardBy.checkExist(tiktokArticle.id, tiktokArticle.platform, target.id, 'article')).toBeNull()
 
     const articleSkips = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values()).filter(
         (record: any) => record.task_kind === 'article',

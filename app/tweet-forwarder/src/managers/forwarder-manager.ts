@@ -108,6 +108,11 @@ type SummaryCardGroup = {
 }
 type SummaryCardMediaUsage = Map<string, number>
 type SummaryCardTextMode = 'default' | 'original' | 'translated'
+type SummaryCardSendTextItemParts = {
+    actor: string
+    action: string
+    ref: string
+}
 type SummaryCardRealtimeMediaResult = {
     hadMedia: boolean
     handled: boolean
@@ -602,16 +607,11 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
                                 end,
                                 target_ids: targetIds,
                             }
-                            await DB.TaskQueue.add(
-                                taskType,
-                                payload,
-                                end,
-                                {
-                                    source_ref: `${info.platform}:${info.u_id}`,
-                                    action_type: taskType,
-                                    idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, payload),
-                                },
-                            )
+                            await DB.TaskQueue.add(taskType, payload, end, {
+                                source_ref: `${info.platform}:${info.u_id}`,
+                                action_type: taskType,
+                                idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, payload),
+                            })
                         }
                     })
                     this.log?.info(
@@ -1040,10 +1040,12 @@ class ForwarderPools extends BaseCompatibleModel {
             return { config: null, cancelReason: 'summary-card-disabled' }
         }
 
-        const candidates = uniquePreserveOrder([
-            resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config)),
-            resolveSummaryCardConfig(baseEffectiveConfig),
-        ].filter((config): config is ResolvedSummaryCardConfig => Boolean(config)))
+        const candidates = uniquePreserveOrder(
+            [
+                resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config)),
+                resolveSummaryCardConfig(baseEffectiveConfig),
+            ].filter((config): config is ResolvedSummaryCardConfig => Boolean(config)),
+        )
 
         if (!persistedConfig) {
             return {
@@ -1772,9 +1774,16 @@ class ForwarderPools extends BaseCompatibleModel {
                         context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
                         target.id,
                     )
-                    await this.markArticleOutboundSkipped(log, article, target, routeKeyForTarget, 'blocked_by_all_forwarders', {
-                        skipped: 'blocked_by_all_forwarders',
-                    })
+                    await this.markArticleOutboundSkipped(
+                        log,
+                        article,
+                        target,
+                        routeKeyForTarget,
+                        'blocked_by_all_forwarders',
+                        {
+                            skipped: 'blocked_by_all_forwarders',
+                        },
+                    )
                     await this.claimArticleChain(article, platform, target.id)
                 }
                 continue
@@ -2618,8 +2627,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             ? 'summary_realtime_media_only'
                             : 'summary_realtime_media_required_missing',
                         {
-                            media_realtime_drop_summary_platforms:
-                                summaryConfig.mediaRealtimeDropSummaryPlatforms,
+                            media_realtime_drop_summary_platforms: summaryConfig.mediaRealtimeDropSummaryPlatforms,
                             realtime_media: realtimeMediaResult,
                         },
                         renderResult,
@@ -2719,7 +2727,10 @@ class ForwarderPools extends BaseCompatibleModel {
             return null
         })
         const durableLastSentAt = Number(
-            latestVisibleOutbound?.finished_at || latestVisibleOutbound?.updated_at || latestVisibleOutbound?.created_at || 0,
+            latestVisibleOutbound?.finished_at ||
+                latestVisibleOutbound?.updated_at ||
+                latestVisibleOutbound?.created_at ||
+                0,
         )
         const lastSentAt = Math.max(memoryLastSentAt, memoryTargetLastSentAt, durableLastSentAt)
         if (lastSentAt > 0) {
@@ -2779,10 +2790,7 @@ class ForwarderPools extends BaseCompatibleModel {
         return uniquePreserveOrder([header, headline, article.url || '']).join('\n')
     }
 
-    private shouldDropSummaryCardAfterRealtimeMedia(
-        article: ArticleWithId,
-        config: ResolvedSummaryCardConfig,
-    ) {
+    private shouldDropSummaryCardAfterRealtimeMedia(article: ArticleWithId, config: ResolvedSummaryCardConfig) {
         if (!config.mediaRealtime || config.mediaRealtimeDropSummaryPlatforms.length === 0) {
             return false
         }
@@ -2916,7 +2924,11 @@ class ForwarderPools extends BaseCompatibleModel {
         return feed !== 'official-blog' && article.u_id !== '22/7:official-blog'
     }
 
-    private isSummaryRealtimeMediaEligible(target: BaseForwarder, file: RenderedMediaFile, allFiles: RenderedMediaFile[]) {
+    private isSummaryRealtimeMediaEligible(
+        target: BaseForwarder,
+        file: RenderedMediaFile,
+        allFiles: RenderedMediaFile[],
+    ) {
         if (file.media_type === 'photo' || file.media_type === 'video') {
             return true
         }
@@ -3668,9 +3680,7 @@ class ForwarderPools extends BaseCompatibleModel {
         if (!normalized) {
             return null
         }
-        return (
-            this.processors.find((processor) => processor.id === normalized || processor.name === normalized) || null
-        )
+        return this.processors.find((processor) => processor.id === normalized || processor.name === normalized) || null
     }
 
     private async getSummaryCardProcessor(processorId?: string) {
@@ -3734,19 +3744,12 @@ class ForwarderPools extends BaseCompatibleModel {
             const stableId = String((article as any).id ?? article.a_id ?? '')
             const isTarget = stableId === targetStableId
             const orderLabel =
-                index === 0
-                    ? '最先发生'
-                    : index === chain.length - 1
-                      ? '最后发生'
-                      : `第${index + 1}条发生`
+                index === 0 ? '最先发生' : index === chain.length - 1 ? '最后发生' : `第${index + 1}条发生`
             const body = isTarget ? sourceText : String(article.content || '').trim()
             if (!body) {
                 continue
             }
-            lines.push(
-                `【第${index + 1}条/${orderLabel}${isTarget ? '/当前待译' : '/上下文'}】`,
-                body,
-            )
+            lines.push(`【第${index + 1}条/${orderLabel}${isTarget ? '/当前待译' : '/上下文'}】`, body)
         }
         lines.push(`【当前待译字段】${fieldLabel}`)
         return lines.join('\n\n')
@@ -3769,9 +3772,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 if (BaseProcessor.isValidResult(article.translation)) {
                     return true
                 }
-                if (
-                    article.media?.some((media) => BaseProcessor.isValidResult((media as any).translation))
-                ) {
+                if (article.media?.some((media) => BaseProcessor.isValidResult((media as any).translation))) {
                     return true
                 }
                 return BaseProcessor.isValidResult((article.extra as any)?.translation)
@@ -3900,7 +3901,7 @@ class ForwarderPools extends BaseCompatibleModel {
         return formatArticleSourceActionAttribution(article as any).replace(/^[^\s]+\s+/, '') || '更新'
     }
 
-    private buildSummaryCardSendTextItem(article: ArticleWithId | Article) {
+    private buildSummaryCardSendTextItemParts(article: ArticleWithId | Article): SummaryCardSendTextItemParts {
         const actor = this.formatSummaryCardSendTextUser(article)
         const action = this.formatSummaryCardSendTextAction(article)
         const ref =
@@ -3910,7 +3911,132 @@ class ForwarderPools extends BaseCompatibleModel {
             ['retweet', 'quoted', 'reply', 'conversation'].includes(String(article.type || ''))
                 ? this.formatSummaryCardSendTextUser(article.ref as ArticleWithId | Article)
                 : ''
-        return `${actor} ${action}${ref}`
+        return { actor, action, ref }
+    }
+
+    private formatSummaryCardSendTextIndexList(indices: number[]) {
+        const sortedIndices = indices.slice().sort((a, b) => a - b)
+        const ranges: string[] = []
+        let start = sortedIndices[0]
+        let previous = sortedIndices[0]
+
+        for (const index of sortedIndices.slice(1)) {
+            if (index === previous + 1) {
+                previous = index
+                continue
+            }
+            ranges.push(start === previous ? String(start) : `${start}~${previous}`)
+            start = index
+            previous = index
+        }
+
+        if (start !== undefined && previous !== undefined) {
+            ranges.push(start === previous ? String(start) : `${start}~${previous}`)
+        }
+
+        return ranges.join(',')
+    }
+
+    private formatSummaryCardSendTextDigestEntry(indices: number[], parts: SummaryCardSendTextItemParts) {
+        const refSeparator = parts.ref && parts.action.includes('/') ? ' ' : ''
+        return `${this.formatSummaryCardSendTextIndexList(indices)}. ${parts.actor} ${parts.action}${refSeparator}${
+            parts.ref
+        }`
+    }
+
+    private isSummaryCardRetweetQuoteParts(parts: SummaryCardSendTextItemParts) {
+        return Boolean(parts.ref) && (parts.action === 'x转推' || parts.action === 'x引用')
+    }
+
+    private formatSummaryCardRetweetQuoteAction(actions: string[]) {
+        const uniqueActions = new Set(actions)
+        if (uniqueActions.has('x转推') && uniqueActions.has('x引用')) {
+            return 'x转推/引用'
+        }
+        if (uniqueActions.has('x转推')) {
+            return 'x转推'
+        }
+        if (uniqueActions.has('x引用')) {
+            return 'x引用'
+        }
+        return actions[0] || 'x更新'
+    }
+
+    private buildSummaryCardSendTextDigestItems(items: SummaryCardQueueItem[]) {
+        const entries = items.map((item, index) => ({
+            index: index + 1,
+            parts: this.buildSummaryCardSendTextItemParts(item.article),
+        }))
+        const consumed = new Set<number>()
+        const digestEntries: Array<{ firstIndex: number; text: string }> = []
+
+        for (let cursor = 0; cursor < entries.length; cursor += 1) {
+            const first = entries[cursor]
+            if (!first || !this.isSummaryCardRetweetQuoteParts(first.parts)) {
+                continue
+            }
+            let end = cursor + 1
+            while (
+                end < entries.length &&
+                this.isSummaryCardRetweetQuoteParts(entries[end].parts) &&
+                entries[end].parts.actor === first.parts.actor &&
+                entries[end].parts.ref === first.parts.ref
+            ) {
+                end += 1
+            }
+
+            const run = entries.slice(cursor, end)
+            const actions = uniquePreserveOrder(run.map((entry) => entry.parts.action))
+            if (run.length >= 2 && actions.length >= 2) {
+                for (const entry of run) {
+                    consumed.add(entry.index)
+                }
+                digestEntries.push({
+                    firstIndex: first.index,
+                    text: this.formatSummaryCardSendTextDigestEntry(
+                        run.map((entry) => entry.index),
+                        {
+                            actor: first.parts.actor,
+                            action: this.formatSummaryCardRetweetQuoteAction(actions),
+                            ref: first.parts.ref,
+                        },
+                    ),
+                })
+                cursor = end - 1
+            }
+        }
+
+        const exactGroups = new Map<
+            string,
+            {
+                parts: SummaryCardSendTextItemParts
+                indices: number[]
+            }
+        >()
+        for (const entry of entries) {
+            if (consumed.has(entry.index)) {
+                continue
+            }
+            const key = [entry.parts.actor, entry.parts.action, entry.parts.ref].join('\u0000')
+            const group = exactGroups.get(key)
+            if (group) {
+                group.indices.push(entry.index)
+            } else {
+                exactGroups.set(key, { parts: entry.parts, indices: [entry.index] })
+            }
+        }
+
+        for (const group of exactGroups.values()) {
+            digestEntries.push({
+                firstIndex: group.indices[0],
+                text: this.formatSummaryCardSendTextDigestEntry(group.indices, group.parts),
+            })
+        }
+
+        return digestEntries
+            .sort((a, b) => a.firstIndex - b.firstIndex)
+            .map((entry) => entry.text)
+            .join(' ')
     }
 
     private buildSummaryCardSendText(queue: SummaryCardQueue, items: SummaryCardQueueItem[], fallbackTitle: string) {
@@ -3919,15 +4045,8 @@ class ForwarderPools extends BaseCompatibleModel {
             items.map((item) => item.article),
             { spaced: true },
         )
-        const itemLine = items
-            .map((item, index) => `${index + 1}. ${this.buildSummaryCardSendTextItem(item.article)}`)
-            .join(' ')
-        return [
-            `聚合 ${range || fallbackTitle.replace(/^聚合\s*/, '')}`.trim(),
-            itemLine,
-        ]
-            .filter(Boolean)
-            .join('\n')
+        const itemLine = this.buildSummaryCardSendTextDigestItems(items)
+        return [`聚合 ${range || fallbackTitle.replace(/^聚合\s*/, '')}`.trim(), itemLine].filter(Boolean).join('\n')
     }
 
     private async prepareSummaryCardTranslations(queue: SummaryCardQueue, items: SummaryCardQueueItem[]) {
@@ -3939,11 +4058,7 @@ class ForwarderPools extends BaseCompatibleModel {
             )
             return this.hasArticleChainTranslatedContent(articles)
         }
-        return this.prepareArticleChainTranslations(
-            processorId,
-            articles,
-            `summary-card companion ${queue.target.id}`,
-        )
+        return this.prepareArticleChainTranslations(processorId, articles, `summary-card companion ${queue.target.id}`)
     }
 
     private async buildSummaryCardRenderVariant(
