@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { BiliForwarder } from './bilibili'
 import { QQForwarder } from './qq'
+import { PartialForwarderSendError } from './base'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -141,7 +142,28 @@ test('BiliForwarder compresses oversized dynamic images before upload', async ()
         ;(forwarder as any).sendTextWithPhotos = async (_text: string, pics: any[]) => {
             expect(pics).toHaveLength(1)
             expect(pics[0]?.img_size).toBeLessThanOrEqual(maxImageBytes)
-            return { data: { code: 0, message: 'ok' } }
+            return { data: { code: 0, message: 'ok', data: { dyn_id_str: 'compressed-dynamic' } } }
+        }
+        ;(forwarder as any).fetchDynamicDetail = async () => {
+            return {
+                data: {
+                    code: 0,
+                    data: {
+                        item: {
+                            modules: {
+                                module_dynamic: {
+                                    major: {
+                                        type: 'MAJOR_TYPE_DRAW',
+                                        draw: {
+                                            items: [{ src: 'https://i0.hdslb.com/bfs/test/compressed.jpg' }],
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            }
         }
 
         await (forwarder as any).realSend(['dynamic text'], {
@@ -184,6 +206,121 @@ test('BiliForwarder rejects uploaded images without size metadata in strict mode
         }),
     ).rejects.toThrow('No photos uploaded')
     expect(sent).toBeFalse()
+})
+
+test('BiliForwarder verifies Bilibili photo dynamic detail after posting', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            media_check_level: 'strict',
+            require_media: true,
+        } as any,
+        'bili-photo-detail-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    const detailIds: string[] = []
+    ;(forwarder as any).uploadPhoto = async () => ({
+        image_url: 'https://i0.hdslb.com/bfs/test/visible.jpg',
+        image_width: 900,
+        image_height: 1200,
+        img_size: 188,
+    })
+    ;(forwarder as any).sendTextWithPhotos = async () => ({
+        data: {
+            code: 0,
+            message: 'OK',
+            data: {
+                dyn_id_str: 'dynamic-with-visible-photo',
+            },
+        },
+    })
+    ;(forwarder as any).fetchDynamicDetail = async (dynamicId: string) => {
+        detailIds.push(dynamicId)
+        return {
+            data: {
+                code: 0,
+                data: {
+                    item: {
+                        modules: {
+                            module_dynamic: {
+                                major: {
+                                    type: 'MAJOR_TYPE_DRAW',
+                                    draw: {
+                                        items: [{ src: 'https://i0.hdslb.com/bfs/test/visible.jpg' }],
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }
+    }
+
+    await (forwarder as any).realSend(['dynamic text'], {
+        media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
+    })
+
+    expect(detailIds).toEqual(['dynamic-with-visible-photo'])
+})
+
+test('BiliForwarder treats code-zero photo dynamics without visible detail media as partial failure', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            media_check_level: 'strict',
+            require_media: true,
+        } as any,
+        'bili-photo-detail-failure-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).dynamicDetailValidationRetries = 0
+
+    ;(forwarder as any).uploadPhoto = async () => ({
+        image_url: 'https://i0.hdslb.com/bfs/test/missing-major.jpg',
+        image_width: 900,
+        image_height: 1200,
+        img_size: 188,
+    })
+    ;(forwarder as any).sendTextWithPhotos = async () => ({
+        data: {
+            code: 0,
+            message: 'OK',
+            data: {
+                dyn_id_str: 'dynamic-without-visible-photo',
+            },
+        },
+    })
+    ;(forwarder as any).fetchDynamicDetail = async () => ({
+        data: {
+            code: 0,
+            data: {
+                item: {
+                    modules: {
+                        module_dynamic: {
+                            major: null,
+                        },
+                    },
+                },
+            },
+        },
+    })
+
+    let caught: unknown
+    try {
+        await (forwarder as any).realSend(['dynamic text'], {
+            media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
+        })
+    } catch (error) {
+        caught = error
+    }
+
+    expect(caught).toBeInstanceOf(PartialForwarderSendError)
+    expect((caught as Error).message).toContain('post-validation failed')
+    expect((caught as PartialForwarderSendError).partialResults).toHaveLength(1)
 })
 
 test('QQForwarder keeps long text as a single payload instead of chunking', async () => {

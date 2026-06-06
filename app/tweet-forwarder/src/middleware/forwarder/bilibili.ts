@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Forwarder, type SendProps } from './base'
+import { Forwarder, PartialForwarderSendError, type SendProps } from './base'
 import { pRetry } from '@idol-bbq-utils/utils'
 import FormData from 'form-data'
 import fs from 'fs'
@@ -30,6 +30,17 @@ type BiliUploadPhotoResponse = {
     img_size?: number
 }
 
+type BiliCreateDynamicResponse = {
+    data?: {
+        code?: number
+        message?: string
+        data?: {
+            dyn_id?: string | number
+            dyn_id_str?: string | number
+        }
+    }
+}
+
 type BiliVideoUploadResult = 'uploaded' | 'duplicate' | 'dedupe_blocked' | 'upload_failed'
 type BiliVideoUploadHashRecord = {
     hash: string
@@ -43,6 +54,7 @@ class BiliForwarder extends Forwarder {
     private sessdata: string
     private media_check_level: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['media_check_level']
     private video_upload: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['video_upload']
+    private dynamicDetailValidationRetries = 3
     protected override BASIC_TEXT_LIMIT = 1000
 
     constructor(...[config, ...rest]: [...ConstructorParameters<typeof Forwarder>]) {
@@ -231,6 +243,79 @@ class BiliForwarder extends Forwarder {
         }
     }
 
+    private extractDynamicId(res: BiliCreateDynamicResponse) {
+        const data = res.data?.data
+        const dynId = data?.dyn_id_str ?? data?.dyn_id
+        return dynId === undefined || dynId === null ? '' : String(dynId).trim()
+    }
+
+    private getDynamicDetailMajor(detail: any) {
+        return detail?.data?.data?.item?.modules?.module_dynamic?.major
+    }
+
+    private countDynamicDetailImages(detail: any) {
+        const major = this.getDynamicDetailMajor(detail)
+        const drawItems = major?.draw?.items
+        if (Array.isArray(drawItems)) {
+            return drawItems.filter((item) => item?.src || item?.img_src || item?.url).length
+        }
+        const opusPics = major?.opus?.pics
+        if (Array.isArray(opusPics)) {
+            return opusPics.filter((item) => item?.url || item?.src).length
+        }
+        return 0
+    }
+
+    private async fetchDynamicDetail(dynamicId: string) {
+        return axios.get('https://api.bilibili.com/x/polymer/web-dynamic/v1/detail', {
+            params: {
+                id: dynamicId,
+            },
+            headers: {
+                Cookie: `SESSDATA=${this.sessdata}`,
+            },
+        })
+    }
+
+    private assertProviderResponseOk(res: BiliCreateDynamicResponse, context: string) {
+        if (res.data?.code !== 0) {
+            throw new Error(`Send ${context} to ${this.NAME} failed. ${res.data?.message}: ${JSON.stringify(res.data)}`)
+        }
+    }
+
+    private async assertPhotoDynamicVisible(res: BiliCreateDynamicResponse, expectedPicCount: number) {
+        const dynamicId = this.extractDynamicId(res)
+        if (!dynamicId) {
+            throw new Error(`Bilibili photo dynamic response did not include dyn_id_str.`)
+        }
+
+        await pRetry(
+            async () => {
+                const detail = await this.fetchDynamicDetail(dynamicId)
+                if (detail.data?.code !== 0) {
+                    throw new Error(`Bilibili dynamic detail failed. ${JSON.stringify(detail.data)}`)
+                }
+                const major = this.getDynamicDetailMajor(detail)
+                const imageCount = this.countDynamicDetailImages(detail)
+                if (!major || imageCount < expectedPicCount) {
+                    throw new Error(
+                        `Bilibili photo dynamic ${dynamicId} has invalid detail major: major=${major ? JSON.stringify(Object.keys(major)) : 'null'} image_count=${imageCount} expected=${expectedPicCount}`,
+                    )
+                }
+            },
+            {
+                retries: this.dynamicDetailValidationRetries,
+                minTimeout: 1500,
+                maxTimeout: 3000,
+                onFailedAttempt: (error) => {
+                    this.log?.warn(
+                        `Bilibili photo dynamic detail validation pending for ${dynamicId}: ${error.originalError.message}`,
+                    )
+                },
+            },
+        )
+    }
+
     private async sendDynamicContent(texts: string[], props?: SendProps): Promise<any> {
         let { media } = props || {}
         media = media || []
@@ -295,19 +380,25 @@ class BiliForwarder extends Forwarder {
                 let res
                 if (msgPics.length > 0) {
                     res = await this.sendTextWithPhotos(text, msgPics)
+                    this.assertProviderResponseOk(res, `photo dynamic chunk ${i + 1}/${n}`)
+                    _res.push(res)
+                    try {
+                        await this.assertPhotoDynamicVisible(res, msgPics.length)
+                    } catch (error) {
+                        throw new PartialForwarderSendError(
+                            `Bilibili photo dynamic post-validation failed for chunk ${i + 1}/${n}`,
+                            _res,
+                            `photo dynamic chunk ${i + 1}/${n}`,
+                            error,
+                        )
+                    }
                 } else {
                     if (!textChunks[i]) continue; // If no text and no pics, skip (shouldn't happen due to Math.max logic unless textChunks ran out and picChunks ran out)
                     res = await this.sendText(text)
+                    this.assertProviderResponseOk(res, `text dynamic chunk ${i + 1}/${n}`)
+                    _res.push(res)
                 }
-                _res.push(res)
             }
-            _res.forEach((res) => {
-                if (res.data.code !== 0) {
-                    throw new Error(
-                        `Send text to ${this.NAME} failed. ${res.data.message}: ${JSON.stringify(res.data)}`,
-                    )
-                }
-            })
             return _res
         } finally {
             normalizedAttachments.cleanup()
@@ -326,6 +417,9 @@ class BiliForwarder extends Forwarder {
             },
         })
         this.log?.debug(`Upload photo response: ${JSON.stringify(res.data)}`)
+        if (res.data?.code !== 0) {
+            throw new Error(`Upload photo to ${this.NAME} failed. ${res.data?.message}: ${JSON.stringify(res.data)}`)
+        }
         return res.data.data
     }
 

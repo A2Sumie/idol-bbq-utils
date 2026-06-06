@@ -11,7 +11,7 @@ import {
 } from '../template/img/DefaultCard'
 import { languageFontMap } from '../src/img/utils/font'
 import { getIconCode } from '../src/img/utils/twemoji'
-import { isSupportedOpenTypeFont, loadDynamicAsset } from '../src/img'
+import { ImgConverter, isSupportedOpenTypeFont, loadDynamicAsset } from '../src/img'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
     return {
@@ -49,6 +49,14 @@ function findReactElement(node: any, predicate: (node: any) => boolean): any {
         return findReactElement(node.type(node.props), predicate)
     }
     return findReactElement(node.props?.children, predicate)
+}
+
+function readPngSize(buffer: Buffer) {
+    expect(buffer.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    return {
+        width: buffer.readUInt32BE(16),
+        height: buffer.readUInt32BE(20),
+    }
 }
 
 test('resolve227WebsiteBrandKey distinguishes official and FC website feeds', () => {
@@ -182,6 +190,39 @@ test('translated-corner-badge feature renders a soft pink card tint without text
     expect(outline.props.style.width).toBe(78)
     expect(outline.props.style.height).toBe(78)
     expect(visibleTextBadge).toBeNull()
+})
+
+test('translated-corner-badge feature renders through satori without layout errors', async () => {
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'summary-card-render-test',
+        u_id: 'message_pack',
+        username: '聚合',
+        created_at: 1710000000,
+        content: '聚合\n1. sally_amaki发推 2. nananiji_staff转推',
+        translation: null,
+        translated_by: null,
+        url: '',
+        type: 'message_pack',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: {
+            extra_type: 'message_pack_meta',
+            data: {
+                range: '2条 / 1900～2100',
+                translated_badge_label: '译文',
+                groups: [],
+            },
+        },
+        u_avatar: null,
+    }
+
+    const img = await new ImgConverter().articleToImg(article as any, { features: ['translated-corner-badge'] })
+
+    expect(img.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    expect(readPngSize(img).width).toBeGreaterThan(0)
 })
 
 test('font loader rejects TTC collections because satori cannot render them', () => {

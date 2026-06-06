@@ -765,7 +765,7 @@ function isTranslatedMarkedCard(article: Article, features: CardRenderFeatures) 
 function TranslatedCardTint() {
     return (
         <div
-            tw="absolute"
+            tw="absolute flex"
             style={{
                 right: 18,
                 top: 16,
@@ -774,7 +774,6 @@ function TranslatedCardTint() {
                 border: '2px solid rgba(236, 72, 153, 0.18)',
                 borderRadius: 16,
                 transform: 'rotate(12deg)',
-                zIndex: 0,
             }}
         >
             <div
