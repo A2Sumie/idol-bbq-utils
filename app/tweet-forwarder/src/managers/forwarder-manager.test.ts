@@ -6394,7 +6394,7 @@ test('summary-card realtime media metadata text stays one line without body or U
     expect(target.sent[0]?.props?.media?.[0]?.media_type).toBe('photo')
 })
 
-test('summary-card realtime media-only platforms do not leak into later dynamics', async () => {
+test('summary-card realtime media and later aggregation do not suppress each other', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'bilibili'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -6431,7 +6431,6 @@ test('summary-card realtime media-only platforms do not leak into later dynamics
                 send_first_immediately: false,
                 media_realtime: true,
                 media_realtime_text: 'metadata',
-                media_realtime_drop_summary_platforms: ['instagram', 'tiktok'],
                 flush_on_threshold: false,
             },
         } as any,
@@ -6517,21 +6516,23 @@ test('summary-card realtime media-only platforms do not leak into later dynamics
     expect(target.sent[0]?.texts[0]).toContain('@ig_member')
     expect(target.sent[0]?.texts[0]).not.toContain('instagram body should not become summary dynamic')
     expect(target.sent[0]?.props?.media?.[0]?.path).toBe('/tmp/instagram-media-only-814.jpg')
-    expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
+    const queue = getSummaryCardQueueForTarget(pools, target.id)
+    expect(queue?.items.size).toBe(2)
+    expect(Array.from(queue?.items.values() || []).map((item: any) => item.article.a_id)).toEqual([
+        'instagram-media-only',
+        'tiktok-no-media-only',
+    ])
     expect(
         await DB.ForwardBy.checkExist(instagramArticle.id, instagramArticle.platform, target.id, 'article'),
-    ).not.toBeNull()
+    ).toBeNull()
     expect(
         await DB.ForwardBy.checkExist(tiktokArticle.id, tiktokArticle.platform, target.id, 'article'),
-    ).not.toBeNull()
+    ).toBeNull()
 
     const articleSkips = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values()).filter(
         (record: any) => record.task_kind === 'article',
     )
-    expect(articleSkips.map((record: any) => record.provider_message_ids?.reason).sort()).toEqual([
-        'summary_realtime_media_only',
-        'summary_realtime_media_required_missing',
-    ])
+    expect(articleSkips).toHaveLength(0)
 })
 
 test('target media visibility text-collapses media after the second visible occurrence', async () => {

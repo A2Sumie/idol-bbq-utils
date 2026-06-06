@@ -368,6 +368,12 @@ async function loadDynamicAsset(emojiType: keyof typeof apis, _code: string, tex
     return loadCachedDynamicAsset(emojiType, _code, text)
 }
 
+function resolveRasterScale(article: Article, height: number) {
+    const isMessagePack = String((article as any).type || '') === 'message_pack'
+    const isLongRenderedCard = height >= CARD_WIDTH * 1.5
+    return isMessagePack || isLongRenderedCard ? 2 : 1.5
+}
+
 class ImgConverter {
     private fonts: Array<FontConfig>
     constructor() {
@@ -444,7 +450,7 @@ class ImgConverter {
         const resvg = new Resvg(svg, {
             fitTo: {
                 mode: 'width',
-                value: CARD_WIDTH * 1.5,
+                value: Math.round(CARD_WIDTH * resolveRasterScale(article, height)),
             },
         })
         const data = resvg.render()

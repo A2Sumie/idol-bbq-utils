@@ -316,6 +316,50 @@ test('long message-pack cards keep only a small height safety margin', () => {
     expect(height).toBeLessThan(1325)
 })
 
+test('long message-pack cards render at higher raster width even without watermark', async () => {
+    const groups = Array.from({ length: 8 }, (_, index) => ({
+        title: `${index + 1}. 消息串 1900～2100`,
+        avatars: [{ name: `member-${index}` }],
+        items: [
+            {
+                index: 1,
+                text:
+                    `@member_${index} 190${index}⁹ X发推\n\n` +
+                    '今日はライブのお知らせと感想をまとめました。読みやすい長さの本文を保持します。\n' +
+                    '引用や補足も聚合卡里は省略しません。',
+            },
+        ],
+    }))
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'long-summary-card-raster-width-test',
+        u_id: 'message_pack',
+        username: '聚合',
+        created_at: 1710000000,
+        content: '聚合',
+        translation: null,
+        translated_by: null,
+        url: '',
+        type: 'message_pack',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: {
+            extra_type: 'message_pack_meta',
+            data: {
+                range: '8条 / 1900～2100',
+                groups,
+            },
+        },
+        u_avatar: null,
+    }
+
+    const img = await new ImgConverter().articleToImg(article as any)
+
+    expect(readPngSize(img).width).toBe(1200)
+})
+
 test('translated-corner-badge feature renders through satori without layout errors', async () => {
     const article = {
         id: -1,
