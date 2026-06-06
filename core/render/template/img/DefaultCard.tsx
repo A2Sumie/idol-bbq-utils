@@ -762,31 +762,87 @@ function isTranslatedMarkedCard(article: Article, features: CardRenderFeatures) 
     )
 }
 
-function TranslatedCardTint() {
+function TranslatedPatternShape({
+    shape,
+    left,
+    top,
+}: {
+    shape: 'circle' | 'square' | 'triangle' | 'diamond'
+    left: number
+    top: number
+}) {
+    const symbolByShape = {
+        circle: '○',
+        square: '□',
+        triangle: '△',
+        diamond: '◇',
+    } satisfies Record<typeof shape, string>
+
     return (
         <div
+            data-translated-pattern-shape={shape}
             tw="absolute flex"
             style={{
-                right: 18,
-                top: 16,
-                width: 78,
-                height: 78,
-                border: '2px solid rgba(236, 72, 153, 0.18)',
-                borderRadius: 16,
-                transform: 'rotate(12deg)',
+                left,
+                top,
+                width: 30,
+                height: 30,
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'rgba(236, 72, 153, 0.16)',
+                fontFamily: CARD_UI_FONT_FAMILY,
+                fontSize: 31,
+                fontWeight: 700,
+                lineHeight: '30px',
             }}
         >
-            <div
-                tw="absolute"
-                style={{
-                    left: 18,
-                    top: 18,
-                    width: 38,
-                    height: 38,
-                    border: '2px solid rgba(236, 72, 153, 0.13)',
-                    borderRadius: 999,
-                }}
-            />
+            {symbolByShape[shape]}
+        </div>
+    )
+}
+
+function TranslatedPatternCluster({ left, top }: { left: number; top: number }) {
+    return (
+        <div
+            data-translated-pattern-cluster="true"
+            tw="absolute flex"
+            style={{
+                left,
+                top,
+                width: 68,
+                height: 68,
+                opacity: 0.9,
+            }}
+        >
+            <TranslatedPatternShape shape="triangle" left={22} top={0} />
+            <TranslatedPatternShape shape="square" left={0} top={22} />
+            <TranslatedPatternShape shape="circle" left={44} top={22} />
+            <TranslatedPatternShape shape="diamond" left={22} top={44} />
+        </div>
+    )
+}
+
+function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
+    const clusterCount = Math.max(1, Math.ceil(cardHeight / 220))
+    const clusters = Array.from({ length: clusterCount }, (_, index) => ({
+        left: 336 + (index % 3) * 34,
+        top: Math.min(28 + index * 220, Math.max(24, cardHeight - 92)),
+    }))
+    return (
+        <div
+            data-translated-pattern="true"
+            tw="absolute flex"
+            style={{
+                left: 0,
+                top: 0,
+                width: CARD_WIDTH,
+                height: cardHeight,
+                opacity: 1,
+            }}
+        >
+            {clusters.map((cluster, index) => (
+                <TranslatedPatternCluster key={index} left={cluster.left} top={cluster.top} />
+            ))}
         </div>
     )
 }
@@ -994,17 +1050,10 @@ function InlineWebsiteContent({
     )
 }
 
-/**
- * 在Node.js环境中估算文本在指定容器宽度和字体大小下的行数
- * @param {string} text - 要计算的文本内容
- * @param {number} fontSize - 字体大小(px)
- * @param {number} containerWidth - 容器宽度(px)
- * @return {number} 估算的文本高度
- */
-function estimateTextLinesHeight(text: string, fontSize: number, containerWidth: number) {
+function estimateTextLayout(text: string, fontSize: number, containerWidth: number) {
     text = text.trim()
     if (!text) {
-        return 0
+        return { paragraphCount: 0, totalLines: 0 }
     }
     // 1. 处理硬换行符 - 分割文本成行
     const paragraphs = text.split('\n')
@@ -1042,7 +1091,23 @@ function estimateTextLinesHeight(text: string, fontSize: number, containerWidth:
         const linesNeeded = Math.max(1, Math.ceil(paragraphWidth / containerWidth))
         totalLines += linesNeeded
     }
-    return totalLines * fontSize * 1.42 + paragraphs.length * 2
+    return { paragraphCount: paragraphs.length, totalLines }
+}
+
+/**
+ * 在Node.js环境中估算文本在指定容器宽度和字体大小下的行数
+ * @param {string} text - 要计算的文本内容
+ * @param {number} fontSize - 字体大小(px)
+ * @param {number} containerWidth - 容器宽度(px)
+ * @return {number} 估算的文本高度
+ */
+function estimateTextLinesHeight(text: string, fontSize: number, containerWidth: number) {
+    const { paragraphCount, totalLines } = estimateTextLayout(text, fontSize, containerWidth)
+    return totalLines * fontSize * 1.42 + paragraphCount * 2
+}
+
+function estimateRenderedTextBlockHeight(text: string, fontSize: number, lineHeight: number, containerWidth: number) {
+    return estimateTextLayout(text, fontSize, containerWidth).totalLines * lineHeight
 }
 
 function estimateImagesHeight(media: Exclude<Article['media'], null>, level: number = 0) {
@@ -1084,17 +1149,39 @@ function estimateMessagePackHeight(article: Article, level: number) {
     }
 
     const contentWidth = getContentWidth(level) - 34
-    return meta.groups.reduce((sum, group) => {
-        const titleHeight = group.title ? estimateTextLinesHeight(group.title, 12, contentWidth) : 0
-        const itemsHeight = (group.items || []).reduce((itemSum, item) => {
+    return meta.groups.reduce((sum, group, groupIndex) => {
+        const columnBlocks: number[] = []
+        const titleHeight = group.title
+            ? estimateRenderedTextBlockHeight(sanitizeCardText(group.title), 12, 16, contentWidth)
+            : 0
+        if (titleHeight > 0) {
+            columnBlocks.push(titleHeight)
+        }
+
+        for (const item of group.items || []) {
             const rawText = String(item.text || '').trim()
             const text = rawText ? `${item.index ? `【${item.index}】\n` : ''}${rawText}` : ''
-            const mediaHeight = item.media?.length ? estimateImagesHeight(item.media, level + 1) + 4 : 0
-            return itemSum + estimateTextLinesHeight(sanitizeCardText(text), 14, contentWidth) + mediaHeight + 5
-        }, 0)
-        const omittedHeight = Number(group.omitted || 0) > 0 ? 18 : 0
-        const avatarHeight = Math.max(26, Math.min(5, Math.max(1, group.avatars?.length || 0)) * 28)
-        return sum + Math.max(avatarHeight, titleHeight + itemsHeight + omittedHeight) + 8
+            const textHeight = text
+                ? estimateRenderedTextBlockHeight(sanitizeCardText(text), 14, 19, contentWidth)
+                : 0
+            const mediaHeight = item.media?.length ? estimateImagesHeight(item.media, level + 1) : 0
+            const itemHeight = textHeight + mediaHeight + (textHeight > 0 && mediaHeight > 0 ? 4 : 0)
+            if (itemHeight > 0) {
+                columnBlocks.push(itemHeight)
+            }
+        }
+
+        if (Number(group.omitted || 0) > 0) {
+            columnBlocks.push(16)
+        }
+
+        const shownAvatarCount = Math.min(5, Math.max(1, group.avatars?.length || 0))
+        const avatarHeight = shownAvatarCount * 26 + Math.max(0, shownAvatarCount - 1) * 2
+        const columnHeight = columnBlocks.reduce((blockSum, blockHeight) => blockSum + blockHeight, 0) +
+            Math.max(0, columnBlocks.length - 1) * 5
+        const groupHeight = Math.max(avatarHeight, columnHeight)
+        const separatorAndGapHeight = groupIndex < (meta.groups?.length || 0) - 1 ? 17 : 0
+        return sum + groupHeight + separatorAndGapHeight
     }, 0)
 }
 
@@ -1249,10 +1336,12 @@ function BaseCard({
     article,
     paddingHeight,
     features,
+    cardHeight,
 }: {
     article: Article
     paddingHeight: number
     features: CardRenderFeatures
+    cardHeight: number
 }) {
     const flattedArticle = flatArticle(article)
     const badge = getPlatformBadge(article)
@@ -1268,10 +1357,11 @@ function BaseCard({
             style={{
                 fontFamily: CARD_FONT_FAMILY,
                 rowGap: '6px',
-                background: translatedMarkedCard ? '#fff7fb' : '#ffffff',
+                background: '#ffffff',
+                overflow: 'hidden',
             }}
         >
-            {translatedMarkedCard && <TranslatedCardTint />}
+            {translatedMarkedCard && <TranslatedCardPattern cardHeight={cardHeight} />}
             {badge.layers.map((layer, index) => (
                 <img
                     key={`${layer.icon}-${index}`}
@@ -1360,16 +1450,18 @@ function articleParser(
     ]
         .flat()
         .reduce((a, b) => a + b, 0)
-    estimatedHeight = Math.ceil(estimatedHeight * 1.08 + 10)
+    const isMessagePack = isMessagePackArticle(article)
+    estimatedHeight = Math.ceil(estimatedHeight * (isMessagePack ? 1.025 : 1.08) + (isMessagePack ? 6 : 10))
 
     let paddingHeight = 0
     const minimumCardRatio = hasVisualMedia ? 1 / 3 : 0.27
     if (estimatedHeight / CARD_WIDTH < minimumCardRatio) {
         paddingHeight = CARD_WIDTH * minimumCardRatio - estimatedHeight
     }
+    const cardHeight = Math.ceil(estimatedHeight + paddingHeight)
     return {
-        component: <BaseCard article={article} paddingHeight={paddingHeight} features={features} />,
-        height: estimatedHeight + paddingHeight,
+        component: <BaseCard article={article} paddingHeight={paddingHeight} features={features} cardHeight={cardHeight} />,
+        height: cardHeight,
     }
 }
 

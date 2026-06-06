@@ -51,6 +51,20 @@ function findReactElement(node: any, predicate: (node: any) => boolean): any {
     return findReactElement(node.props?.children, predicate)
 }
 
+function findReactElements(node: any, predicate: (node: any) => boolean): any[] {
+    if (!node) {
+        return []
+    }
+    if (Array.isArray(node)) {
+        return node.flatMap((child) => findReactElements(child, predicate))
+    }
+    if (typeof node !== 'object') {
+        return []
+    }
+    const children = typeof node.type === 'function' ? node.type(node.props) : node.props?.children
+    return [...(predicate(node) ? [node] : []), ...findReactElements(children, predicate)]
+}
+
 function readPngSize(buffer: Buffer) {
     expect(buffer.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
     return {
@@ -151,7 +165,7 @@ test('sanitizeCardText removes stray selectors from rino-style decorative text',
     expect(sanitizeCardText('今日も素敵🪄︎︎◝✩ ‌‌ ‌')).toBe('今日も素敵🪄◝✩  ')
 })
 
-test('translated-corner-badge feature renders a soft pink card tint without text badge', () => {
+test('translated-corner-badge feature renders sparse pink geometry watermark without text badge', () => {
     const article = {
         id: -1,
         platform: Platform.X,
@@ -178,18 +192,69 @@ test('translated-corner-badge feature renders a soft pink card tint without text
         u_avatar: null,
     }
     const { component } = articleParser(article as any, { features: ['translated-corner-badge'] } as any)
-    const card = findReactElement(component, (node) => node.props?.style?.background === '#fff7fb')
-    const outline = findReactElement(
+    const card = findReactElement(component, (node) => node.props?.style?.background === '#ffffff')
+    const pinkFill = findReactElement(component, (node) => node.props?.style?.background === '#fff7fb')
+    const pattern = findReactElement(component, (node) => node.props?.['data-translated-pattern'] === 'true')
+    const clusters = findReactElements(
         component,
-        (node) => node.props?.style?.border === '2px solid rgba(236, 72, 153, 0.18)',
+        (node) => node.props?.['data-translated-pattern-cluster'] === 'true',
     )
+    const xShape = findReactElement(component, (node) => node.props?.['data-translated-pattern-shape'] === 'x')
     const visibleTextBadge = findReactElement(component, (node) => node.props?.children === '译文')
 
     expect(card).toBeTruthy()
-    expect(outline).toBeTruthy()
-    expect(outline.props.style.width).toBe(78)
-    expect(outline.props.style.height).toBe(78)
+    expect(pinkFill).toBeNull()
+    expect(pattern).toBeTruthy()
+    expect(clusters.length).toBe(1)
+    expect(clusters[0]?.props.style.width).toBe(68)
+    expect(clusters[0]?.props.style.height).toBe(68)
+    expect(xShape).toBeNull()
     expect(visibleTextBadge).toBeNull()
+})
+
+test('long message-pack cards keep only a small height safety margin', () => {
+    const groups = Array.from({ length: 8 }, (_, index) => ({
+        title: `${index + 1}. 消息串 1900～2100`,
+        avatars: [{ name: `member-${index}` }],
+        items: [
+            {
+                index: 1,
+                text:
+                    `@member_${index} 190${index}⁹ X发推\n\n` +
+                    '今日はライブのお知らせと感想をまとめました。読みやすい長さの本文を保持します。\n' +
+                    '引用や補足も聚合卡里は省略しません。',
+            },
+        ],
+    }))
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'long-summary-card-height-test',
+        u_id: 'message_pack',
+        username: '聚合',
+        created_at: 1710000000,
+        content: '聚合',
+        translation: null,
+        translated_by: null,
+        url: '',
+        type: 'message_pack',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: {
+            extra_type: 'message_pack_meta',
+            data: {
+                range: '8条 / 1900～2100',
+                groups,
+            },
+        },
+        u_avatar: null,
+    }
+
+    const { height } = articleParser(article as any)
+
+    expect(height).toBeGreaterThan(1260)
+    expect(height).toBeLessThan(1325)
 })
 
 test('translated-corner-badge feature renders through satori without layout errors', async () => {
