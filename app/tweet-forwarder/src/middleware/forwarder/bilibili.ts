@@ -41,7 +41,7 @@ type BiliCreateDynamicResponse = {
     }
 }
 
-type BiliVideoUploadResult = 'uploaded' | 'duplicate' | 'dedupe_blocked' | 'upload_failed'
+type BiliVideoUploadResult = 'uploaded' | 'duplicate'
 type BiliVideoUploadHashRecord = {
     hash: string
     path: string
@@ -165,7 +165,11 @@ class BiliForwarder extends Forwarder {
         )
     }
 
-    private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | boolean> {
+    private formatError(error: unknown) {
+        return error instanceof Error ? error.message : String(error)
+    }
+
+    private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | false> {
         const media = props?.media || []
         const candidate = buildBiliupUploadCandidate(props?.article, texts, media, this.video_upload)
         if (!candidate) {
@@ -183,10 +187,13 @@ class BiliForwarder extends Forwarder {
                 return 'duplicate'
             }
         } catch (error) {
+            const message = this.formatError(error)
             this.log?.error(
-                `Bilibili video upload dedupe check failed for ${props?.article?.a_id || 'unknown'}; suppressing upload and dynamic fallback: ${error}`,
+                `Bilibili video upload dedupe check failed for ${props?.article?.a_id || 'unknown'}; refusing dynamic fallback: ${message}`,
             )
-            return 'dedupe_blocked'
+            throw new Error(
+                `Bilibili video upload dedupe check failed for ${props?.article?.a_id || 'unknown'}: ${message}`,
+            )
         }
 
         try {
@@ -200,10 +207,11 @@ class BiliForwarder extends Forwarder {
             )
             return 'uploaded'
         } catch (error) {
+            const message = this.formatError(error)
             this.log?.error(
-                `biliup upload failed for ${props?.article?.a_id || 'unknown'}; suppressing dynamic fallback: ${error}`,
+                `biliup video publish failed for ${props?.article?.a_id || 'unknown'}; refusing dynamic fallback: ${message}`,
             )
-            return 'upload_failed'
+            throw new Error(`biliup video publish failed for ${props?.article?.a_id || 'unknown'}: ${message}`)
         }
     }
 
@@ -393,7 +401,7 @@ class BiliForwarder extends Forwarder {
                         )
                     }
                 } else {
-                    if (!textChunks[i]) continue; // If no text and no pics, skip (shouldn't happen due to Math.max logic unless textChunks ran out and picChunks ran out)
+                    if (!textChunks[i]) continue // If no text and no pics, skip (shouldn't happen due to Math.max logic unless textChunks ran out and picChunks ran out)
                     res = await this.sendText(text)
                     this.assertProviderResponseOk(res, `text dynamic chunk ${i + 1}/${n}`)
                     _res.push(res)

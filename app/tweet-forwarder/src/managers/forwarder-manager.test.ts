@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import EventEmitter from 'events'
+import path from 'path'
 import {
     ForwarderPools,
     ForwarderTaskScheduler,
@@ -6811,6 +6812,137 @@ test('summary-card realtime media metadata text stays one line without body or U
     expect(text).not.toContain('full body should not be in realtime metadata text')
     expect(text).not.toContain('https://x.com/bili_uid/status/813')
     expect(target.sent[0]?.props?.media?.[0]?.media_type).toBe('photo')
+})
+
+test('summary-card realtime media appends rendered card after Bilibili photo dynamics only', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME: string
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        constructor(name: string, id: string) {
+            super(
+                {
+                    block_until: '32h',
+                    summary_card: {
+                        enabled: true,
+                        threshold: 8,
+                        interval_seconds: 1800,
+                        include_original_media: false,
+                        send_first_immediately: false,
+                        media_realtime: true,
+                        media_realtime_text: 'metadata',
+                        flush_on_threshold: false,
+                    },
+                } as any,
+                id,
+            )
+            this.NAME = name
+        }
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const biliTarget = new RecordingForwarder('bilibili', 'target-summary-card-realtime-photo-bili')
+    const qqTarget = new RecordingForwarder('qq', 'target-summary-card-realtime-photo-qq')
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content || '',
+            textCollapseMode: 'article',
+            cardMediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-photo-card-${article.id}.png`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `card:${article.a_id}`,
+                },
+            ],
+            originalMediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-photo-original-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-photo-original-${article.id}.jpg`,
+                },
+            ],
+            mediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-photo-card-${article.id}.png`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `card:${article.a_id}`,
+                },
+                {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-photo-original-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-photo-original-${article.id}.jpg`,
+                },
+            ],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-realtime-photo-tail-card',
+        [
+            {
+                id: 814,
+                a_id: 'summary-realtime-photo-tail-card',
+                platform: Platform.X,
+                username: 'Photo Nick',
+                u_id: 'photo_uid',
+                content: 'photo body should be card tail on Bilibili',
+                url: 'https://x.com/photo_uid/status/814',
+                type: 'tweet',
+                created_at: now,
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: 'https://example.com/realtime-photo-original-814.jpg' }],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [
+            { forwarder: biliTarget, runtime_config: undefined },
+            { forwarder: qqTarget, runtime_config: undefined },
+        ],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(biliTarget.sent).toHaveLength(1)
+    expect(qqTarget.sent).toHaveLength(1)
+    expect(biliTarget.sent[0]?.props?.media?.map((file: any) => path.basename(file.path))).toEqual([
+        'realtime-photo-original-814.jpg',
+        'realtime-photo-card-814.png',
+    ])
+    expect(qqTarget.sent[0]?.props?.media?.map((file: any) => path.basename(file.path))).toEqual([
+        'realtime-photo-original-814.jpg',
+    ])
 })
 
 test('summary-card realtime media and later aggregation do not suppress each other', async () => {

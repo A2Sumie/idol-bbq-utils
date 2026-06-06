@@ -685,7 +685,9 @@ function MessagePackContent({
                                         {text && (
                                             <pre
                                                 tw="w-full text-[#202733] my-0"
-                                                lang={hasFeature(features, 'translated-corner-badge') ? 'zh-CN' : 'ja-JP'}
+                                                lang={
+                                                    hasFeature(features, 'translated-corner-badge') ? 'zh-CN' : 'ja-JP'
+                                                }
                                                 style={{
                                                     fontFamily: textFontFamily,
                                                     fontSize: CARD_TEXT_SIZE.sm,
@@ -1190,9 +1192,7 @@ function estimateMessagePackHeight(article: Article, level: number) {
         for (const item of group.items || []) {
             const rawText = String(item.text || '').trim()
             const text = rawText ? `${item.index ? `【${item.index}】\n` : ''}${rawText}` : ''
-            const textHeight = text
-                ? estimateRenderedTextBlockHeight(sanitizeCardText(text), 14, 19, contentWidth)
-                : 0
+            const textHeight = text ? estimateRenderedTextBlockHeight(sanitizeCardText(text), 14, 19, contentWidth) : 0
             const mediaHeight = item.media?.length ? estimateImagesHeight(item.media, level + 1) : 0
             const itemHeight = textHeight + mediaHeight + (textHeight > 0 && mediaHeight > 0 ? 4 : 0)
             if (itemHeight > 0) {
@@ -1206,7 +1206,8 @@ function estimateMessagePackHeight(article: Article, level: number) {
 
         const shownAvatarCount = Math.min(5, Math.max(1, group.avatars?.length || 0))
         const avatarHeight = shownAvatarCount * 26 + Math.max(0, shownAvatarCount - 1) * 2
-        const columnHeight = columnBlocks.reduce((blockSum, blockHeight) => blockSum + blockHeight, 0) +
+        const columnHeight =
+            columnBlocks.reduce((blockSum, blockHeight) => blockSum + blockHeight, 0) +
             Math.max(0, columnBlocks.length - 1) * 5
         const groupHeight = Math.max(avatarHeight, columnHeight)
         const separatorAndGapHeight = groupIndex < (meta.groups?.length || 0) - 1 ? 17 : 0
@@ -1272,9 +1273,7 @@ function ArticleContent({
                         {sanitizeCardText(parseTranslationContent(article))}
                     </pre>
                 )}
-                {article.translation && (
-                    <Divider text={article.translated_by ? `由${article.translated_by}提供翻译` : ''} />
-                )}
+                {article.translation && <Divider text="译文 / 原文" />}
                 {article.content && !useInlineWebsiteBlocks && !useMessagePackBlocks && (
                     <pre
                         tw="w-full text-[#202733] my-0"
@@ -1493,7 +1492,9 @@ function articleParser(
     }
     const cardHeight = Math.ceil(estimatedHeight + paddingHeight)
     return {
-        component: <BaseCard article={article} paddingHeight={paddingHeight} features={features} cardHeight={cardHeight} />,
+        component: (
+            <BaseCard article={article} paddingHeight={paddingHeight} features={features} cardHeight={cardHeight} />
+        ),
         height: cardHeight,
     }
 }

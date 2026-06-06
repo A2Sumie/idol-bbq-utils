@@ -250,7 +250,7 @@ test('resolveVideoUploadConfig keeps metadata template and collision placeholder
 
     expect(config?.metadata_templates?.title).toBe('【{{platform_type_label}}】{{display_name}} {{summary}}')
     expect(config?.collision_placeholder_part?.video_path).toBe(videoPath)
-    expect(config?.collision_placeholder_part?.title).toBe('###')
+    expect(config?.collision_placeholder_part?.title).toBe('补充')
     expect(config?.collision_placeholder_part?.background_color).toBe('#d1e5fc')
 })
 
@@ -306,7 +306,7 @@ test('prepareUploadVideoParts reuses persistent collision placeholder video when
                     enabled: true,
                     video_path: placeholderPath,
                     image_path: path.join(tempRoot, 'unused.png'),
-                    title: '###',
+                    title: '补充',
                     duration_seconds: 7,
                     width: 1920,
                     height: 1080,
@@ -319,7 +319,7 @@ test('prepareUploadVideoParts reuses persistent collision placeholder video when
         uploadDir,
     )
 
-    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '###.mp4'])
+    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '补充.mp4'])
     expect(fs.existsSync(parts[1]!.stagedPath)).toBe(true)
 })
 
@@ -365,7 +365,7 @@ printf 'placeholder' > "$out"
                 collision_placeholder_part: {
                     enabled: true,
                     image_path: logoPath,
-                    title: '###',
+                    title: '补充',
                     duration_seconds: 1,
                     width: 1280,
                     height: 720,
@@ -378,8 +378,8 @@ printf 'placeholder' > "$out"
         uploadDir,
     )
 
-    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '###.mp4'])
-    expect(parts[1]?.partTitle).toBe('###')
+    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '补充.mp4'])
+    expect(parts[1]?.partTitle).toBe('补充')
     expect(fs.existsSync(parts[1]!.stagedPath)).toBe(true)
 })
 
@@ -553,20 +553,74 @@ test('BiliForwarder suppresses dynamic fallback when biliup upload fails', async
     }
 
     try {
-        const result = await (forwarder as any).realSend(['hello'], {
-            article: {
-                platform: Platform.TikTok,
-                a_id: 'tt-video-upload-failed',
-                u_id: 'tt_member',
-                username: 'TT Member',
-                type: 'video',
-                created_at: 1773985020,
-                url: 'https://www.tiktok.com/@tt_member/video/3',
-            },
-            media: [{ media_type: 'video', path: '/tmp/video.mp4', content_hash: 'failed-video-hash' }],
-        })
+        await expect(
+            (forwarder as any).realSend(['hello'], {
+                article: {
+                    platform: Platform.TikTok,
+                    a_id: 'tt-video-upload-failed',
+                    u_id: 'tt_member',
+                    username: 'TT Member',
+                    type: 'video',
+                    created_at: 1773985020,
+                    url: 'https://www.tiktok.com/@tt_member/video/3',
+                },
+                media: [{ media_type: 'video', path: '/tmp/video.mp4', content_hash: 'failed-video-hash' }],
+            }),
+        ).rejects.toThrow(/simulated biliup failure/)
+        expect(dynamicCalls).toBe(0)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    }
+})
 
-        expect(result).toEqual([{ ok: true, mode: 'biliup_upload_failed' }])
+test('BiliForwarder blocks dynamic fallback when video dedupe check fails', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    DB.MediaHash.checkExist = async () => {
+        throw new Error('simulated media hash database failure')
+    }
+    DB.MediaHash.save = async () => {
+        throw new Error('dedupe failure should not save')
+    }
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-test',
+    )
+
+    let uploadCalls = 0
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async () => {
+        uploadCalls += 1
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    try {
+        await expect(
+            (forwarder as any).realSend(['hello'], {
+                article: {
+                    platform: Platform.TikTok,
+                    a_id: 'tt-video-dedupe-failed',
+                    u_id: 'tt_member',
+                    username: 'TT Member',
+                    type: 'video',
+                    created_at: 1773985020,
+                    url: 'https://www.tiktok.com/@tt_member/video/4',
+                },
+                media: [{ media_type: 'video', path: '/tmp/video.mp4', content_hash: 'dedupe-failed-video-hash' }],
+            }),
+        ).rejects.toThrow(/simulated media hash database failure/)
+        expect(uploadCalls).toBe(0)
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist

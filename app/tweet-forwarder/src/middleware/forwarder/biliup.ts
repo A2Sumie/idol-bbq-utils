@@ -17,7 +17,7 @@ const DEFAULT_BILIUP_LINE = 'AUTO'
 const DEFAULT_BILIUP_WORKING_DIR = path.join(CACHE_DIR_ROOT, 'media', 'biliup')
 const DEFAULT_BILIUP_EXCLUDED_UIDS = ['22/7:radio', '22/7:movie']
 const DEFAULT_BILIUP_COOKIE_SYNC_URL = 'https://www.bilibili.com'
-const DEFAULT_BILIUP_COLLISION_PART_TITLE = '###'
+const DEFAULT_BILIUP_COLLISION_PART_TITLE = '补充'
 const DEFAULT_BILIUP_COLLISION_MAIN_PART_TITLE = '正片'
 const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_DURATION_SECONDS = 2
 const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_WIDTH = 1920
@@ -161,7 +161,10 @@ function defaultBrowserCookieSyncScriptPath() {
 }
 
 function normalizeTag(tag: string) {
-    return tag.replace(/[\r\n,]+/g, ' ').replace(/\s+/g, ' ').trim()
+    return tag
+        .replace(/[\r\n,]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -190,7 +193,10 @@ function truncateText(value: string, maxChars: number) {
 }
 
 function defaultFfmpegPath() {
-    return resolveExistingPath([process.env.FFMPEG_PATH, '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', 'ffmpeg'], 'ffmpeg')
+    return resolveExistingPath(
+        [process.env.FFMPEG_PATH, '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', 'ffmpeg'],
+        'ffmpeg',
+    )
 }
 
 function normalizeTextBlock(value: string | null | undefined) {
@@ -200,6 +206,18 @@ function normalizeTextBlock(value: string | null | undefined) {
         .replace(/[ \t]+\n/g, '\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim()
+}
+
+function hasBiliupTitleText(value: string) {
+    return /[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/.test(value)
+}
+
+function normalizeBiliupTitleText(value: string | null | undefined, fallback: string) {
+    const normalized = normalizeTextBlock(value)
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    return normalized && hasBiliupTitleText(normalized) ? normalized : fallback
 }
 
 function collectTextBlocks(article: Pick<Article, 'content'>, texts: string[]) {
@@ -318,11 +336,11 @@ function buildTemplateContext(
     timeZone: string,
 ): TemplateContext {
     const blocks = collectTextBlocks(article, texts)
-    const primaryLine = blocks
-        .flatMap((value) => value.split('\n'))
-        .map((line) => line.trim())
-        .find(Boolean)
-        || ''
+    const primaryLine =
+        blocks
+            .flatMap((value) => value.split('\n'))
+            .map((line) => line.trim())
+            .find(Boolean) || ''
     const dateTime = formatDateTimeParts(article.created_at, timeZone)
     const displayName = resolveDisplayName(article)
     const summary = primaryLine || dateTime.datetime
@@ -416,7 +434,9 @@ function resolveCollisionPlaceholderVideoPath(candidate?: string) {
     if (configured) {
         return configured
     }
-    return fs.existsSync(DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO) ? DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO : undefined
+    return fs.existsSync(DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO)
+        ? DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO
+        : undefined
 }
 
 function resolveMetadataTemplatesConfig(
@@ -449,30 +469,35 @@ function resolveCollisionPlaceholderPartConfig(
         enabled: true,
         video_path: resolveCollisionPlaceholderVideoPath(config.video_path),
         image_path: resolveCollisionPlaceholderImagePath(config.image_path),
-        title: normalizeTextBlock(config.title) || DEFAULT_BILIUP_COLLISION_PART_TITLE,
-        duration_seconds: resolveMinNumber(config.duration_seconds, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_DURATION_SECONDS, 1),
+        title: normalizeBiliupTitleText(config.title, DEFAULT_BILIUP_COLLISION_PART_TITLE),
+        duration_seconds: resolveMinNumber(
+            config.duration_seconds,
+            DEFAULT_BILIUP_COLLISION_PLACEHOLDER_DURATION_SECONDS,
+            1,
+        ),
         width: resolveMinInteger(config.width, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_WIDTH, 320),
         height: resolveMinInteger(config.height, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_HEIGHT, 240),
         fps: resolveMinInteger(config.fps, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_FPS, 1),
         ffmpeg_path: config.ffmpeg_path || defaultFfmpegPath(),
-        background_color: normalizeTextBlock(config.background_color) || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_BACKGROUND_COLOR,
+        background_color:
+            normalizeTextBlock(config.background_color) || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_BACKGROUND_COLOR,
     }
 }
 
-function deriveTags(
-    article: Pick<Article, 'platform' | 'username'>,
-    configuredTags: Array<string>,
-) {
-    const platformTag = article.platform === Platform.YouTube
-        ? 'YouTube'
-        : article.platform === Platform.Instagram
-            ? 'Instagram'
-            : article.platform === Platform.TikTok
+function deriveTags(article: Pick<Article, 'platform' | 'username'>, configuredTags: Array<string>) {
+    const platformTag =
+        article.platform === Platform.YouTube
+            ? 'YouTube'
+            : article.platform === Platform.Instagram
+              ? 'Instagram'
+              : article.platform === Platform.TikTok
                 ? 'TikTok'
                 : article.platform === Platform.Website
-                    ? '官网'
-                    : '社媒'
-    return uniqueStrings(['22/7', platformTag, article.username || '', ...configuredTags].map(normalizeTag)).filter(Boolean)
+                  ? '官网'
+                  : '社媒'
+    return uniqueStrings(['22/7', platformTag, article.username || '', ...configuredTags].map(normalizeTag)).filter(
+        Boolean,
+    )
 }
 
 function normalizeBiliupCookieDocument(document: unknown): BiliupCookieDocument {
@@ -623,9 +648,7 @@ function buildBiliupUploadCandidate(
         return null
     }
 
-    const videoPaths = uniqueStrings(
-        media.filter((item) => item.media_type === 'video').map((item) => item.path),
-    )
+    const videoPaths = uniqueStrings(media.filter((item) => item.media_type === 'video').map((item) => item.path))
     if (videoPaths.length === 0) {
         return null
     }
@@ -633,7 +656,12 @@ function buildBiliupUploadCandidate(
     const coverPath = media.find((item) => item.media_type === 'photo' || item.media_type === 'video_thumbnail')?.path
     return {
         title: deriveTitle(article, texts, resolvedConfig.metadata_timezone, resolvedConfig.metadata_templates?.title),
-        description: deriveDescription(article, texts, resolvedConfig.metadata_timezone, resolvedConfig.metadata_templates?.description),
+        description: deriveDescription(
+            article,
+            texts,
+            resolvedConfig.metadata_timezone,
+            resolvedConfig.metadata_templates?.description,
+        ),
         sourceUrl: article.url,
         coverPath,
         videoPaths,
@@ -687,7 +715,8 @@ async function runBrowserCookieSync(config: ResolvedBiliupVideoUploadConfig, log
             env: {
                 ...process.env,
                 BROWSER_PROFILE_DIR:
-                    process.env.BROWSER_PROFILE_DIR || path.join(process.cwd(), 'assets', 'cookies', 'browser-profiles'),
+                    process.env.BROWSER_PROFILE_DIR ||
+                    path.join(process.cwd(), 'assets', 'cookies', 'browser-profiles'),
             },
         })
 
@@ -742,7 +771,11 @@ async function runSpawn(command: string, args: string[], cwd: string, logPrefix:
                 resolve()
                 return
             }
-            reject(new Error(`${command} exited with code ${code}: ${stderrChunks.join('').trim() || stdoutChunks.join('').trim()}`))
+            reject(
+                new Error(
+                    `${command} exited with code ${code}: ${stderrChunks.join('').trim() || stdoutChunks.join('').trim()}`,
+                ),
+            )
         })
     })
 }
@@ -838,12 +871,12 @@ function stageUploadVideoPart(sourcePath: string, stagedPath: string) {
     try {
         fs.symlinkSync(sourcePath, stagedPath)
         return
-    } catch { }
+    } catch {}
 
     try {
         fs.linkSync(sourcePath, stagedPath)
         return
-    } catch { }
+    } catch {}
 
     fs.copyFileSync(sourcePath, stagedPath)
 }
@@ -920,7 +953,9 @@ async function runBiliupUpload(
             await runBrowserCookieSync(candidate.config, log)
         } catch (error) {
             browserCookieSyncError = error instanceof Error ? error : new Error(String(error))
-            log?.warn(`Biliup browser cookie sync failed, will try fallback credentials: ${browserCookieSyncError.message}`)
+            log?.warn(
+                `Biliup browser cookie sync failed, will try fallback credentials: ${browserCookieSyncError.message}`,
+            )
         }
     }
 
@@ -932,7 +967,9 @@ async function runBiliupUpload(
             )
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
-            log?.warn(`Invalid biliup cookie file ${candidate.config.cookie_file}, falling back if possible: ${message}`)
+            log?.warn(
+                `Invalid biliup cookie file ${candidate.config.cookie_file}, falling back if possible: ${message}`,
+            )
         }
     }
 
@@ -1012,12 +1049,16 @@ async function runBiliupUpload(
                 resolve()
                 return
             }
-            reject(new Error(`biliup exited with code ${code}: ${stderrChunks.join('').trim() || stdoutChunks.join('').trim()}`))
+            reject(
+                new Error(
+                    `biliup exited with code ${code}: ${stderrChunks.join('').trim() || stdoutChunks.join('').trim()}`,
+                ),
+            )
         })
     }).finally(() => {
         try {
             fs.rmSync(cookieFile, { force: true })
-        } catch { }
+        } catch {}
     })
 
     return {
@@ -1031,10 +1072,10 @@ export {
     buildBiliupUploadCandidate,
     buildCookieDocument,
     normalizeBiliupCookieDocument,
-        resolveBrowserCookieSyncConfig,
-        resolveVideoUploadConfig,
-        runBiliupUpload,
-        runBrowserCookieSync,
-        prepareUploadVideoParts,
-    }
+    resolveBrowserCookieSyncConfig,
+    resolveVideoUploadConfig,
+    runBiliupUpload,
+    runBrowserCookieSync,
+    prepareUploadVideoParts,
+}
 export type { BiliupUploadCandidate, ResolvedBiliupVideoUploadConfig }

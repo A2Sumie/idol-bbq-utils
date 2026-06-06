@@ -176,6 +176,35 @@ test('sanitizeCardText removes stray selectors from rino-style decorative text',
     expect(sanitizeCardText('今日も素敵🪄︎︎◝✩ ‌‌ ‌')).toBe('今日も素敵🪄◝✩  ')
 })
 
+test('translated article divider hides external model name', () => {
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'translated-card-test',
+        u_id: 'member',
+        username: 'Member',
+        created_at: 1710000000,
+        content: '原文',
+        translation: '译文',
+        translated_by: 'DeepSeek V4 Flash',
+        url: 'https://x.com/member/status/1',
+        type: 'tweet',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const { component } = articleParser(article as any)
+    const dividerLabel = findReactElement(component, (node) => node.props?.children === '译文 / 原文')
+    const providerLabel = findReactElement(component, (node) =>
+        String(node.props?.children || '').includes('DeepSeek V4 Flash'),
+    )
+
+    expect(dividerLabel).toBeTruthy()
+    expect(providerLabel).toBeNull()
+})
+
 test('translated-corner-badge feature renders sparse multicolor geometry watermark without text badge', () => {
     const article = {
         id: -1,
@@ -206,10 +235,7 @@ test('translated-corner-badge feature renders sparse multicolor geometry waterma
     const card = findReactElement(component, (node) => node.props?.style?.background === '#ffffff')
     const pinkFill = findReactElement(component, (node) => node.props?.style?.background === '#fff7fb')
     const pattern = findReactElement(component, (node) => node.props?.['data-translated-pattern'] === 'true')
-    const clusters = findReactElements(
-        component,
-        (node) => node.props?.['data-translated-pattern-cluster'] === 'true',
-    )
+    const clusters = findReactElements(component, (node) => node.props?.['data-translated-pattern-cluster'] === 'true')
     const geometryShapes = findReactElements(component, (node) =>
         ['circle', 'square', 'triangle', 'diamond'].includes(node.props?.['data-translated-pattern-shape']),
     )

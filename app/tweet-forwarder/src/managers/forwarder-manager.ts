@@ -2938,6 +2938,29 @@ class ForwarderPools extends BaseCompatibleModel {
         return target.NAME === 'bilibili' && allFiles.some((item) => item.media_type === 'video')
     }
 
+    private shouldAppendSummaryRealtimeCardMedia(target: BaseForwarder, mediaFiles: RenderedMediaFile[]) {
+        return (
+            target.NAME === 'bilibili' &&
+            mediaFiles.length > 0 &&
+            mediaFiles.every((file) => file.media_type === 'photo')
+        )
+    }
+
+    private appendSummaryRealtimeCardMediaForTarget(
+        target: BaseForwarder,
+        mediaFiles: RenderedMediaFile[],
+        renderResult: RenderResult,
+    ) {
+        if (!this.shouldAppendSummaryRealtimeCardMedia(target, mediaFiles)) {
+            return mediaFiles
+        }
+        const cardMedia = renderResult.cardMediaFiles.find((file) => file.media_type === 'photo')
+        if (!cardMedia || mediaFiles.some((file) => file.path === cardMedia.path)) {
+            return mediaFiles
+        }
+        return [...mediaFiles, cardMedia]
+    }
+
     private async releaseTargetMediaVisibilityClaims(visibility: MediaVisibilityResult | null | undefined) {
         if (!visibility?.policy || visibility.visibleClaims.length === 0 || isNonLiveOutboundSendMode()) {
             return
@@ -2960,7 +2983,12 @@ class ForwarderPools extends BaseCompatibleModel {
         const mediaFiles = rawMediaFiles.filter((file) =>
             this.isSummaryRealtimeMediaEligible(target, file, rawMediaFiles),
         )
-        if (mediaFiles.length === 0) {
+        const mediaFilesWithTargetExtras = this.appendSummaryRealtimeCardMediaForTarget(
+            target,
+            mediaFiles,
+            renderResult,
+        )
+        if (mediaFilesWithTargetExtras.length === 0) {
             return {
                 hadMedia: false,
                 handled: true,
@@ -2970,10 +2998,15 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const text = this.buildSummaryCardRealtimeMediaText(article, renderResult, config)
-        const mediaIdentities = this.buildRenderedMediaIdentityList(mediaFiles)
+        const mediaIdentities = this.buildRenderedMediaIdentityList(mediaFilesWithTargetExtras)
         const syntheticKey = `${routeKeyValue}:${articleKey(article)}:${hashValue(mediaIdentities)}`
         const outboundIdempotencyKey = syntheticOutboundKey(target.id, 'summary_realtime_media', syntheticKey)
-        const visibility = await this.applyTargetMediaVisibility(article, target, runtime_config, mediaFiles)
+        const visibility = await this.applyTargetMediaVisibility(
+            article,
+            target,
+            runtime_config,
+            mediaFilesWithTargetExtras,
+        )
         const visibleMediaFiles = visibility.visibleFiles
         if (visibility.policy?.duplicateBehavior === 'skip' && visibleMediaFiles.length === 0) {
             const outboundPayloadHash = payloadHash({

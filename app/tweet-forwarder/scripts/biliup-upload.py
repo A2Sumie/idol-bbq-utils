@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import os
+import re
 import sys
 import time
 
@@ -98,8 +100,11 @@ def upload_and_submit(uploader: BiliWeb, file_list):
         bili.appsec = uploader.user.get("appsec")
         bili.login(uploader.persistence_path, uploader.user_cookie)
         for file in file_list:
-            video_part = bili.upload_file(file.video, uploader.lines, uploader.threads)
-            video_part["title"] = video_part["title"][:80]
+            try:
+                video_part = bili.upload_file(file.video, uploader.lines, uploader.threads)
+            except Exception as exc:
+                raise RuntimeError(f"biliup upload_file failed for {file.video}: {explain_upload_error(exc)}") from exc
+            video_part["title"] = sanitize_video_part_title(video_part.get("title"), file.video)
             video.append(video_part)
         video.title = uploader.data["format_title"][:80]
         if uploader.credits:
@@ -121,8 +126,38 @@ def upload_and_submit(uploader: BiliWeb, file_list):
         if uploader.dtime:
             video.delay_time(int(time.time()) + uploader.dtime)
         if uploader.cover_path:
-            video.cover = bili.cover_up(uploader.cover_path).replace("http:", "")
-        return bili.submit(uploader.submit_api)
+            try:
+                video.cover = bili.cover_up(uploader.cover_path).replace("http:", "")
+            except Exception as exc:
+                raise RuntimeError(f"biliup cover_up failed for {uploader.cover_path}: {explain_upload_error(exc)}") from exc
+        try:
+            submit_result = bili.submit(uploader.submit_api)
+        except Exception as exc:
+            raise RuntimeError(f"biliup submit failed: {explain_upload_error(exc)}") from exc
+        validate_submit_result(submit_result)
+        return submit_result
+
+
+def sanitize_video_part_title(title, video_path: str) -> str:
+    candidate = str(title or os.path.splitext(os.path.basename(video_path))[0] or "").strip()
+    candidate = re.sub(r'[\r\n\t<>:"/\\|?*\x00-\x1f]+', " ", candidate)
+    candidate = re.sub(r"\s+", " ", candidate).strip()
+    if not re.search(r"[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]", candidate):
+        candidate = "补充"
+    return candidate[:80]
+
+
+def validate_submit_result(submit_result):
+    if not isinstance(submit_result, dict):
+        return
+    code = submit_result.get("code")
+    if code in (None, 0):
+        return
+    message = submit_result.get("message") or submit_result.get("msg") or json.dumps(
+        submit_result,
+        ensure_ascii=False,
+    )
+    raise RuntimeError(f"biliup submit returned code {code}: {message}")
 
 
 def explain_upload_error(exc: Exception) -> str:

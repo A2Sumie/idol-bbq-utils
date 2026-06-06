@@ -416,7 +416,7 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
         format_article += formatArticleHeaderLine(currentArticle)
         if (currentArticle.translated_by) {
             let translation = parseTranslationContent(currentArticle)
-            format_article += `\n\n${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
+            format_article += `\n\n${translation}\n${'-'.repeat(6)}↑译文--↓原文${'-'.repeat(6)}\n`
         }
 
         /* 原文 */
@@ -459,7 +459,7 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
         format_article += formatArticleHeaderLine(currentArticle)
         if (currentArticle.translated_by) {
             const translation = parseTranslationContent(currentArticle)
-            format_article += `\n\n${translation}\n${'-'.repeat(6)}↑${(currentArticle.translated_by || '大模型') + '渣翻'}--↓原文${'-'.repeat(6)}\n`
+            format_article += `\n\n${translation}\n${'-'.repeat(6)}↑译文--↓原文${'-'.repeat(6)}\n`
         }
 
         const raw_article = parseCompactRawContent(currentArticle)
