@@ -243,7 +243,7 @@ beforeEach(() => {
             Array.from(outboundRecords.values())
                 .filter(
                     (record: any) =>
-                        record.route_key === options.route_key &&
+                        (!options.route_key || record.route_key === options.route_key) &&
                         record.target_id === options.target_id &&
                         (taskKinds.size === 0 || taskKinds.has(record.task_kind)) &&
                         visibleStatuses.has(record.status),
@@ -7144,7 +7144,7 @@ test('idle-first summary-card items can fall back to native article send', async
     expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
 })
 
-test('idle-first native summary-card send respects durable recent visible sends', async () => {
+test('idle-first native summary-card send respects target-wide durable recent visible sends across routes', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -7200,7 +7200,10 @@ test('idle-first native summary-card send respects durable recent visible sends'
     }
 
     const now = Math.floor(Date.now() / 1000)
-    const durableRouteKey = targetRouteKey(routeKey({ source: 'system', crawlerId: 'unknown' }), target.id)
+    const durableRouteKey = targetRouteKey(
+        routeKey({ source: 'graph', crawlerId: 'previous-role-route', formatterId: 'fmt-x-card-main' }),
+        target.id,
+    )
     ;((DB.OutboundMessage as any).__records as Map<string, any>).set('recent-summary-card', {
         id: 999,
         idempotency_key: 'recent-summary-card',
@@ -7706,6 +7709,7 @@ test('idle-first translated native companion is suppressed for text-only media v
         }
     }
     ;(pools as any).summaryCardLastSentAt.clear()
+    ;(pools as any).summaryCardTargetLastSentAt.clear()
     await (pools as any).sendArticles(
         undefined,
         'summary-native-visible-second',

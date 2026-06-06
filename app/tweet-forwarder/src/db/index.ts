@@ -1224,13 +1224,13 @@ namespace DB {
         }
 
         export async function findLatestVisibleCompletion(options: {
-            route_key: string
+            route_key?: string
             target_id: string
             task_kinds?: Array<string>
         }): Promise<DBOutboundMessage | null> {
             return await prisma.outbound_messages.findFirst({
                 where: {
-                    route_key: options.route_key,
+                    route_key: options.route_key || undefined,
                     target_id: options.target_id,
                     task_kind:
                         options.task_kinds && options.task_kinds.length > 0

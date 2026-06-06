@@ -631,6 +631,89 @@ test('OutboundMessage terminal states clear unrelated stale fields on SQLite', a
     })
 })
 
+test('OutboundMessage latest visible completion can be target-wide across routes on SQLite', async () => {
+    await DB.OutboundMessage.claim(
+        outboundData({
+            idempotency_key: 'old-route-visible',
+            route_key: 'route:old',
+            target_id: 'target-shared',
+            task_kind: 'article',
+        }),
+    )
+    await DB.OutboundMessage.markSending('old-route-visible')
+    await DB.OutboundMessage.markSent('old-route-visible', { message_id: 'old' })
+    await testPrisma.outbound_messages.update({
+        where: { idempotency_key: 'old-route-visible' },
+        data: { finished_at: 1000, updated_at: 1000, created_at: 900 },
+    })
+
+    await DB.OutboundMessage.claim(
+        outboundData({
+            idempotency_key: 'new-route-visible',
+            route_key: 'route:new',
+            target_id: 'target-shared',
+            task_kind: 'summary_card',
+        }),
+    )
+    await DB.OutboundMessage.markSending('new-route-visible')
+    await DB.OutboundMessage.markSent('new-route-visible', { message_id: 'new' })
+    await testPrisma.outbound_messages.update({
+        where: { idempotency_key: 'new-route-visible' },
+        data: { finished_at: 2000, updated_at: 2000, created_at: 1900 },
+    })
+
+    await DB.OutboundMessage.claim(
+        outboundData({
+            idempotency_key: 'other-target-visible',
+            route_key: 'route:other',
+            target_id: 'target-other',
+            task_kind: 'summary_card',
+        }),
+    )
+    await DB.OutboundMessage.markSending('other-target-visible')
+    await DB.OutboundMessage.markSent('other-target-visible', { message_id: 'other' })
+    await testPrisma.outbound_messages.update({
+        where: { idempotency_key: 'other-target-visible' },
+        data: { finished_at: 3000, updated_at: 3000, created_at: 2900 },
+    })
+
+    await DB.OutboundMessage.claim(
+        outboundData({
+            idempotency_key: 'failed-same-target',
+            route_key: 'route:failed',
+            target_id: 'target-shared',
+            task_kind: 'summary_card',
+        }),
+    )
+    await DB.OutboundMessage.markSending('failed-same-target')
+    await DB.OutboundMessage.markFailed('failed-same-target', new Error('ignore failed'))
+    await testPrisma.outbound_messages.update({
+        where: { idempotency_key: 'failed-same-target' },
+        data: { finished_at: 4000, updated_at: 4000, created_at: 3900 },
+    })
+
+    expect(
+        await DB.OutboundMessage.findLatestVisibleCompletion({
+            target_id: 'target-shared',
+            task_kinds: ['summary_card', 'article'],
+        }),
+    ).toMatchObject({
+        idempotency_key: 'new-route-visible',
+        route_key: 'route:new',
+        target_id: 'target-shared',
+    })
+
+    expect(
+        await DB.OutboundMessage.findLatestVisibleCompletion({
+            route_key: 'route:old',
+            target_id: 'target-shared',
+            task_kinds: ['summary_card', 'article'],
+        }),
+    ).toMatchObject({
+        idempotency_key: 'old-route-visible',
+    })
+})
+
 test('OutboundMessage suppresses terminal duplicates while recording payload drift on SQLite', async () => {
     await DB.OutboundMessage.claim(outboundData({ idempotency_key: 'terminal-key' }))
     await DB.OutboundMessage.markSending('terminal-key')

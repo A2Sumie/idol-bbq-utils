@@ -818,6 +818,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private tagDigestStates = new Map<string, TagDigestState>()
     private summaryCardQueues = new Map<string, SummaryCardQueue>()
     private summaryCardLastSentAt = new Map<string, number>()
+    private summaryCardTargetLastSentAt = new Map<string, number>()
     private summaryCardProcessors = new Map<string, BaseProcessor>()
     private summaryCardFlushTimer?: ReturnType<typeof setInterval>
     private dispatchListener: (payload: unknown) => Promise<void>
@@ -1277,6 +1278,7 @@ class ForwarderPools extends BaseCompatibleModel {
         this.summaryCardProcessors.clear()
         this.summaryCardQueues.clear()
         this.summaryCardLastSentAt.clear()
+        this.summaryCardTargetLastSentAt.clear()
         this.log?.info('Pools dropped')
     }
 
@@ -2070,6 +2072,11 @@ class ForwarderPools extends BaseCompatibleModel {
                                 mediaFiles = [...mediaFiles, ...translatedCompanionCard.cardMediaFiles]
                                 cardMediaFiles = [...cardMediaFiles, ...translatedCompanionCard.cardMediaFiles]
                             }
+                            log?.info(
+                                `Prepared native translated companion for ${target.id} ${article.a_id}: ` +
+                                    `cards=${translatedCompanionCard.cardMediaFiles.length} ` +
+                                    `media=${translatedCompanionCard.mediaFiles.length}`,
+                            )
                         }
 
                         const outboundPayloadHash = payloadHash({
@@ -2515,10 +2522,10 @@ class ForwarderPools extends BaseCompatibleModel {
         if (
             !existingQueue &&
             summaryConfig.sendFirstImmediately &&
-            (await this.canSendSummaryCardNow(queueKey, summaryConfig, now, summaryRouteKey, target.id))
+            (await this.canSendSummaryCardNow(queueKey, summaryConfig, now, target.id))
         ) {
             if (summaryConfig.sendFirstNative) {
-                this.summaryCardLastSentAt.set(queueKey, now)
+                this.markSummaryCardVisibleSent(queueKey, target.id, now)
                 log?.debug(`Sending idle-first summary-card item ${article.a_id} natively for ${target.id}.`)
                 return false
             }
@@ -2655,12 +2662,11 @@ class ForwarderPools extends BaseCompatibleModel {
         queueKey: string,
         config: ResolvedSummaryCardConfig,
         now: number,
-        routeKeyValue: string,
         targetId: string,
     ) {
         const memoryLastSentAt = this.summaryCardLastSentAt.get(queueKey) || 0
+        const memoryTargetLastSentAt = this.summaryCardTargetLastSentAt.get(targetId) || 0
         const latestVisibleOutbound = await DB.OutboundMessage.findLatestVisibleCompletion({
-            route_key: routeKeyValue,
             target_id: targetId,
             task_kinds: ['summary_card', 'article'],
         }).catch((error) => {
@@ -2674,11 +2680,19 @@ class ForwarderPools extends BaseCompatibleModel {
         const durableLastSentAt = Number(
             latestVisibleOutbound?.finished_at || latestVisibleOutbound?.updated_at || latestVisibleOutbound?.created_at || 0,
         )
-        const lastSentAt = Math.max(memoryLastSentAt, durableLastSentAt)
+        const lastSentAt = Math.max(memoryLastSentAt, memoryTargetLastSentAt, durableLastSentAt)
         if (lastSentAt > 0) {
-            this.summaryCardLastSentAt.set(queueKey, lastSentAt)
+            this.markSummaryCardVisibleSent(queueKey, targetId, lastSentAt)
         }
         return !lastSentAt || now - lastSentAt >= config.intervalSeconds
+    }
+
+    private markSummaryCardVisibleSent(queueKey: string, targetId: string, sentAt: number) {
+        this.summaryCardLastSentAt.set(queueKey, sentAt)
+        this.summaryCardTargetLastSentAt.set(
+            targetId,
+            Math.max(this.summaryCardTargetLastSentAt.get(targetId) || 0, sentAt),
+        )
     }
 
     private canFlushSummaryCardThreshold(queueKey: string, queue: SummaryCardQueue, now: number) {
@@ -3355,6 +3369,14 @@ class ForwarderPools extends BaseCompatibleModel {
                       queue.config.translatedCard.badgeLabel,
                   )
                 : null
+        this.log?.info(
+            `Prepared message pack card (${reason}) for ${queue.target.id}: ` +
+                `articles=${totalArticles} groups=${groups.length} ` +
+                `primary_cards=${primaryCard.cardResult.cardMediaFiles.length} ` +
+                `translated_cards=${translatedCard?.cardResult.cardMediaFiles.length || 0} ` +
+                `translated_enabled=${Boolean(queue.config.translatedCard)} ` +
+                `translated_content=${Boolean(hasTranslatedContent)}`,
+        )
         const cardResults = [primaryCard.cardResult, translatedCard?.cardResult].filter(
             (result): result is RenderResult => Boolean(result),
         )
@@ -3411,13 +3433,14 @@ class ForwarderPools extends BaseCompatibleModel {
                         ? DB.AggregationWindow.STATUS.Completed
                         : DB.AggregationWindow.STATUS.Cancelled
                     if (visibleCompletion) {
-                        this.summaryCardLastSentAt.set(
+                        this.markSummaryCardVisibleSent(
                             this.getSummaryCardQueueKey(
                                 queue.routeKey,
                                 queue.target.id,
                                 queue.runtime_config,
                                 queue.config,
                             ),
+                            queue.target.id,
                             now,
                         )
                     }
@@ -3494,8 +3517,9 @@ class ForwarderPools extends BaseCompatibleModel {
                     payload_hash: outboundPayloadHash,
                 }).catch(() => undefined)
             }
-            this.summaryCardLastSentAt.set(
+            this.markSummaryCardVisibleSent(
                 this.getSummaryCardQueueKey(queue.routeKey, queue.target.id, queue.runtime_config, queue.config),
+                queue.target.id,
                 now,
             )
             this.log?.info(
@@ -3524,6 +3548,11 @@ class ForwarderPools extends BaseCompatibleModel {
                         payload_hash: outboundPayloadHash,
                     }).catch(() => undefined)
                 }
+                this.markSummaryCardVisibleSent(
+                    this.getSummaryCardQueueKey(queue.routeKey, queue.target.id, queue.runtime_config, queue.config),
+                    queue.target.id,
+                    now,
+                )
                 return true
             }
             await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)

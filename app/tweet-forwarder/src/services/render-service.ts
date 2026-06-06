@@ -162,7 +162,13 @@ export class RenderService {
                 this.log?.debug(`Generated rendered image at ${path}`)
                 return path
             } catch (e) {
-                this.log?.error(`Error while converting article to img: ${e}`)
+                const errorText = e instanceof Error ? e.stack || e.message : String(e)
+                this.log?.error(
+                    `Error while converting article ${article.platform}:${article.a_id} (${article.type}) to img ` +
+                        `for task ${taskId} render=${render_type || 'default'} features=${JSON.stringify(
+                            this.resolveCardFeatures(config.card_features),
+                        )}: ${errorText}`,
+                )
                 return null
             }
         }
