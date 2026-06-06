@@ -7,11 +7,32 @@ import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
 
 async function writeLargePpm(filePath: string, width = 900, height = 900) {
     const header = Buffer.from(`P6\n${width} ${height}\n255\n`)
     const pixels = Buffer.alloc(width * height * 3, 255)
     await writeFile(filePath, Buffer.concat([header, pixels]))
+}
+
+function probeImageSize(filePath: string) {
+    const output = execFileSync(
+        process.env.FFPROBE_PATH || 'ffprobe',
+        [
+            '-v',
+            'error',
+            '-select_streams',
+            'v:0',
+            '-show_entries',
+            'stream=width,height',
+            '-of',
+            'csv=s=x:p=0',
+            filePath,
+        ],
+        { encoding: 'utf8' },
+    ).trim()
+    const [width, height] = output.split('x').map((part) => Number(part))
+    return { width, height }
 }
 
 test('QQForwarder treats video thumbnails as images', async () => {
@@ -97,6 +118,46 @@ test('QQForwarder compresses oversized image attachments before building image s
         }
 
         await (forwarder as any).realSend(['oversized image'], {
+            media: [{ media_type: 'photo', path: sourcePath }],
+        })
+
+        expect(sentPath).toBeTruthy()
+        expect(existsSync(sentPath)).toBe(false)
+    } finally {
+        await rm(tempRoot, { recursive: true, force: true })
+    }
+})
+
+test('QQForwarder preserves tall rendered card width when compressing oversized images', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-tall-card-compress-'))
+    const sourcePath = path.join(tempRoot, 'tall-card.ppm')
+    await writeLargePpm(sourcePath, 1200, 6000)
+    const maxImageBytes = 4_000_000
+
+    try {
+        const forwarder = new QQForwarder(
+            {
+                group_id: '123',
+                url: 'http://127.0.0.1:3001',
+                token: '',
+                max_image_bytes: maxImageBytes,
+            } as any,
+            'qq-tall-card-compress-test',
+        )
+        ;(forwarder as any).minInterval = 0
+
+        let sentPath = ''
+        ;(forwarder as any).sendWithPayload = async (segments: any) => {
+            const imageSegment = segments.find((segment: any) => segment.type === 'image')
+            sentPath = String(imageSegment?.data?.file || '').replace(/^file:\/\//, '')
+            const uploadedSize = probeImageSize(sentPath)
+            expect(uploadedSize.width).toBeGreaterThanOrEqual(1000)
+            expect(uploadedSize.height).toBeGreaterThan(2400)
+            expect((await stat(sentPath)).size).toBeLessThanOrEqual(maxImageBytes)
+            return { ok: true }
+        }
+
+        await (forwarder as any).realSend(['tall card'], {
             media: [{ media_type: 'photo', path: sourcePath }],
         })
 

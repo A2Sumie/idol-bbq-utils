@@ -34,7 +34,9 @@ interface CompressionAttempt {
     quality: number
 }
 
+const TALL_IMAGE_HEIGHT_WIDTH_RATIO = 3
 const COMPRESSION_ATTEMPTS: CompressionAttempt[] = [
+    { maxDimension: 2400, quality: 2 },
     { maxDimension: 2400, quality: 3 },
     { maxDimension: 2048, quality: 4 },
     { maxDimension: 1600, quality: 5 },
@@ -81,7 +83,9 @@ function fitDimensions(dimensions: ImageDimensions | null, maxDimension: number)
         return `${maxDimension}:${maxDimension}:force_original_aspect_ratio=decrease`
     }
 
-    const ratio = Math.min(1, maxDimension / Math.max(dimensions.width, dimensions.height))
+    const isTallImage = dimensions.height / dimensions.width >= TALL_IMAGE_HEIGHT_WIDTH_RATIO
+    const constrainedDimension = isTallImage ? dimensions.width : Math.max(dimensions.width, dimensions.height)
+    const ratio = Math.min(1, maxDimension / constrainedDimension)
     return `${safeEvenDimension(dimensions.width * ratio)}:${safeEvenDimension(dimensions.height * ratio)}`
 }
 
@@ -158,6 +162,8 @@ function compressImageUnderLimit(
                     '1',
                     '-q:v',
                     String(attempt.quality),
+                    '-pix_fmt',
+                    'yuvj444p',
                     '-map_metadata',
                     '-1',
                     outputPath,
