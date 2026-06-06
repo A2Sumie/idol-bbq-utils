@@ -142,6 +142,7 @@ const DEFAULT_TAG_DIGEST_WINDOW_SECONDS = 20 * 60
 const DEFAULT_COLLAPSE_FORWARDED_REF_WINDOW_SECONDS = 18 * 3600
 const DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA = 12
 const DEFAULT_SUMMARY_CARD_STALE_GRACE_SECONDS = 3600
+const DEFAULT_SUMMARY_CARD_FLUSHES_PER_TICK = 1
 const DEFAULT_BATCH_AGGREGATION_CRON = '0 * * * *'
 const DEFAULT_BATCH_AGGREGATION_WINDOW_SECONDS = 3600
 const HIGH_REALTIME_GROUP_IDS = new Set(['742435777'])
@@ -978,10 +979,34 @@ class ForwarderPools extends BaseCompatibleModel {
             const lastQueuedAt = Math.max(...Array.from(queueItems.values()).map((item) => item.queuedAt))
             const windowStart = Number(window.window_start || firstQueuedAt)
             const windowEnd = Number(window.window_end || firstQueuedAt + config.intervalSeconds)
-            this.summaryCardQueues.set(
-                this.getSummaryCardQueueKey(window.route_key, target.id, runtime_config, config),
-                {
-                    routeKey: window.route_key,
+            const sharedRouteKey = this.buildSummaryCardSharedRouteKey(target.id)
+            const queueKey = this.getSummaryCardQueueKey(sharedRouteKey, target.id, runtime_config, config)
+            const existingQueue = this.summaryCardQueues.get(queueKey)
+            if (existingQueue) {
+                for (const item of queueItems.values()) {
+                    existingQueue.items.set(item.article.id, item)
+                    if (existingQueue.windowId && existingQueue.windowId !== window.id) {
+                        await this.persistSummaryCardItem(existingQueue, item).catch((error) => {
+                            this.log?.warn(
+                                `Failed to merge summary-card item ${item.article.a_id} into window ${existingQueue.windowId}: ${
+                                    error instanceof Error ? error.message : String(error)
+                                }`,
+                            )
+                        })
+                    }
+                }
+                existingQueue.firstQueuedAt = Math.min(existingQueue.firstQueuedAt, firstQueuedAt)
+                existingQueue.lastQueuedAt = Math.max(existingQueue.lastQueuedAt, lastQueuedAt)
+                existingQueue.windowStart = Math.min(existingQueue.windowStart || windowStart, windowStart)
+                existingQueue.windowEnd = Math.max(existingQueue.windowEnd || windowEnd, windowEnd)
+                if (existingQueue.windowId && existingQueue.windowId !== window.id) {
+                    await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
+                        payload_hash: `merged-into-window-${existingQueue.windowId}`,
+                    }).catch(() => undefined)
+                }
+            } else {
+                this.summaryCardQueues.set(queueKey, {
+                    routeKey: sharedRouteKey,
                     windowId: window.id,
                     target,
                     runtime_config,
@@ -991,8 +1016,8 @@ class ForwarderPools extends BaseCompatibleModel {
                     lastQueuedAt,
                     windowStart,
                     windowEnd,
-                },
-            )
+                })
+            }
             restoredCount += 1
         }
         if (restoredCount > 0) {
@@ -2400,6 +2425,18 @@ class ForwarderPools extends BaseCompatibleModel {
         return syntheticOutboundKey(targetId, 'summary_window', `${routeKeyValue}:${windowStart}:${intervalSeconds}`)
     }
 
+    private buildSummaryCardSharedRouteKey(targetId: string) {
+        return targetRouteKey(
+            routeKey({
+                source: 'system',
+                crawlerId: 'summary-card',
+                formatterId: 'all-platforms',
+                targetId,
+            }),
+            targetId,
+        )
+    }
+
     private resolveSummaryCardWindowStart(firstQueuedAt: number, config: ResolvedSummaryCardConfig) {
         if (config.windowAlignment === 'hour') {
             return dayjs.unix(firstQueuedAt).startOf('hour').unix()
@@ -2479,9 +2516,14 @@ class ForwarderPools extends BaseCompatibleModel {
         runtime_config?: ForwardTargetPlatformCommonConfig,
         routeKeyValue?: string,
     ) {
+        void routeKeyValue
         const effectiveConfig = target.getEffectiveConfig(runtime_config)
         const summaryConfig = resolveSummaryCardConfig(effectiveConfig)
         if (!summaryConfig) {
+            return false
+        }
+
+        if (!this.shouldUseSummaryCardForArticle(article)) {
             return false
         }
 
@@ -2497,8 +2539,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const now = Math.floor(Date.now() / 1000)
-        const summaryRouteKey =
-            routeKeyValue || targetRouteKey(routeKey({ source: 'system', crawlerId: 'unknown' }), target.id)
+        const summaryRouteKey = this.buildSummaryCardSharedRouteKey(target.id)
         const queueKey = this.getSummaryCardQueueKey(summaryRouteKey, target.id, runtime_config, summaryConfig)
         let existingQueue = this.summaryCardQueues.get(queueKey)
         if (existingQueue && this.isSummaryCardQueueDue(existingQueue, now)) {
@@ -2867,6 +2908,24 @@ class ForwarderPools extends BaseCompatibleModel {
         return '[图略]'
     }
 
+    private shouldUseSummaryCardForArticle(article: ArticleWithId) {
+        if (article.platform !== Platform.Website) {
+            return true
+        }
+        const feed = String((article.extra?.data as any)?.feed || '').trim()
+        return feed !== 'official-blog' && article.u_id !== '22/7:official-blog'
+    }
+
+    private isSummaryRealtimeMediaEligible(target: BaseForwarder, file: RenderedMediaFile, allFiles: RenderedMediaFile[]) {
+        if (file.media_type === 'photo' || file.media_type === 'video') {
+            return true
+        }
+        if (file.media_type !== 'video_thumbnail') {
+            return false
+        }
+        return target.NAME === 'bilibili' && allFiles.some((item) => item.media_type === 'video')
+    }
+
     private async releaseTargetMediaVisibilityClaims(visibility: MediaVisibilityResult | null | undefined) {
         if (!visibility?.policy || visibility.visibleClaims.length === 0 || isNonLiveOutboundSendMode()) {
             return
@@ -2885,7 +2944,10 @@ class ForwarderPools extends BaseCompatibleModel {
         config: ResolvedSummaryCardConfig,
         renderResult: RenderResult,
     ): Promise<SummaryCardRealtimeMediaResult> {
-        const mediaFiles = [...renderResult.originalMediaFiles]
+        const rawMediaFiles = [...renderResult.originalMediaFiles]
+        const mediaFiles = rawMediaFiles.filter((file) =>
+            this.isSummaryRealtimeMediaEligible(target, file, rawMediaFiles),
+        )
         if (mediaFiles.length === 0) {
             return {
                 hadMedia: false,
@@ -3217,9 +3279,16 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private async flushDueSummaryCardQueues() {
         const now = Math.floor(Date.now() / 1000)
+        let flushed = 0
         for (const [queueKey, queue] of Array.from(this.summaryCardQueues.entries())) {
             if (this.isSummaryCardQueueDue(queue, now)) {
                 await this.flushSummaryCardQueue(queueKey, 'interval')
+                if (!this.summaryCardQueues.has(queueKey)) {
+                    flushed += 1
+                    if (flushed >= DEFAULT_SUMMARY_CARD_FLUSHES_PER_TICK) {
+                        break
+                    }
+                }
             }
         }
     }

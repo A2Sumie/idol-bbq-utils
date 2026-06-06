@@ -35,7 +35,7 @@ function probeImageSize(filePath: string) {
     return { width, height }
 }
 
-test('QQForwarder treats video thumbnails as images', async () => {
+test('QQForwarder does not send video thumbnails as standalone images', async () => {
     const forwarder = new QQForwarder(
         {
             group_id: '123',
@@ -69,12 +69,6 @@ test('QQForwarder treats video thumbnails as images', async () => {
                 type: 'text',
                 data: {
                     text: 'shorts update',
-                },
-            },
-            {
-                type: 'image',
-                data: {
-                    file: 'file:///tmp/shorts-cover.jpg',
                 },
             },
         ],
@@ -266,6 +260,36 @@ test('BiliForwarder rejects uploaded images without size metadata in strict mode
             media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
         }),
     ).rejects.toThrow('No photos uploaded')
+    expect(sent).toBeFalse()
+})
+
+test('BiliForwarder suppresses pure video-thumbnail dynamics when visible media is required', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            require_media: true,
+        } as any,
+        'bili-thumbnail-only-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    let uploaded = false
+    let sent = false
+    ;(forwarder as any).uploadPhoto = async () => {
+        uploaded = true
+    }
+    ;(forwarder as any).sendTextWithPhotos = async () => {
+        sent = true
+        return { data: { code: 0, message: 'ok' } }
+    }
+
+    const result = await (forwarder as any).realSend(['video update'], {
+        media: [{ media_type: 'video_thumbnail', path: '/tmp/video-cover.jpg' }],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic_media_required_suppressed' }])
+    expect(uploaded).toBeFalse()
     expect(sent).toBeFalse()
 })
 

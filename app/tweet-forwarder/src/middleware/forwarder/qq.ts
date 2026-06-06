@@ -42,7 +42,7 @@ class QQForwarder extends Forwarder {
                 file: string
             }
         }> = media
-            .filter((i) => i.media_type === 'photo' || i.media_type === 'video_thumbnail')
+            .filter((i) => i.media_type === 'photo')
             .map((i) => ({
                 type: 'image',
                 data: {

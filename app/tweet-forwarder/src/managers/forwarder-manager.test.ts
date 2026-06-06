@@ -3406,7 +3406,7 @@ test('flushSummaryCardQueue keeps summary-card windows retryable after transient
     expect(sentOutbound?.status).toBe('sent')
 })
 
-test('summary-card queues are isolated by route for the same target', async () => {
+test('summary-card queues are shared across routes for the same target', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -3493,10 +3493,13 @@ test('summary-card queues are isolated by route for the same target', async () =
     const queues = Array.from((pools as any).summaryCardQueues.values()).filter(
         (queue: any) => queue.target.id === target.id,
     )
-    expect(queues).toHaveLength(2)
-    expect(new Set(queues.map((queue: any) => queue.routeKey))).toEqual(
-        new Set([`route-a:target:${target.id}`, `route-b:target:${target.id}`]),
-    )
+    expect(queues).toHaveLength(1)
+    expect(queues[0]?.items.size).toBe(2)
+    expect(Array.from(queues[0]?.items.values()).map((item: any) => item.article.a_id)).toEqual([
+        'summary-route-isolation-0',
+        'summary-route-isolation-1',
+    ])
+    expect(queues[0]?.routeKey).toContain('summary-card')
 })
 
 test('sendArticles records suppressed payload drift for target-once article outbox keys', async () => {
@@ -6170,7 +6173,7 @@ test('summary-card realtime media visibility releases reservations after failed 
     expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(2)
 })
 
-test('summary-card realtime media can include basic text for Bilibili-style targets', async () => {
+test('summary-card realtime media can include basic text for Bilibili video targets', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'bilibili'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -6229,6 +6232,12 @@ test('summary-card realtime media can include basic text for Bilibili-style targ
                     sourceArticleId: article.a_id,
                     sourceUrl: `https://example.com/realtime-basic-${article.id}.jpg`,
                 },
+                {
+                    media_type: 'video',
+                    path: `/tmp/realtime-basic-${article.id}.mp4`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-basic-${article.id}.mp4`,
+                },
             ],
             mediaFiles: [
                 {
@@ -6236,6 +6245,12 @@ test('summary-card realtime media can include basic text for Bilibili-style targ
                     path: `/tmp/realtime-basic-${article.id}.jpg`,
                     sourceArticleId: article.a_id,
                     sourceUrl: `https://example.com/realtime-basic-${article.id}.jpg`,
+                },
+                {
+                    media_type: 'video',
+                    path: `/tmp/realtime-basic-${article.id}.mp4`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-basic-${article.id}.mp4`,
                 },
             ],
         }),
@@ -6264,7 +6279,10 @@ test('summary-card realtime media can include basic text for Bilibili-style targ
                     created_at: now,
                     ref: null,
                     has_media: true,
-                    media: [{ type: 'video_thumbnail', url: 'https://example.com/realtime-basic-812.jpg' }],
+                    media: [
+                        { type: 'video_thumbnail', url: 'https://example.com/realtime-basic-812.jpg' },
+                        { type: 'video', url: 'https://example.com/realtime-basic-812.mp4' },
+                    ],
                     extra: null,
                     u_avatar: null,
                 },
@@ -6280,7 +6298,199 @@ test('summary-card realtime media can include basic text for Bilibili-style targ
     expect(target.sent[0]?.texts[0]).toContain('summary basic media text')
     expect(target.sent[0]?.texts[0]).toContain('https://x.com/media_basic_member/status/812')
     expect(target.sent[0]?.props?.bypassMediaBatch).toBeTrue()
-    expect(target.sent[0]?.props?.media?.[0]?.media_type).toBe('video_thumbnail')
+    expect(target.sent[0]?.props?.media?.map((file: any) => file.media_type)).toEqual(['video_thumbnail', 'video'])
+    expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(1)
+})
+
+test('summary-card realtime media skips pure video thumbnails for non-Bilibili targets', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'qq'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'none',
+                flush_on_threshold: false,
+            },
+        } as any,
+        'target-summary-card-realtime-thumbnail-qq',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            const files = [
+                {
+                    media_type: 'video_thumbnail',
+                    path: `/tmp/realtime-thumbnail-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-thumbnail-${article.id}.jpg`,
+                },
+            ]
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: files,
+                mediaFiles: files,
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-realtime-thumbnail-qq',
+        [
+            {
+                id: 816,
+                a_id: 'summary-realtime-thumbnail-qq',
+                platform: Platform.X,
+                username: 'video member',
+                u_id: 'video_member',
+                content: 'video thumbnail should wait for summary',
+                url: 'https://x.com/video_member/status/816',
+                type: 'tweet',
+                created_at: now,
+                ref: null,
+                has_media: true,
+                media: [{ type: 'video_thumbnail', url: 'https://example.com/realtime-thumbnail-816.jpg' }],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(target.sent).toHaveLength(0)
+    expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(1)
+})
+
+test('summary-card realtime media skips pure video thumbnails for Bilibili targets', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'metadata',
+                flush_on_threshold: false,
+            },
+        } as any,
+        'target-summary-card-realtime-thumbnail-bili',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            const files = [
+                {
+                    media_type: 'video_thumbnail',
+                    path: `/tmp/realtime-bili-thumbnail-${article.id}.jpg`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `https://example.com/realtime-bili-thumbnail-${article.id}.jpg`,
+                },
+            ]
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: files,
+                mediaFiles: files,
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-realtime-thumbnail-bili',
+        [
+            {
+                id: 817,
+                a_id: 'summary-realtime-thumbnail-bili',
+                platform: Platform.YouTube,
+                username: 'YT Channel',
+                u_id: 'yt_channel',
+                content: 'youtube video should wait for aggregation when only cover exists',
+                url: 'https://www.youtube.com/watch?v=817',
+                type: 'video',
+                created_at: now,
+                ref: null,
+                has_media: true,
+                media: [{ type: 'video_thumbnail', url: 'https://example.com/realtime-bili-thumbnail-817.jpg' }],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(target.sent).toHaveLength(0)
     expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(1)
 })
 
@@ -6533,6 +6743,219 @@ test('summary-card realtime media and later aggregation do not suppress each oth
         (record: any) => record.task_kind === 'article',
     )
     expect(articleSkips).toHaveLength(0)
+})
+
+test('summary-card queues social platforms together per target instead of per route', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'qq'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 3600,
+                include_original_media: false,
+                send_first_immediately: false,
+                flush_on_threshold: false,
+                align_to_hour: true,
+                flush_delay_seconds: 300,
+            },
+        } as any,
+        'target-summary-card-social-shared',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content || '',
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-social-x',
+        [
+            {
+                id: 818,
+                a_id: 'summary-social-x',
+                platform: Platform.X,
+                username: 'x member',
+                u_id: 'x_member',
+                content: 'x text',
+                url: 'https://x.com/x_member/status/818',
+                type: 'tweet',
+                created_at: now,
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+        undefined,
+        { routeKey: targetRouteKey(routeKey({ source: 'graph', crawlerId: 'x-crawler' }), target.id) },
+    )
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-social-ig',
+        [
+            {
+                id: 819,
+                a_id: 'summary-social-ig',
+                platform: Platform.Instagram,
+                username: 'IG member',
+                u_id: 'ig_member',
+                content: 'ig text',
+                url: 'https://www.instagram.com/p/819/',
+                type: 'post',
+                created_at: now + 1,
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+        undefined,
+        { routeKey: targetRouteKey(routeKey({ source: 'graph', crawlerId: 'ig-crawler' }), target.id) },
+    )
+
+    const queues = Array.from((pools as any).summaryCardQueues.values()) as Array<any>
+    const windows = Array.from(((DB.AggregationWindow as any).__windows as Map<number, any>).values()).filter(
+        (window: any) => window.status === 'open',
+    )
+    expect(target.sent).toHaveLength(0)
+    expect(queues).toHaveLength(1)
+    expect(queues[0]?.items.size).toBe(2)
+    expect(Array.from(queues[0]?.items.values()).map((item: any) => item.article.platform)).toEqual([
+        Platform.X,
+        Platform.Instagram,
+    ])
+    expect(windows).toHaveLength(1)
+})
+
+test('summary-card targets leave official blog articles on the native send path', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'qq'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 3600,
+                include_original_media: false,
+                send_first_immediately: false,
+                flush_on_threshold: false,
+            },
+        } as any,
+        'target-summary-card-blog-native',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content || '',
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-blog-native',
+        [
+            {
+                id: 821,
+                a_id: 'summary-blog-native',
+                platform: Platform.Website,
+                username: 'Blog Member',
+                u_id: '22/7:official-blog',
+                content: 'official blog body',
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/821',
+                type: 'article',
+                created_at: now,
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: {
+                    data: {
+                        feed: 'official-blog',
+                    },
+                },
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toBe('official blog body')
+    expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
 })
 
 test('target media visibility text-collapses media after the second visible occurrence', async () => {
