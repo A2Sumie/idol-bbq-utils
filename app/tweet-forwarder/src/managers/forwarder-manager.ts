@@ -3833,11 +3833,11 @@ class ForwarderPools extends BaseCompatibleModel {
         translatedBadgeLabel?: string,
     ) {
         const mediaUsage: SummaryCardMediaUsage = new Map()
-        const embeddedMedia = this.buildSummaryCardEmbeddedMedia(allItems, queue.config, mediaUsage)
         const renderMeta = await this.buildSummaryCardRenderMeta(queue, groups, mediaUsage, {
             textMode,
             translatedBadgeLabel,
         })
+        const embeddedMedia: NonNullable<Article['media']> = []
         const summaryArticle = this.buildSyntheticSummaryArticle(
             title,
             content,
@@ -4078,32 +4078,6 @@ class ForwarderPools extends BaseCompatibleModel {
             }
             return this.shouldUseSummaryCardMediaKeys(keys, config, mediaUsage)
         })
-    }
-
-    private buildSummaryCardEmbeddedMedia(
-        items: SummaryCardQueueItem[],
-        config?: ResolvedSummaryCardConfig,
-        mediaUsage?: SummaryCardMediaUsage,
-    ): NonNullable<Article['media']> {
-        const fromRenderedFiles = this.renderService.buildCardMediaFromRenderedFiles(
-            this.filterSummaryCardRenderedFiles(
-                items.flatMap((item) => item.cardSourceMediaFiles),
-                config,
-                mediaUsage,
-                { renderableOnly: true },
-            ),
-            DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA,
-        )
-        if (fromRenderedFiles.length > 0) {
-            return fromRenderedFiles
-        }
-
-        return this.collectSummaryArticleMedia(
-            items.map((item) => item.article),
-            DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA,
-            config,
-            mediaUsage,
-        )
     }
 
     private collectSummaryArticleMedia(

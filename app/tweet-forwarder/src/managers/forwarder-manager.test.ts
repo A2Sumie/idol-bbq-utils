@@ -7575,7 +7575,7 @@ test('idle-first translated native companion is suppressed for text-only media v
     ).toHaveLength(1)
 })
 
-test('summary-card media duplicate budget keeps one top representative per card', async () => {
+test('summary-card media duplicate budget keeps one in-card representative per card variant', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -7611,6 +7611,7 @@ test('summary-card media duplicate budget keeps one top representative per card'
                 include_original_media: false,
                 send_first_immediately: false,
                 media_duplicate_limit: 1,
+                translated_card: true,
             },
         } as any,
         'target-summary-card-media-duplicate-limit',
@@ -7620,15 +7621,16 @@ test('summary-card media duplicate budget keeps one top representative per card'
     ;(pools as any).releaseArticleChain = async () => undefined
     const packedArticles: Array<any> = []
     ;(pools as any).renderService = {
-        process: async (article: any) => {
+        process: async (article: any, config?: any) => {
             if (article.id < 0) {
+                const suffix = config?.card_features?.includes('translated-corner-badge') ? 'translated' : 'original'
                 packedArticles.push(article)
                 return {
                     text: article.content,
                     textCollapseMode: 'article',
-                    cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-dup.png' }],
+                    cardMediaFiles: [{ media_type: 'photo', path: `/tmp/summary-card-dup-${suffix}.png` }],
                     originalMediaFiles: [],
-                    mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card-dup.png' }],
+                    mediaFiles: [{ media_type: 'photo', path: `/tmp/summary-card-dup-${suffix}.png` }],
                 }
             }
             return {
@@ -7679,6 +7681,8 @@ test('summary-card media duplicate budget keeps one top representative per card'
                 username: `duplicate member ${index}`,
                 u_id: `duplicate_member_${index}`,
                 content: `duplicate text ${index}`,
+                translation: `duplicate translated ${index}`,
+                translated_by: 'LLM',
                 url: `https://x.com/duplicate_member/status/${index}`,
                 type: 'tweet',
                 created_at: now + index,
@@ -7698,15 +7702,32 @@ test('summary-card media duplicate budget keeps one top representative per card'
     }
 
     expect(target.sent).toHaveLength(1)
-    expect(packedArticles[0]?.media).toHaveLength(1)
-    const itemMediaCounts = packedArticles[0]?.extra?.data?.groups.flatMap((group: any) =>
-        group.items.map((item: any) => item.media.length),
-    )
-    expect(itemMediaCounts).toEqual([0, 0, 0])
-    const itemTexts = packedArticles[0]?.extra?.data?.groups.flatMap((group: any) =>
+    expect(target.sent[0]?.props?.cardMedia).toEqual([
+        { media_type: 'photo', path: '/tmp/summary-card-dup-original.png' },
+        { media_type: 'photo', path: '/tmp/summary-card-dup-translated.png' },
+    ])
+    expect(packedArticles).toHaveLength(2)
+    expect(packedArticles[0]?.media).toEqual([])
+    expect(packedArticles[1]?.media).toEqual([])
+    for (const packedArticle of packedArticles) {
+        const itemMediaCounts = packedArticle?.extra?.data?.groups.flatMap((group: any) =>
+            group.items.map((item: any) => item.media.length),
+        )
+        expect(itemMediaCounts).toEqual([1, 0, 0])
+        const itemTexts = packedArticle?.extra?.data?.groups.flatMap((group: any) =>
+            group.items.map((item: any) => item.text),
+        )
+        expect(itemTexts[0]).not.toContain('[图略]')
+        expect(itemTexts[1]).toContain('[图略]')
+        expect(itemTexts[2]).toContain('[图略]')
+    }
+    const originalItemTexts = packedArticles[0]?.extra?.data?.groups.flatMap((group: any) =>
         group.items.map((item: any) => item.text),
     )
-    expect(itemTexts[0]).toContain('[图略]')
-    expect(itemTexts[1]).toContain('[图略]')
-    expect(itemTexts[2]).toContain('[图略]')
+    const translatedItemTexts = packedArticles[1]?.extra?.data?.groups.flatMap((group: any) =>
+        group.items.map((item: any) => item.text),
+    )
+    expect(originalItemTexts[0]).toContain('duplicate text 0')
+    expect(originalItemTexts[0]).not.toContain('duplicate translated 0')
+    expect(translatedItemTexts[0]).toContain('duplicate translated 0')
 })
