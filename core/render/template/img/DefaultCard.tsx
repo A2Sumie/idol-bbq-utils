@@ -806,8 +806,8 @@ function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
     const shapeSize = 48
     const leftStart = 190
     const topStart = 34
-    const columnGap = 124
-    const rowGap = 140
+    const columnGap = 116
+    const rowGap = 132
     const rowCount = Math.max(1, Math.ceil((cardHeight - topStart) / rowGap))
     const patternShapes = Array.from({ length: rowCount }).flatMap((_, rowIndex) => {
         const rowTop = topStart + rowIndex * rowGap
