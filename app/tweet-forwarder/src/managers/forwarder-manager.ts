@@ -4240,20 +4240,6 @@ class ForwarderPools extends BaseCompatibleModel {
         return this.collectSummaryArticleMedia([item.article], DEFAULT_SUMMARY_CARD_MAX_EMBEDDED_MEDIA).length
     }
 
-    private shouldCollapseSummaryCardItemRefText(queue: SummaryCardQueue, article: ArticleWithId) {
-        if (!article.ref || typeof article.ref !== 'object') {
-            return false
-        }
-        const config = queue.target.getEffectiveConfig(queue.runtime_config)
-        if (config.collapse_forwarded_ref_text === false) {
-            return false
-        }
-        if (HIGH_REALTIME_GROUP_IDS.has(String((config as any).group_id || ''))) {
-            return false
-        }
-        return true
-    }
-
     private buildArticleTextVariant(article: ArticleWithId, textMode: SummaryCardTextMode) {
         if (textMode === 'default') {
             return article
@@ -4372,20 +4358,9 @@ class ForwarderPools extends BaseCompatibleModel {
         nonStormTags: Array<string> = [],
         textMode: SummaryCardTextMode = 'default',
     ) {
-        const config = queue.target.getEffectiveConfig(queue.runtime_config)
-        const collapsedArticleIds = this.shouldCollapseSummaryCardItemRefText(queue, article)
-            ? await this.collectForwardedReferenceIds(
-                  article,
-                  queue.target.id,
-                  this.resolvePositiveSeconds(
-                      config.collapse_forwarded_ref_window_seconds,
-                      DEFAULT_COLLAPSE_FORWARDED_REF_WINDOW_SECONDS,
-                  ),
-              )
-            : undefined
         const textArticle = this.buildArticleTextVariant(article, textMode)
         const message =
-            this.renderService.renderText(textArticle, { render_type: 'text-compact', collapsedArticleIds }).trim() ||
+            this.renderService.renderText(textArticle, { render_type: 'text-compact' }).trim() ||
             formatArticleHeaderLine(textArticle as any).trim() ||
             extractArticleHeadline(textArticle as any, 100).trim() ||
             article.url ||

@@ -4259,7 +4259,7 @@ test('restoreSummaryCardQueues cancels open windows when summary-card config cha
     expect(target.sent).toHaveLength(0)
 })
 
-test('sendArticles folds idle-first summary-card item when it appears as a later reply reference', async () => {
+test('sendArticles keeps forwarded reference text inside summary-card items', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -4407,9 +4407,9 @@ test('sendArticles folds idle-first summary-card item when it appears as a later
 
     expect(target.sent).toHaveLength(2)
     expect(packedArticles).toHaveLength(2)
-    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('@first_member 2320⁹（略）')
-    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).not.toContain('first body should not repeat')
-    expect(renderTextCalls.some((call) => call.article.id === 302 && call.collapsedArticleIds?.has(301))).toBeTrue()
+    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).not.toContain('（略）')
+    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('first body should not repeat')
+    expect(renderTextCalls.some((call) => call.article.id === 302 && call.collapsedArticleIds)).toBeFalse()
 })
 
 test('sendArticles renders a translated companion summary card with stable forwarded references', async () => {
@@ -4589,11 +4589,11 @@ test('sendArticles renders a translated companion summary card with stable forwa
     expect(originalReplyText).toContain('reply body')
     expect(originalReplyText).not.toContain('回复译文')
     expect(translatedReplyText).toContain('回复译文')
-    expect(translatedReplyText).toContain('@first_member 2320⁹（略）')
+    expect(translatedReplyText).not.toContain('（略）')
     expect(translatedReplyText).not.toContain('first body should not repeat')
-    expect(translatedReplyText).not.toContain('首条译文不应重复')
+    expect(translatedReplyText).toContain('首条译文不应重复')
     expect(
-        renderTextCalls.filter((call) => call.article.id === 302).every((call) => call.collapsedArticleIds?.has(301)),
+        renderTextCalls.filter((call) => call.article.id === 302).every((call) => !call.collapsedArticleIds),
     ).toBeTrue()
 })
 
