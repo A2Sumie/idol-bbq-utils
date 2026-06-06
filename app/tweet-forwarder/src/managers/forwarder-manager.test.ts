@@ -2881,6 +2881,80 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })
 
+test('summary-card send text keeps omitted item count in the top digest', () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+
+        protected async realSend() {
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder({ block_until: '32h' } as any, 'target-summary-card-send-text-digest')
+    const now = Math.floor(Date.now() / 1000)
+    const items = Array.from({ length: 7 }, (_, index) => {
+        const id = index + 1
+        return {
+            article: {
+                id,
+                a_id: `summary-send-text-${id}`,
+                platform: Platform.X,
+                username: `member${id}`,
+                u_id: `member${id}`,
+                content: `summary content ${id}`,
+                url: `https://x.com/member/status/${id}`,
+                type: 'tweet',
+                created_at: now + index,
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+            queuedAt: now,
+            cardSourceMediaFiles: [],
+            originalMediaFiles: [],
+            digestTags: [],
+        }
+    })
+    const text = (pools as any).buildSummaryCardSendText(
+        {
+            routeKey: 'summary-send-text-digest',
+            target,
+            runtime_config: undefined,
+            config: {
+                windowAlignment: 'none',
+            },
+            items: new Map(items.map((item) => [item.article.id, item])),
+            firstQueuedAt: now,
+            lastQueuedAt: now + 6,
+        },
+        items,
+        '聚合 fallback',
+    )
+
+    expect(text).toContain('1. member1发推')
+    expect(text).toContain('6. member6发推')
+    expect(text).not.toContain('7. member7发推')
+    expect(text).toContain('另有 1 条更新已合并')
+    expect(text).not.toContain('另有1条')
+})
+
 test('sendArticles does not flush a fresh summary-card queue from stale last sent time', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

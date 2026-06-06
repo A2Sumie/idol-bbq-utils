@@ -3923,7 +3923,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const omitted = items.length - shown.length
         return [
             `聚合 ${range || fallbackTitle.replace(/^聚合\s*/, '')}`.trim(),
-            [itemLine, omitted > 0 ? `另有${omitted}条` : ''].filter(Boolean).join(' '),
+            [itemLine, omitted > 0 ? `另有 ${omitted} 条更新已合并` : ''].filter(Boolean).join(' '),
         ]
             .filter(Boolean)
             .join('\n')
