@@ -789,7 +789,7 @@ function TranslatedPatternShape({
                 height: 48,
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: 'rgba(236, 72, 153, 0.12)',
+                color: 'rgba(236, 72, 153, 0.17)',
                 fontFamily: CARD_UI_FONT_FAMILY,
                 fontSize: 46,
                 fontWeight: 900,
@@ -804,15 +804,16 @@ function TranslatedPatternShape({
 function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
     const shapes: Array<'circle' | 'square' | 'triangle' | 'diamond'> = ['triangle', 'square', 'circle', 'diamond']
     const shapeSize = 48
-    const leftStart = 190
+    const leftStart = 36
     const topStart = 34
-    const columnGap = 116
-    const rowGap = 132
+    const columnGap = 104
+    const rowGap = 104
     const rowCount = Math.max(1, Math.ceil((cardHeight - topStart) / rowGap))
     const patternShapes = Array.from({ length: rowCount }).flatMap((_, rowIndex) => {
         const rowTop = topStart + rowIndex * rowGap
         const rowOffset = rowIndex % 2 === 0 ? 0 : columnGap / 2
-        return Array.from({ length: 3 })
+        const columnCount = Math.ceil((CARD_WIDTH - leftStart + columnGap) / columnGap)
+        return Array.from({ length: columnCount })
             .map((__, columnIndex) => {
                 const left = leftStart + rowOffset + columnIndex * columnGap
                 return {

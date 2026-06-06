@@ -209,11 +209,13 @@ test('translated-corner-badge feature renders sparse pink geometry watermark wit
     expect(pinkFill).toBeNull()
     expect(pattern).toBeTruthy()
     expect(clusters.length).toBe(0)
-    expect(geometryShapes.length).toBe(3)
-    expect(geometryShapes.map((shape) => shape.props.style.left)).toEqual([190, 306, 422])
-    expect(geometryShapes.map((shape) => shape.props.style.top)).toEqual([34, 34, 34])
+    expect(geometryShapes.length).toBe(10)
+    expect(geometryShapes.slice(0, 5).map((shape) => shape.props.style.left)).toEqual([36, 140, 244, 348, 452])
+    expect(geometryShapes.slice(5, 10).map((shape) => shape.props.style.left)).toEqual([88, 192, 296, 400, 504])
+    expect(geometryShapes.slice(0, 5).map((shape) => shape.props.style.top)).toEqual([34, 34, 34, 34, 34])
     expect(geometryShapes[0]?.props.style.width).toBe(48)
     expect(geometryShapes[0]?.props.style.height).toBe(48)
+    expect(geometryShapes[0]?.props.style.color).toBe('rgba(236, 72, 153, 0.17)')
     expect(xShape).toBeNull()
     expect(visibleTextBadge).toBeNull()
 })
@@ -261,14 +263,15 @@ test('translated-corner-badge watermark uses a staggered polka-dot grid on long 
     const geometryShapes = findReactElements(component, (node) =>
         ['circle', 'square', 'triangle', 'diamond'].includes(node.props?.['data-translated-pattern-shape']),
     )
-    const firstRow = geometryShapes.slice(0, 3)
-    const secondRow = geometryShapes.slice(3, 5)
+    const firstRow = geometryShapes.slice(0, 5)
+    const secondRow = geometryShapes.slice(5, 10)
 
     expect(geometryShapes.length).toBeGreaterThan(16)
     expect(new Set(geometryShapes.map((shape) => shape.props?.['data-translated-pattern-shape'])).size).toBe(4)
-    expect(firstRow.map((shape) => shape.props.style.left)).toEqual([190, 306, 422])
-    expect(secondRow.map((shape) => shape.props.style.left)).toEqual([248, 364])
-    expect(geometryShapes[3]?.props.style.top - geometryShapes[0]?.props.style.top).toBe(132)
+    expect(firstRow.map((shape) => shape.props.style.left)).toEqual([36, 140, 244, 348, 452])
+    expect(secondRow.map((shape) => shape.props.style.left)).toEqual([88, 192, 296, 400, 504])
+    expect(firstRow[1]?.props.style.left - firstRow[0]?.props.style.left).toBe(104)
+    expect(geometryShapes[5]?.props.style.top - geometryShapes[0]?.props.style.top).toBe(104)
 })
 
 test('long message-pack cards keep only a small height safety margin', () => {
