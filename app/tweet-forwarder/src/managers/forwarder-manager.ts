@@ -3001,19 +3001,29 @@ class ForwarderPools extends BaseCompatibleModel {
               )
             : this.hasArticleChainTranslatedContent([article])
         if (!hasTranslatedContent) {
+            this.log?.warn(
+                `Falling back to original-only summary realtime Bilibili tail card for ${article.a_id}: translated_card is enabled but no translated content is available`,
+            )
             return renderResult
         }
 
         const cardResult = await this.renderService.process(article, {
             taskId: `summary-realtime-card-${target.id}-${article.id || article.a_id}`,
             render_type: 'text-card',
+            card_features: ['translated-card-pattern'],
             preloadedMediaFiles: renderResult.originalMediaFiles,
             deduplication: false,
         })
         cardResult.mediaFiles ||= []
         cardResult.cardMediaFiles ||= []
         cardResult.originalMediaFiles ||= []
-        return cardResult.cardMediaFiles.length > 0 ? cardResult : renderResult
+        if (cardResult.cardMediaFiles.length === 0) {
+            this.log?.warn(
+                `Falling back to original-only summary realtime Bilibili tail card for ${article.a_id}: translated card render produced no media`,
+            )
+            return renderResult
+        }
+        return cardResult
     }
 
     private async releaseTargetMediaVisibilityClaims(visibility: MediaVisibilityResult | null | undefined) {

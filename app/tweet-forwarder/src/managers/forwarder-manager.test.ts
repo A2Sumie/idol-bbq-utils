@@ -7045,8 +7045,10 @@ test('summary-card realtime media appends translated content card for Bilibili p
         process: async (article: any, config?: any) => {
             renderProcessCalls.push({ article, config })
             if (String(config?.taskId || '').startsWith('summary-realtime-card-')) {
+                expect(article.content).toBe('photo body should be translated in Bilibili tail card')
                 expect(article.translation).toBe('译:photo body should be translated in Bilibili tail card')
                 expect(config?.preloadedMediaFiles).toEqual([sourceMedia])
+                expect(config?.card_features).toEqual(['translated-card-pattern'])
                 return {
                     text: article.content || '',
                     textCollapseMode: 'article',
@@ -7117,6 +7119,139 @@ test('summary-card realtime media appends translated content card for Bilibili p
         'realtime-translated-card-815.png',
     ])
     expect(renderProcessCalls).toHaveLength(2)
+})
+
+test('summary-card realtime Bilibili photo tail card keeps original-card fallback when translation is unavailable', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const originalCreateProcessor = (processorRegistry as any).create
+    ;(processorRegistry as any).create = async () => {
+        throw new Error('translator unavailable')
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.OpenAI,
+                    api_key: 'test-key',
+                    cfg_processor: { action: 'translate' },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                send_first_native: false,
+                media_realtime: true,
+                media_realtime_text: 'metadata',
+                flush_on_threshold: false,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                    processor_id: '22_7-social-ja-zh',
+                },
+            },
+        } as any,
+        'target-summary-card-realtime-photo-bili-translation-missing',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const sourceMedia = {
+        media_type: 'photo',
+        path: '/tmp/realtime-translation-missing-original-815.jpg',
+        sourceArticleId: 'summary-realtime-photo-tail-card-translation-missing',
+        sourceUrl: 'https://example.com/realtime-translation-missing-original-815.jpg',
+    }
+    const originalOnlyCard = {
+        media_type: 'photo',
+        path: '/tmp/realtime-translation-missing-original-card-815.png',
+        sourceArticleId: 'summary-realtime-photo-tail-card-translation-missing',
+        sourceUrl: 'card:summary-realtime-photo-tail-card-translation-missing:original',
+    }
+    const renderProcessCalls: Array<{ article: any; config: any }> = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            renderProcessCalls.push({ article, config })
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [originalOnlyCard],
+                originalMediaFiles: [sourceMedia],
+                mediaFiles: [sourceMedia, originalOnlyCard],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-realtime-photo-tail-card-translation-missing',
+            [
+                {
+                    id: 816,
+                    a_id: 'summary-realtime-photo-tail-card-translation-missing',
+                    platform: Platform.X,
+                    username: 'Photo Nick',
+                    u_id: 'photo_uid',
+                    content: 'photo body should not get an original-only Bilibili tail card',
+                    translation: null,
+                    translated_by: null,
+                    url: 'https://x.com/photo_uid/status/816',
+                    type: 'tweet',
+                    created_at: Math.floor(Date.now() / 1000),
+                    ref: null,
+                    has_media: true,
+                    media: [{ type: 'photo', url: 'https://example.com/realtime-translation-missing-original-815.jpg' }],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+    }
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.props?.media?.map((file: any) => path.basename(file.path))).toEqual([
+        'realtime-translation-missing-original-815.jpg',
+        'realtime-translation-missing-original-card-815.png',
+    ])
+    expect(renderProcessCalls).toHaveLength(1)
 })
 
 test('summary-card realtime media and later aggregation do not suppress each other', async () => {

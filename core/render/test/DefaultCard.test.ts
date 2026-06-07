@@ -13,6 +13,7 @@ import {
 import { languageFontMap } from '../src/img/utils/font'
 import { getIconCode } from '../src/img/utils/twemoji'
 import { ImgConverter, isSupportedOpenTypeFont, loadDynamicAsset } from '../src/img'
+import fs from 'fs'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
     return {
@@ -164,6 +165,71 @@ test('card UI metadata font prefers modern sans before simplified CJK fallback',
 
 test('dynamic fallback font list covers decorative lisu-shaped glyphs', () => {
     expect(languageFontMap.unknown).toContain('Noto+Sans+Lisu')
+    for (const font of [
+        'Noto+Sans+Armenian',
+        'Noto+Sans+Syriac',
+        'Noto+Sans+Bengali',
+        'Noto+Sans+Arabic',
+        'Noto+Serif+Tibetan',
+        'Noto+Sans+Khmer',
+        'Noto+Sans+Ethiopic',
+        'Noto+Sans+Balinese',
+        'Noto+Sans+Egyptian+Hieroglyphs',
+        'Noto+Sans+Linear+A',
+        'Noto+Sans+Vai',
+        'Noto+Sans+Cherokee',
+        'Noto+Sans+Mongolian',
+        'Noto+Sans+Tai+Tham',
+        'Noto+Sans+Batak',
+        'Noto+Sans+Inscriptional+Pahlavi',
+        'Noto+Sans+Miao',
+        'Noto+Sans+Bamum',
+    ]) {
+        expect(languageFontMap.unknown).toContain(font)
+    }
+})
+
+test('bundled font manifest includes broad kaomoji script coverage with valid font files', () => {
+    const fontsDir = './assets/fonts'
+    const fonts = JSON.parse(fs.readFileSync(`${fontsDir}/fonts.json`, 'utf-8')) as Array<{
+        name: string
+        font_file_name: string
+        weight: number
+    }>
+    const requiredFonts = [
+        'Noto Sans Armenian',
+        'Noto Sans Syriac',
+        'Noto Sans Bengali',
+        'Noto Sans Arabic',
+        'Noto Sans Lisu',
+        'Noto Sans Telugu',
+        'Noto Sans Thai',
+        'Noto Sans Tamil',
+        'Noto Sans Malayalam',
+        'Noto Sans Hebrew',
+        'Noto Sans Devanagari',
+        'Noto Sans Kannada',
+        'Noto Sans Khmer',
+        'Noto Sans Ethiopic',
+        'Noto Sans Balinese',
+        'Noto Serif Tibetan',
+        'Noto Sans Egyptian Hieroglyphs',
+        'Noto Sans Linear A',
+        'Noto Sans Vai',
+        'Noto Sans Cherokee',
+        'Noto Sans Mongolian',
+        'Noto Sans Tai Tham',
+        'Noto Sans Batak',
+        'Noto Sans Inscriptional Pahlavi',
+        'Noto Sans Miao',
+        'Noto Sans Bamum',
+    ]
+
+    for (const name of requiredFonts) {
+        const font = fonts.find((candidate) => candidate.name === name && candidate.weight === 400)
+        expect(font).toBeTruthy()
+        expect(isSupportedOpenTypeFont(fs.readFileSync(`${fontsDir}/${font?.font_file_name}`))).toBeTrue()
+    }
 })
 
 test('emoji icon code ignores text and emoji variation selectors', () => {
@@ -479,6 +545,48 @@ test('translated-corner-badge feature renders through satori without layout erro
 
     expect(img.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
     expect(readPngSize(img).width).toBeGreaterThan(0)
+})
+
+test('mixed-script decorative kaomoji snippets render without remote font assets', async () => {
+    const previousRemoteAssets = process.env.RENDER_REMOTE_ASSETS
+    process.env.RENDER_REMOTE_ASSETS = '0'
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'mixed-script-kaomoji-render-test',
+        u_id: 'decorative_member',
+        username: 'decorative member',
+        created_at: 1710000000,
+        content: [
+            '໒՞ ܸ. .ܸ՞۱',
+            '໒՞ ܸ. .ܸ՞১',
+            '໒꒰՞ ܸ. .ܸ՞꒱ྀི১',
+            '૮꒰˶•༝•˶꒱ა ♡₊˚ ୨୧ ࣪ ִֶָ ༘⋆ ೃ༄ ᥫ᭡ 𓆩♡𓆪',
+            '⋆𐙚₊˚⊹♡ Ꮚ ꔫ ᡣ𐭩 ᯓ 𖦹',
+        ].join('\n'),
+        translation: '໒՞ ܸ. .ܸ՞۱ 也要能在译文区正常渲染。',
+        translated_by: 'test',
+        url: 'https://x.com/decorative_member/status/1',
+        type: 'tweet',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    try {
+        const img = await new ImgConverter().articleToImg(article as any)
+        const size = readPngSize(img)
+        expect(size.width).toBeGreaterThan(0)
+        expect(size.height).toBeGreaterThan(0)
+    } finally {
+        if (previousRemoteAssets === undefined) {
+            delete process.env.RENDER_REMOTE_ASSETS
+        } else {
+            process.env.RENDER_REMOTE_ASSETS = previousRemoteAssets
+        }
+    }
 })
 
 test('font loader rejects TTC collections because satori cannot render them', () => {
