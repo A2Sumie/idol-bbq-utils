@@ -148,6 +148,48 @@ test('cross-platform short video dedup uses duration buckets for nijigram-like a
     expect(duplicate?.a_id).toBe(`${Platform.Instagram}:ig-short-1`)
 })
 
+test('cross-platform short video dedup groups X official posts by 22/7 the 3rd content', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+
+    const xArticle = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.X,
+            type: 'tweet',
+            a_id: '2063561843692716187',
+            created_at: 1780826457,
+            u_id: '227_staff',
+            username: '22/7(ナナブンノニジュウニ)',
+            content: '22/7_the 3rd\n『＃叫ぶしかない青春』\nMusic Video公開中',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 45.766531 }],
+    )
+    expect(xArticle?.group).toBe('3rd')
+    await markShortVideoCrossPlatformSeen(xArticle!)
+
+    const instagramArticle = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'post',
+            a_id: 'DZR9nGHxnvu',
+            created_at: 1780826818,
+            u_id: 'nananijigram22_7_the.3rd',
+            username: '22/7_the 3rd',
+            content: '. 22/7_the 3rd 『＃叫ぶしかない青春』 Music Video公開中',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 45.787 }],
+    )
+    expect(instagramArticle?.group).toBe('3rd')
+
+    const duplicate = await checkShortVideoCrossPlatformDuplicate(instagramArticle!)
+    expect(duplicate?.a_id).toBe(`${Platform.X}:2063561843692716187`)
+})
+
 test('video fingerprint dedup matches re-encoded short videos by frame bands', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any

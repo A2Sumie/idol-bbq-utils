@@ -13,6 +13,7 @@ import {
     resolveBrowserCookieSyncConfig,
     resolveVideoUploadConfig,
 } from './biliup'
+import { buildShortVideoDedupCandidate, markShortVideoCrossPlatformSeen } from '@/services/media-cache-service'
 
 test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', () => {
     const candidate = buildBiliupUploadCandidate(
@@ -63,7 +64,7 @@ test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads
         },
     )
 
-    expect(candidate?.title).toBe('【Instagram投稿】椎名桜月 2026-03-20 14:37')
+    expect(candidate?.title).toBe('【22/7】[ins] 椎名桜月 2026-03-20 14:37')
     expect(candidate?.description).toContain('来源平台: Instagram投稿')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: satsuki_shiina')
@@ -93,10 +94,32 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【TikTok视频】TikTok Member TT短视频正文')
+    expect(candidate?.title).toBe('【22/7】[TT] TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).toContain('TikTok')
+})
+
+test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.X,
+            type: 'tweet',
+            u_id: '227_staff',
+            username: '22/7(ナナブンノニジュウニ)',
+            a_id: '2063561843692716187',
+            content: '22/7_the 3rd\n『＃叫ぶしかない青春』\nMusic Video公開中',
+            created_at: 1780826457,
+            url: 'https://x.com/227_staff/status/2063561843692716187',
+        } as any,
+        ['22/7_the 3rd\n『＃叫ぶしかない青春』\nMusic Video公開中'],
+        [{ media_type: 'video', path: '/tmp/x-video.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate?.title).toBe('【22/7】[X] 22/7_the 3rd')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
@@ -518,6 +541,146 @@ test('BiliForwarder suppresses duplicate video uploads without dynamic fallback'
         expect(result).toEqual([{ ok: true, mode: 'biliup_duplicate' }])
         expect(uploadCalls).toBe(0)
         expect(dynamicCalls).toBe(0)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    }
+})
+
+test('BiliForwarder suppresses cross-platform short video upload duplicates without dynamic fallback', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+
+    const previous = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'post',
+            a_id: 'DZR9nGHxnvu',
+            created_at: 1780826818,
+            u_id: 'nananijigram22_7_the.3rd',
+            username: '22/7_the 3rd',
+            content: '. 22/7_the 3rd 『＃叫ぶしかない青春』 Music Video公開中',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 45.787 }],
+    )
+    await markShortVideoCrossPlatformSeen(previous!)
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-test',
+    )
+
+    let uploadCalls = 0
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async () => {
+        uploadCalls += 1
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    try {
+        const result = await (forwarder as any).realSend(['hello'], {
+            article: {
+                platform: Platform.X,
+                a_id: '2063561843692716187',
+                u_id: '227_staff',
+                username: '22/7(ナナブンノニジュウニ)',
+                type: 'tweet',
+                created_at: 1780826457,
+                url: 'https://x.com/227_staff/status/2063561843692716187',
+                content: '22/7_the 3rd\n『＃叫ぶしかない青春』\nMusic Video公開中',
+            },
+            media: [
+                {
+                    media_type: 'video',
+                    path: '/tmp/x-video.mp4',
+                    content_hash: 'x-reencoded-video-hash',
+                    duration_seconds: 45.766531,
+                },
+            ],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'biliup_duplicate' }])
+        expect(uploadCalls).toBe(0)
+        expect(dynamicCalls).toBe(0)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    }
+})
+
+test('BiliForwarder records short video upload dedupe keys after successful Bilibili upload', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    const saved: Array<{ platform: string; hash: string; a_id: string }> = []
+    DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        saved.push({ platform, hash, a_id })
+        return { platform, hash, a_id } as any
+    }
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-test',
+    )
+
+    ;(forwarder as any).performBiliupUpload = async () => {}
+    ;(forwarder as any).sendDynamicContent = async () => [{ ok: true, mode: 'dynamic' }]
+
+    try {
+        const result = await (forwarder as any).realSend(['hello'], {
+            article: {
+                platform: Platform.X,
+                a_id: '2063561843692716187',
+                u_id: '227_staff',
+                username: '22/7(ナナブンノニジュウニ)',
+                type: 'tweet',
+                created_at: 1780826457,
+                url: 'https://x.com/227_staff/status/2063561843692716187',
+                content: '22/7_the 3rd\n『＃叫ぶしかない青春』\nMusic Video公開中',
+            },
+            media: [
+                {
+                    media_type: 'video',
+                    path: '/tmp/x-video.mp4',
+                    content_hash: 'x-reencoded-video-hash',
+                    duration_seconds: 45.766531,
+                },
+            ],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'biliup' }])
+        expect(saved).toContainEqual({
+            platform: 'bilibili-video-upload',
+            hash: 'x-reencoded-video-hash',
+            a_id: `${Platform.X}:2063561843692716187`,
+        })
+        expect(saved).toContainEqual({
+            platform: 'cross-short-video:3rd',
+            hash: '82445:92',
+            a_id: `${Platform.X}:2063561843692716187`,
+        })
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
         DB.MediaHash.save = originalSave

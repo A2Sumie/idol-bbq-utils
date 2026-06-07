@@ -36,6 +36,7 @@ export type MediaFile = {
     sourceUserId?: string
     content_hash?: string
     size_bytes?: number
+    duration_seconds?: number
 }
 
 interface PreparedBatchItem {

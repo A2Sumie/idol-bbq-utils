@@ -176,15 +176,17 @@ function probeDurationSeconds(filePath: string) {
     }
 }
 
-function normalizeShortVideoGroup(article: Pick<Article, 'u_id' | 'username'>) {
-    const normalized = `${article.u_id || ''} ${article.username || ''}`.toLowerCase().replace(/[^a-z0-9]+/g, '')
+function normalizeShortVideoGroup(article: Pick<Article, 'u_id' | 'username'> & { content?: string | null }) {
+    const normalized = `${article.u_id || ''} ${article.username || ''} ${article.content || ''}`
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '')
     if (normalized.includes('the3rd') || normalized.includes('3rd')) {
         return '3rd'
     }
     if (normalized.includes('nananijigram')) {
         return 'nijigram'
     }
-    if (normalized.includes('227smej') || normalized.includes('227official')) {
+    if (normalized.includes('227smej') || normalized.includes('227official') || normalized.includes('227staff')) {
         return '227-official'
     }
     return null
@@ -199,6 +201,9 @@ function isSupportedShortVideoPlatform(article: Pick<Article, 'platform' | 'type
     }
     if (article.platform === Platform.Instagram) {
         return article.type === 'post' || article.type === 'story'
+    }
+    if (article.platform === Platform.X) {
+        return true
     }
     return false
 }
@@ -221,7 +226,9 @@ function buildShortVideoDurationBuckets(durationSeconds: number) {
 }
 
 function buildShortVideoDedupCandidate(
-    article: Pick<Article, 'platform' | 'type' | 'a_id' | 'created_at' | 'u_id' | 'username'>,
+    article: Pick<Article, 'platform' | 'type' | 'a_id' | 'created_at' | 'u_id' | 'username'> & {
+        content?: string | null
+    },
     mediaFiles: Array<{ media_type: MediaType; duration_seconds?: number }>,
 ): ShortVideoDedupCandidate | null {
     if (!isSupportedShortVideoPlatform(article)) {
@@ -294,7 +301,7 @@ function sampleVideoFrameHash(filePath: string, durationSeconds: number, ratio: 
                 'rawvideo',
                 'pipe:1',
             ],
-            { maxBuffer: 1024 * 1024 },
+            { maxBuffer: 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] },
         ) as Buffer
 
         if (rawFrame.length < 64) {
@@ -330,7 +337,9 @@ function buildVideoFingerprintBandKeys(durationBucket: number, frameHashes: Arra
 }
 
 function buildVideoFingerprintCandidate(
-    article: Pick<Article, 'platform' | 'type' | 'a_id' | 'created_at' | 'u_id' | 'username'>,
+    article: Pick<Article, 'platform' | 'type' | 'a_id' | 'created_at' | 'u_id' | 'username'> & {
+        content?: string | null
+    },
     mediaFile: Pick<StoredMediaMetadata, 'path' | 'media_type' | 'duration_seconds'>,
 ): VideoFingerprintCandidate | null {
     if (

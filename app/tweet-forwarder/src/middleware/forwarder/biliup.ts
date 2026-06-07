@@ -303,6 +303,25 @@ function resolvePlatformTypeLabel(article: Pick<Article, 'platform' | 'type' | '
     return `${platformLabel}${typeLabel}`
 }
 
+function resolveBiliupSourceTag(article: Pick<Article, 'platform'>) {
+    if (article.platform === Platform.X) {
+        return 'X'
+    }
+    if (article.platform === Platform.TikTok) {
+        return 'TT'
+    }
+    if (article.platform === Platform.Instagram) {
+        return 'ins'
+    }
+    if (article.platform === Platform.YouTube) {
+        return 'YT'
+    }
+    if (article.platform === Platform.Website) {
+        return 'blog'
+    }
+    return '社媒'
+}
+
 function formatDateTimeParts(timestampSeconds: number, timeZone: string) {
     const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone,
@@ -346,6 +365,7 @@ function buildTemplateContext(
     const summary = primaryLine || dateTime.datetime
     const bodyWithoutRepeatedSummary = stripDuplicateLeadingSummary(blocks[0] || '', summary)
     const body = bodyWithoutRepeatedSummary || blocks[0] || ''
+    const uploadSummary = primaryLine || `${displayName} ${dateTime.datetime}`.trim()
 
     return {
         article_id: article.a_id,
@@ -356,9 +376,11 @@ function buildTemplateContext(
         display_name: displayName,
         platform_label: resolvePlatformLabel(article),
         platform_type_label: resolvePlatformTypeLabel(article),
+        source_tag: resolveBiliupSourceTag(article),
         summary,
         time: dateTime.time,
         type_label: resolveTypeLabel(article),
+        upload_summary: uploadSummary,
         url: String(article.url || '').trim(),
         user_id: String(article.u_id || '').trim(),
         username: String(article.username || '').trim(),
@@ -380,7 +402,7 @@ function resolveDefaultTitleTemplate(article: Pick<Article, 'platform' | 'type'>
     if (article.platform === Platform.YouTube && article.type !== 'shorts') {
         return '{{summary}}'
     }
-    return '【{{platform_type_label}}】{{display_name}} {{summary}}'
+    return '【22/7】[{{source_tag}}] {{upload_summary}}'
 }
 
 function deriveTitle(

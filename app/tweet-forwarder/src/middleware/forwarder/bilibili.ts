@@ -12,6 +12,16 @@ import {
 } from '@/services/forwarder-image-attachment-service'
 import DB, { type Article } from '@/db'
 import { createHash } from 'crypto'
+import {
+    buildShortVideoDedupCandidate,
+    buildVideoFingerprintCandidate,
+    checkShortVideoCrossPlatformDuplicate,
+    checkVideoFingerprintDuplicate,
+    markShortVideoCrossPlatformSeen,
+    markVideoFingerprintSeen,
+    type ShortVideoDedupCandidate,
+    type VideoFingerprintCandidate,
+} from '@/services/media-cache-service'
 
 const BILI_VIDEO_UPLOAD_HASH_NAMESPACE = 'bilibili-video-upload'
 
@@ -46,6 +56,23 @@ type BiliVideoUploadHashRecord = {
     hash: string
     path: string
 }
+type BiliVideoUploadDedupeRecords = {
+    exact: BiliVideoUploadHashRecord[]
+    article?: Article
+    videoMedia: Array<NonNullable<SendProps['media']>[number]>
+    shortVideo: ShortVideoDedupCandidate | null
+    fingerprints?: VideoFingerprintCandidate[]
+}
+type BiliVideoUploadDuplicate =
+    | {
+          kind: 'exact'
+          record: BiliVideoUploadHashRecord
+          existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>>
+      }
+    | {
+          kind: 'short-video' | 'fingerprint'
+          existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>>
+      }
 
 class BiliForwarder extends Forwarder {
     static _PLATFORM = ForwardTargetPlatformEnum.Bilibili
@@ -119,7 +146,7 @@ class BiliForwarder extends Forwarder {
         return createHash('sha256').update(buffer).digest('hex')
     }
 
-    private resolveVideoUploadHashRecords(videoPaths: string[], props?: SendProps): BiliVideoUploadHashRecord[] {
+    private resolveVideoUploadExactHashRecords(videoPaths: string[], props?: SendProps): BiliVideoUploadHashRecord[] {
         const records = new Map<string, BiliVideoUploadHashRecord>()
         for (const videoPath of videoPaths) {
             const mediaFile = (props?.media || []).find(
@@ -134,19 +161,72 @@ class BiliForwarder extends Forwarder {
         return Array.from(records.values())
     }
 
-    private async findDuplicateBiliVideoUpload(records: BiliVideoUploadHashRecord[]) {
-        for (const record of records) {
+    private resolveVideoUploadDedupeRecords(videoPaths: string[], props?: SendProps): BiliVideoUploadDedupeRecords {
+        const exact = this.resolveVideoUploadExactHashRecords(videoPaths, props)
+        if (!props?.article) {
+            return {
+                exact,
+                videoMedia: [],
+                shortVideo: null,
+            }
+        }
+
+        const videoMedia = videoPaths
+            .map((videoPath) =>
+                (props.media || []).find((item) => item.media_type === 'video' && item.path === videoPath),
+            )
+            .filter((item): item is NonNullable<SendProps['media']>[number] => Boolean(item))
+        return {
+            exact,
+            article: props.article,
+            videoMedia,
+            shortVideo: buildShortVideoDedupCandidate(props.article as any, videoMedia),
+        }
+    }
+
+    private resolveVideoUploadFingerprints(records: BiliVideoUploadDedupeRecords) {
+        if (!records.article) {
+            return []
+        }
+        if (!records.fingerprints) {
+            records.fingerprints = records.videoMedia
+                .map((item) => buildVideoFingerprintCandidate(records.article as any, item as any))
+                .filter((item): item is VideoFingerprintCandidate => Boolean(item))
+        }
+        return records.fingerprints
+    }
+
+    private async findDuplicateBiliVideoUpload(records: BiliVideoUploadDedupeRecords): Promise<BiliVideoUploadDuplicate | null> {
+        for (const record of records.exact) {
             const existing = await DB.MediaHash.checkExist(BILI_VIDEO_UPLOAD_HASH_NAMESPACE, record.hash)
             if (existing) {
-                return { record, existing }
+                return { kind: 'exact', record, existing }
+            }
+        }
+        if (records.shortVideo) {
+            const existing = await checkShortVideoCrossPlatformDuplicate(records.shortVideo)
+            if (existing) {
+                return { kind: 'short-video', existing }
+            }
+        }
+        for (const fingerprint of this.resolveVideoUploadFingerprints(records)) {
+            const existing = await checkVideoFingerprintDuplicate(fingerprint)
+            if (existing) {
+                return { kind: 'fingerprint', existing }
             }
         }
         return null
     }
 
-    private async markBiliVideoUploadSeen(records: BiliVideoUploadHashRecord[], marker: string) {
-        for (const record of records) {
+    private async markBiliVideoUploadSeen(records: BiliVideoUploadDedupeRecords, marker: string) {
+        for (const record of records.exact) {
             await DB.MediaHash.save(BILI_VIDEO_UPLOAD_HASH_NAMESPACE, record.hash, marker)
+        }
+        if (records.shortVideo) {
+            await markShortVideoCrossPlatformSeen(records.shortVideo)
+        }
+        for (const fingerprint of this.resolveVideoUploadFingerprints(records)) {
+            await markVideoFingerprintSeen(fingerprint)
         }
     }
 
@@ -176,13 +256,17 @@ class BiliForwarder extends Forwarder {
             return false
         }
 
-        let hashRecords: BiliVideoUploadHashRecord[]
+        let dedupeRecords: BiliVideoUploadDedupeRecords
         try {
-            hashRecords = this.resolveVideoUploadHashRecords(candidate.videoPaths, props)
-            const duplicate = await this.findDuplicateBiliVideoUpload(hashRecords)
+            dedupeRecords = this.resolveVideoUploadDedupeRecords(candidate.videoPaths, props)
+            const duplicate = await this.findDuplicateBiliVideoUpload(dedupeRecords)
             if (duplicate) {
+                const detail =
+                    duplicate.kind === 'exact'
+                        ? `${duplicate.record.hash.substring(0, 8)} already uploaded`
+                        : `${duplicate.kind} matched`
                 this.log?.warn(
-                    `Skipping duplicate Bilibili video upload for ${props?.article?.a_id || 'unknown'}: ${duplicate.record.hash.substring(0, 8)} already uploaded as ${duplicate.existing.a_id || 'previous article'}`,
+                    `Skipping duplicate Bilibili video upload for ${props?.article?.a_id || 'unknown'}: ${detail} as ${duplicate.existing?.a_id || 'previous article'}`,
                 )
                 return 'duplicate'
             }
@@ -198,7 +282,7 @@ class BiliForwarder extends Forwarder {
 
         try {
             await this.performBiliupUpload(props?.article, candidate)
-            await this.markBiliVideoUploadSeen(hashRecords, this.buildVideoUploadMarker(props?.article, props)).catch(
+            await this.markBiliVideoUploadSeen(dedupeRecords, this.buildVideoUploadMarker(props?.article, props)).catch(
                 (error) => {
                     this.log?.error(
                         `Failed to mark Bilibili video upload hash for ${props?.article?.a_id || 'unknown'}: ${error}`,
