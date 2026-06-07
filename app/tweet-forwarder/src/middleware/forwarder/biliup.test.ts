@@ -431,6 +431,68 @@ test('BiliForwarder skips dynamic posting when biliup upload succeeds', async ()
     expect(result).toEqual([{ ok: true, mode: 'biliup' }])
 })
 
+test('BiliForwarder applies runtime video upload metadata overrides', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.save = async () => ({ platform: 'test', hash: 'test', a_id: 'test' }) as any
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+                metadata_templates: {
+                    title: 'OLD {{summary}}',
+                },
+            },
+        } as any,
+        'bili-test',
+    )
+
+    let uploadedTitle = ''
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async (_article: unknown, candidate: { title: string }) => {
+        uploadedTitle = candidate.title
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    try {
+        const result = await (forwarder as any).realSend(['TT短视频正文'], {
+            runtime_config: {
+                video_upload: {
+                    enabled: true,
+                    metadata_templates: {
+                        title: 'NEW {{source_tag}} {{upload_summary}}',
+                    },
+                },
+            } as any,
+            article: {
+                platform: Platform.TikTok,
+                a_id: 'tt-runtime-title',
+                u_id: 'tiktok_member',
+                username: 'TikTok Member',
+                type: 'video',
+                content: 'TT短视频正文',
+                created_at: 1773985020,
+                url: 'https://www.tiktok.com/@tiktok_member/video/runtime-title',
+            },
+            media: [{ media_type: 'video', path: '/tmp/video.mp4', content_hash: 'runtime-title-video-hash' }],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'biliup' }])
+        expect(uploadedTitle).toBe('NEW TT TT短视频正文')
+        expect(dynamicCalls).toBe(0)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    }
+})
+
 test('BiliForwarder records successful video uploads for strict Bilibili dedupe', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
     const originalSave = DB.MediaHash.save

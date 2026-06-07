@@ -251,7 +251,10 @@ class BiliForwarder extends Forwarder {
 
     private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | false> {
         const media = props?.media || []
-        const candidate = buildBiliupUploadCandidate(props?.article, texts, media, this.video_upload)
+        const videoUploadConfig =
+            ((this.getEffectiveConfig(props?.runtime_config) as any).video_upload as typeof this.video_upload) ||
+            this.video_upload
+        const candidate = buildBiliupUploadCandidate(props?.article, texts, media, videoUploadConfig)
         if (!candidate) {
             return false
         }
