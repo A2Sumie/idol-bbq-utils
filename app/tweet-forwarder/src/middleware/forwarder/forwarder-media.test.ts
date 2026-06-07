@@ -3,6 +3,7 @@ import { Platform } from '@idol-bbq-utils/spider/types'
 import { BiliForwarder } from './bilibili'
 import { QQForwarder } from './qq'
 import { PartialForwarderSendError } from './base'
+import { resolveForwarderImageMaxBytes } from '@/services/forwarder-image-attachment-service'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -34,6 +35,11 @@ function probeImageSize(filePath: string) {
     const [width, height] = output.split('x').map((part) => Number(part))
     return { width, height }
 }
+
+test('image max byte config treats small legacy values as KiB', () => {
+    expect(resolveForwarderImageMaxBytes({ max_image_bytes: 3500 })).toBe(3500 * 1024)
+    expect(resolveForwarderImageMaxBytes({ max_image_bytes: 4_700_000 })).toBe(4_700_000)
+})
 
 test('QQForwarder does not send video thumbnails as standalone images', async () => {
     const forwarder = new QQForwarder(

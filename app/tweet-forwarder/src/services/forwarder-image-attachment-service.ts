@@ -36,17 +36,31 @@ interface CompressionAttempt {
 
 const TALL_IMAGE_HEIGHT_WIDTH_RATIO = 3
 const COMPRESSION_ATTEMPTS: CompressionAttempt[] = [
-    { maxDimension: 2400, quality: 2 },
-    { maxDimension: 2400, quality: 3 },
-    { maxDimension: 2048, quality: 4 },
-    { maxDimension: 1600, quality: 5 },
-    { maxDimension: 1280, quality: 6 },
-    { maxDimension: 1080, quality: 7 },
-    { maxDimension: 900, quality: 8 },
-    { maxDimension: 720, quality: 9 },
-    { maxDimension: 540, quality: 10 },
+    { maxDimension: 3200, quality: 3 },
+    { maxDimension: 2880, quality: 3 },
+    { maxDimension: 2560, quality: 4 },
+    { maxDimension: 2400, quality: 4 },
+    { maxDimension: 2400, quality: 5 },
+    { maxDimension: 2200, quality: 5 },
+    { maxDimension: 2048, quality: 5 },
+    { maxDimension: 1800, quality: 6 },
+    { maxDimension: 1600, quality: 6 },
+    { maxDimension: 1440, quality: 7 },
+    { maxDimension: 1280, quality: 7 },
+    { maxDimension: 1080, quality: 8 },
+    { maxDimension: 900, quality: 9 },
+    { maxDimension: 720, quality: 10 },
+    { maxDimension: 540, quality: 11 },
     { maxDimension: 420, quality: 12 },
 ]
+const LEGACY_KIB_IMAGE_LIMIT_MAX = 10_000
+
+function normalizeConfiguredImageMaxBytes(value: number) {
+    if (value > 0 && value <= LEGACY_KIB_IMAGE_LIMIT_MAX) {
+        return value * 1024
+    }
+    return value
+}
 
 function ensureDirectory(dirPath: string) {
     if (!fs.existsSync(dirPath)) {
@@ -58,7 +72,7 @@ function normalizeMaxImageBytes(value?: number) {
     if (!Number.isFinite(value) || Number(value) <= 0) {
         return DEFAULT_FORWARDER_IMAGE_MAX_BYTES
     }
-    return Math.max(128_000, Math.floor(Number(value)))
+    return Math.max(128_000, Math.floor(normalizeConfiguredImageMaxBytes(Number(value))))
 }
 
 function isImageLikeMedia(item: MediaFile) {
@@ -163,7 +177,7 @@ function compressImageUnderLimit(
                     '-q:v',
                     String(attempt.quality),
                     '-pix_fmt',
-                    'yuvj444p',
+                    'yuvj420p',
                     '-map_metadata',
                     '-1',
                     outputPath,

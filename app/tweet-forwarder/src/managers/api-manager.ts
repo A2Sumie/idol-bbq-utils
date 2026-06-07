@@ -113,6 +113,8 @@ function jsonResponse(payload: unknown, status = 200) {
 
 const MAX_BUN_IDLE_TIMEOUT_SECONDS = 255
 const DEFAULT_CIC_ORIGIN = 'https://cic.n2nj.moe'
+const MAX_MANUAL_CRAWLER_WEBSITES = 20
+const MAX_MANUAL_CRAWLER_WEBSITE_LENGTH = 2048
 
 function publicCookieFileMetadata(cookieFile?: string | null) {
     const normalized = String(cookieFile || '').trim()
@@ -231,6 +233,48 @@ function defaultOriginForPlatform(platform: Platform) {
     if (platform === Platform.TikTok) return 'https://www.tiktok.com'
     if (platform === Platform.YouTube) return 'https://www.youtube.com'
     return 'https://example.com'
+}
+
+function normalizeManualCrawlerWebsites(body: {
+    website?: unknown
+    websites?: unknown
+}): { websites?: string[]; error?: string } {
+    const raw = body.websites ?? (body.website ? [body.website] : undefined)
+    if (raw === undefined) {
+        return {}
+    }
+    if (!Array.isArray(raw)) {
+        return { error: 'websites must be an array' }
+    }
+    if (raw.length === 0 || raw.length > MAX_MANUAL_CRAWLER_WEBSITES) {
+        return { error: `websites must contain 1-${MAX_MANUAL_CRAWLER_WEBSITES} URLs` }
+    }
+
+    const websites = Array.from(
+        new Set(
+            raw
+                .map((value) => String(value || '').trim())
+                .filter(Boolean),
+        ),
+    )
+    if (websites.length === 0 || websites.length > MAX_MANUAL_CRAWLER_WEBSITES) {
+        return { error: `websites must contain 1-${MAX_MANUAL_CRAWLER_WEBSITES} URLs` }
+    }
+    for (const website of websites) {
+        if (website.length > MAX_MANUAL_CRAWLER_WEBSITE_LENGTH) {
+            return { error: 'website URL is too long' }
+        }
+        let url: URL
+        try {
+            url = new URL(website)
+        } catch {
+            return { error: `Invalid website URL: ${website}` }
+        }
+        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+            return { error: `Unsupported website URL protocol: ${url.protocol}` }
+        }
+    }
+    return { websites }
 }
 
 function joinOriginAndPath(origin?: string | null, rawPath?: string | null) {
@@ -1121,27 +1165,54 @@ export class APIManager extends BaseCompatibleModel {
         if (!this.deps.emitter) {
             return new Response('Emitter unavailable', { status: 503 })
         }
-        const body = (await req.json()) as { crawler?: string; name?: string }
+        const body = (await req.json()) as { crawler?: string; name?: string; website?: unknown; websites?: unknown }
         const crawlerName = body.crawler || body.name
         const crawler = this.config.crawlers?.find((item) => item.name === crawlerName)
         if (!crawler || !crawler.name) {
             return new Response('Crawler not found', { status: 404 })
         }
+        const websiteOverride = normalizeManualCrawlerWebsites(body)
+        if (websiteOverride.error) {
+            return new Response(websiteOverride.error, { status: 400 })
+        }
+        if (websiteOverride.websites && resolveCrawlerPlatform(crawler) !== Platform.Website) {
+            return new Response('website override is only supported for website crawlers', { status: 400 })
+        }
+        const dispatchCrawler = websiteOverride.websites
+            ? {
+                  ...crawler,
+                  websites: websiteOverride.websites,
+              }
+            : crawler
 
         const now = Math.floor(Date.now() / 1000)
         const taskId = `manual-${Math.random().toString(36).slice(2, 9)}`
         const taskType = DB.TaskQueue.TYPE.ManualCrawlerRun
-        const queueTask = await DB.TaskQueue.add(taskType, { crawler: crawler.name, task_id: taskId }, now, {
-            source_ref: crawler.name,
-            action_type: 'crawl',
-        })
+        const queueTask = await DB.TaskQueue.add(
+            taskType,
+            {
+                crawler: crawler.name,
+                task_id: taskId,
+                ...(websiteOverride.websites ? { websites: websiteOverride.websites } : {}),
+            },
+            now,
+            {
+                source_ref: crawler.name,
+                action_type: 'crawl',
+            },
+        )
         const task: TaskScheduler.Task = {
             id: taskId,
             status: TaskScheduler.TaskStatus.PENDING,
-            data: crawler,
+            data: dispatchCrawler,
             meta: {
                 task_queue_id: queueTask.id,
                 task_queue_type: taskType,
+                ...(websiteOverride.websites
+                    ? {
+                          manual_website_override_count: websiteOverride.websites.length,
+                      }
+                    : {}),
             },
         }
         try {
@@ -1161,7 +1232,14 @@ export class APIManager extends BaseCompatibleModel {
             })
             throw error
         }
-        return jsonResponse({ success: true, status: 'queued', taskId, taskQueueId: queueTask.id, crawler: crawler.name })
+        return jsonResponse({
+            success: true,
+            status: 'queued',
+            taskId,
+            taskQueueId: queueTask.id,
+            crawler: crawler.name,
+            ...(websiteOverride.websites ? { websites: websiteOverride.websites } : {}),
+        })
     }
 
     private async handleNotificationSignalIngest(req: Request): Promise<Response> {

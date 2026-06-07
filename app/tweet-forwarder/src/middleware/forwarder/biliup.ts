@@ -1009,6 +1009,13 @@ async function runBiliupUpload(
 
     fs.writeFileSync(cookieFile, JSON.stringify(cookieDocument, null, 2))
     const preparedVideoParts = await prepareUploadVideoParts(candidate, uploadDir, log)
+    log?.info(
+        `Prepared biliup video parts for ${article.a_id}: requested=${candidate.videoPaths.length} actual=${
+            preparedVideoParts.length
+        } titles=${preparedVideoParts
+            .map((part, index) => part.partTitle || path.basename(part.stagedPath) || `part-${index + 1}`)
+            .join(',')}`,
+    )
 
     const args = [
         candidate.config.helper_path,
@@ -1083,9 +1090,32 @@ async function runBiliupUpload(
         } catch {}
     })
 
+    const stdout = stdoutChunks.join('')
+    const stderr = stderrChunks.join('')
+    const lastJsonLine = stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('{') && line.endsWith('}'))
+        .at(-1)
+    if (lastJsonLine) {
+        try {
+            const payload = JSON.parse(lastJsonLine) as Record<string, any>
+            const submitData = payload.submit_result?.data || payload.submit_result || {}
+            log?.info(
+                `Biliup upload completed for ${article.a_id}: parts=${preparedVideoParts.length} bvid=${
+                    submitData.bvid || ''
+                } aid=${submitData.aid || ''}`,
+            )
+        } catch {
+            log?.info(`Biliup upload completed for ${article.a_id}: parts=${preparedVideoParts.length}`)
+        }
+    } else {
+        log?.info(`Biliup upload completed for ${article.a_id}: parts=${preparedVideoParts.length}`)
+    }
+
     return {
-        stdout: stdoutChunks.join(''),
-        stderr: stderrChunks.join(''),
+        stdout,
+        stderr,
     }
 }
 

@@ -5205,6 +5205,226 @@ test('summary-card translation handles multiple referenced articles without data
     expect(articleUpdates.map((item) => item.id).sort()).toEqual([801, 802])
 })
 
+test('summary-card translation requires complete coverage for three-layer forwarded chains', async () => {
+    const processCalls: string[] = []
+    const articleUpdates: Array<{ id: number; patch: any }> = []
+    const originalCreateProcessor = (processorRegistry as any).create
+    const originalArticleUpdate = (DB.Article as any).update
+    ;(processorRegistry as any).create = async () => ({
+        NAME: 'fake-three-layer-translator',
+        process: async (text: string) => {
+            processCalls.push(text)
+            const current =
+                text.match(/当前待译】\n([\s\S]*?)(?:\n\n【第|\n\n【当前待译字段】|$)/)?.[1]?.trim() ||
+                text.trim()
+            return `译:${current}`
+        },
+        drop: async () => undefined,
+    })
+    ;(DB.Article as any).update = async (id: number, _platform: Platform, patch: any) => {
+        articleUpdates.push({ id, patch })
+        return { id, ...patch }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.Deepseek,
+                    api_key: 'test-key',
+                    cfg_processor: {
+                        action: 'translate',
+                    },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const rootArticle = {
+        id: 930,
+        a_id: 'three-layer-root',
+        platform: Platform.X,
+        username: 'root member',
+        u_id: 'root_member',
+        content: 'root source body',
+        translation: '译:root source body',
+        translated_by: 'existing',
+        url: 'https://x.com/root_member/status/930',
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const middleArticle = {
+        id: 931,
+        a_id: 'three-layer-middle',
+        platform: Platform.X,
+        username: 'middle member',
+        u_id: 'middle_member',
+        content: 'middle quote body',
+        translation: null,
+        translated_by: null,
+        url: 'https://x.com/middle_member/status/931',
+        type: 'quoted',
+        created_at: rootArticle.created_at + 60,
+        ref: rootArticle,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const outerArticle = {
+        id: 932,
+        a_id: 'three-layer-outer',
+        platform: Platform.X,
+        username: 'outer member',
+        u_id: 'outer_member',
+        content: 'outer reply body',
+        translation: null,
+        translated_by: null,
+        url: 'https://x.com/outer_member/status/932',
+        type: 'reply',
+        created_at: middleArticle.created_at + 60,
+        ref: middleArticle,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+
+    expect((pools as any).hasArticleChainTranslatedContent([outerArticle])).toBeFalse()
+
+    try {
+        await (pools as any).prepareArticleChainTranslations(
+            '22_7-social-ja-zh',
+            [outerArticle],
+            'three-layer-chain-test',
+        )
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+        ;(DB.Article as any).update = originalArticleUpdate
+    }
+
+    expect(processCalls).toHaveLength(2)
+    expect(processCalls[0]).toContain('【第2条/第2条发生/当前待译】')
+    expect(processCalls[1]).toContain('【第3条/最后发生/当前待译】')
+    expect(middleArticle.translation).toBe('译:middle quote body')
+    expect(outerArticle.translation).toBe('译:outer reply body')
+    expect((pools as any).hasArticleChainTranslatedContent([outerArticle])).toBeTrue()
+    expect(articleUpdates.map((item) => item.id).sort()).toEqual([931, 932])
+
+    const translatedVariant = (pools as any).buildArticleTextVariant(outerArticle, 'translated')
+    expect(translatedVariant.content).toBe('译:outer reply body')
+    expect(translatedVariant.ref.content).toBe('译:middle quote body')
+    expect(translatedVariant.ref.ref.content).toBe('译:root source body')
+})
+
+test('summary-card translation reprocesses unchanged Japanese translations before rendering', async () => {
+    const processCalls: string[] = []
+    const articleUpdates: Array<{ id: number; patch: any }> = []
+    const originalCreateProcessor = (processorRegistry as any).create
+    const originalArticleUpdate = (DB.Article as any).update
+    ;(processorRegistry as any).create = async () => ({
+        NAME: 'fake-unchanged-ja-translator',
+        process: async (text: string) => {
+            processCalls.push(text)
+            return '真的要早点见面呢'
+        },
+        drop: async () => undefined,
+    })
+    ;(DB.Article as any).update = async (id: number, _platform: Platform, patch: any) => {
+        articleUpdates.push({ id, patch })
+        return { id, ...patch }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.Deepseek,
+                    api_key: 'test-key',
+                    cfg_processor: {
+                        action: 'translate',
+                    },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const article = {
+        id: 940,
+        a_id: 'unchanged-ja-translation',
+        platform: Platform.X,
+        username: 'member',
+        u_id: 'member',
+        content: 'ほまに……はよう……',
+        translation: 'ほまに……はよう……',
+        translated_by: 'old',
+        url: 'https://x.com/member/status/940',
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+
+    expect((pools as any).hasArticleChainTranslatedContent([article])).toBeFalse()
+
+    try {
+        await (pools as any).prepareArticleChainTranslations(
+            '22_7-social-ja-zh',
+            [article],
+            'unchanged-ja-translation-test',
+        )
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+        ;(DB.Article as any).update = originalArticleUpdate
+    }
+
+    expect(processCalls).toHaveLength(1)
+    expect(article.translation).toBe('真的要早点见面呢')
+    expect((pools as any).hasArticleChainTranslatedContent([article])).toBeTrue()
+    expect(articleUpdates).toEqual([
+        {
+            id: 940,
+            patch: {
+                translation: '真的要早点见面呢',
+                translated_by: 'fake-unchanged-ja-translator',
+            },
+        },
+    ])
+
+    const translatedVariant = (pools as any).buildArticleTextVariant(article, 'translated')
+    expect(translatedVariant.content).toBe('真的要早点见面呢')
+})
+
 test('sendArticles prompts summary-card translation with chronological chain order', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -7048,7 +7268,8 @@ test('summary-card realtime media appends translated content card for Bilibili p
                 expect(article.content).toBe('photo body should be translated in Bilibili tail card')
                 expect(article.translation).toBe('译:photo body should be translated in Bilibili tail card')
                 expect(config?.preloadedMediaFiles).toEqual([sourceMedia])
-                expect(config?.card_features).toEqual(['translated-card-pattern'])
+                expect(config?.card_features || []).not.toContain('translated-card-pattern')
+                expect(config?.card_features || []).not.toContain('translated-corner-badge')
                 return {
                     text: article.content || '',
                     textCollapseMode: 'article',
@@ -7391,6 +7612,98 @@ test('summary-card realtime media and later aggregation do not suppress each oth
         (record: any) => record.task_kind === 'article',
     )
     expect(articleSkips).toHaveLength(0)
+})
+
+test('translated native companion is disabled when summary-card target is not native-first', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+
+        protected async realSend(): Promise<any> {
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text-card',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const processCalls: any[] = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            processCalls.push({ article, config })
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [{ media_type: 'photo', path: '/tmp/should-not-render.png' }],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const target = new RecordingForwarder(
+        {
+            summary_card: {
+                enabled: true,
+                send_first_native: false,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                    processor_id: '22_7-social-ja-zh',
+                },
+            },
+        } as any,
+        'target-bili-no-native-companion',
+    )
+    const sourceMedia = { media_type: 'photo', path: '/tmp/source.jpg' }
+    const originalCard = { media_type: 'photo', path: '/tmp/original-card.png' }
+
+    const result = await (pools as any).buildTranslatedNativeCompanionCard(
+        {
+            id: 850,
+            a_id: 'no-native-companion',
+            platform: Platform.X,
+            username: 'member',
+            u_id: 'member',
+            content: '原文',
+            translation: '译文',
+            translated_by: 'LLM',
+            url: 'https://x.com/member/status/850',
+            type: 'tweet',
+            created_at: Math.floor(Date.now() / 1000),
+            ref: null,
+            has_media: true,
+            media: [{ type: 'photo', url: 'https://example.com/source.jpg' }],
+            extra: null,
+            u_avatar: null,
+        },
+        {
+            cardMediaFiles: [originalCard],
+            originalMediaFiles: [sourceMedia],
+        },
+        { render_type: 'text-card' } as any,
+        target,
+        undefined,
+        'task-no-native-companion',
+        [originalCard],
+    )
+
+    expect(result).toBeNull()
+    expect(processCalls).toHaveLength(0)
 })
 
 test('summary-card queues social platforms together per target instead of per route', async () => {

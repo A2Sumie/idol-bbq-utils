@@ -197,7 +197,8 @@ interface ForwardTargetPlatformCommonConfig {
               duplicate_behavior?: 'skip' | 'text_only'
           }
     /**
-     * Maximum image attachment size in bytes before provider upload. Defaults to 4,000,000.
+     * Maximum image attachment size before provider upload. Values up to 10000 are treated as KiB for legacy configs;
+     * larger values are bytes. Defaults to 4,000,000 bytes.
      */
     max_image_bytes?: number
     image_max_bytes?: number

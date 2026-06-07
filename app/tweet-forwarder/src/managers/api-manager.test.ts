@@ -1277,6 +1277,115 @@ test('APIManager queues manual crawler run without marking it completed before c
     }
 })
 
+test('APIManager queues manual website crawler run with one-shot website override', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const dispatched: any[] = []
+    const queuePayloads: any[] = []
+
+    ;(DB.TaskQueue as any).add = async (_type: string, payload: any) => {
+        queuePayloads.push(payload)
+        return { id: 90, payload }
+    }
+    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            name: 'website-crawler',
+                            websites: ['https://example.com/list'],
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    emitter: {
+                        emit: (_event: string, payload: any) => {
+                            dispatched.push(payload)
+                            return true
+                        },
+                    },
+                }) as any,
+        })
+
+        const response = await (manager as any).handleCrawlerRun(
+            new Request('http://localhost/api/actions/crawlers/run', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name: 'website-crawler',
+                    websites: [
+                        'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/450790',
+                        'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/450790',
+                    ],
+                }),
+            }),
+        )
+        const payload = await response.json()
+
+        expect(payload).toMatchObject({
+            success: true,
+            status: 'queued',
+            crawler: 'website-crawler',
+            websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/450790'],
+        })
+        expect(queuePayloads[0]).toMatchObject({
+            crawler: 'website-crawler',
+            websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/450790'],
+        })
+        expect(dispatched[0].task.data).toMatchObject({
+            name: 'website-crawler',
+            websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/450790'],
+        })
+        expect(dispatched[0].task.meta).toMatchObject({
+            task_queue_id: 90,
+            task_queue_type: 'manual_crawler_run',
+            manual_website_override_count: 1,
+        })
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
+test('APIManager rejects website override for non-website crawlers', async () => {
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+                crawlers: [
+                    {
+                        name: 'crawler-a',
+                        origin: 'https://x.com',
+                    },
+                ],
+            }) as any,
+        getDeps: () =>
+            ({
+                emitter: {
+                    emit: () => true,
+                },
+            }) as any,
+    })
+
+    const response = await (manager as any).handleCrawlerRun(
+        new Request('http://localhost/api/actions/crawlers/run', {
+            method: 'POST',
+            body: JSON.stringify({ name: 'crawler-a', website: 'https://example.com/list' }),
+        }),
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.text()).toBe('website override is only supported for website crawlers')
+})
+
 test('APIManager records failed processor runs when processor execution fails', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus

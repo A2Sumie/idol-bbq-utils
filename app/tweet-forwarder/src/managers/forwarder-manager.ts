@@ -318,6 +318,19 @@ function preserveSourceHashtags(sourceText: string, translatedText: string) {
     return [translatedText.trim(), missingTags.join(' ')].filter(Boolean).join(' ')
 }
 
+function normalizeTranslationComparableText(text: string | null | undefined) {
+    return String(text || '')
+        .replace(/https?:\/\/\S+/gi, '')
+        .replace(/\s+/g, '')
+        .replace(/[、。，．！？!?…~～・･:：;；"'“”‘’「」『』【】（）()[\]{}<>《》〈〉＿_\-—–]+/g, '')
+        .trim()
+        .toLocaleLowerCase()
+}
+
+function hasJapaneseKana(text: string | null | undefined) {
+    return /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(String(text || ''))
+}
+
 function truncateDigestText(text: string, maxLength: number) {
     if (text.length <= maxLength) {
         return text
@@ -3002,7 +3015,7 @@ class ForwarderPools extends BaseCompatibleModel {
             : this.hasArticleChainTranslatedContent([article])
         if (!hasTranslatedContent) {
             this.log?.warn(
-                `Falling back to original-only summary realtime Bilibili tail card for ${article.a_id}: translated_card is enabled but no translated content is available`,
+                `Using original-only summary realtime Bilibili tail card for ${article.a_id}: translated_card is enabled but no useful translated content is available`,
             )
             return renderResult
         }
@@ -3010,7 +3023,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const cardResult = await this.renderService.process(article, {
             taskId: `summary-realtime-card-${target.id}-${article.id || article.a_id}`,
             render_type: 'text-card',
-            card_features: ['translated-card-pattern'],
+            card_features: ['no-translated-card-pattern', 'no-translated-corner-badge'],
             preloadedMediaFiles: renderResult.originalMediaFiles,
             deduplication: false,
         })
@@ -3765,17 +3778,26 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private flattenSummaryArticleChain(article: ArticleWithId) {
-        const chain: ArticleWithId[] = []
-        let current: ArticleWithId | null = article
-        const visited = new Set<number>()
+    private flattenSummaryArticleChain(article: ArticleWithId | Article) {
+        const chain: Array<ArticleWithId | Article> = []
+        let current: ArticleWithId | Article | null = article
+        const visitedIds = new Set<string>()
+        const visitedObjects = new WeakSet<object>()
         while (current && typeof current === 'object') {
-            if (visited.has(current.id)) {
+            if (visitedObjects.has(current)) {
                 break
             }
-            visited.add(current.id)
+            visitedObjects.add(current)
+            const stableId = String((current as any).id ?? current.a_id ?? '').trim()
+            if (stableId) {
+                const key = `${current.platform}:${stableId}`
+                if (visitedIds.has(key)) {
+                    break
+                }
+                visitedIds.add(key)
+            }
             chain.push(current)
-            current = current.ref && typeof current.ref === 'object' ? (current.ref as ArticleWithId) : null
+            current = current.ref && typeof current.ref === 'object' ? (current.ref as ArticleWithId | Article) : null
         }
         return chain
     }
@@ -3861,28 +3883,115 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private async processSummaryCardTranslationText(processor: BaseProcessor, inputText: string, sourceText: string) {
-        return await pRetry(() => processor.process(inputText), {
-            retries: RETRY_LIMIT,
-        })
-            .then((value) => preserveSourceHashtags(sourceText, value))
-            .catch((error) => {
-                this.log?.error(`Summary-card translation processor failed: ${error}`)
-                return PROCESSOR_ERROR_FALLBACK
+        const translateOnce = async (text: string) =>
+            await pRetry(() => processor.process(text), {
+                retries: RETRY_LIMIT,
             })
+                .then((value) => preserveSourceHashtags(sourceText, value))
+                .catch((error) => {
+                    this.log?.error(`Summary-card translation processor failed: ${error}`)
+                    return PROCESSOR_ERROR_FALLBACK
+                })
+
+        const firstResult = await translateOnce(inputText)
+        if (this.isUsefulSummaryCardTranslation(sourceText, firstResult) || !hasJapaneseKana(sourceText)) {
+            return firstResult
+        }
+
+        const retryInput = [
+            '上一次输出疑似没有把日文翻成简体中文。请重新翻译下面文本。',
+            '只输出简体中文译文；保留 URLs、@handles、hashtags、emoji、数字、日期、时间和专有名词。',
+            '如果有 hashtag，保留 hashtag 原文。',
+            '',
+            sourceText,
+        ].join('\n')
+        const retryResult = await translateOnce(retryInput)
+        if (!this.isUsefulSummaryCardTranslation(sourceText, retryResult)) {
+            this.log?.warn(
+                `Summary-card translation looked unchanged; suppressing translated text for source: ${sourceText.slice(
+                    0,
+                    80,
+                )}`,
+            )
+            return PROCESSOR_ERROR_FALLBACK
+        }
+        return retryResult
     }
 
-    private hasArticleChainTranslatedContent(articles: ArticleWithId[]) {
-        return articles.some((item) =>
-            this.flattenSummaryArticleChain(item).some((article) => {
-                if (BaseProcessor.isValidResult(article.translation)) {
-                    return true
-                }
-                if (article.media?.some((media) => BaseProcessor.isValidResult((media as any).translation))) {
-                    return true
-                }
-                return BaseProcessor.isValidResult((article.extra as any)?.translation)
-            }),
+    private isUsefulSummaryCardTranslation(
+        sourceText: string | null | undefined,
+        translatedText: string | null | undefined,
+    ) {
+        if (!BaseProcessor.isValidResult(translatedText)) {
+            return false
+        }
+        const sourceComparable = normalizeTranslationComparableText(sourceText)
+        const translatedComparable = normalizeTranslationComparableText(translatedText)
+        if (!sourceComparable || !translatedComparable) {
+            return true
+        }
+        if (sourceComparable === translatedComparable && hasJapaneseKana(sourceText)) {
+            return false
+        }
+        return true
+    }
+
+    private async translateSummaryCardField(
+        processor: BaseProcessor,
+        rootArticle: ArticleWithId,
+        article: ArticleWithId | Article,
+        sourceText: string,
+        fieldLabel: string,
+    ) {
+        return await this.processSummaryCardTranslationText(
+            processor,
+            this.buildOrderedTranslationInput(rootArticle, article, sourceText, fieldLabel),
+            sourceText,
         )
+    }
+
+    private async translateSummaryCardFieldIfUseful(
+        processor: BaseProcessor,
+        rootArticle: ArticleWithId,
+        article: ArticleWithId | Article,
+        sourceText: string,
+        fieldLabel: string,
+    ) {
+        const result = await this.translateSummaryCardField(processor, rootArticle, article, sourceText, fieldLabel)
+        return this.isUsefulSummaryCardTranslation(sourceText, result) ? result : null
+    }
+
+    private collectArticleChainTranslationCoverage(articles: Array<ArticleWithId | Article>) {
+        const checks: boolean[] = []
+        for (const item of articles) {
+            for (const article of this.flattenSummaryArticleChain(item)) {
+                if (String(article.content || '').trim()) {
+                    checks.push(this.isUsefulSummaryCardTranslation(article.content, article.translation))
+                }
+                for (const media of article.media || []) {
+                    if (String(media.alt || '').trim()) {
+                        checks.push(this.isUsefulSummaryCardTranslation(media.alt, (media as any).translation))
+                    }
+                }
+                if (String((article.extra as any)?.content || '').trim()) {
+                    checks.push(
+                        this.isUsefulSummaryCardTranslation(
+                            (article.extra as any)?.content,
+                            (article.extra as any)?.translation,
+                        ),
+                    )
+                }
+            }
+        }
+        return {
+            total: checks.length,
+            translated: checks.filter(Boolean).length,
+            complete: checks.length > 0 && checks.every(Boolean),
+        }
+    }
+
+    private hasArticleChainTranslatedContent(articles: Array<ArticleWithId | Article>) {
+        return this.collectArticleChainTranslationCoverage(articles).complete
     }
 
     private async prepareArticleChainTranslations(
@@ -3910,32 +4019,46 @@ class ForwarderPools extends BaseCompatibleModel {
                 seenArticles.add(key)
 
                 const patch: Partial<Article> = {}
-                if (article.content && !BaseProcessor.isValidResult(article.translation)) {
-                    patch.translation = await this.processSummaryCardTranslationText(
+                if (article.content && !this.isUsefulSummaryCardTranslation(article.content, article.translation)) {
+                    const translation = await this.translateSummaryCardFieldIfUseful(
                         processor,
-                        this.buildOrderedTranslationInput(item, article, article.content, '正文'),
+                        item,
+                        article,
                         article.content,
+                        '正文',
                     )
-                    patch.translated_by = processor.NAME
-                    article.translation = patch.translation
-                    article.translated_by = processor.NAME
+                    if (translation) {
+                        patch.translation = translation
+                        patch.translated_by = processor.NAME
+                        article.translation = patch.translation
+                        article.translated_by = processor.NAME
+                    }
                 }
 
                 if (article.media) {
                     let changed = false
                     const updatedMedia = await Promise.all(
                         article.media.map(async (media) => {
-                            if (!media.alt || BaseProcessor.isValidResult((media as any).translation)) {
+                            if (
+                                !media.alt ||
+                                this.isUsefulSummaryCardTranslation(media.alt, (media as any).translation)
+                            ) {
+                                return media
+                            }
+                            const translation = await this.translateSummaryCardFieldIfUseful(
+                                processor,
+                                item,
+                                article,
+                                media.alt,
+                                '图片说明',
+                            )
+                            if (!translation) {
                                 return media
                             }
                             changed = true
                             return {
                                 ...media,
-                                translation: await this.processSummaryCardTranslationText(
-                                    processor,
-                                    this.buildOrderedTranslationInput(item, article, media.alt, '图片说明'),
-                                    media.alt,
-                                ),
+                                translation,
                                 translated_by: processor.NAME,
                             }
                         }),
@@ -3946,17 +4069,25 @@ class ForwarderPools extends BaseCompatibleModel {
                     }
                 }
 
-                if (article.extra?.content && !BaseProcessor.isValidResult((article.extra as any).translation)) {
-                    patch.extra = {
-                        ...article.extra,
-                        translation: await this.processSummaryCardTranslationText(
-                            processor,
-                            this.buildOrderedTranslationInput(item, article, article.extra.content, '补充内容'),
-                            article.extra.content,
-                        ),
-                        translated_by: processor.NAME,
-                    } as any
-                    article.extra = patch.extra as any
+                if (
+                    article.extra?.content &&
+                    !this.isUsefulSummaryCardTranslation(article.extra.content, (article.extra as any).translation)
+                ) {
+                    const translation = await this.translateSummaryCardFieldIfUseful(
+                        processor,
+                        item,
+                        article,
+                        article.extra.content,
+                        '补充内容',
+                    )
+                    if (translation) {
+                        patch.extra = {
+                            ...article.extra,
+                            translation,
+                            translated_by: processor.NAME,
+                        } as any
+                        article.extra = patch.extra as any
+                    }
                 }
 
                 if (Object.keys(patch).length > 0) {
@@ -4544,7 +4675,10 @@ class ForwarderPools extends BaseCompatibleModel {
             if (Array.isArray(currentArticle.media)) {
                 currentArticle.media = currentArticle.media.map((mediaItem) => {
                     const clonedMedia = { ...(mediaItem as any) }
-                    if (textMode === 'translated' && clonedMedia.translation) {
+                    if (
+                        textMode === 'translated' &&
+                        this.isUsefulSummaryCardTranslation(clonedMedia.alt, clonedMedia.translation)
+                    ) {
                         clonedMedia.alt = clonedMedia.translation
                     }
                     delete clonedMedia.translation
@@ -4555,7 +4689,10 @@ class ForwarderPools extends BaseCompatibleModel {
 
             if (currentArticle.extra) {
                 const nextExtra = { ...(currentArticle.extra as any) }
-                if (textMode === 'translated' && nextExtra.translation) {
+                if (
+                    textMode === 'translated' &&
+                    this.isUsefulSummaryCardTranslation(nextExtra.content, nextExtra.translation)
+                ) {
                     nextExtra.content = nextExtra.translation
                 }
                 delete nextExtra.translation
@@ -4564,7 +4701,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
             if (textMode === 'translated') {
                 const translatedContent = String(currentArticle.translation || '').trim()
-                if (translatedContent) {
+                if (this.isUsefulSummaryCardTranslation(currentArticle.content, translatedContent)) {
                     currentArticle.content = translatedContent
                 }
             }
@@ -4608,7 +4745,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
         const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
         const translatedCard = summaryConfig?.translatedCard
-        if (!translatedCard) {
+        if (!summaryConfig?.sendFirstNative || !translatedCard) {
             return null
         }
         if (!translatedCard.processorId) {
