@@ -341,9 +341,11 @@ function formatDateTimeParts(timestampSeconds: number, timeZone: string) {
         }, {})
 
     const date = `${parts.year}-${parts.month}-${parts.day}`
+    const dateShort = `${String(parts.year || '').slice(-2)}.${parts.month}.${parts.day}`
     const time = `${parts.hour}:${parts.minute}`
     return {
         date,
+        date_short: dateShort,
         time,
         datetime: `${date} ${time}`,
     }
@@ -357,7 +359,7 @@ function resolveUploadSummary(
 ) {
     const summary = primaryLine.trim()
     if ([Platform.Instagram, Platform.TikTok, Platform.X].includes(article.platform)) {
-        const prefix = [displayName, dateTime.date].filter(Boolean).join(' ').trim()
+        const prefix = [displayName, dateTime.date_short].filter(Boolean).join(' ').trim()
         return [prefix, summary].filter(Boolean).join(' ').trim() || `${displayName} ${dateTime.datetime}`.trim()
     }
     return summary || `${displayName} ${dateTime.datetime}`.trim()
@@ -386,6 +388,7 @@ function buildTemplateContext(
         body,
         body_or_summary: body || summary,
         date: dateTime.date,
+        date_short: dateTime.date_short,
         datetime: dateTime.datetime,
         display_name: displayName,
         platform_label: resolvePlatformLabel(article),
@@ -416,7 +419,7 @@ function resolveDefaultTitleTemplate(article: Pick<Article, 'platform' | 'type'>
     if (article.platform === Platform.YouTube && article.type !== 'shorts') {
         return '{{summary}}'
     }
-    return '【22/7】[{{source_tag}}] {{upload_summary}}'
+    return '【22/7 Member】[{{source_tag}}] {{upload_summary}}'
 }
 
 function deriveTitle(
