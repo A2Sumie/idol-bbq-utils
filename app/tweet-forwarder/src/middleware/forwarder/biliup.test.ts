@@ -119,7 +119,79 @@ test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 Member】[X] 22/7(ナナブンノニジュウニ) 26.06.07 22/7_the 3rd')
+    expect(candidate?.title).toBe('【22/7 Member】[X] 22/7 26.06.07 22/7_the 3rd')
+})
+
+test('buildBiliupUploadCandidate maps decorative X nicknames to canonical member names', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.X,
+            type: 'tweet',
+            u_id: 'rino_mochizuki',
+            username: '♡望月りの♡【22/7】໒꒱· ﾟ',
+            a_id: 'x-rino-video',
+            content: '本日18:00〜 もぐもぐ配信します',
+            created_at: 1773985020,
+            url: 'https://x.com/rino_mochizuki/status/1',
+        } as any,
+        ['本日18:00〜 もぐもぐ配信します'],
+        [{ media_type: 'video', path: '/tmp/x-rino.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate?.title).toBe('【22/7 Member】[X] 望月りの 26.03.20 本日18:00〜 もぐもぐ配信します')
+    expect(candidate?.description).toContain('来源账号: 望月りの')
+})
+
+test('buildBiliupUploadCandidate maps configured Instagram handles to canonical member names', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'story',
+            u_id: 'shiina_satsuki227',
+            username: 'shiina_satsuki227',
+            a_id: 'ig-satsuki-story',
+            content: null,
+            created_at: 1773985020,
+            url: 'https://www.instagram.com/stories/shiina_satsuki227/1/',
+        } as any,
+        [],
+        [{ media_type: 'video', path: '/tmp/ig-satsuki.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate?.title).toBe('【22/7 Member】[ins] 椎名桜月 26.03.20')
+    expect(candidate?.description).toContain('来源账号: 椎名桜月')
+    expect(candidate?.description).toContain('账号标识: shiina_satsuki227')
+})
+
+test('buildBiliupUploadCandidate maps TikTok 22/7-prefixed nicknames to canonical member names', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.TikTok,
+            type: 'video',
+            u_id: 'emma_tsukishiro',
+            username: '22/7 月城咲舞',
+            a_id: 'tt-emma-video',
+            content: 'TikTok本文',
+            created_at: 1773985020,
+            url: 'https://www.tiktok.com/@emma_tsukishiro/video/1',
+        } as any,
+        ['TikTok本文'],
+        [
+            { media_type: 'video_thumbnail', path: '/tmp/tt-emma-cover.jpg' },
+            { media_type: 'video', path: '/tmp/tt-emma.mp4' },
+        ],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate?.title).toBe('【22/7 Member】[TT] 月城咲舞 26.03.20 TikTok本文')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {

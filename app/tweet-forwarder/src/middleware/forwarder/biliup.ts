@@ -37,6 +37,50 @@ const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_IMAGE = path.resolve(
     'live-player-background.png',
 )
 const DEFAULT_BILIUP_METADATA_TIMEZONE = 'Asia/Tokyo'
+const BILIUP_ACCOUNT_DISPLAY_NAME_MAP: Record<string, string> = {
+    '227_staff': '22/7',
+    '227official': '22/7',
+    '227keisanchu': '22/7 計算外',
+    'nananijigram22_7': '22/7',
+    'nananijigram22_7_the.3rd': '22/7 THE 3RD',
+    '_fujimasakura': '藤間桜',
+    '_nishiurasora': '西浦そら',
+    '_saitonicole': '斎藤ニコル',
+    '_takigawamiu': '滝川みう',
+    '_yagamitoa': '八神叶愛',
+    'alice__kurosaki': '黒崎ありす',
+    'asaoka_mao__': '麻丘真央',
+    'chiharu_okr': '千春',
+    'cure_rinochi': '望月りの',
+    'em_matcha227': '月城咲舞',
+    'emma_tsukishiro': '月城咲舞',
+    'hikari_kabashima': '椛島光',
+    'iko_hiyama': '桧山依子',
+    'kawase_uta': '河瀬詩',
+    'luna': '四条月',
+    'luna.shijo': '四条月',
+    'luna_shijo': '四条月',
+    'mana__tachibana': '橘茉奈',
+    'mao_asaoka227': '麻丘真央',
+    'mao_asaoka_227': '麻丘真央',
+    'mikumo_haruka': '三雲遥加',
+    'minami__iori': '南伊織',
+    'mirei_orimoto': '折本美玲',
+    'nagomi_saijo_227': '西條和',
+    'nao_aikawa227': '相川奈央',
+    'rino_mochizuki': '望月りの',
+    'ruri_yoshizawa': '吉沢珠璃',
+    'sally_amaki': '天城サリー',
+    'sally_amaki_official': '天城サリー',
+    'sallyamaki': '天城サリー',
+    'sallyamakiofficial': '天城サリー',
+    'satsuki_shiina': '椎名桜月',
+    'shiina_satsuki227': '椎名桜月',
+    'shiina_satsuki_': '椎名桜月',
+    'tabesugiyaseruo': '蒼乃音',
+    'ui_sakura_0526': '佐倉初',
+    'yoshizawa_ruri': '吉沢珠璃',
+}
 
 type TemplateContext = Record<string, string>
 
@@ -264,8 +308,41 @@ function stripDuplicateLeadingSummary(block: string, summary: string) {
     return lines.join('\n').trim()
 }
 
+function normalizeBiliupAccountKey(value: string | null | undefined) {
+    return String(value || '')
+        .trim()
+        .replace(/^@+/, '')
+        .toLocaleLowerCase()
+}
+
+function cleanupBiliupDisplayName(value: string | null | undefined) {
+    return String(value || '')
+        .replace(/【\s*22\/7\s*】/gi, '')
+        .replace(/[（(]\s*22\/7\s*[)）]/gi, '')
+        .replace(/^22\/7[\s:：-]+/i, '')
+        .replace(/[\s:：-]+22\/7$/i, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+function resolveMappedBiliupDisplayName(article: Pick<Article, 'username' | 'u_id'>) {
+    for (const candidate of [article.u_id, article.username]) {
+        const key = normalizeBiliupAccountKey(candidate)
+        const mapped = key ? BILIUP_ACCOUNT_DISPLAY_NAME_MAP[key] : undefined
+        if (mapped) {
+            return mapped
+        }
+    }
+    return ''
+}
+
 function resolveDisplayName(article: Pick<Article, 'username' | 'u_id'>) {
-    return String(article.username || article.u_id || '').trim() || 'Unknown'
+    return (
+        resolveMappedBiliupDisplayName(article) ||
+        cleanupBiliupDisplayName(article.username) ||
+        cleanupBiliupDisplayName(article.u_id) ||
+        'Unknown'
+    )
 }
 
 function resolveTypeLabel(article: Pick<Article, 'platform' | 'type'>) {
