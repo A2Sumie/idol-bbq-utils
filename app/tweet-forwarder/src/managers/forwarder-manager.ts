@@ -2977,6 +2977,45 @@ class ForwarderPools extends BaseCompatibleModel {
         return [...mediaFiles, cardMedia]
     }
 
+    private async buildSummaryRealtimeCardRenderResultForTarget(
+        article: ArticleWithId,
+        target: BaseForwarder,
+        config: ResolvedSummaryCardConfig,
+        mediaFiles: RenderedMediaFile[],
+        renderResult: RenderResult,
+    ) {
+        if (!this.shouldAppendSummaryRealtimeCardMedia(target, mediaFiles)) {
+            return renderResult
+        }
+
+        const translatedCard = config.translatedCard
+        if (!translatedCard) {
+            return renderResult
+        }
+
+        const hasTranslatedContent = translatedCard.processorId
+            ? await this.prepareArticleChainTranslations(
+                  translatedCard.processorId,
+                  [article],
+                  `summary realtime Bilibili card ${target.id}`,
+              )
+            : this.hasArticleChainTranslatedContent([article])
+        if (!hasTranslatedContent) {
+            return renderResult
+        }
+
+        const cardResult = await this.renderService.process(article, {
+            taskId: `summary-realtime-card-${target.id}-${article.id || article.a_id}`,
+            render_type: 'text-card',
+            preloadedMediaFiles: renderResult.originalMediaFiles,
+            deduplication: false,
+        })
+        cardResult.mediaFiles ||= []
+        cardResult.cardMediaFiles ||= []
+        cardResult.originalMediaFiles ||= []
+        return cardResult.cardMediaFiles.length > 0 ? cardResult : renderResult
+    }
+
     private async releaseTargetMediaVisibilityClaims(visibility: MediaVisibilityResult | null | undefined) {
         if (!visibility?.policy || visibility.visibleClaims.length === 0 || isNonLiveOutboundSendMode()) {
             return
@@ -2999,10 +3038,17 @@ class ForwarderPools extends BaseCompatibleModel {
         const mediaFiles = rawMediaFiles.filter((file) =>
             this.isSummaryRealtimeMediaEligible(target, file, rawMediaFiles),
         )
+        const cardRenderResult = await this.buildSummaryRealtimeCardRenderResultForTarget(
+            article,
+            target,
+            config,
+            mediaFiles,
+            renderResult,
+        )
         const mediaFilesWithTargetExtras = this.appendSummaryRealtimeCardMediaForTarget(
             target,
             mediaFiles,
-            renderResult,
+            cardRenderResult,
         )
         if (mediaFilesWithTargetExtras.length === 0) {
             return {
