@@ -3835,7 +3835,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const lines = [
-            '目标语言：简体中文（zh-CN）。请只翻译【当前待译】段落，输出简体中文译文，不要输出原文、序号、说明、上下文、繁体中文、日文或英文解释。',
+            '请只翻译【当前待译】段落，输出简体中文译文，不要输出原文、序号、说明或上下文。',
             '保留所有 hashtag 原文（例如 #ナナニジ），不要翻译、改写、删除或增减。',
         ]
         if (chain.length <= 1) {

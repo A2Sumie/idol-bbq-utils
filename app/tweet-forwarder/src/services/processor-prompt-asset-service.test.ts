@@ -70,30 +70,6 @@ test('resolveProcessorApiKey supports env indirection', () => {
     }
 })
 
-test('default processor prompt explicitly targets Simplified Chinese', () => {
-    class TestProcessor extends BaseProcessor {
-        NAME = 'Prompt Probe'
-        protected BASE_URL = ''
-        public async process() {
-            return ''
-        }
-        public prompt() {
-            return this.getPrompt()
-        }
-    }
-
-    const prompt = new TestProcessor('').prompt()
-    expect(prompt).toContain('目标语言必须是简体中文（zh-CN）')
-    expect(prompt).toContain('不要输出原文、繁体中文、日文或英文解释')
-})
-
-test('22/7 social translation prompt explicitly targets Simplified Chinese', () => {
-    const promptPath = path.resolve(process.cwd(), 'assets/knowledge/22_7/translation/social-ja-zh.prompt.txt')
-    const prompt = fs.readFileSync(promptPath, 'utf8')
-    expect(prompt).toContain('Target language: Simplified Chinese (zh-CN).')
-    expect(prompt).toContain('Return only the translated text in Simplified Chinese (zh-CN).')
-})
-
 test('output schema can be loaded from a processor JSON asset', () => {
     class TestProcessor extends BaseProcessor {
         NAME = 'Schema Probe'

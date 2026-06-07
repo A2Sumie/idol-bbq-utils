@@ -5365,14 +5365,12 @@ test('sendArticles prompts summary-card translation with chronological chain ord
     }
 
     expect(processCalls).toHaveLength(2)
-    expect(processCalls[0]).toContain('目标语言：简体中文（zh-CN）')
     expect(processCalls[0]).toContain('保留所有 hashtag 原文')
     expect(processCalls[0]).toContain('以下按发生顺序排列')
     expect(processCalls[0]).toContain('【第1条/最先发生/当前待译】')
     expect(processCalls[0]).toContain('先の本文 #ナナニジ')
     expect(processCalls[0]).toContain('【第2条/最后发生/上下文】')
     expect(processCalls[0]).toContain('後の返信 #出演情報')
-    expect(processCalls[1]).toContain('目标语言：简体中文（zh-CN）')
     expect(processCalls[1]).toContain('保留所有 hashtag 原文')
     expect(processCalls[1]).toContain('以下按发生顺序排列')
     expect(processCalls[1]).toContain('【第1条/最先发生/上下文】')
