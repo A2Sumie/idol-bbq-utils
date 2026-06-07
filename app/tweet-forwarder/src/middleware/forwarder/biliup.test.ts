@@ -94,7 +94,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7】[TT] TT短视频正文')
+    expect(candidate?.title).toBe('【22/7】[TT] TikTok Member 14:37 TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).toContain('TikTok')
@@ -485,7 +485,7 @@ test('BiliForwarder applies runtime video upload metadata overrides', async () =
         })
 
         expect(result).toEqual([{ ok: true, mode: 'biliup' }])
-        expect(uploadedTitle).toBe('NEW TT TT短视频正文')
+        expect(uploadedTitle).toBe('NEW TT TikTok Member 14:37 TT短视频正文')
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist

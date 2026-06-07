@@ -349,6 +349,20 @@ function formatDateTimeParts(timestampSeconds: number, timeZone: string) {
     }
 }
 
+function resolveUploadSummary(
+    article: Pick<Article, 'platform'>,
+    primaryLine: string,
+    displayName: string,
+    dateTime: ReturnType<typeof formatDateTimeParts>,
+) {
+    const summary = primaryLine.trim()
+    if (article.platform === Platform.TikTok) {
+        const prefix = [displayName, dateTime.time].filter(Boolean).join(' ').trim()
+        return [prefix, summary].filter(Boolean).join(' ').trim() || `${displayName} ${dateTime.datetime}`.trim()
+    }
+    return summary || `${displayName} ${dateTime.datetime}`.trim()
+}
+
 function buildTemplateContext(
     article: Pick<Article, 'content' | 'platform' | 'username' | 'u_id' | 'a_id' | 'created_at' | 'url' | 'type'>,
     texts: string[],
@@ -365,7 +379,7 @@ function buildTemplateContext(
     const summary = primaryLine || dateTime.datetime
     const bodyWithoutRepeatedSummary = stripDuplicateLeadingSummary(blocks[0] || '', summary)
     const body = bodyWithoutRepeatedSummary || blocks[0] || ''
-    const uploadSummary = primaryLine || `${displayName} ${dateTime.datetime}`.trim()
+    const uploadSummary = resolveUploadSummary(article, primaryLine, displayName, dateTime)
 
     return {
         article_id: article.a_id,
