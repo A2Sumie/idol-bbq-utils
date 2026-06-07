@@ -356,8 +356,8 @@ function resolveUploadSummary(
     dateTime: ReturnType<typeof formatDateTimeParts>,
 ) {
     const summary = primaryLine.trim()
-    if (article.platform === Platform.TikTok) {
-        const prefix = [displayName, dateTime.time].filter(Boolean).join(' ').trim()
+    if ([Platform.Instagram, Platform.TikTok, Platform.X].includes(article.platform)) {
+        const prefix = [displayName, dateTime.date].filter(Boolean).join(' ').trim()
         return [prefix, summary].filter(Boolean).join(' ').trim() || `${displayName} ${dateTime.datetime}`.trim()
     }
     return summary || `${displayName} ${dateTime.datetime}`.trim()

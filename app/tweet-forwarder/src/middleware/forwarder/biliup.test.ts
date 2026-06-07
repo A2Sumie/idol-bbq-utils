@@ -64,7 +64,7 @@ test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads
         },
     )
 
-    expect(candidate?.title).toBe('【22/7】[ins] 椎名桜月 2026-03-20 14:37')
+    expect(candidate?.title).toBe('【22/7】[ins] 椎名桜月 2026-03-20')
     expect(candidate?.description).toContain('来源平台: Instagram投稿')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: satsuki_shiina')
@@ -94,7 +94,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7】[TT] TikTok Member 14:37 TT短视频正文')
+    expect(candidate?.title).toBe('【22/7】[TT] TikTok Member 2026-03-20 TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).toContain('TikTok')
@@ -119,7 +119,7 @@ test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7】[X] 22/7_the 3rd')
+    expect(candidate?.title).toBe('【22/7】[X] 22/7(ナナブンノニジュウニ) 2026-06-07 22/7_the 3rd')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
@@ -485,7 +485,7 @@ test('BiliForwarder applies runtime video upload metadata overrides', async () =
         })
 
         expect(result).toEqual([{ ok: true, mode: 'biliup' }])
-        expect(uploadedTitle).toBe('NEW TT TikTok Member 14:37 TT短视频正文')
+        expect(uploadedTitle).toBe('NEW TT TikTok Member 2026-03-20 TT短视频正文')
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
