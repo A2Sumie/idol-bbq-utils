@@ -65,6 +65,7 @@ interface ProcessorConfig extends CommonCfgConfig {
      * extra config for request body
      */
     extended_payload?: Record<string, any>
+    response_format?: 'json_schema' | 'json_object' | 'none'
     output_schema?: Record<string, any>
     output_schema_file?: string
     schedule_url?: string

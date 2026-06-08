@@ -84,6 +84,15 @@ abstract class BaseProcessor extends BaseCompatibleModel {
         if (typeof this.config?.max_tokens === 'number') {
             payload.max_tokens = this.config.max_tokens
         }
+        if (this.config?.response_format === 'json_object') {
+            payload.response_format = {
+                type: 'json_object',
+            }
+            return payload
+        }
+        if (this.config?.response_format === 'none') {
+            return payload
+        }
         const outputSchema = this.getOutputSchema()
         if (outputSchema) {
             payload.response_format = {
