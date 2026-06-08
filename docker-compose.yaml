@@ -39,6 +39,11 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
+      # Optional live-player schedule webhook sink for extracted time-event candidates.
+      - LIVE_PLAYER_SCHEDULE_WEBHOOK_URL=${LIVE_PLAYER_SCHEDULE_WEBHOOK_URL:-}
+      - LIVE_PLAYER_SCHEDULE_WEBHOOK_API_KEY=${LIVE_PLAYER_SCHEDULE_WEBHOOK_API_KEY:-}
+      - LIVE_PLAYER_SCHEDULE_WEBHOOK_USER_AGENT=${LIVE_PLAYER_SCHEDULE_WEBHOOK_USER_AGENT:-N2NJ-Stream-Bot/1.0}
+      - LIVE_PLAYER_SCHEDULE_WAF_BYPASS_HEADER=${LIVE_PLAYER_SCHEDULE_WAF_BYPASS_HEADER:-}
       # TV 存档上传单独走天津风 biliup cookies，不影响其他 bilibili 任务
       - ARCHIVE_UPLOAD_COOKIE_SOURCE=/app/assets/cookies/biliup.tianjinfeng.cookies.json
     volumes:

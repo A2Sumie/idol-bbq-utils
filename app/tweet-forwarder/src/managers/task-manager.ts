@@ -10,7 +10,10 @@ import type { ProcessorConfig } from '@/types/processor'
 import type { Processor } from '@/types'
 import { isPersistentMediaPath } from '@/services/media-cache-service'
 import { normalizeCronSecond } from '@/utils/cron'
+import { writeSchedulesFromProcessorResult } from '@/services/processor-schedule-webhook-service'
 import { getForwarderProviderResult, PartialForwarderSendError } from '@/middleware/forwarder/base'
+import { pRetry } from '@idol-bbq-utils/utils'
+import { RETRY_LIMIT } from '@/config'
 import {
     isOutboundFailedStatus,
     isOutboundDryRunStatus,
@@ -27,6 +30,8 @@ import {
 
 type AggregateTaskKind = typeof DB.TaskQueue.TYPE.AggregateHourly | typeof DB.TaskQueue.TYPE.AggregateDaily
 
+type ProcessorRunAction = 'translate' | 'extract' | 'merge' | 'plan'
+
 interface AggregatePayload {
     platform: Platform
     u_id: string
@@ -37,6 +42,24 @@ interface AggregatePayload {
     processorConfig?: ProcessorConfig & { provider: string; api_key?: string }
     processorId?: string
     prompt?: string
+}
+
+interface ArticleProcessorRunPayload {
+    processorId?: string
+    action?: ProcessorRunAction
+    platform?: string | number
+    id?: number
+    a_id?: string
+    u_id?: string
+    start?: number
+    end?: number
+    text?: string
+    scheduleUrl?: string
+    scheduleApiKey?: string
+    scheduleUserAgent?: string
+    scheduleWafBypassHeader?: string
+    resultKey?: string
+    minConfidence?: number
 }
 
 type AggregateSendStatus =
@@ -72,6 +95,48 @@ class TaskDeliveryError extends Error {
 
 function toErrorMessage(error: unknown) {
     return error instanceof Error ? error.message : String(error)
+}
+
+function tryParseJson(value: string) {
+    try {
+        return JSON.parse(value)
+    } catch {
+        return null
+    }
+}
+
+function selectProcessorResult(value: any, resultKey?: string | null) {
+    if (!resultKey) {
+        return value
+    }
+    return resultKey
+        .split('.')
+        .filter(Boolean)
+        .reduce((current, key) => {
+            if (current && typeof current === 'object' && key in current) {
+                return current[key]
+            }
+            return undefined
+        }, value)
+}
+
+function resolvePlatform(value?: string | number | null): Platform | null {
+    if (value === null || value === undefined || value === '') {
+        return null
+    }
+    if (typeof value === 'number') {
+        return value as Platform
+    }
+    if (/^\d+$/.test(value)) {
+        return Number(value) as Platform
+    }
+    const normalized = value.toLowerCase()
+    if (['x', 'twitter'].includes(normalized)) return Platform.X
+    if (normalized === 'instagram') return Platform.Instagram
+    if (['tiktok', 'tik_tok'].includes(normalized)) return Platform.TikTok
+    if (['youtube', 'yt'].includes(normalized)) return Platform.YouTube
+    if (['website', 'web'].includes(normalized)) return Platform.Website
+    return null
 }
 
 export class TaskManager extends BaseCompatibleModel {
@@ -151,6 +216,9 @@ export class TaskManager extends BaseCompatibleModel {
                     } else if (claimedTask.type === DB.TaskQueue.TYPE.AggregateHourly) {
                         const payload = claimedTask.payload as unknown as AggregatePayload
                         resultSummary = await this.handleHourlyAggregation(payload)
+                    } else if (claimedTask.type === DB.TaskQueue.TYPE.ArticleProcessorRun) {
+                        const payload = claimedTask.payload as unknown as ArticleProcessorRunPayload
+                        resultSummary = await this.handleArticleProcessorRun(payload)
                     } else {
                         throw new Error(`Unsupported task type: ${claimedTask.type}`)
                     }
@@ -199,6 +267,204 @@ export class TaskManager extends BaseCompatibleModel {
         }
         this.log?.warn(`Stopping ${scope}: task manager is shutting down`)
         return true
+    }
+
+    private resolveProcessorDefinition(processorId?: string) {
+        const processorDef = processorId
+            ? this.processors.find((processor) => processor.id === processorId || processor.name === processorId)
+            : this.processors[0]
+        if (!processorDef) {
+            throw new Error(`Processor not found: ${processorId || 'default'}`)
+        }
+        return processorDef
+    }
+
+    private async buildProcessorInput(payload: ArticleProcessorRunPayload) {
+        const platform = resolvePlatform(payload.platform)
+        if (platform && (payload.id || payload.a_id)) {
+            const article = payload.id
+                ? await DB.Article.getSingleArticle(payload.id, platform)
+                : await DB.Article.getSingleArticleByArticleCode(payload.a_id || '', platform)
+            if (!article) {
+                throw new Error('Article not found')
+            }
+            return {
+                article,
+                sourceType: 'article',
+                sourceRef: `${platform}:${article.a_id}`,
+                text: this.buildProcessorArticleDigest([article as any]),
+            }
+        }
+
+        if (platform && payload.u_id && payload.start && payload.end) {
+            const articles = await DB.Article.getArticlesByTimeRange(payload.u_id, platform, payload.start, payload.end)
+            return {
+                article: null,
+                sourceType: 'window',
+                sourceRef: `${platform}:${payload.u_id}:${payload.start}-${payload.end}`,
+                text: this.buildProcessorArticleDigest(articles as any),
+            }
+        }
+
+        if (payload.text) {
+            return {
+                article: null,
+                sourceType: 'text',
+                sourceRef: 'manual:text',
+                text: payload.text,
+            }
+        }
+
+        throw new Error('No valid processor input provided')
+    }
+
+    private buildProcessorArticleDigest(articles: Array<{ [key: string]: any }>) {
+        return articles
+            .slice()
+            .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0))
+            .map((article) => {
+                const extraContent = typeof article.extra?.content === 'string' ? article.extra.content.trim() : ''
+                const mediaUrls = Array.isArray(article.media)
+                    ? article.media.map((media) => media?.url?.trim()).filter((url): url is string => Boolean(url))
+                    : []
+                return [
+                    `[${dayjs.unix(article.created_at).format('YYYY-MM-DD HH:mm:ss')}]`,
+                    `Article DB ID: ${article.id}`,
+                    `Article ID: ${article.a_id}`,
+                    `Platform: ${String(Platform[article.platform] || article.platform).toLowerCase()}`,
+                    `User ID: ${article.u_id}`,
+                    `Username: ${article.username}`,
+                    `URL: ${article.url}`,
+                    'Content:',
+                    article.content || '(empty)',
+                    extraContent ? ['Extra Content:', extraContent].join('\n') : null,
+                    mediaUrls.length > 0 ? ['Media URLs:', ...mediaUrls.map((url) => `- ${url}`)].join('\n') : null,
+                ]
+                    .filter((line): line is string => Boolean(line))
+                    .join('\n')
+            })
+            .join('\n\n---\n\n')
+    }
+
+    private resolveProcessorRunFallbackSource(payload: ArticleProcessorRunPayload) {
+        const platform = resolvePlatform(payload.platform)
+        if (platform && (payload.id || payload.a_id)) {
+            return {
+                sourceType: 'article',
+                sourceRef: `${platform}:${payload.a_id || payload.id}`,
+            }
+        }
+        if (platform && payload.u_id && payload.start && payload.end) {
+            return {
+                sourceType: 'window',
+                sourceRef: `${platform}:${payload.u_id}:${payload.start}-${payload.end}`,
+            }
+        }
+        if (payload.text) {
+            return {
+                sourceType: 'text',
+                sourceRef: 'manual:text',
+            }
+        }
+        return {
+            sourceType: null,
+            sourceRef: null,
+        }
+    }
+
+    private countProcessorResultItems(value: any) {
+        if (Array.isArray(value)) {
+            return value.length
+        }
+        if (Array.isArray(value?.items)) {
+            return value.items.length
+        }
+        if (Array.isArray(value?.plans)) {
+            return value.plans.length
+        }
+        if (Array.isArray(value?.tasks)) {
+            return value.tasks.length
+        }
+        return value ? 1 : 0
+    }
+
+    private async handleArticleProcessorRun(payload: ArticleProcessorRunPayload): Promise<string | undefined> {
+        const processorDef = this.resolveProcessorDefinition(payload.processorId)
+        const action = payload.action || processorDef.cfg_processor?.action || 'extract'
+        let processorInput: {
+            article: unknown
+            sourceType: string
+            sourceRef: string
+            text: string
+        } | null = null
+
+        try {
+            processorInput = await this.buildProcessorInput(payload)
+            const processor = await processorRegistry.create(
+                processorDef.provider,
+                processorDef.api_key,
+                this.log,
+                processorDef.cfg_processor,
+            )
+            const rawResult = await pRetry(() => processor.process(processorInput!.text), {
+                retries: RETRY_LIMIT,
+            })
+            const parsed = tryParseJson(rawResult)
+            const resultKey = payload.resultKey || processorDef.cfg_processor?.result_key
+            const selected = selectProcessorResult(parsed, resultKey)
+            const shouldWriteSchedules = action === 'extract' || action === 'plan'
+            const scheduleResults = shouldWriteSchedules
+                ? await writeSchedulesFromProcessorResult(selected ?? parsed, processorInput.sourceRef, {
+                      scheduleUrl: payload.scheduleUrl || processorDef.cfg_processor?.schedule_url,
+                      scheduleApiKey: payload.scheduleApiKey || processorDef.cfg_processor?.schedule_api_key,
+                      scheduleUserAgent:
+                          payload.scheduleUserAgent || processorDef.cfg_processor?.schedule_user_agent,
+                      scheduleWafBypassHeader:
+                          payload.scheduleWafBypassHeader || processorDef.cfg_processor?.schedule_waf_bypass_header,
+                      minConfidence: payload.minConfidence ?? processorDef.cfg_processor?.min_confidence,
+                      log: this.log,
+                  })
+                : []
+
+            await DB.ProcessorRun.create({
+                processor_id: processorDef.id || processorDef.name || processor.NAME,
+                action,
+                source_type: processorInput.sourceType,
+                source_ref: processorInput.sourceRef,
+                input: {
+                    request: payload,
+                    text: processorInput.text,
+                },
+                output: {
+                    raw: rawResult,
+                    parsed,
+                    selected,
+                    result_key: resultKey || null,
+                    schedules: scheduleResults,
+                },
+            })
+
+            return `${DB.TaskQueue.TYPE.ArticleProcessorRun} ${action} items=${this.countProcessorResultItems(
+                selected ?? parsed,
+            )} schedules=${scheduleResults.length}`
+        } catch (error) {
+            const fallbackSource = this.resolveProcessorRunFallbackSource(payload)
+            await DB.ProcessorRun.create({
+                processor_id: processorDef.id || processorDef.name || null,
+                action,
+                source_type: processorInput?.sourceType || fallbackSource.sourceType,
+                source_ref: processorInput?.sourceRef || fallbackSource.sourceRef,
+                status: DB.ProcessorRun.STATUS.Failed,
+                input: {
+                    request: payload,
+                    ...(processorInput ? { text: processorInput.text } : {}),
+                },
+                error: toErrorMessage(error),
+            }).catch((recordError) => {
+                this.log?.error(`Failed to record article processor run failure: ${recordError}`)
+            })
+            throw error
+        }
     }
 
     private async handleHourlyAggregation(payload: AggregatePayload): Promise<string | undefined> {

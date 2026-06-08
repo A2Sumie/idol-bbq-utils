@@ -221,6 +221,8 @@ test('task queue API redaction summarizes processor task payloads without text o
             text: 'private processor input text',
             scheduleUrl: 'https://scheduler.example/private',
             scheduleApiKey: 'private-schedule-api-key',
+            scheduleUserAgent: 'private-user-agent',
+            scheduleWafBypassHeader: 'x-bypass-waf: private-waf',
             resultKey: 'plans',
         },
     })
@@ -238,11 +240,15 @@ test('task queue API redaction summarizes processor task payloads without text o
         text_length: 'private processor input text'.length,
         schedule_url_present: true,
         schedule_api_key_present: true,
+        schedule_user_agent_present: true,
+        schedule_waf_bypass_header_present: true,
         result_key_present: true,
     })
     expect(serialized).not.toContain('private processor')
     expect(serialized).not.toContain('private processor input text')
     expect(serialized).not.toContain('private-schedule-api-key')
+    expect(serialized).not.toContain('private-user-agent')
+    expect(serialized).not.toContain('private-waf')
     expect(serialized).not.toContain('scheduler.example')
     expect(serialized).not.toContain('private-member')
     expect(serialized).not.toContain('private-article')

@@ -632,6 +632,96 @@ test('ForwarderTaskScheduler dispatches immediate tasks with article_ids_by_url 
     })
 })
 
+test('ForwarderTaskScheduler queues configured article post-processors from spider results', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const queuedTasks: any[] = []
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        queuedTasks.push({ type, payload, executeAt, meta })
+        return { id: queuedTasks.length }
+    }
+
+    try {
+        const emitter = new EventEmitter()
+        const scheduler = new ForwarderTaskScheduler(
+            {
+                cfg_forwarder: {
+                    render_type: 'img-tag',
+                } as any,
+                forwarders: [
+                    {
+                        name: 'X图文模板',
+                        origin: 'https://x.com',
+                        cfg_forwarder: {},
+                    },
+                ] as any,
+                connections: {
+                    'crawler-formatter': {},
+                    'crawler-processor': {},
+                    'processor-formatter': {},
+                    'formatter-target': {},
+                } as any,
+                crawlers: [
+                    {
+                        name: '22/7-cast-成员统一列表',
+                        origin: 'https://x.com',
+                        paths: ['i/lists/1936785344072151389'],
+                        cfg_crawler: {
+                            post_processors: [
+                                {
+                                    processor_id: '22_7-event-time-extract',
+                                    action: 'extract',
+                                    schedule_user_agent: 'N2NJ-Stream-Bot/1.0',
+                                    schedule_waf_bypass_header: 'env:LIVE_PLAYER_SCHEDULE_WAF_BYPASS_HEADER',
+                                    min_confidence: 0.65,
+                                },
+                            ],
+                        },
+                    },
+                ] as any,
+                formatters: [],
+                forward_targets: [],
+            },
+            emitter,
+        )
+        const dispatched: any[] = []
+        emitter.on(`forwarder:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => {
+            dispatched.push(payload)
+        })
+        ;(scheduler as any).onSpiderTaskFinished({
+            taskId: 'spider-schedule-1',
+            crawlerName: '22/7-cast-成员统一列表',
+            result: [
+                {
+                    task_type: 'article',
+                    url: 'https://x.com/i/lists/1936785344072151389',
+                    data: [301, 302],
+                },
+            ],
+        })
+        await new Promise((resolve) => setTimeout(resolve, 0))
+
+        expect(dispatched).toHaveLength(1)
+        expect(queuedTasks).toHaveLength(2)
+        expect(queuedTasks[0]).toMatchObject({
+            type: DB.TaskQueue.TYPE.ArticleProcessorRun,
+            payload: {
+                processorId: '22_7-event-time-extract',
+                action: 'extract',
+                id: 301,
+                scheduleUserAgent: 'N2NJ-Stream-Bot/1.0',
+                scheduleWafBypassHeader: 'env:LIVE_PLAYER_SCHEDULE_WAF_BYPASS_HEADER',
+                minConfidence: 0.65,
+            },
+            meta: {
+                action_type: 'extract',
+            },
+        })
+        expect(queuedTasks[0].meta.idempotency_key).toBeTruthy()
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
 test('ForwarderTaskScheduler registers immediate tasks before dispatch status events', async () => {
     const emitter = new EventEmitter()
     const scheduler = new ForwarderTaskScheduler(

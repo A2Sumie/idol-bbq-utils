@@ -667,6 +667,14 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
             return
         }
 
+        void this.enqueueCrawlerPostProcessorTasks(crawler, articleIdsByUrl).catch((error) => {
+            this.log?.warn(
+                `Failed to enqueue post-processor tasks for crawler ${crawlerName}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+        })
+
         const { forwarderTaskData } = buildAutoBoundForwarderTaskData(crawler, this.props)
         const forwardTaskId = `spider-${taskId}`
         const task: TaskScheduler.Task = {
@@ -688,6 +696,61 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         if (!dispatched) {
             this.tasks.delete(forwardTaskId)
             this.log?.warn(`Forwarder dispatcher unavailable for immediate task ${forwardTaskId}`)
+        }
+    }
+
+    private getCrawlerPostProcessors(crawler: CrawlerConfig) {
+        return (crawler.cfg_crawler?.post_processors || []).filter(
+            (processor) => processor && processor.enabled !== false && processor.processor_id,
+        )
+    }
+
+    private async enqueueCrawlerPostProcessorTasks(crawler: CrawlerConfig, articleIdsByUrl: ArticleIdsByUrl) {
+        const postProcessors = this.getCrawlerPostProcessors(crawler)
+        if (postProcessors.length === 0) {
+            return
+        }
+
+        const now = Math.floor(Date.now() / 1000)
+        let scheduled = 0
+        for (const [url, articleIds] of Object.entries(articleIdsByUrl)) {
+            const info = spiderRegistry.extractBasicInfo(url)
+            if (!info?.platform) {
+                this.log?.warn(`Skipping post-processor tasks for ${url}: unable to resolve platform`)
+                continue
+            }
+            for (const id of articleIds) {
+                for (const postProcessor of postProcessors) {
+                    const action = postProcessor.action || 'extract'
+                    const payload = {
+                        processorId: postProcessor.processor_id,
+                        action,
+                        platform: info.platform,
+                        id,
+                        scheduleUrl: postProcessor.schedule_url,
+                        scheduleApiKey: postProcessor.schedule_api_key,
+                        scheduleUserAgent: postProcessor.schedule_user_agent,
+                        scheduleWafBypassHeader: postProcessor.schedule_waf_bypass_header,
+                        resultKey: postProcessor.result_key,
+                        minConfidence: postProcessor.min_confidence,
+                    }
+                    await DB.TaskQueue.add(DB.TaskQueue.TYPE.ArticleProcessorRun, payload, now, {
+                        source_ref: `${info.platform}:${id}`,
+                        action_type: action,
+                        idempotency_key: DB.TaskQueue.buildIdempotencyKey(DB.TaskQueue.TYPE.ArticleProcessorRun, {
+                            processorId: payload.processorId,
+                            action,
+                            platform: info.platform,
+                            id,
+                        }),
+                    })
+                    scheduled += 1
+                }
+            }
+        }
+
+        if (scheduled > 0) {
+            this.log?.info(`Queued ${scheduled} post-processor task(s) for crawler ${crawler.name || '(unnamed)'}`)
         }
     }
 

@@ -9,12 +9,14 @@ const originalTaskQueue = { ...DB.TaskQueue }
 const originalOutboundMessage = { ...DB.OutboundMessage }
 const originalTargetHealth = { ...DB.TargetHealth }
 const originalArticle = { ...DB.Article }
+const originalProcessorRun = { ...DB.ProcessorRun }
 
 afterEach(() => {
     Object.assign(DB.TaskQueue, originalTaskQueue)
     Object.assign(DB.OutboundMessage, originalOutboundMessage)
     Object.assign(DB.TargetHealth, originalTargetHealth)
     Object.assign(DB.Article, originalArticle)
+    Object.assign(DB.ProcessorRun, originalProcessorRun)
 })
 
 test('TaskManager poll skips tasks that lose the pending claim race', async () => {
@@ -50,8 +52,12 @@ test('TaskManager poll skips tasks that lose the pending claim race', async () =
     await (manager as any).poll()
 
     expect(updatedStatuses).toEqual([])
-    expect(recoverCalls[0]?.options).toEqual({ types: ['aggregate_daily', 'aggregate_hourly'] })
-    expect(getPendingCalls[0]?.options).toEqual({ types: ['aggregate_daily', 'aggregate_hourly'] })
+    expect(recoverCalls[0]?.options).toEqual({
+        types: ['aggregate_daily', 'aggregate_hourly', 'article_processor_run'],
+    })
+    expect(getPendingCalls[0]?.options).toEqual({
+        types: ['aggregate_daily', 'aggregate_hourly', 'article_processor_run'],
+    })
 })
 
 test('TaskManager aggregate sends are claimed through outbound messages', async () => {
@@ -188,6 +194,122 @@ test('TaskManager daily aggregation defaults to the first configured processor',
         expect(sentText).toContain('こんにちは')
     } finally {
         ;(processorRegistry as any).create = originalCreateProcessor
+    }
+})
+
+test('TaskManager handles article processor runs and writes extracted schedule candidates', async () => {
+    const originalCreateProcessor = (processorRegistry as any).create
+    const originalFetch = globalThis.fetch
+    const processorRuns: any[] = []
+    const fetchCalls: any[] = []
+
+    ;(DB.Article as any).getSingleArticle = async () =>
+        ({
+            id: 31,
+            a_id: 'post-31',
+            platform: Platform.X,
+            created_at: 1710000000,
+            u_id: 'member_a',
+            username: 'member a',
+            content: '6/15(月) 20:00からSHOWROOM配信します',
+            url: 'https://x.com/member_a/status/post-31',
+            has_media: false,
+            media: [],
+            extra: null,
+        }) as any
+    ;(DB.ProcessorRun as any).create = async (data: any) => {
+        processorRuns.push(data)
+        return { id: processorRuns.length, ...data }
+    }
+    ;(processorRegistry as any).create = async () =>
+        ({
+            NAME: 'fake-extractor',
+            process: async () =>
+                JSON.stringify({
+                    items: [
+                        {
+                            title: 'SHOWROOM 配信',
+                            event_type: 'stream',
+                            starts_at: '2026-06-15T20:00:00+09:00',
+                            ends_at: null,
+                            timezone: 'Asia/Tokyo',
+                            source_time_text: '6/15(月) 20:00',
+                            source_url: 'https://x.com/member_a/status/post-31',
+                            confidence: 0.9,
+                            needs_review: false,
+                            notes: null,
+                        },
+                    ],
+                }),
+        }) as any
+    globalThis.fetch = (async (url: string, init: RequestInit) => {
+        fetchCalls.push({ url, headers: init.headers, body: JSON.parse(String(init.body)) })
+        return new Response(JSON.stringify({ success: true, scheduleId: 8 }), { status: 200 })
+    }) as typeof fetch
+
+    try {
+        const manager = new TaskManager(
+            { getTarget: () => null } as any,
+            {
+                processors: [
+                    {
+                        id: '22_7-event-time-extract',
+                        provider: ProcessorProvider.DeepSeekV4Flash,
+                        api_key: 'test-key',
+                        cfg_processor: {
+                            action: 'extract',
+                            schedule_url: 'https://live-player.example/api/webhook/schedule',
+                            schedule_api_key: 'schedule-key',
+                            schedule_user_agent: 'N2NJ-Stream-Bot/1.0',
+                            schedule_waf_bypass_header: 'x-bypass-waf: schedule-waf',
+                            min_confidence: 0.6,
+                        },
+                    },
+                ],
+            },
+        )
+        const summary = await (manager as any).handleArticleProcessorRun({
+            processorId: '22_7-event-time-extract',
+            action: 'extract',
+            platform: Platform.X,
+            id: 31,
+        })
+
+        expect(summary).toBe('article_processor_run extract items=1 schedules=1')
+        expect(fetchCalls).toHaveLength(1)
+        expect(fetchCalls[0]).toMatchObject({
+            url: 'https://live-player.example/api/webhook/schedule',
+            headers: {
+                'User-Agent': 'N2NJ-Stream-Bot/1.0',
+                'x-bypass-waf': 'schedule-waf',
+            },
+            body: {
+                title: 'SHOWROOM 配信',
+                scheduleType: 'reminder',
+                executionTime: '2026-06-15T20:00:00+09:00',
+                apiKey: 'schedule-key',
+            },
+        })
+        expect(processorRuns).toHaveLength(1)
+        expect(processorRuns[0]).toMatchObject({
+            processor_id: '22_7-event-time-extract',
+            action: 'extract',
+            source_type: 'article',
+            source_ref: `${Platform.X}:post-31`,
+            output: {
+                schedules: [
+                    {
+                        ok: true,
+                        status: 200,
+                        title: 'SHOWROOM 配信',
+                    },
+                ],
+            },
+        })
+        expect(processorRuns[0].input.text).toContain('SHOWROOM配信します')
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+        globalThis.fetch = originalFetch
     }
 })
 

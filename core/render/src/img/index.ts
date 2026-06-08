@@ -10,6 +10,7 @@ import fs from 'fs'
 import { Buffer } from 'buffer'
 
 const jaSymbols = ['～', '┈', '─', '╮', '╯', '╰', '╭', '━', '┏', '┓', '┗', '┛', '＼', '＞', '＜', '゜']
+const SYMBOL_FONT_FALLBACK_PATTERN = /[\u2100-\u214F\u2460-\u24FF\u3200-\u33FF]/u
 const TRANSPARENT_SVG_DATA_URL = `data:image/svg+xml;base64,${Buffer.from(
     '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>',
     'utf8',
@@ -159,6 +160,7 @@ const SYSTEM_FALLBACK_FONTS: Array<FontConfig & { paths: Array<string> }> = [
 ]
 const BASE_FONT_EXCLUDED_NAMES = new Set(['Unifont'])
 const UNIFONT_FALLBACK_CODES = new Set(['unknown', 'symbol', 'math', 'zh-CN'])
+const SYMBOL_FALLBACK_FONT_NAMES = ['Noto Sans Symbols 2', 'Noto Sans Symbols', 'Unifont']
 
 // Our own encoding of multiple fonts and their code, so we can fetch them in one request. The structure is:
 // [1 byte = X, length of language code][X bytes of language code string][4 bytes = Y, length of font][Y bytes of font data]
@@ -288,6 +290,14 @@ function loadBundledFallbackFont(name: string): Font | null {
     }
 }
 
+function loadBundledFallbackFonts(names: Array<string>): Font[] {
+    return names.map((name) => loadBundledFallbackFont(name)).filter((font): font is Font => Boolean(font))
+}
+
+function needsBundledSymbolFallback(text: string) {
+    return SYMBOL_FONT_FALLBACK_PATTERN.test(text)
+}
+
 async function loadDynamicAssetUncached(emojiType: keyof typeof apis, _code: string, text: string) {
     if (_code === 'emoji') {
         if (!isRemoteRenderAssetEnabled()) {
@@ -308,6 +318,9 @@ async function loadDynamicAssetUncached(emojiType: keyof typeof apis, _code: str
     if (codes.includes('symbol') && !codes.includes('ja-JP') && jaSymbols.some((s) => text.includes(s))) {
         codes.push('ja-JP')
     }
+    if (needsBundledSymbolFallback(text) && !codes.includes('symbol')) {
+        codes.push('symbol')
+    }
 
     // Try to load from Google Fonts.
     const fonts = codes
@@ -316,6 +329,9 @@ async function loadDynamicAssetUncached(emojiType: keyof typeof apis, _code: str
         .flat()
 
     if (!isRemoteRenderAssetEnabled()) {
+        if (codes.includes('symbol')) {
+            return loadBundledFallbackFonts(SYMBOL_FALLBACK_FONT_NAMES)
+        }
         if (codes.some((code) => UNIFONT_FALLBACK_CODES.has(code))) {
             const unifont = loadBundledFallbackFont('Unifont')
             return unifont ? [unifont] : []
@@ -373,6 +389,12 @@ async function loadDynamicAssetUncached(emojiType: keyof typeof apis, _code: str
     }
 
     if (codes.some((code) => UNIFONT_FALLBACK_CODES.has(code))) {
+        if (codes.includes('symbol')) {
+            const bundledSymbolFonts = loadBundledFallbackFonts(SYMBOL_FALLBACK_FONT_NAMES)
+            if (bundledSymbolFonts.length > 0) {
+                return bundledSymbolFonts
+            }
+        }
         const unifont = loadBundledFallbackFont('Unifont')
         return unifont ? [unifont] : []
     }

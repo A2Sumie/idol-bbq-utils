@@ -10,6 +10,18 @@ interface AggregationConfig {
     target_ids?: Array<string>
 }
 
+interface CrawlerPostProcessorConfig {
+    enabled?: boolean
+    processor_id: string
+    action?: 'translate' | 'extract' | 'merge' | 'plan'
+    schedule_url?: string
+    schedule_api_key?: string
+    schedule_user_agent?: string
+    schedule_waf_bypass_header?: string
+    result_key?: string
+    min_confidence?: number
+}
+
 interface LiveRelayTargetConfig {
     enabled?: boolean
     player_id?: string
@@ -69,6 +81,7 @@ interface CrawlerConfig extends CommonCfgConfig {
     // Processor Configuration
     processor?: Processor
     processor_id?: string
+    post_processors?: Array<CrawlerPostProcessorConfig>
 
     // Aggregation (Batch Formatting) Configuration
     aggregation?: AggregationConfig
@@ -171,4 +184,11 @@ interface Crawler {
     cfg_crawler?: CrawlerConfig
 }
 
-export type { Crawler, CrawlerConfig, AggregationConfig, LiveRelayConfig, LiveRelayTargetConfig }
+export type {
+    Crawler,
+    CrawlerConfig,
+    AggregationConfig,
+    CrawlerPostProcessorConfig,
+    LiveRelayConfig,
+    LiveRelayTargetConfig,
+}

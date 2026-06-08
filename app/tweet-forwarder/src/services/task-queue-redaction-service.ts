@@ -203,6 +203,8 @@ function publicProcessorRunTaskPayload(payload: unknown) {
         ...(stringLength(value.text) !== undefined ? { text_length: stringLength(value.text) } : {}),
         schedule_url_present: hasValue(value.scheduleUrl),
         schedule_api_key_present: hasValue(value.scheduleApiKey),
+        schedule_user_agent_present: hasValue(value.scheduleUserAgent),
+        schedule_waf_bypass_header_present: hasValue(value.scheduleWafBypassHeader),
         result_key_present: hasValue(value.resultKey),
     }
 }
@@ -258,6 +260,7 @@ function publicTaskPayload(type: string | null | undefined, payload: unknown) {
         case DB.TaskQueue.TYPE.ArticleResend:
             return publicArticleResendPayload(payload)
         case DB.TaskQueue.TYPE.ProcessorRun:
+        case DB.TaskQueue.TYPE.ArticleProcessorRun:
             return publicProcessorRunTaskPayload(payload)
         default:
             return publicUnknownPayload(payload)

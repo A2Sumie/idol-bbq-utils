@@ -69,7 +69,10 @@ interface ProcessorConfig extends CommonCfgConfig {
     output_schema_file?: string
     schedule_url?: string
     schedule_api_key?: string
+    schedule_user_agent?: string
+    schedule_waf_bypass_header?: string
     result_key?: string
+    min_confidence?: number
 }
 
 interface ProcessorPromptAssetConfig {

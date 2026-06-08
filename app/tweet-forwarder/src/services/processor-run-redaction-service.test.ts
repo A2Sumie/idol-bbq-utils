@@ -21,6 +21,8 @@ test('processor run API redaction summarizes input and output without text or sc
                 text: 'private request text',
                 scheduleUrl: 'https://scheduler.example/private',
                 scheduleApiKey: 'private-schedule-api-key',
+                scheduleUserAgent: 'private-user-agent',
+                scheduleWafBypassHeader: 'x-bypass-waf: private-waf',
                 resultKey: 'plans',
             },
             text: 'private processor input text',
@@ -63,6 +65,8 @@ test('processor run API redaction summarizes input and output without text or sc
             text_length: 'private request text'.length,
             schedule_url_present: true,
             schedule_api_key_present: true,
+            schedule_user_agent_present: true,
+            schedule_waf_bypass_header_present: true,
             result_key_present: true,
         },
         text_present: true,
@@ -87,6 +91,8 @@ test('processor run API redaction summarizes input and output without text or sc
     expect(serialized).not.toContain('private parsed plan')
     expect(serialized).not.toContain('private selected payload')
     expect(serialized).not.toContain('private-schedule-api-key')
+    expect(serialized).not.toContain('private-user-agent')
+    expect(serialized).not.toContain('private-waf')
     expect(serialized).not.toContain('scheduler.example')
     expect(serialized).not.toContain('private schedule response')
     expect(serialized).not.toContain('private processor error')

@@ -59,6 +59,8 @@ function publicRequestSummary(request: unknown) {
         ...(stringLength(value.text) !== undefined ? { text_length: stringLength(value.text) } : {}),
         schedule_url_present: hasValue(value.scheduleUrl),
         schedule_api_key_present: hasValue(value.scheduleApiKey),
+        schedule_user_agent_present: hasValue(value.scheduleUserAgent),
+        schedule_waf_bypass_header_present: hasValue(value.scheduleWafBypassHeader),
         result_key_present: hasValue(value.resultKey),
     }
 }

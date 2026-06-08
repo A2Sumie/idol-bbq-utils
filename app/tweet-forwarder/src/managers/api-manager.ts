@@ -57,6 +57,7 @@ import {
     redactArchiveUploadResultForApi,
 } from '@/services/archive-admin-redaction-service'
 import { sanitizeArticleForApi, sanitizeArticlesForApi } from '@/services/article-api-redaction-service'
+import { writeSchedulesFromProcessorResult } from '@/services/processor-schedule-webhook-service'
 
 interface ApiConfig {
     port?: number
@@ -1520,7 +1521,10 @@ export class APIManager extends BaseCompatibleModel {
             text?: string
             scheduleUrl?: string
             scheduleApiKey?: string
+            scheduleUserAgent?: string
+            scheduleWafBypassHeader?: string
             resultKey?: string
+            minConfidence?: number
         }
         const processorDef = this.resolveProcessorDefinition(body.processorId)
         const action = body.action || processorDef.cfg_processor?.action || 'extract'
@@ -1555,13 +1559,17 @@ export class APIManager extends BaseCompatibleModel {
                 selected = selectProcessorResult(parsed, body.resultKey || processorDef.cfg_processor?.result_key)
             }
             const scheduleResults =
-                action === 'plan'
-                    ? await this.writeSchedulesFromPlan(
-                          selected ?? parsed,
-                          input.sourceRef,
-                          body.scheduleUrl || processorDef.cfg_processor?.schedule_url,
-                          body.scheduleApiKey || processorDef.cfg_processor?.schedule_api_key,
-                      )
+                action === 'plan' || action === 'extract'
+                    ? await writeSchedulesFromProcessorResult(selected ?? parsed, input.sourceRef, {
+                          scheduleUrl: body.scheduleUrl || processorDef.cfg_processor?.schedule_url,
+                          scheduleApiKey: body.scheduleApiKey || processorDef.cfg_processor?.schedule_api_key,
+                          scheduleUserAgent:
+                              body.scheduleUserAgent || processorDef.cfg_processor?.schedule_user_agent,
+                          scheduleWafBypassHeader:
+                              body.scheduleWafBypassHeader || processorDef.cfg_processor?.schedule_waf_bypass_header,
+                          minConfidence: body.minConfidence ?? processorDef.cfg_processor?.min_confidence,
+                          log: this.log,
+                      })
                     : []
 
             const run = await DB.ProcessorRun.create({
@@ -1940,52 +1948,4 @@ export class APIManager extends BaseCompatibleModel {
         return null
     }
 
-    private async writeSchedulesFromPlan(
-        parsed: any,
-        sourceRef: string,
-        scheduleUrl?: string,
-        scheduleApiKey?: string,
-    ) {
-        const targetUrl = scheduleUrl || process.env.SCHEDULE_WEBHOOK_URL
-        if (!targetUrl) {
-            return []
-        }
-        const candidates = Array.isArray(parsed)
-            ? parsed
-            : parsed?.plans || parsed?.items || parsed?.tasks || (parsed?.title ? [parsed] : [])
-        if (!Array.isArray(candidates)) {
-            return []
-        }
-
-        const results = []
-        for (const [index, candidate] of candidates.entries()) {
-            if (!candidate?.title || !candidate?.executionTime) {
-                continue
-            }
-
-            const payload = {
-                title: candidate.title,
-                description: candidate.description || null,
-                scheduleType: candidate.scheduleType || 'workflow',
-                executionTime: candidate.executionTime,
-                recurrence: candidate.recurrence || null,
-                payload: candidate.payload || null,
-                externalKey: candidate.externalKey || `${sourceRef}:${index}`,
-                apiKey: scheduleApiKey || process.env.SCHEDULE_WEBHOOK_API_KEY,
-            }
-
-            const response = await fetch(targetUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            })
-            const text = await response.text()
-            results.push({
-                ok: response.ok,
-                status: response.status,
-                body: tryParseJson(text) || text,
-            })
-        }
-        return results
-    }
 }

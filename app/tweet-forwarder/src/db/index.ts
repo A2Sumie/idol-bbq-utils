@@ -450,6 +450,7 @@ namespace DB {
             ArticleReprocess: 'article_reprocess',
             ArticleResend: 'article_resend',
             ProcessorRun: 'processor_run',
+            ArticleProcessorRun: 'article_processor_run',
         } as const
 
         export type Type = (typeof TYPE)[keyof typeof TYPE]
@@ -461,7 +462,7 @@ namespace DB {
 
         export type IdempotencyFormat = (typeof IDEMPOTENCY_FORMAT)[keyof typeof IDEMPOTENCY_FORMAT]
 
-        export const WORKER_TYPES = [TYPE.AggregateDaily, TYPE.AggregateHourly] as const
+        export const WORKER_TYPES = [TYPE.AggregateDaily, TYPE.AggregateHourly, TYPE.ArticleProcessorRun] as const
         export const INLINE_API_TYPES = [
             TYPE.ManualCrawlerRun,
             TYPE.NotificationSignal,
