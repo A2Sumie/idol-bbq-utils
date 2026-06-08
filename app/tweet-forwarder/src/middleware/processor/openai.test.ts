@@ -31,7 +31,7 @@ test('DeepSeek V4 Flash provider applies OpenCode Go defaults and aliases', asyn
         expect(calls[0]?.url).toBe('https://opencode.ai/zen/go/v1/chat/completions')
         expect(calls[0]?.body).toMatchObject({
             model: 'deepseek-v4-flash',
-            temperature: 0.4,
+            temperature: 1.3,
             thinking: {
                 type: 'disabled',
             },

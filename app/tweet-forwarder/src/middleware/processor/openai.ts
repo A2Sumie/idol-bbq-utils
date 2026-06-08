@@ -12,7 +12,7 @@ const DEEPSEEK_V4_FLASH_DEFAULT_CONFIG: ProcessorConfig = {
     name: 'OpenCode-Go-DeepSeek-v4-flash',
     model_id: 'deepseek-v4-flash',
     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
-    temperature: 0.4,
+    temperature: 1.3,
     extended_payload: {
         thinking: {
             type: 'disabled',
