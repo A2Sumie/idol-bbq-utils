@@ -1,6 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
+import { processorRegistry } from '@/middleware/processor'
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
+import { ProcessorProvider } from '@/types/processor'
 import { TaskManager } from './task-manager'
 
 const originalTaskQueue = { ...DB.TaskQueue }
@@ -111,6 +113,82 @@ test('TaskManager aggregate sends are claimed through outbound messages', async 
     expect(sentPayloads).toHaveLength(1)
     expect(sentPayloads[0]?.props?.forceSend).toBeTrue()
     expect(health[0]?.last_send_status).toBe('sent')
+})
+
+test('TaskManager daily aggregation defaults to the first configured processor', async () => {
+    const originalCreateProcessor = (processorRegistry as any).create
+    const createCalls: any[] = []
+    let sentText = ''
+
+    ;(DB.Article as any).getArticlesByTimeRange = async () => [
+        {
+            id: 1,
+            a_id: 'article-1',
+            created_at: 150,
+            content: 'こんにちは',
+            has_media: false,
+            media: [],
+        },
+    ]
+    ;(processorRegistry as any).create = async (provider: string, apiKey: string, _log: unknown, config: any) => {
+        createCalls.push({ provider, apiKey, config })
+        return {
+            process: async (text: string) => `summary:${text}`,
+        }
+    }
+
+    try {
+        const manager = new TaskManager(
+            { getTarget: () => null } as any,
+            {
+                processors: [
+                    {
+                        id: 'v4-flash-default',
+                        provider: ProcessorProvider.DeepSeekV4Flash,
+                        api_key: 'env:OPENCODE_GO_API_KEY',
+                        cfg_processor: {
+                            action: 'translate',
+                            temperature: 0.4,
+                        },
+                    },
+                ],
+            },
+        )
+        ;(manager as any).sendAggregateToTargets = async (
+            _taskKind: string,
+            _payload: unknown,
+            _targetIds: Array<string>,
+            text: string,
+        ) => {
+            sentText = text
+            return 'sent'
+        }
+
+        const result = await (manager as any).handleDailyAggregation({
+            platform: Platform.X,
+            u_id: 'member_a',
+            start: 100,
+            end: 200,
+            target_ids: ['target-a'],
+        })
+
+        expect(result).toBe('sent')
+        expect(createCalls).toHaveLength(1)
+        expect(createCalls[0]).toMatchObject({
+            provider: ProcessorProvider.DeepSeekV4Flash,
+            apiKey: 'env:OPENCODE_GO_API_KEY',
+            config: {
+                action: 'translate',
+                temperature: 0.4,
+            },
+        })
+        expect(createCalls[0]?.config?.prompt).toContain('You are a summarizer')
+        expect(sentText).toContain('Daily Report for member_a:')
+        expect(sentText).toContain('summary:')
+        expect(sentText).toContain('こんにちは')
+    } finally {
+        ;(processorRegistry as any).create = originalCreateProcessor
+    }
 })
 
 test('TaskManager retries aggregate tasks when target delivery fails', async () => {

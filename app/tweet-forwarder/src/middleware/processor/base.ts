@@ -113,6 +113,7 @@ abstract class BaseProcessor extends BaseCompatibleModel {
 
 export interface ProcessorPlugin {
     provider: ProcessorProvider
+    aliases?: Array<string>
     create: (apiKey: string, log?: Logger, config?: ProcessorConfig) => BaseProcessor
 }
 
@@ -130,11 +131,15 @@ class ProcessorRegistry {
     }
 
     register(plugin: ProcessorPlugin): this {
-        const key = plugin.provider.toLowerCase()
-        if (this.plugins.has(key)) {
-            throw new Error(`Processor plugin ${plugin.provider} already registered`)
+        const keys = [plugin.provider, ...(plugin.aliases || [])].map((value) => value.toLowerCase())
+        for (const key of keys) {
+            if (this.plugins.has(key)) {
+                throw new Error(`Processor plugin ${plugin.provider} already registered for key ${key}`)
+            }
         }
-        this.plugins.set(key, plugin)
+        for (const key of keys) {
+            this.plugins.set(key, plugin)
+        }
         return this
     }
 

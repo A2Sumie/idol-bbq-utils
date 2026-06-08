@@ -5,6 +5,7 @@ import os from 'os'
 import path from 'path'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
+import { ProcessorProvider } from '@/types/processor'
 import { TaskScheduler } from '@/utils/base'
 import { CrawlerCookieExportError, SpiderPools, SpiderTaskScheduler } from './spider-manager'
 
@@ -24,6 +25,48 @@ test('SpiderTaskScheduler treats same crawler pending or running tasks as active
         status: TaskScheduler.TaskStatus.COMPLETED,
     })
     expect((scheduler as any).hasActiveCrawlerTask('Instagram Live 抢抓 - 椎名桜月')).toBe(false)
+})
+
+test('SpiderTaskScheduler injects connected processor definitions into crawler tasks', () => {
+    const scheduler = new SpiderTaskScheduler(
+        {
+            crawlers: [],
+            connections: {
+                'crawler-processor': {
+                    'Crawler A': 'processor-v4-flash',
+                },
+            } as any,
+            processors: [
+                {
+                    id: 'processor-v4-flash',
+                    provider: ProcessorProvider.DeepSeekV4Flash,
+                    api_key: 'env:OPENCODE_GO_API_KEY',
+                    cfg_processor: {
+                        action: 'translate',
+                    },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const taskData = (scheduler as any).buildCrawlerTaskData({
+        name: 'Crawler A',
+        websites: ['https://x.com/member'],
+        cfg_crawler: {
+            cron: '* * * * *',
+        },
+    })
+
+    expect(taskData.cfg_crawler.processor).toMatchObject({
+        id: 'processor-v4-flash',
+        provider: ProcessorProvider.DeepSeekV4Flash,
+        api_key: 'env:OPENCODE_GO_API_KEY',
+        cfg_processor: {
+            action: 'translate',
+        },
+    })
+    expect((scheduler as any).resolveCrawlerProcessorId(taskData)).toBe('processor-v4-flash')
 })
 
 test('SpiderPools ignores malformed dispatch payloads without status side effects', async () => {

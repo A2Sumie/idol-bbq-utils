@@ -320,7 +320,7 @@ export class TaskManager extends BaseCompatibleModel {
 
         const configuredProcessor = processorId
             ? this.processors.find((processor) => processor.id === processorId || processor.name === processorId)
-            : null
+            : this.processors[0] || null
         const provider = configuredProcessor?.provider || processorConfig?.provider || 'Google'
         const apiKey =
             configuredProcessor?.api_key ||

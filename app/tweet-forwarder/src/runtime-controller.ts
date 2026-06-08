@@ -277,6 +277,7 @@ export class RuntimeController {
                         connections: config.connections,
                         formatters,
                         forward_targets,
+                        processors: config.processors,
                     },
                     emitter,
                     log,

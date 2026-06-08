@@ -8,6 +8,29 @@ abstract class BaseOpenai extends BaseProcessor {
     protected BASE_URL = 'https://api.openai.com/v1/chat/completions'
 }
 
+const DEEPSEEK_V4_FLASH_DEFAULT_CONFIG: ProcessorConfig = {
+    name: 'OpenCode-Go-DeepSeek-v4-flash',
+    model_id: 'deepseek-v4-flash',
+    base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
+    temperature: 0.4,
+    extended_payload: {
+        thinking: {
+            type: 'disabled',
+        },
+    },
+}
+
+function mergeProcessorDefaults(defaults: ProcessorConfig, config?: ProcessorConfig): ProcessorConfig {
+    return {
+        ...defaults,
+        ...(config || {}),
+        extended_payload: {
+            ...(defaults.extended_payload || {}),
+            ...(config?.extended_payload || {}),
+        },
+    }
+}
+
 class OpenaiLikeLLMTranslator extends BaseOpenai {
     static _PROVIDER = ProcessorProvider.OpenAI
     NAME: string
@@ -45,4 +68,12 @@ class OpenaiLikeLLMTranslator extends BaseOpenai {
     }
 }
 
-export { OpenaiLikeLLMTranslator }
+class DeepSeekV4FlashTranslator extends OpenaiLikeLLMTranslator {
+    static _PROVIDER = ProcessorProvider.DeepSeekV4Flash
+
+    constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
+        super(api_key, log, mergeProcessorDefaults(DEEPSEEK_V4_FLASH_DEFAULT_CONFIG, config))
+    }
+}
+
+export { DeepSeekV4FlashTranslator, OpenaiLikeLLMTranslator }

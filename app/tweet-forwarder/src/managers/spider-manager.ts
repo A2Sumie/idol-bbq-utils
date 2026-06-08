@@ -15,7 +15,6 @@ import type { AppConfig } from '@/types'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import type { TaskType, TaskTypeResult } from '@idol-bbq-utils/spider/types'
 import { BaseSpider } from '@idol-bbq-utils/spider'
-import { ProcessorProvider } from '@/types/processor'
 import { processorRegistry } from '@/middleware/processor'
 import { pRetry } from '@idol-bbq-utils/utils'
 import DB from '@/db'
@@ -149,11 +148,17 @@ function summarizeCrawlerErrors(errors: Array<unknown>) {
 class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
     NAME: string = 'SpiderTaskScheduler'
     protected log?: Logger
-    private props: Pick<AppConfig, 'crawlers' | 'cfg_crawler' | 'connections' | 'formatters' | 'forward_targets'>
+    private props: Pick<
+        AppConfig,
+        'crawlers' | 'cfg_crawler' | 'connections' | 'formatters' | 'forward_targets' | 'processors'
+    >
     private taskEventBindings: Array<{ eventName: string; listener: (...args: any[]) => void }> = []
 
     constructor(
-        props: Pick<AppConfig, 'crawlers' | 'cfg_crawler' | 'connections' | 'formatters' | 'forward_targets'>,
+        props: Pick<
+            AppConfig,
+            'crawlers' | 'cfg_crawler' | 'connections' | 'formatters' | 'forward_targets' | 'processors'
+        >,
         emitter: EventEmitter,
         log?: Logger,
     ) {
@@ -200,7 +205,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 const task: TaskScheduler.Task = {
                     id: taskId,
                     status: TaskScheduler.TaskStatus.PENDING,
-                    data: crawler,
+                    data: this.buildCrawlerTaskData(crawler),
                 }
                 this.tasks.set(taskId, task)
                 this.emitter.emit(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, {
@@ -263,7 +268,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                                 processorConfig: crawler.cfg_crawler?.processor,
                                 processorId:
                                     crawler.cfg_crawler?.aggregation?.processor_id ||
-                                    crawler.cfg_crawler?.processor_id,
+                                    this.resolveCrawlerProcessorId(crawler),
                                 prompt: crawler.cfg_crawler?.aggregation?.prompt,
                             }
                             const idempotencyPayload = {
@@ -321,6 +326,48 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             }
         }
         return sortUnique(Array.from(targetIds))
+    }
+
+    private resolveCrawlerProcessorId(crawler: Crawler) {
+        const crawlerKeys = [(crawler as any).id, crawler.name]
+        return (
+            lookupConnectionValues(this.props.connections?.['crawler-processor'], crawlerKeys) ||
+            crawler.cfg_crawler?.processor_id ||
+            ''
+        )
+    }
+
+    private resolveCrawlerProcessor(crawler: Crawler) {
+        if (crawler.cfg_crawler?.processor) {
+            return crawler.cfg_crawler.processor
+        }
+
+        const processorId = this.resolveCrawlerProcessorId(crawler)
+        if (!processorId) {
+            return undefined
+        }
+        const processor = (this.props.processors || []).find(
+            (candidate) => candidate.id === processorId || candidate.name === processorId,
+        )
+        if (!processor) {
+            this.log?.warn(`Processor ${processorId} configured for crawler ${crawler.name || '(unnamed)'} was not found`)
+            return undefined
+        }
+        return processor
+    }
+
+    private buildCrawlerTaskData(crawler: Crawler): Crawler {
+        const processor = this.resolveCrawlerProcessor(crawler)
+        if (!processor) {
+            return crawler
+        }
+        return {
+            ...crawler,
+            cfg_crawler: {
+                ...crawler.cfg_crawler,
+                processor,
+            },
+        }
     }
 
     /**

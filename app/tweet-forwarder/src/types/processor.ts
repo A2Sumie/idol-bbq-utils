@@ -3,7 +3,7 @@ import type { CommonCfgConfig } from './common'
 type ByteDance_LLM = 'doubao-pro-128k'
 type BigModel_LLM = 'glm-4-flash'
 type Google_LLM = 'gemini'
-type Deepseek_LLM = 'deepseek-v3'
+type Deepseek_LLM = 'deepseek-v3' | 'deepseek-v4-flash'
 
 type OpenA_Like_LLM = 'Openai'
 
@@ -32,6 +32,10 @@ enum ProcessorProvider {
      * default model id openai
      */
     OpenAI = 'Openai',
+    /**
+     * OpenAI-compatible OpenCode Go endpoint for DeepSeek V4 Flash
+     */
+    DeepSeekV4Flash = 'DeepSeekV4Flash',
     /**
      * Qwen MT model
      */
