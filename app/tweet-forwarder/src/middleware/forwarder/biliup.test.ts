@@ -64,7 +64,7 @@ test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 Member】[ins] 椎名桜月 26.03.20')
+    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 椎名桜月 26.03.20')
     expect(candidate?.description).toContain('来源平台: Instagram投稿')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: satsuki_shiina')
@@ -94,7 +94,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7 Member】[TT] TikTok Member 26.03.20 TT短视频正文')
+    expect(candidate?.title).toBe('【22/7 TikTok Member】[TT] TikTok Member 26.03.20 TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).toContain('TikTok')
@@ -119,7 +119,7 @@ test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 Member】[X] 22/7 26.06.07 22/7_the 3rd')
+    expect(candidate?.title).toBe('【22/7】[X] 22/7 26.06.07 22/7_the 3rd')
 })
 
 test('buildBiliupUploadCandidate maps decorative X nicknames to canonical member names', () => {
@@ -141,7 +141,7 @@ test('buildBiliupUploadCandidate maps decorative X nicknames to canonical member
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 Member】[X] 望月りの 26.03.20 本日18:00〜 もぐもぐ配信します')
+    expect(candidate?.title).toBe('【22/7 望月りの】[X] 望月りの 26.03.20 本日18:00〜 もぐもぐ配信します')
     expect(candidate?.description).toContain('来源账号: 望月りの')
 })
 
@@ -164,7 +164,7 @@ test('buildBiliupUploadCandidate maps configured Instagram handles to canonical 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 Member】[ins] 椎名桜月 26.03.20')
+    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 椎名桜月 26.03.20')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: shiina_satsuki227')
 })
@@ -191,7 +191,7 @@ test('buildBiliupUploadCandidate maps TikTok 22/7-prefixed nicknames to canonica
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 Member】[TT] 月城咲舞 26.03.20 TikTok本文')
+    expect(candidate?.title).toBe('【22/7 月城咲舞】[TT] 月城咲舞 26.03.20 TikTok本文')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {

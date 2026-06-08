@@ -442,6 +442,10 @@ function resolveUploadSummary(
     return summary || `${displayName} ${dateTime.datetime}`.trim()
 }
 
+function resolveBiliupAccountTitle(displayName: string) {
+    return displayName.startsWith('22/7') ? displayName : `22/7 ${displayName}`
+}
+
 function buildTemplateContext(
     article: Pick<Article, 'content' | 'platform' | 'username' | 'u_id' | 'a_id' | 'created_at' | 'url' | 'type'>,
     texts: string[],
@@ -461,6 +465,7 @@ function buildTemplateContext(
     const uploadSummary = resolveUploadSummary(article, primaryLine, displayName, dateTime)
 
     return {
+        account_title: resolveBiliupAccountTitle(displayName),
         article_id: article.a_id,
         body,
         body_or_summary: body || summary,
@@ -496,7 +501,7 @@ function resolveDefaultTitleTemplate(article: Pick<Article, 'platform' | 'type'>
     if (article.platform === Platform.YouTube && article.type !== 'shorts') {
         return '{{summary}}'
     }
-    return '【22/7 Member】[{{source_tag}}] {{upload_summary}}'
+    return '【{{account_title}}】[{{source_tag}}] {{upload_summary}}'
 }
 
 function deriveTitle(
