@@ -27,6 +27,22 @@ class QQForwarder extends Forwarder {
         this.token = token
     }
 
+    private assertOneBotResponseOk(res: { data?: any; statusText?: string }, context: string) {
+        const data = res?.data
+        const status = String(data?.status || '').trim().toLowerCase()
+        const retcodeRaw = data?.retcode
+        const retcodeText = retcodeRaw === undefined || retcodeRaw === null ? '' : String(retcodeRaw).trim()
+        const hasRetcode = retcodeText.length > 0
+        const retcode = Number(retcodeRaw)
+        const retcodeFailed = hasRetcode && (!Number.isFinite(retcode) || retcode !== 0)
+        if ((status && status !== 'ok') || retcodeFailed) {
+            const message = String(data?.message || data?.wording || data?.msg || data?.error || res?.statusText || 'unknown')
+            throw new Error(
+                `QQ OneBot send failed (${context}): status=${status || 'unknown'} retcode=${hasRetcode ? retcodeRaw : 'unknown'} message=${message}`,
+            )
+        }
+    }
+
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
         let { media } = props || {}
         media = media || []
@@ -157,6 +173,7 @@ class QQForwarder extends Forwarder {
                 headers,
             },
         )
+        this.assertOneBotResponseOk(res, 'send_group_msg')
         return res
     }
 }

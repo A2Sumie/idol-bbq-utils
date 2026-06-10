@@ -89,6 +89,43 @@ test('QQForwarder does not send video thumbnails as standalone images', async ()
     ])
 })
 
+test('QQForwarder rejects OneBot failed JSON responses even when HTTP succeeds', () => {
+    const forwarder = new QQForwarder(
+        {
+            group_id: '123',
+            url: 'http://127.0.0.1:3001',
+            token: '',
+        } as any,
+        'qq-onebot-response-test',
+    )
+
+    expect(() =>
+        (forwarder as any).assertOneBotResponseOk(
+            {
+                statusText: 'OK',
+                data: {
+                    status: 'ok',
+                    retcode: 0,
+                },
+            },
+            'send_group_msg',
+        ),
+    ).not.toThrow()
+    expect(() =>
+        (forwarder as any).assertOneBotResponseOk(
+            {
+                statusText: 'OK',
+                data: {
+                    status: 'failed',
+                    retcode: 200,
+                    message: 'EventChecker Failed',
+                },
+            },
+            'send_group_msg',
+        ),
+    ).toThrow(/status=failed retcode=200 message=EventChecker Failed/)
+})
+
 test('QQForwarder compresses oversized image attachments before building image segments', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-image-compress-'))
     const sourcePath = path.join(tempRoot, 'oversized.ppm')

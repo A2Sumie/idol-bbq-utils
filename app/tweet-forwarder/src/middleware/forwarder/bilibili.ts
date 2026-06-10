@@ -129,6 +129,16 @@ class BiliForwarder extends Forwarder {
         )
     }
 
+    private isRootArticleMedia(item: NonNullable<SendProps['media']>[number], props?: SendProps) {
+        const rootArticleId = props?.article?.a_id?.trim()
+        return !rootArticleId || !item.sourceArticleId || item.sourceArticleId === rootArticleId
+    }
+
+    private resolveVideoUploadMedia(props?: SendProps) {
+        const media = props?.media?.length ? props.media : [...(props?.contentMedia || []), ...(props?.cardMedia || [])]
+        return media.filter((item) => this.isRootArticleMedia(item, props))
+    }
+
     private buildVideoUploadMarker(article: Article | undefined, props?: SendProps) {
         if (article) {
             return `${String(article.platform)}:${article.a_id}`
@@ -234,7 +244,7 @@ class BiliForwarder extends Forwarder {
     }
 
     private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | false> {
-        const media = props?.media || []
+        const media = this.resolveVideoUploadMedia(props)
         const videoUploadConfig =
             ((this.getEffectiveConfig(props?.runtime_config) as any).video_upload as typeof this.video_upload) ||
             this.video_upload

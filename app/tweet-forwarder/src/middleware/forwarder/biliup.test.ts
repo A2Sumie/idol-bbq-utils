@@ -706,6 +706,77 @@ test('BiliForwarder suppresses duplicate video uploads without dynamic fallback'
     }
 })
 
+test('BiliForwarder ignores referenced videos when choosing biliup upload for quoted image posts', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    DB.MediaHash.checkExist = async () => {
+        throw new Error('referenced video should not be considered for root biliup upload')
+    }
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            require_media: true,
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-root-media-test',
+    )
+
+    let uploadCalls = 0
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async () => {
+        uploadCalls += 1
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const rootPhoto = {
+        media_type: 'photo',
+        path: '/tmp/root-photo.jpg',
+        sourceArticleId: 'x-quote-with-own-photo',
+        sourceUserId: 'alice__kurosaki',
+    }
+    const refVideo = {
+        media_type: 'video',
+        path: '/tmp/ref-video.mp4',
+        content_hash: 'ref-video-hash',
+        sourceArticleId: 'x-referenced-video',
+        sourceUserId: '227_staff',
+    }
+    const refThumb = {
+        media_type: 'video_thumbnail',
+        path: '/tmp/ref-thumb.jpg',
+        sourceArticleId: 'x-referenced-video',
+        sourceUserId: '227_staff',
+    }
+
+    try {
+        const result = await (forwarder as any).realSend(['quote with own photo'], {
+            article: {
+                platform: Platform.X,
+                a_id: 'x-quote-with-own-photo',
+                u_id: 'alice__kurosaki',
+                username: '黒崎ありす【22/7】',
+                type: 'quoted',
+                created_at: 1781100425,
+                url: 'https://x.com/alice__kurosaki/status/x-quote-with-own-photo',
+            },
+            media: [rootPhoto, refVideo, refThumb],
+            contentMedia: [rootPhoto],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+        expect(uploadCalls).toBe(0)
+        expect(dynamicCalls).toBe(1)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+    }
+})
+
 test('BiliForwarder does not suppress uploads from coarse short-video buckets alone', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
     const originalSave = DB.MediaHash.save
