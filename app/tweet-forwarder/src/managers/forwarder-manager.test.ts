@@ -958,6 +958,69 @@ test('ForwarderPools resendArticle reuses crawler template media config', async 
     })
 })
 
+test('ForwarderPools resendArticle can limit delivery to selected targets with fresh force keys', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {
+                'crawler-formatter': {},
+                'crawler-processor': {},
+                'processor-formatter': {},
+                'formatter-target': {},
+            } as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [
+                {
+                    name: 'Instagram抓取 - 普通时段',
+                    origin: 'https://www.instagram.com',
+                },
+            ] as any,
+        },
+        new EventEmitter(),
+    )
+
+    const targetA = { forwarder: { id: '七虹信标-群3' }, runtime_config: undefined } as any
+    const targetB = { forwarder: { id: 'bilibili-转帖' }, runtime_config: { require_media: true } } as any
+    const capturedSends: Array<{ taskId: string; targets: any[] }> = []
+    ;(pools as any).resolveForwardingPaths = () => [
+        {
+            formatterConfig: {
+                render_type: 'text',
+            },
+            targets: [targetA, targetB],
+            source: 'graph',
+            formatterName: '图文模板',
+        },
+    ]
+    ;(pools as any).normalizeForwardingArticles = async (articles: any[]) => articles
+    ;(pools as any).sendArticles = async (_log: any, taskId: string, _articles: any[], targets: any[]) => {
+        capturedSends.push({ taskId, targets })
+    }
+
+    const article = {
+        id: 823,
+        a_id: '3916403096331382169',
+        platform: Platform.Instagram,
+    } as any
+    const options = {
+        targetIds: ['bilibili-转帖'],
+    }
+    await pools.resendArticle(article, 'Instagram抓取 - 普通时段', undefined, undefined, options)
+    await pools.resendArticle(article, 'Instagram抓取 - 普通时段', undefined, undefined, options)
+
+    expect(capturedSends).toHaveLength(2)
+    expect(capturedSends[0].targets.map((item) => item.forwarder.id)).toEqual(['bilibili-转帖'])
+    expect(capturedSends[0].targets[0].runtime_config).toEqual({ require_media: true })
+    expect(capturedSends[0].taskId).toStartWith('manual-3916403096331382169-')
+    expect(capturedSends[1].taskId).toStartWith('manual-3916403096331382169-')
+    expect(capturedSends[0].taskId).not.toBe(capturedSends[1].taskId)
+})
+
 test('ForwarderPools resolves article subscribers as inline forwarding paths', () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -7432,6 +7495,153 @@ test('summary-card realtime media appends translated content card for Bilibili p
     expect(renderProcessCalls).toHaveLength(2)
 })
 
+test('summary-card realtime Bilibili tail card survives duplicate source media visibility', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                send_first_native: false,
+                media_realtime: true,
+                media_realtime_text: 'metadata',
+                flush_on_threshold: false,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                },
+            },
+            media_visibility: {
+                enabled: true,
+                window_seconds: 432000,
+                max_visible: 1,
+                duplicate_behavior: 'skip',
+            },
+        } as any,
+        'target-summary-card-realtime-photo-bili-duplicate-tail-card',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const sourceMediaFor = (id: number) => ({
+        media_type: 'photo',
+        path: `/tmp/realtime-duplicate-source-${id}.jpg`,
+        sourceArticleId: `summary-realtime-duplicate-tail-card-${id}`,
+        sourceUrl: 'https://example.com/realtime-duplicate-source.jpg',
+        content_hash: 'realtime-duplicate-source-hash',
+    })
+    const renderProcessCalls: Array<{ article: any; config: any }> = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            renderProcessCalls.push({ article, config })
+            const id = Number(article.id)
+            if (String(config?.taskId || '').startsWith('summary-realtime-card-')) {
+                const translatedCard = {
+                    media_type: 'photo',
+                    path: `/tmp/realtime-duplicate-translated-card-${id}.png`,
+                    sourceArticleId: article.a_id,
+                    sourceUrl: `card:${article.a_id}:translated`,
+                }
+                return {
+                    text: article.content || '',
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [translatedCard],
+                    originalMediaFiles: config?.preloadedMediaFiles || [],
+                    mediaFiles: [...(config?.preloadedMediaFiles || []), translatedCard],
+                }
+            }
+            const sourceMedia = sourceMediaFor(id)
+            const originalCard = {
+                media_type: 'photo',
+                path: `/tmp/realtime-duplicate-original-card-${id}.png`,
+                sourceArticleId: article.a_id,
+                sourceUrl: `card:${article.a_id}:original`,
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [originalCard],
+                originalMediaFiles: [sourceMedia],
+                mediaFiles: [sourceMedia, originalCard],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    for (const id of [817, 818]) {
+        await (pools as any).sendArticles(
+            undefined,
+            `summary-realtime-duplicate-tail-card-${id}`,
+            [
+                {
+                    id,
+                    a_id: `summary-realtime-duplicate-tail-card-${id}`,
+                    platform: Platform.X,
+                    username: 'Photo Nick',
+                    u_id: 'photo_uid',
+                    content: `photo body ${id}`,
+                    translation: `译:photo body ${id}`,
+                    translated_by: 'LLM',
+                    url: `https://x.com/photo_uid/status/${id}`,
+                    type: 'tweet',
+                    created_at: now + id,
+                    ref: null,
+                    has_media: true,
+                    media: [{ type: 'photo', url: 'https://example.com/realtime-duplicate-source.jpg' }],
+                    extra: null,
+                    u_avatar: null,
+                },
+            ],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    }
+
+    expect(target.sent).toHaveLength(2)
+    expect(target.sent[0]?.props?.media?.map((file: any) => path.basename(file.path))).toEqual([
+        'realtime-duplicate-source-817.jpg',
+        'realtime-duplicate-translated-card-817.png',
+    ])
+    expect(target.sent[1]?.props?.media?.map((file: any) => path.basename(file.path))).toEqual([
+        'realtime-duplicate-translated-card-818.png',
+    ])
+    expect(
+        renderProcessCalls.filter((call) => String(call.config?.taskId || '').startsWith('summary-realtime-card-')),
+    ).toHaveLength(2)
+})
+
 test('summary-card realtime Bilibili photo tail card keeps original-card fallback when translation is unavailable', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'bilibili'
@@ -9207,6 +9417,156 @@ test('idle-first translated native companion is suppressed for text-only media v
     expect(
         renderProcessCalls.filter((call) => call.config?.card_features?.includes('translated-corner-badge')),
     ).toHaveLength(1)
+})
+
+test('skip media visibility keeps generated native translated companion cards', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: true,
+                send_first_native: true,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                },
+            },
+            media_visibility: {
+                enabled: true,
+                window_seconds: 86400,
+                max_visible: 1,
+                duplicate_behavior: 'skip',
+            },
+        } as any,
+        'target-summary-card-native-first-translated-skip-visibility',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const sourceMediaFor = (id: string) => ({
+        media_type: 'photo',
+        path: `/tmp/${id}-source.jpg`,
+        sourceArticleId: id,
+        sourceUrl: 'https://example.com/same-skip-visible-media.jpg',
+        content_hash: 'same-skip-visible-media-hash',
+    })
+    const renderProcessCalls: Array<{ article: any; config: any }> = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            renderProcessCalls.push({ article, config })
+            const translated = config?.card_features?.includes('translated-corner-badge')
+            if (translated) {
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: `/tmp/${article.a_id}-translated-card.png` }],
+                    originalMediaFiles: config?.preloadedMediaFiles || [],
+                    mediaFiles: [
+                        ...(config?.preloadedMediaFiles || []),
+                        { media_type: 'photo', path: `/tmp/${article.a_id}-translated-card.png` },
+                    ],
+                }
+            }
+            const sourceMedia = sourceMediaFor(article.a_id)
+            const originalCard = { media_type: 'photo', path: `/tmp/${article.a_id}-original-card.png` }
+            return {
+                text: article.content,
+                textCollapseMode: 'article',
+                cardMediaFiles: [originalCard],
+                originalMediaFiles: [sourceMedia],
+                mediaFiles: [sourceMedia, originalCard],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const makeArticle = (id: number) => ({
+        id,
+        a_id: `summary-native-skip-visible-${id}`,
+        platform: Platform.X,
+        username: 'native member',
+        u_id: 'native_member',
+        content: `native skip visible text ${id}`,
+        translation: `native skip visible translated ${id}`,
+        translated_by: 'LLM',
+        url: `https://x.com/native_member/status/${id}`,
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: true,
+        media: [{ type: 'photo', url: 'https://example.com/same-skip-visible-media.jpg' }],
+        extra: null,
+        u_avatar: null,
+    })
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-native-skip-visible-first',
+        [makeArticle(834)],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+    const expiredSentAt = Math.floor(Date.now() / 1000) - 7200
+    for (const record of ((DB.OutboundMessage as any).__records as Map<string, any>).values()) {
+        if (record.target_id === target.id && record.task_kind === 'article') {
+            record.updated_at = expiredSentAt
+            record.finished_at = expiredSentAt
+        }
+    }
+    ;(pools as any).summaryCardLastSentAt.clear()
+    ;(pools as any).summaryCardTargetLastSentAt.clear()
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-native-skip-visible-second',
+        [makeArticle(835)],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(target.sent).toHaveLength(2)
+    expect(target.sent[0]?.props?.cardMedia).toHaveLength(2)
+    expect(target.sent[1]?.props?.contentMedia).toEqual([])
+    expect(target.sent[1]?.props?.cardMedia).toEqual([
+        { media_type: 'photo', path: '/tmp/summary-native-skip-visible-835-original-card.png' },
+        { media_type: 'photo', path: '/tmp/summary-native-skip-visible-835-translated-card.png' },
+    ])
+    expect(target.sent[1]?.texts[0]).not.toContain('[图略]')
+    expect(
+        renderProcessCalls.filter((call) => call.config?.card_features?.includes('translated-corner-badge')),
+    ).toHaveLength(2)
 })
 
 test('summary-card media duplicate budget keeps one in-card representative per card variant', async () => {

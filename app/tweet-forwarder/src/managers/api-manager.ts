@@ -1454,6 +1454,7 @@ export class APIManager extends BaseCompatibleModel {
             id?: number
             a_id?: string
             crawlerName?: string
+            targetIds?: Array<string>
         }
         const platform = resolvePlatform(body.platform)
         if (!platform) {
@@ -1461,6 +1462,15 @@ export class APIManager extends BaseCompatibleModel {
         }
         if (!body.crawlerName) {
             return new Response('crawlerName is required', { status: 400 })
+        }
+        if (body.targetIds !== undefined && !Array.isArray(body.targetIds)) {
+            return new Response('targetIds must be an array of target ids', { status: 400 })
+        }
+        const targetIds = body.targetIds
+            ? Array.from(new Set(body.targetIds.map((id) => String(id || '').trim()).filter(Boolean)))
+            : undefined
+        if (body.targetIds !== undefined && (!targetIds || targetIds.length === 0)) {
+            return new Response('targetIds must include at least one target id', { status: 400 })
         }
         const article = await this.loadArticle(platform, body.id, body.a_id)
         if (!article) {
@@ -1483,7 +1493,8 @@ export class APIManager extends BaseCompatibleModel {
             )
         }
 
-        const task = await DB.TaskQueue.add(DB.TaskQueue.TYPE.ArticleResend, body, Math.floor(Date.now() / 1000), {
+        const taskBody = targetIds ? { ...body, targetIds } : body
+        const task = await DB.TaskQueue.add(DB.TaskQueue.TYPE.ArticleResend, taskBody, Math.floor(Date.now() / 1000), {
             source_ref: `${platform}:${article.a_id}`,
             action_type: 'resend',
         })
@@ -1492,11 +1503,13 @@ export class APIManager extends BaseCompatibleModel {
             await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Processing, {
                 result_summary: `resending ${article.a_id}`,
             })
-            await this.deps.forwarderPools.resendArticle(article as any, body.crawlerName)
+            await this.deps.forwarderPools.resendArticle(article as any, body.crawlerName, undefined, undefined, {
+                targetIds,
+            })
             await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Completed, {
                 result_summary: `resent ${article.a_id}`,
             })
-            return jsonResponse({ success: true, articleId: article.id, crawlerName: body.crawlerName })
+            return jsonResponse({ success: true, articleId: article.id, crawlerName: body.crawlerName, targetIds })
         } catch (error) {
             await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Failed, {
                 last_error: error instanceof Error ? error.message : String(error),

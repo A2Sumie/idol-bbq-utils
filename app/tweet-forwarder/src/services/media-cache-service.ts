@@ -20,6 +20,7 @@ const SHORT_VIDEO_TIME_BUCKET_SECONDS = 6 * 3600
 const VIDEO_FINGERPRINT_SAMPLE_RATIOS = [0.12, 0.3, 0.5, 0.7, 0.88]
 const VIDEO_FINGERPRINT_BAND_SIZE = 4
 const VIDEO_FINGERPRINT_MIN_BAND_MATCHES = 8
+const VIDEO_FINGERPRINT_MIN_DISTINCT_FRAME_HASHES = 3
 const DEFAULT_MEDIA_STORE_RETENTION_DAYS = 7
 const DEFAULT_MEDIA_DOWNLOAD_RETENTION_HOURS = 24
 const DEFAULT_MEDIA_CLEANUP_INTERVAL_HOURS = 6
@@ -268,17 +269,13 @@ function buildShortVideoDedupCandidate(
 }
 
 async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupCandidate) {
-    for (const signature of candidate.signaturesToCheck) {
-        const existing = await DB.MediaHash.checkExist(candidate.storagePlatform, signature)
-        if (existing && existing.a_id !== candidate.articleMarker) {
-            return existing
-        }
-    }
+    void candidate
     return null
 }
 
 async function markShortVideoCrossPlatformSeen(candidate: ShortVideoDedupCandidate) {
-    return await DB.MediaHash.save(candidate.storagePlatform, candidate.signature, candidate.articleMarker)
+    void candidate
+    return null
 }
 
 function sampleVideoFrameHash(filePath: string, durationSeconds: number, ratio: number) {
@@ -323,17 +320,20 @@ function sampleVideoFrameHash(filePath: string, durationSeconds: number, ratio: 
 }
 
 function buildVideoFingerprintBandKeys(durationBucket: number, frameHashes: Array<string>) {
-    const bandKeys: Array<string> = []
+    const bandKeys = new Set<string>()
     frameHashes.forEach((hash, frameIndex) => {
         for (let offset = 0; offset < hash.length; offset += VIDEO_FINGERPRINT_BAND_SIZE) {
             const bandIndex = offset / VIDEO_FINGERPRINT_BAND_SIZE
             const band = hash.slice(offset, offset + VIDEO_FINGERPRINT_BAND_SIZE)
-            if (band.length === VIDEO_FINGERPRINT_BAND_SIZE) {
-                bandKeys.push(`band:${durationBucket}:f${frameIndex}:b${bandIndex}:${band}`)
+            if (
+                band.length === VIDEO_FINGERPRINT_BAND_SIZE
+                && !/^(?:0+|f+)$/i.test(band)
+            ) {
+                bandKeys.add(`band:${durationBucket}:f${frameIndex}:b${bandIndex}:${band}`)
             }
         }
     })
-    return bandKeys
+    return Array.from(bandKeys)
 }
 
 function buildVideoFingerprintCandidate(
@@ -359,29 +359,41 @@ function buildVideoFingerprintCandidate(
     if (frameHashes.length < 3) {
         return null
     }
+    if (new Set(frameHashes).size < VIDEO_FINGERPRINT_MIN_DISTINCT_FRAME_HASHES) {
+        return null
+    }
 
     const group = normalizeShortVideoGroup(article) || 'global'
     const articleMarker = buildArticleMarker(article as Pick<Article, 'platform' | 'a_id'>)
     const durationBucket = Math.round((mediaFile.duration_seconds * 1000) / SHORT_VIDEO_DURATION_BUCKET_MS)
+    const bandKeys = buildVideoFingerprintBandKeys(durationBucket, frameHashes)
+    if (bandKeys.length < VIDEO_FINGERPRINT_MIN_BAND_MATCHES) {
+        return null
+    }
 
     return {
         storagePlatform: `${VIDEO_FINGERPRINT_PLATFORM_PREFIX}:${group}`,
         articleMarker,
         signature: `exact:${durationBucket}:${frameHashes.join(':')}`,
-        bandKeys: buildVideoFingerprintBandKeys(durationBucket, frameHashes),
+        bandKeys,
         duration_seconds: mediaFile.duration_seconds,
         group,
     }
 }
 
 async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandidate) {
+    const candidateBandKeys = Array.from(new Set(candidate.bandKeys))
+    if (candidateBandKeys.length < VIDEO_FINGERPRINT_MIN_BAND_MATCHES) {
+        return null
+    }
+
     const exact = await DB.MediaHash.checkExist(candidate.storagePlatform, candidate.signature)
     if (exact && exact.a_id !== candidate.articleMarker) {
         return exact
     }
 
     const hitsByArticle = new Map<string, { count: number; existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>> }>()
-    for (const bandKey of candidate.bandKeys) {
+    for (const bandKey of candidateBandKeys) {
         const existing = await DB.MediaHash.checkExist(candidate.storagePlatform, bandKey)
         if (!existing || existing.a_id === candidate.articleMarker) {
             continue
@@ -392,8 +404,8 @@ async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandida
     }
 
     const threshold = Math.min(
-        candidate.bandKeys.length,
-        Math.max(VIDEO_FINGERPRINT_MIN_BAND_MATCHES, Math.ceil(candidate.bandKeys.length * 0.5)),
+        candidateBandKeys.length,
+        Math.max(VIDEO_FINGERPRINT_MIN_BAND_MATCHES, Math.ceil(candidateBandKeys.length * 0.5)),
     )
     for (const hit of hitsByArticle.values()) {
         if (hit.count >= threshold) {
@@ -406,7 +418,11 @@ async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandida
 
 async function markVideoFingerprintSeen(candidate: VideoFingerprintCandidate) {
     await DB.MediaHash.save(candidate.storagePlatform, candidate.signature, candidate.articleMarker)
-    await Promise.all(candidate.bandKeys.map((bandKey) => DB.MediaHash.save(candidate.storagePlatform, bandKey, candidate.articleMarker)))
+    await Promise.all(
+        Array.from(new Set(candidate.bandKeys)).map((bandKey) =>
+            DB.MediaHash.save(candidate.storagePlatform, bandKey, candidate.articleMarker),
+        ),
+    )
 }
 
 async function checkExactCrossPlatformVideoDuplicate(hash: string, articleMarker: string) {

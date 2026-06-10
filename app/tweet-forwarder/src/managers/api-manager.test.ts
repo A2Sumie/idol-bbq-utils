@@ -1613,6 +1613,7 @@ test('APIManager resend infers website crawler platform from websites config', a
                     platform: 'website',
                     id: 162,
                     crawlerName: '22/7官网FC抓取 - 日间轮询',
+                    targetIds: ['bilibili-转帖', 'bilibili-转帖', ''],
                 }),
             }),
         )
@@ -1622,6 +1623,7 @@ test('APIManager resend infers website crawler platform from websites config', a
             success: true,
             articleId: 162,
             crawlerName: '22/7官网FC抓取 - 日间轮询',
+            targetIds: ['bilibili-转帖'],
         })
         expect(resendCalls).toHaveLength(1)
         expect(resendCalls[0][0]).toMatchObject({
@@ -1630,6 +1632,9 @@ test('APIManager resend infers website crawler platform from websites config', a
             platform: Platform.Website,
         })
         expect(resendCalls[0][1]).toBe('22/7官网FC抓取 - 日间轮询')
+        expect(resendCalls[0][4]).toEqual({
+            targetIds: ['bilibili-转帖'],
+        })
         expect(statusUpdates).toEqual([
             {
                 id: 991,

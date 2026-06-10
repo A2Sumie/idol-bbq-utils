@@ -1170,6 +1170,72 @@ describe('RenderService media deduplication', () => {
         DB.MediaHash.save = originalSave
     })
 
+    test('does not skip a quoted root article when only referenced media is duplicate', async () => {
+        const hashStore = new Map<string, { platform: string; hash: string; a_id: string }>()
+        DB.MediaHash.checkExist = async (platform: string, hash: string) => hashStore.get(`${platform}:${hash}`) as any
+        DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+            const value = { platform, hash, a_id }
+            hashStore.set(`${platform}:${hash}`, value)
+            return value as any
+        }
+
+        const service = new RenderService()
+        const config = {
+            taskId: 'test-quoted-root-ref-duplicate',
+            render_type: 'text-compact',
+            mediaConfig: {
+                type: 'no-storage' as const,
+                use: {
+                    tool: MediaToolEnum.DEFAULT,
+                },
+            },
+            deduplication: true,
+        }
+
+        const previous = await service.process(buildMediaArticle('ig-ref-original') as any, config)
+        const rootArticle = {
+            id: 101,
+            a_id: 'x-quote-with-own-photo',
+            u_id: 'alice__kurosaki',
+            username: '黒崎ありす【22/7】',
+            created_at: 1710000300,
+            content: 'quote text with its own photos',
+            translation: null,
+            translated_by: null,
+            url: 'https://x.com/alice__kurosaki/status/x-quote-with-own-photo',
+            type: 'quoted',
+            has_media: true,
+            media: [
+                {
+                    type: 'photo' as const,
+                    url: SAMPLE_PROGRESSIVE_JPEG_DATA_URL,
+                },
+            ],
+            ref: {
+                ...buildMediaArticle('ig-ref-repost'),
+                id: 102,
+            },
+            extra: null,
+            u_avatar: null,
+            platform: Platform.X,
+        }
+
+        const quoted = await service.process(rootArticle as any, {
+            ...config,
+            taskId: 'test-quoted-root-ref-duplicate-2',
+        })
+
+        expect(previous.mediaFiles).toHaveLength(1)
+        expect(quoted.mediaFiles).toHaveLength(1)
+        expect(quoted.mediaFiles[0]?.sourceArticleId).toBe('x-quote-with-own-photo')
+        expect(quoted.shouldSkipSend).toBeFalsy()
+        expect(quoted.skipReason).toBeUndefined()
+
+        service.cleanup([...previous.mediaFiles, ...quoted.mediaFiles])
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    })
+
     test('non-live send modes do not mutate media dedup state or suppress media', async () => {
         const originalMode = process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
         const calls = {

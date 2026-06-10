@@ -108,7 +108,7 @@ test('cleanupMediaCache removes expired stored media and transient downloads', (
     expect(summary.errors).toBe(0)
 })
 
-test('cross-platform short video dedup uses duration buckets for nijigram-like accounts', async () => {
+test('cross-platform short video duration buckets no longer suppress by themselves', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
@@ -145,10 +145,10 @@ test('cross-platform short video dedup uses duration buckets for nijigram-like a
     expect(second).toBeTruthy()
 
     const duplicate = await checkShortVideoCrossPlatformDuplicate(second!)
-    expect(duplicate?.a_id).toBe(`${Platform.Instagram}:ig-short-1`)
+    expect(duplicate).toBeNull()
 })
 
-test('cross-platform short video dedup groups X official posts by 22/7 the 3rd content', async () => {
+test('cross-platform short video group candidates are advisory only', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
@@ -187,7 +187,7 @@ test('cross-platform short video dedup groups X official posts by 22/7 the 3rd c
     expect(instagramArticle?.group).toBe('3rd')
 
     const duplicate = await checkShortVideoCrossPlatformDuplicate(instagramArticle!)
-    expect(duplicate?.a_id).toBe(`${Platform.X}:2063561843692716187`)
+    expect(duplicate).toBeNull()
 })
 
 test('video fingerprint dedup matches re-encoded short videos by frame bands', async () => {
@@ -201,11 +201,11 @@ test('video fingerprint dedup matches re-encoded short videos by frame bands', a
 
     const storagePlatform = 'cross-video-fingerprint:227-official'
     const firstFrameHashes = [
-        'ffff0000ffff0000',
-        '0000ffff0000ffff',
-        'f0f0f0f00f0f0f0f',
-        'cccc3333cccc3333',
-        'aaaa5555aaaa5555',
+        '1234abcd5678ef90',
+        '2345bcde6789f0a1',
+        '3456cdef7890a1b2',
+        '4567def08901b2c3',
+        '5678ef019012c3d4',
     ]
     const first: VideoFingerprintCandidate = {
         storagePlatform,
@@ -218,11 +218,11 @@ test('video fingerprint dedup matches re-encoded short videos by frame bands', a
     await markVideoFingerprintSeen(first)
 
     const reencodedFrameHashes = [
-        'ffff0000ffff1111',
-        '0000ffff0000eeee',
-        'f0f0f0f00f0f2222',
-        'cccc3333cccc4444',
-        'aaaa5555aaaa6666',
+        '1234abcd5678ef91',
+        '2345bcde6789f0a2',
+        '3456cdef7890a1b3',
+        '4567def08901b2c4',
+        '5678ef019012c3d5',
     ]
     const second: VideoFingerprintCandidate = {
         storagePlatform,
@@ -235,4 +235,50 @@ test('video fingerprint dedup matches re-encoded short videos by frame bands', a
 
     const duplicate = await checkVideoFingerprintDuplicate(second)
     expect(duplicate?.a_id).toBe(`${Platform.TikTok}:tt-short-1`)
+})
+
+test('video fingerprint dedup ignores low-information repeated frame bands', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+
+    const storagePlatform = 'cross-video-fingerprint:3rd'
+    const lowInfoFrameHashes = [
+        'ffff3e0000000000',
+        'ffff3e0000000000',
+        'ffff3e0000000000',
+        'ffff3e0000000000',
+        'ffff3e0000000000',
+    ]
+    const staleLowInfo: VideoFingerprintCandidate = {
+        storagePlatform,
+        articleMarker: `${Platform.Instagram}:old-story`,
+        signature: `exact:90:${lowInfoFrameHashes.join(':')}`,
+        bandKeys: [
+            ...buildVideoFingerprintBandKeys(90, lowInfoFrameHashes),
+            'band:90:f0:b0:ffff',
+            'band:90:f0:b2:0000',
+        ],
+        duration_seconds: 45,
+        group: '3rd',
+    }
+    await markVideoFingerprintSeen(staleLowInfo)
+
+    const candidateBandKeys = buildVideoFingerprintBandKeys(90, lowInfoFrameHashes)
+    expect(candidateBandKeys.some((key) => key.endsWith(':ffff') || key.endsWith(':0000'))).toBe(false)
+    expect(candidateBandKeys.length).toBeLessThan(8)
+
+    const duplicate = await checkVideoFingerprintDuplicate({
+        storagePlatform,
+        articleMarker: `${Platform.Instagram}:new-story`,
+        signature: `exact:90:different-low-info-signature`,
+        bandKeys: candidateBandKeys,
+        duration_seconds: 45,
+        group: '3rd',
+    })
+    expect(duplicate).toBeNull()
 })

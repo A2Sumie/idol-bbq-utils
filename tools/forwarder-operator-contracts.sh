@@ -131,6 +131,12 @@ HELP
 
     require_contains "app/tweet-forwarder/update-media-tools.sh" 'BILIUP_PACKAGE="${BILIUP_PACKAGE:-biliup}"' \
         'upstream biliup package selector'
+    require_contains "app/tweet-forwarder/update-media-tools.sh" 'TOOL_PYTHON_VERSION="${TOOL_PYTHON_VERSION:-3.12}"' \
+        'media tool Python 3.10+ selector'
+    require_contains "app/tweet-forwarder/update-media-tools.sh" 'UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${TOOLS_DIR}/uv-python}"' \
+        'media tool Python install dir is bundled under /app/tools'
+    require_contains "app/tweet-forwarder/update-media-tools.sh" 'YT_DLP_PY_PACKAGE="${YT_DLP_PY_PACKAGE:-https://github.com/yt-dlp/yt-dlp/archive/refs/tags/${YT_DLP_VERSION}.tar.gz}"' \
+        'biliup yt-dlp Python package follows standalone stable tag'
     require_contains "app/tweet-forwarder/update-media-tools.sh" 'from biliup.plugins.bili_webup import BiliBili, BiliWeb, Data' \
         'biliup helper import self-test'
     require_contains "$preflight" 'db_backup_host_dir' \

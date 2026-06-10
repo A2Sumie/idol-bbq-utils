@@ -12,7 +12,7 @@ import {
 } from '../template/img/DefaultCard'
 import { languageFontMap } from '../src/img/utils/font'
 import { getIconCode } from '../src/img/utils/twemoji'
-import { ImgConverter, isSupportedOpenTypeFont, loadDynamicAsset } from '../src/img'
+import { ImgConverter, isSupportedOpenTypeFont, loadDynamicAsset, resolveSatoriFontLang } from '../src/img'
 import fs from 'fs'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
@@ -190,7 +190,7 @@ test('dynamic fallback font list covers decorative lisu-shaped glyphs', () => {
 })
 
 test('bundled font manifest includes broad kaomoji script coverage with valid font files', () => {
-    const fontsDir = './assets/fonts'
+    const fontsDir = process.env.FONTS_DIR || './assets/fonts'
     const fonts = JSON.parse(fs.readFileSync(`${fontsDir}/fonts.json`, 'utf-8')) as Array<{
         name: string
         font_file_name: string
@@ -592,6 +592,57 @@ test('mixed-script decorative kaomoji snippets render without remote font assets
 test('font loader rejects TTC collections because satori cannot render them', () => {
     expect(isSupportedOpenTypeFont(Buffer.from('ttcf0000'))).toBeFalse()
     expect(isSupportedOpenTypeFont(Buffer.from('OTTO0000'))).toBeTrue()
+})
+
+test('unsupported fallback font languages are not passed as satori lang props', () => {
+    expect(resolveSatoriFontLang('zh-CN')).toBe('zh-CN')
+    expect(resolveSatoriFontLang('mongolian')).toBeUndefined()
+    expect(resolveSatoriFontLang('tibetan')).toBeUndefined()
+    expect(resolveSatoriFontLang('lo-LA')).toBeUndefined()
+})
+
+test('dynamic mongolian fallback fonts omit unsupported satori lang props', async () => {
+    const previousRemoteAssets = process.env.RENDER_REMOTE_ASSETS
+    const previousFetch = globalThis.fetch
+    process.env.RENDER_REMOTE_ASSETS = '1'
+    const fontsDir = process.env.FONTS_DIR || './assets/fonts'
+    const fontData = fs.readFileSync(`${fontsDir}/NotoSansMongolian-Regular.ttf`)
+    const detectorCss = [
+        "@font-face { font-family: 'Noto Sans Mongolian'; font-style: normal; font-weight: 400;",
+        "src: url(https://fonts.example.test/mongolian.ttf) format('truetype'); unicode-range: U+1800-18AF; }",
+    ].join(' ')
+    const fontCss = [
+        "@font-face { font-family: 'Noto Sans Mongolian'; font-style: normal; font-weight: 400;",
+        "src: url(https://fonts.example.test/mongolian.ttf) format('truetype'); }",
+    ].join(' ')
+    globalThis.fetch = (async (url: string | URL | Request) => {
+        const href = String(url)
+        if (href.includes('fonts.googleapis.com/css2?')) {
+            return new Response(detectorCss)
+        }
+        if (href.includes('fonts.googleapis.com/css2?family=Noto%2BSans%2BMongolian')) {
+            return new Response(fontCss)
+        }
+        if (href === 'https://fonts.example.test/mongolian.ttf') {
+            return new Response(fontData)
+        }
+        throw new Error(`unexpected fetch: ${href}`)
+    }) as typeof fetch
+
+    try {
+        const fonts = await loadDynamicAsset('twemoji', 'mongolian', 'ᠠ')
+        expect(fonts).toBeArray()
+        expect((fonts as any[]).length).toBeGreaterThan(0)
+        expect((fonts as any[]).every((font) => font.name.includes('mongolian'))).toBeTrue()
+        expect((fonts as any[]).every((font) => font.lang === undefined)).toBeTrue()
+    } finally {
+        if (previousRemoteAssets === undefined) {
+            delete process.env.RENDER_REMOTE_ASSETS
+        } else {
+            process.env.RENDER_REMOTE_ASSETS = previousRemoteAssets
+        }
+        globalThis.fetch = previousFetch
+    }
 })
 
 test('dynamic asset loader can run in deterministic no-remote mode', async () => {

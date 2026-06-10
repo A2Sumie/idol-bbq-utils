@@ -264,6 +264,36 @@ function normalizeBiliupTitleText(value: string | null | undefined, fallback: st
     return normalized && hasBiliupTitleText(normalized) ? normalized : fallback
 }
 
+function normalizeBiliupMainTitleText(value: string | null | undefined, fallback: string) {
+    const normalized = normalizeTextBlock(value).replace(/\s+/g, ' ').trim()
+    return normalized && hasBiliupTitleText(normalized) ? normalized : fallback
+}
+
+function hasRenderedTitlePayload(value: string, context: TemplateContext) {
+    const ignoredTokens = new Set(
+        [
+            context.source_tag,
+            context.platform_label,
+            context.type_label,
+            'TT',
+            'YT',
+            'X',
+            'ins',
+            'blog',
+            '社媒',
+        ]
+            .map((token) => String(token || '').trim().toLocaleLowerCase())
+            .filter(Boolean),
+    )
+    const payload = normalizeTextBlock(value)
+        .replace(/[【】\[\]()（）{}<>《》「」『』]/g, ' ')
+        .replace(/[|｜:：,，.。/_-]+/g, ' ')
+        .split(/\s+/)
+        .filter((token) => token && !ignoredTokens.has(token.toLocaleLowerCase()))
+        .join(' ')
+    return hasBiliupTitleText(payload)
+}
+
 function collectTextBlocks(article: Pick<Article, 'content'>, texts: string[]) {
     const seen = new Set<string>()
     const blocks: string[] = []
@@ -504,6 +534,20 @@ function resolveDefaultTitleTemplate(article: Pick<Article, 'platform' | 'type'>
     return '【{{account_title}}】[{{source_tag}}] {{upload_summary}}'
 }
 
+function buildTitleFallback(
+    context: TemplateContext,
+    article: Pick<Article, 'platform' | 'username' | 'a_id'>,
+) {
+    const hardFallback = normalizeBiliupMainTitleText(
+        [formatPlatformTag(article), context.datetime, context.article_id].filter(Boolean).join(' '),
+        context.article_id || 'Bilibili upload',
+    )
+    return normalizeBiliupMainTitleText(
+        `【${context.account_title}】${context.source_tag ? `[${context.source_tag}]` : ''} ${context.upload_summary}`,
+        hardFallback,
+    )
+}
+
 function deriveTitle(
     article: Pick<Article, 'content' | 'platform' | 'username' | 'u_id' | 'a_id' | 'created_at' | 'url' | 'type'>,
     texts: string[],
@@ -512,8 +556,9 @@ function deriveTitle(
 ) {
     const context = buildTemplateContext(article, texts, timeZone)
     const rendered = cleanupTemplateOutput(renderTemplate(template || resolveDefaultTitleTemplate(article), context))
-    const fallback = context.summary || `${formatPlatformTag(article)} ${context.datetime}` || article.a_id
-    return truncateText(rendered || fallback, 80)
+    const fallback = buildTitleFallback(context, article)
+    const title = hasRenderedTitlePayload(rendered, context) ? rendered : fallback
+    return truncateText(normalizeBiliupMainTitleText(title, fallback), 80)
 }
 
 function deriveDescription(
@@ -1108,6 +1153,12 @@ async function runBiliupUpload(
 
     fs.writeFileSync(cookieFile, JSON.stringify(cookieDocument, null, 2))
     const preparedVideoParts = await prepareUploadVideoParts(candidate, uploadDir, log)
+    log?.info(
+        `Prepared biliup metadata for ${article.a_id}: title_length=${candidate.title.length} title_hash=${createHash('sha256')
+            .update(candidate.title)
+            .digest('hex')
+            .slice(0, 12)}`,
+    )
     log?.info(
         `Prepared biliup video parts for ${article.a_id}: requested=${candidate.videoPaths.length} actual=${
             preparedVideoParts.length

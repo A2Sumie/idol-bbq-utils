@@ -46,46 +46,32 @@ function logRemoteAssetFailure(message: string, text: string, error: unknown) {
 }
 
 const detector = new FontDetector()
-const SATORI_LANG_CODES = new Set([
+// Satori's `lang` prop accepts a much smaller list than our fallback-font map.
+// Keep loading wider script-specific fonts, but only pass language tags Satori
+// accepts; unsupported tags such as `mongolian` make the whole card render fail.
+const SATORI_FONT_LANG_CODES = new Set([
     'ja-JP',
     'ko-KR',
     'zh-CN',
     'zh-TW',
     'zh-HK',
     'th-TH',
-    'lo-LA',
     'bn-IN',
     'ar-AR',
-    'hy-AM',
     'ta-IN',
     'ml-IN',
     'he-IL',
     'te-IN',
-    'km-KH',
     'devanagari',
     'kannada',
-    'armenian',
-    'syriac',
-    'tibetan',
-    'khmer',
-    'ethiopic',
-    'balinese',
-    'egyptian',
-    'linearA',
-    'vai',
-    'cherokee',
-    'mongolian',
-    'taiTham',
-    'batak',
-    'inscriptionalPahlavi',
-    'miao',
-    'bamum',
-    'yi',
-    'lisu',
     'emoji',
     'symbol',
     'math',
 ])
+
+function resolveSatoriFontLang(languageCode: string) {
+    return SATORI_FONT_LANG_CODES.has(languageCode) ? languageCode : undefined
+}
 const SYSTEM_FALLBACK_FONTS: Array<FontConfig & { paths: Array<string> }> = [
     {
         name: 'Noto Sans CJK SC',
@@ -375,7 +361,7 @@ async function loadDynamicAssetUncached(emojiType: keyof typeof apis, _code: str
                     data: fontData,
                     weight: weight,
                     style: 'normal',
-                    lang: SATORI_LANG_CODES.has(languageCode) ? languageCode : undefined,
+                    lang: resolveSatoriFontLang(languageCode),
                 })
             }
         }
@@ -502,4 +488,4 @@ class ImgConverter {
     }
 }
 
-export { loadDynamicAsset, ImgConverter, isSupportedOpenTypeFont }
+export { loadDynamicAsset, ImgConverter, isSupportedOpenTypeFont, resolveSatoriFontLang }

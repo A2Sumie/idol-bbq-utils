@@ -13,13 +13,9 @@ import {
 import DB, { type Article } from '@/db'
 import { createHash } from 'crypto'
 import {
-    buildShortVideoDedupCandidate,
     buildVideoFingerprintCandidate,
-    checkShortVideoCrossPlatformDuplicate,
     checkVideoFingerprintDuplicate,
-    markShortVideoCrossPlatformSeen,
     markVideoFingerprintSeen,
-    type ShortVideoDedupCandidate,
     type VideoFingerprintCandidate,
 } from '@/services/media-cache-service'
 
@@ -60,7 +56,6 @@ type BiliVideoUploadDedupeRecords = {
     exact: BiliVideoUploadHashRecord[]
     article?: Article
     videoMedia: Array<NonNullable<SendProps['media']>[number]>
-    shortVideo: ShortVideoDedupCandidate | null
     fingerprints?: VideoFingerprintCandidate[]
 }
 type BiliVideoUploadDuplicate =
@@ -70,7 +65,7 @@ type BiliVideoUploadDuplicate =
           existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>>
       }
     | {
-          kind: 'short-video' | 'fingerprint'
+          kind: 'fingerprint'
           existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>>
       }
 
@@ -167,7 +162,6 @@ class BiliForwarder extends Forwarder {
             return {
                 exact,
                 videoMedia: [],
-                shortVideo: null,
             }
         }
 
@@ -180,7 +174,6 @@ class BiliForwarder extends Forwarder {
             exact,
             article: props.article,
             videoMedia,
-            shortVideo: buildShortVideoDedupCandidate(props.article as any, videoMedia),
         }
     }
 
@@ -203,12 +196,6 @@ class BiliForwarder extends Forwarder {
                 return { kind: 'exact', record, existing }
             }
         }
-        if (records.shortVideo) {
-            const existing = await checkShortVideoCrossPlatformDuplicate(records.shortVideo)
-            if (existing) {
-                return { kind: 'short-video', existing }
-            }
-        }
         for (const fingerprint of this.resolveVideoUploadFingerprints(records)) {
             const existing = await checkVideoFingerprintDuplicate(fingerprint)
             if (existing) {
@@ -221,9 +208,6 @@ class BiliForwarder extends Forwarder {
     private async markBiliVideoUploadSeen(records: BiliVideoUploadDedupeRecords, marker: string) {
         for (const record of records.exact) {
             await DB.MediaHash.save(BILI_VIDEO_UPLOAD_HASH_NAMESPACE, record.hash, marker)
-        }
-        if (records.shortVideo) {
-            await markShortVideoCrossPlatformSeen(records.shortVideo)
         }
         for (const fingerprint of this.resolveVideoUploadFingerprints(records)) {
             await markVideoFingerprintSeen(fingerprint)
@@ -314,12 +298,23 @@ class BiliForwarder extends Forwarder {
         return item.media_type === 'photo'
     }
 
+    private getRequiredSourceImageMedia(props?: SendProps) {
+        if (!props) {
+            return []
+        }
+        if (props.contentMedia) {
+            return props.contentMedia.filter((item) => this.isDynamicImageMedia(item))
+        }
+        const cardPaths = new Set((props.cardMedia || []).map((item) => item.path).filter(Boolean))
+        return (props.media || []).filter((item) => this.isDynamicImageMedia(item) && !cardPaths.has(item.path))
+    }
+
     private shouldSuppressMediaRequiredDynamic(props?: SendProps) {
         const config = this.getEffectiveConfig(props?.runtime_config)
         if (config.require_media !== true) {
             return false
         }
-        return !(props?.media || []).some((item) => this.isDynamicImageMedia(item))
+        return this.getRequiredSourceImageMedia(props).length === 0
     }
 
     private normalizeUploadedPhoto(value: BiliUploadPhotoResponse | undefined): BiliImageUploaded | null {

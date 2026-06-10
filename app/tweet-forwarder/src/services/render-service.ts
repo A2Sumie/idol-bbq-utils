@@ -26,14 +26,11 @@ import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spide
 import type { MediaType } from '@idol-bbq-utils/spider/types'
 import {
     buildArticleMarker,
-    buildShortVideoDedupCandidate,
     buildVideoFingerprintCandidate,
     checkExactCrossPlatformMediaDuplicate,
-    checkShortVideoCrossPlatformDuplicate,
     checkVideoFingerprintDuplicate,
     isPersistentMediaPath,
     markExactCrossPlatformMediaSeen,
-    markShortVideoCrossPlatformSeen,
     markVideoFingerprintSeen,
     persistMediaFile,
 } from './media-cache-service'
@@ -291,21 +288,6 @@ export class RenderService {
             // Case 5: Standard Text
             text = this.renderText(article, config)
             textCollapseMode = 'article'
-        }
-
-        if (!skipReason && effectiveDeduplication) {
-            const shortVideoCandidate = buildShortVideoDedupCandidate(article as any, maybe_media_files)
-            if (shortVideoCandidate) {
-                const existing = await checkShortVideoCrossPlatformDuplicate(shortVideoCandidate)
-                if (existing) {
-                    skipReason = `Cross-platform short video duplicate matched ${existing.a_id}`
-                    this.log?.info(
-                        `Skipping cross-platform short video duplicate for ${article.a_id} (${shortVideoCandidate.group}, ${shortVideoCandidate.duration_seconds.toFixed(2)}s).`,
-                    )
-                } else {
-                    await markShortVideoCrossPlatformSeen(shortVideoCandidate)
-                }
-            }
         }
 
         return {
@@ -711,14 +693,17 @@ export class RenderService {
         let maybe_media_files = [] as Array<RenderedMediaFile>
         let currentArticle: Article | null = article
         let skipReason: string | undefined
-        let processedMediaCount = 0
-        let duplicateMediaCount = 0
         let duplicateMediaReason: string | undefined
+        let rootProcessedMediaCount = 0
+        let rootDuplicateMediaCount = 0
+        let rootDuplicateMediaReason: string | undefined
+        let articleDepth = 0
 
         // Dynamic imports to avoid top-level issues during hot-reload or circular deps, and purely for this logic
         const DB = (await import('@/db')).default
 
         while (currentArticle) {
+            const currentIsRootArticle = articleDepth === 0
             let new_files = [] as Array<RenderedMediaFile | undefined>
             if (currentArticle.has_media) {
                 this.log?.debug(`Downloading media files for ${currentArticle.a_id}`)
@@ -734,13 +719,22 @@ export class RenderService {
                         media_type: resolvedMediaType,
                         source_url: sourceUrl,
                     })
-                    processedMediaCount += 1
+                    if (currentIsRootArticle) {
+                        rootProcessedMediaCount += 1
+                    }
                     if (deduplication) {
                         try {
                             const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
                             const articleId = currentArticle?.a_id || ''
                             const articleMarker = buildArticleMarker(currentArticle as any)
                             const hash = persisted.hash
+                            const markDuplicate = (reason: string) => {
+                                duplicateMediaReason = reason
+                                if (currentIsRootArticle) {
+                                    rootDuplicateMediaCount += 1
+                                    rootDuplicateMediaReason = reason
+                                }
+                            }
 
                             const exists = await DB.MediaHash.checkExist(platformStr, hash)
                             if (exists) {
@@ -752,8 +746,7 @@ export class RenderService {
                                     this.log?.info(
                                         `Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`,
                                     )
-                                    duplicateMediaCount += 1
-                                    duplicateMediaReason = `Duplicate media hash matched ${exists.a_id || 'previous article'}`
+                                    markDuplicate(`Duplicate media hash matched ${exists.a_id || 'previous article'}`)
                                     return undefined
                                 }
                             } else {
@@ -766,9 +759,10 @@ export class RenderService {
                                 articleMarker,
                             )
                             if (exactMediaDuplicate) {
-                                duplicateMediaCount += 1
                                 const duplicateKind = resolvedMediaType === 'video' ? 'video' : 'media'
-                                skipReason = `Cross-platform exact ${duplicateKind} duplicate matched ${exactMediaDuplicate.a_id}`
+                                markDuplicate(
+                                    `Cross-platform exact ${duplicateKind} duplicate matched ${exactMediaDuplicate.a_id}`,
+                                )
                                 this.log?.info(
                                     `Skipping ${articleMarker} because ${duplicateKind} hash ${hash.substring(0, 8)} matches ${exactMediaDuplicate.a_id}.`,
                                 )
@@ -785,8 +779,9 @@ export class RenderService {
                                     const fingerprintDuplicate =
                                         await checkVideoFingerprintDuplicate(videoFingerprintCandidate)
                                     if (fingerprintDuplicate) {
-                                        duplicateMediaCount += 1
-                                        skipReason = `Cross-platform video fingerprint duplicate matched ${fingerprintDuplicate.a_id}`
+                                        markDuplicate(
+                                            `Cross-platform video fingerprint duplicate matched ${fingerprintDuplicate.a_id}`,
+                                        )
                                         this.log?.info(
                                             `Skipping ${articleMarker} because video fingerprint (${videoFingerprintCandidate.group}, ${videoFingerprintCandidate.duration_seconds.toFixed(2)}s) matches ${fingerprintDuplicate.a_id}.`,
                                         )
@@ -934,9 +929,15 @@ export class RenderService {
             } else {
                 currentArticle = null
             }
+            articleDepth += 1
         }
-        if (!skipReason && deduplication && processedMediaCount > 0 && duplicateMediaCount === processedMediaCount) {
-            skipReason = duplicateMediaReason || 'All downloaded media were duplicates'
+        if (
+            !skipReason
+            && deduplication
+            && rootProcessedMediaCount > 0
+            && rootDuplicateMediaCount === rootProcessedMediaCount
+        ) {
+            skipReason = rootDuplicateMediaReason || duplicateMediaReason || 'All root article media were duplicates'
         }
         return {
             files: maybe_media_files,

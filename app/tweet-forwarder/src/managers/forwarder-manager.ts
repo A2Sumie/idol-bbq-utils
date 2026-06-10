@@ -833,6 +833,9 @@ type ForwardTargetInstanceWithRuntimeConfig = {
     forwarder: BaseForwarder
     runtime_config?: ForwardTargetPlatformCommonConfig
 }
+type ResendArticleOptions = {
+    targetIds?: Array<string>
+}
 class ForwarderPools extends BaseCompatibleModel {
     NAME = 'ForwarderPools'
     log?: Logger
@@ -1473,6 +1476,7 @@ class ForwarderPools extends BaseCompatibleModel {
         crawlerName: string,
         cfg_forwarder?: Forwarder['cfg_forwarder'],
         cfg_forward_target?: Forwarder['cfg_forward_target'],
+        options: ResendArticleOptions = {},
     ) {
         const taskLog = this.log?.child({ label: `manual-resend:${crawlerName}` })
         const crawler = this.props.crawlers?.find(
@@ -1486,7 +1490,8 @@ class ForwarderPools extends BaseCompatibleModel {
             ...baseForwarderConfig,
             ...cfg_forwarder,
         }
-        const paths = this.resolveForwardingPaths(
+        const targetFilter = new Set((options.targetIds || []).map((id) => id.trim()).filter(Boolean))
+        const resolvedPaths = this.resolveForwardingPaths(
             crawlerName,
             effectiveForwarderConfig,
             cfg_forward_target,
@@ -1498,18 +1503,29 @@ class ForwarderPools extends BaseCompatibleModel {
                 subscribers: matchedForwarder?.subscribers,
             },
         )
+        const paths =
+            targetFilter.size > 0
+                ? resolvedPaths
+                      .map((path) => ({
+                          ...path,
+                          targets: path.targets.filter(({ forwarder }) => targetFilter.has(forwarder.id)),
+                      }))
+                      .filter((path) => path.targets.length > 0)
+                : resolvedPaths
         if (paths.length === 0) {
-            throw new Error(`No forwarding paths found for crawler ${crawlerName}`)
+            const targetSuffix = targetFilter.size > 0 ? ` and targets ${Array.from(targetFilter).join(', ')}` : ''
+            throw new Error(`No forwarding paths found for crawler ${crawlerName}${targetSuffix}`)
         }
 
         const normalizedArticles = await this.normalizeForwardingArticles([article])
+        const manualTaskId = `manual-${article.a_id}-${crypto.randomUUID()}`
         for (const path of paths) {
             if (this.shouldStopForShutdown(taskLog, 'manual resend path loop')) {
                 return
             }
             await this.sendArticles(
                 taskLog,
-                `manual-${article.a_id}`,
+                manualTaskId,
                 normalizedArticles,
                 path.targets,
                 path.formatterConfig,
@@ -2134,7 +2150,8 @@ class ForwarderPools extends BaseCompatibleModel {
                         if (
                             visibility.policy?.duplicateBehavior === 'skip' &&
                             visibility.hiddenFiles.length > 0 &&
-                            contentMediaFiles.length === 0
+                            contentMediaFiles.length === 0 &&
+                            cardMediaFiles.length === 0
                         ) {
                             const outboundPayloadHash = payloadHash({
                                 routeKey: routeKeyForTarget,
@@ -3149,13 +3166,11 @@ class ForwarderPools extends BaseCompatibleModel {
         const mediaIdentities = this.buildRenderedMediaIdentityList(mediaFilesWithTargetExtras)
         const syntheticKey = `${routeKeyValue}:${articleKey(article)}:${hashValue(mediaIdentities)}`
         const outboundIdempotencyKey = syntheticOutboundKey(target.id, 'summary_realtime_media', syntheticKey)
-        const visibility = await this.applyTargetMediaVisibility(
-            article,
-            target,
-            runtime_config,
-            mediaFilesWithTargetExtras,
+        const targetExtraMediaFiles = mediaFilesWithTargetExtras.filter(
+            (file) => !mediaFiles.some((mediaFile) => mediaFile.path === file.path),
         )
-        const visibleMediaFiles = visibility.visibleFiles
+        const visibility = await this.applyTargetMediaVisibility(article, target, runtime_config, mediaFiles)
+        const visibleMediaFiles = [...visibility.visibleFiles, ...targetExtraMediaFiles]
         if (visibility.policy?.duplicateBehavior === 'skip' && visibleMediaFiles.length === 0) {
             const outboundPayloadHash = payloadHash({
                 routeKey: routeKeyValue,

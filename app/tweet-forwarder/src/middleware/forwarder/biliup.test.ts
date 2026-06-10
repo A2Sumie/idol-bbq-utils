@@ -13,7 +13,6 @@ import {
     resolveBrowserCookieSyncConfig,
     resolveVideoUploadConfig,
 } from './biliup'
-import { buildShortVideoDedupCandidate, markShortVideoCrossPlatformSeen } from '@/services/media-cache-service'
 
 test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', () => {
     const candidate = buildBiliupUploadCandidate(
@@ -98,6 +97,32 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).toContain('TikTok')
+})
+
+test('buildBiliupUploadCandidate falls back from empty-shell metadata titles', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.TikTok,
+            type: 'video',
+            u_id: '',
+            username: '',
+            a_id: 'tt-empty-shell-title',
+            content: null,
+            created_at: 1773985020,
+            url: 'https://www.tiktok.com/@unknown/video/1',
+        } as any,
+        [],
+        [{ media_type: 'video', path: '/tmp/tt-empty.mp4' }],
+        {
+            enabled: true,
+            metadata_templates: {
+                title: '【{{missing_account}}】[{{source_tag}}] {{missing_summary}}',
+            },
+        },
+    )
+
+    expect(candidate?.title).toBe('【22/7 Unknown】[TT] Unknown 26.03.20')
+    expect(candidate?.title).not.toBe('【】[TT]')
 })
 
 test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', () => {
@@ -681,7 +706,7 @@ test('BiliForwarder suppresses duplicate video uploads without dynamic fallback'
     }
 })
 
-test('BiliForwarder suppresses cross-platform short video upload duplicates without dynamic fallback', async () => {
+test('BiliForwarder does not suppress uploads from coarse short-video buckets alone', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
     const originalSave = DB.MediaHash.save
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
@@ -692,19 +717,11 @@ test('BiliForwarder suppresses cross-platform short video upload duplicates with
         return value as any
     }
 
-    const previous = buildShortVideoDedupCandidate(
-        {
-            platform: Platform.Instagram,
-            type: 'post',
-            a_id: 'DZR9nGHxnvu',
-            created_at: 1780826818,
-            u_id: 'nananijigram22_7_the.3rd',
-            username: '22/7_the 3rd',
-            content: '. 22/7_the 3rd 『＃叫ぶしかない青春』 Music Video公開中',
-        } as any,
-        [{ media_type: 'video', duration_seconds: 45.787 }],
-    )
-    await markShortVideoCrossPlatformSeen(previous!)
+    store.set('cross-short-video:3rd:82445:92', {
+        platform: 'cross-short-video:3rd',
+        hash: '82445:92',
+        a_id: `${Platform.Instagram}:DZR9nGHxnvu`,
+    })
 
     const forwarder = new BiliForwarder(
         {
@@ -749,8 +766,8 @@ test('BiliForwarder suppresses cross-platform short video upload duplicates with
             ],
         })
 
-        expect(result).toEqual([{ ok: true, mode: 'biliup_duplicate' }])
-        expect(uploadCalls).toBe(0)
+        expect(result).toEqual([{ ok: true, mode: 'biliup' }])
+        expect(uploadCalls).toBe(1)
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
@@ -758,7 +775,7 @@ test('BiliForwarder suppresses cross-platform short video upload duplicates with
     }
 })
 
-test('BiliForwarder records short video upload dedupe keys after successful Bilibili upload', async () => {
+test('BiliForwarder avoids writing coarse short-video dedupe keys after successful upload', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
     const originalSave = DB.MediaHash.save
     const saved: Array<{ platform: string; hash: string; a_id: string }> = []
@@ -810,11 +827,7 @@ test('BiliForwarder records short video upload dedupe keys after successful Bili
             hash: 'x-reencoded-video-hash',
             a_id: `${Platform.X}:2063561843692716187`,
         })
-        expect(saved).toContainEqual({
-            platform: 'cross-short-video:3rd',
-            hash: '82445:92',
-            a_id: `${Platform.X}:2063561843692716187`,
-        })
+        expect(saved.some((item) => item.platform.startsWith('cross-short-video:'))).toBe(false)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
         DB.MediaHash.save = originalSave
@@ -951,6 +964,69 @@ test('BiliForwarder suppresses media-required dynamic posts without uploadable i
 
     expect(result).toEqual([{ ok: true, mode: 'dynamic_media_required_suppressed' }])
     expect(dynamicCalls).toBe(0)
+})
+
+test('BiliForwarder does not let rendered card media satisfy media-required source media', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            require_media: true,
+            video_upload: {
+                enabled: false,
+            },
+        } as any,
+        'bili-card-source-media-test',
+    )
+
+    let dynamicCalls = 0
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const card = { media_type: 'photo', path: '/tmp/rendered-summary-card.png' }
+    const result = await (forwarder as any).realSend(['metadata card'], {
+        media: [card],
+        cardMedia: [card],
+        contentMedia: [],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic_media_required_suppressed' }])
+    expect(dynamicCalls).toBe(0)
+})
+
+test('BiliForwarder allows rendered card media when media-required source media exists', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            require_media: true,
+            video_upload: {
+                enabled: false,
+            },
+        } as any,
+        'bili-card-with-source-media-test',
+    )
+
+    let dynamicCalls = 0
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const card = { media_type: 'photo', path: '/tmp/rendered-summary-card.png' }
+    const source = { media_type: 'photo', path: '/tmp/source-photo.jpg' }
+    const result = await (forwarder as any).realSend(['metadata card'], {
+        media: [card],
+        cardMedia: [card],
+        contentMedia: [source],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(dynamicCalls).toBe(1)
 })
 
 test('BiliForwarder falls back to dynamic posting when biliup upload is skipped', async () => {
