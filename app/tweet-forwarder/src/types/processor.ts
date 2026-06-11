@@ -3,7 +3,7 @@ import type { CommonCfgConfig } from './common'
 type ByteDance_LLM = 'doubao-pro-128k'
 type BigModel_LLM = 'glm-4-flash'
 type Google_LLM = 'gemini'
-type Deepseek_LLM = 'deepseek-v3' | 'deepseek-v4-flash'
+type Deepseek_LLM = 'deepseek-v3' | 'deepseek-v4-flash' | 'deepseek-v4-pro'
 
 type OpenA_Like_LLM = 'Openai'
 
@@ -37,6 +37,10 @@ enum ProcessorProvider {
      */
     DeepSeekV4Flash = 'DeepSeekV4Flash',
     /**
+     * OpenAI-compatible OpenCode Go endpoint for DeepSeek V4 Pro
+     */
+    DeepSeekV4Pro = 'DeepSeekV4Pro',
+    /**
      * Qwen MT model
      */
     QwenMT = 'QwenMT',
@@ -66,6 +70,7 @@ interface ProcessorConfig extends CommonCfgConfig {
      */
     extended_payload?: Record<string, any>
     response_format?: 'json_schema' | 'json_object' | 'none'
+    request_timeout_ms?: number
     output_schema?: Record<string, any>
     output_schema_file?: string
     schedule_url?: string

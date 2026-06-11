@@ -45,10 +45,7 @@ import {
     redactOutboundMessagesForApi,
     redactTargetHealthEntriesForApi,
 } from '@/services/outbound-state-redaction-service'
-import {
-    publicRuntimeLogFileMetadata,
-    redactRuntimeLogLinesForApi,
-} from '@/services/runtime-log-redaction-service'
+import { publicRuntimeLogFileMetadata, redactRuntimeLogLinesForApi } from '@/services/runtime-log-redaction-service'
 import {
     normalizeRedactedArchiveUploadRequest,
     redactArchiveDetailForApi,
@@ -58,6 +55,17 @@ import {
 } from '@/services/archive-admin-redaction-service'
 import { sanitizeArticleForApi, sanitizeArticlesForApi } from '@/services/article-api-redaction-service'
 import { writeSchedulesFromProcessorResult } from '@/services/processor-schedule-webhook-service'
+import {
+    buildProcessorModelCapabilities,
+    getKnownModelCapability,
+    resolveDefaultModelId,
+} from '@/services/processor-model-capability-service'
+import {
+    CodexMcpDisabledError,
+    createCodexMcpClientServiceFromEnv,
+    type CodexMcpReplyRequest,
+    type CodexMcpRunRequest,
+} from '@/services/codex-mcp-client-service'
 
 interface ApiConfig {
     port?: number
@@ -116,6 +124,15 @@ const MAX_BUN_IDLE_TIMEOUT_SECONDS = 255
 const DEFAULT_CIC_ORIGIN = 'https://cic.n2nj.moe'
 const MAX_MANUAL_CRAWLER_WEBSITES = 20
 const MAX_MANUAL_CRAWLER_WEBSITE_LENGTH = 2048
+const AGENT_PROBE_DEFAULT_TIMEOUT_MS = 45_000
+const AGENT_PROBE_MAX_TIMEOUT_MS = 120_000
+const AGENT_PROBE_MAX_INPUT_CHARS = 2_000
+const AGENT_PROBE_MAX_PROMPT_CHARS = 1_000
+const AGENT_PROBE_MAX_TOKENS = 512
+const AGENT_CODEX_DEFAULT_TIMEOUT_MS = 120_000
+const AGENT_CODEX_MAX_TIMEOUT_MS = 240_000
+const AGENT_CODEX_MAX_PROMPT_CHARS = 20_000
+const AGENT_CODEX_MAX_INSTRUCTION_CHARS = 8_000
 
 function publicCookieFileMetadata(cookieFile?: string | null) {
     const normalized = String(cookieFile || '').trim()
@@ -177,6 +194,14 @@ function tryParseJson(value: string) {
     }
 }
 
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed)) {
+        return fallback
+    }
+    return Math.max(min, Math.min(Math.floor(parsed), max))
+}
+
 function selectProcessorResult(value: any, resultKey?: string | null) {
     if (!resultKey) {
         return value
@@ -236,10 +261,10 @@ function defaultOriginForPlatform(platform: Platform) {
     return 'https://example.com'
 }
 
-function normalizeManualCrawlerWebsites(body: {
-    website?: unknown
-    websites?: unknown
-}): { websites?: string[]; error?: string } {
+function normalizeManualCrawlerWebsites(body: { website?: unknown; websites?: unknown }): {
+    websites?: string[]
+    error?: string
+} {
     const raw = body.websites ?? (body.website ? [body.website] : undefined)
     if (raw === undefined) {
         return {}
@@ -251,13 +276,7 @@ function normalizeManualCrawlerWebsites(body: {
         return { error: `websites must contain 1-${MAX_MANUAL_CRAWLER_WEBSITES} URLs` }
     }
 
-    const websites = Array.from(
-        new Set(
-            raw
-                .map((value) => String(value || '').trim())
-                .filter(Boolean),
-        ),
-    )
+    const websites = Array.from(new Set(raw.map((value) => String(value || '').trim()).filter(Boolean)))
     if (websites.length === 0 || websites.length > MAX_MANUAL_CRAWLER_WEBSITES) {
         return { error: `websites must contain 1-${MAX_MANUAL_CRAWLER_WEBSITES} URLs` }
     }
@@ -312,6 +331,79 @@ function resolveUnixTimestamp(value?: unknown) {
     }
 
     return Math.floor(Date.now() / 1000)
+}
+
+function normalizeCodexRunRequest(body: Record<string, unknown>): CodexMcpRunRequest {
+    const prompt = String(body.prompt || '')
+        .slice(0, AGENT_CODEX_MAX_PROMPT_CHARS)
+        .trim()
+    if (!prompt) {
+        throw new Error('prompt is required')
+    }
+
+    return {
+        prompt,
+        cwd: normalizeOptionalString(body.cwd, 1000),
+        model: normalizeOptionalString(body.model, 200),
+        sandbox: normalizeEnum(body.sandbox, ['read-only', 'workspace-write', 'danger-full-access']),
+        approval_policy: normalizeEnum(body.approval_policy || body.approvalPolicy, [
+            'untrusted',
+            'on-failure',
+            'on-request',
+            'never',
+        ]),
+        developer_instructions: normalizeOptionalString(
+            body.developer_instructions || body.developerInstructions,
+            AGENT_CODEX_MAX_INSTRUCTION_CHARS,
+        ),
+        base_instructions: normalizeOptionalString(
+            body.base_instructions || body.baseInstructions,
+            AGENT_CODEX_MAX_INSTRUCTION_CHARS,
+        ),
+        config: typeof body.config === 'object' && body.config ? (body.config as Record<string, unknown>) : undefined,
+        timeout_ms: clampNumber(
+            body.timeout_ms || body.timeoutMs,
+            1_000,
+            AGENT_CODEX_MAX_TIMEOUT_MS,
+            AGENT_CODEX_DEFAULT_TIMEOUT_MS,
+        ),
+    }
+}
+
+function normalizeCodexReplyRequest(body: Record<string, unknown>): CodexMcpReplyRequest {
+    const thread_id = String(body.thread_id || body.threadId || '').trim()
+    const prompt = String(body.prompt || '')
+        .slice(0, AGENT_CODEX_MAX_PROMPT_CHARS)
+        .trim()
+    if (!thread_id) {
+        throw new Error('thread_id is required')
+    }
+    if (!prompt) {
+        throw new Error('prompt is required')
+    }
+
+    return {
+        thread_id,
+        prompt,
+        timeout_ms: clampNumber(
+            body.timeout_ms || body.timeoutMs,
+            1_000,
+            AGENT_CODEX_MAX_TIMEOUT_MS,
+            AGENT_CODEX_DEFAULT_TIMEOUT_MS,
+        ),
+    }
+}
+
+function normalizeOptionalString(value: unknown, maxLength: number) {
+    const text = String(value || '')
+        .slice(0, maxLength)
+        .trim()
+    return text || undefined
+}
+
+function normalizeEnum<T extends string>(value: unknown, allowed: readonly T[]) {
+    const text = String(value || '').trim()
+    return allowed.includes(text as T) ? (text as T) : undefined
 }
 
 function serializeCookiesToNetscape(cookies: Array<NetscapeCookieLike>) {
@@ -399,7 +491,11 @@ export class APIManager extends BaseCompatibleModel {
 
     private async dispatchApiRequest(req: Request, server: any, secret: string): Promise<Response> {
         const url = new URL(req.url)
-        if (url.pathname === '/api/archives' || url.pathname.startsWith('/api/archives/')) {
+        if (
+            url.pathname === '/api/archives' ||
+            url.pathname.startsWith('/api/archives/') ||
+            url.pathname.startsWith('/api/agent/codex/')
+        ) {
             server.timeout(req, MAX_BUN_IDLE_TIMEOUT_SECONDS)
         }
 
@@ -435,6 +531,12 @@ export class APIManager extends BaseCompatibleModel {
         if (req.method === 'GET' && url.pathname === '/api/runtime/manifest') return this.handleRuntimeManifest()
         if (req.method === 'GET' && url.pathname === '/api/routes') return this.handleRouteGraph()
         if (req.method === 'GET' && url.pathname === '/api/runtime/logs') return this.handleRuntimeLogs(url)
+        if (req.method === 'GET' && url.pathname === '/api/agent/status') return this.handleAgentStatus()
+        if (req.method === 'GET' && url.pathname === '/api/agent/models') return this.handleAgentModels()
+        if (req.method === 'POST' && url.pathname === '/api/agent/probe-model') return this.handleAgentModelProbe(req)
+        if (req.method === 'GET' && url.pathname === '/api/agent/codex/status') return this.handleAgentCodexStatus()
+        if (req.method === 'POST' && url.pathname === '/api/agent/codex/run') return this.handleAgentCodexRun(req)
+        if (req.method === 'POST' && url.pathname === '/api/agent/codex/reply') return this.handleAgentCodexReply(req)
         if (req.method === 'GET' && url.pathname === '/api/articles') return this.handleArticleList(url)
         if (req.method === 'GET' && url.pathname.startsWith('/api/articles/')) return this.handleArticleView(url)
         if (req.method === 'GET' && url.pathname === '/api/tasks') return this.handleTasks(url)
@@ -577,7 +679,9 @@ export class APIManager extends BaseCompatibleModel {
             }
 
             fs.writeFileSync(cookieFile, cookie)
-            this.log?.info(`Cookie updated for ${finder} (${publicCookieFileMetadata(cookieFile).filename || 'unknown'})`)
+            this.log?.info(
+                `Cookie updated for ${finder} (${publicCookieFileMetadata(cookieFile).filename || 'unknown'})`,
+            )
             return new Response('Cookie updated successfully', { status: 200 })
         } catch (error) {
             this.log?.error('Cookie update error:', error)
@@ -639,7 +743,8 @@ export class APIManager extends BaseCompatibleModel {
         } catch (error) {
             this.log?.error('Cookie sync error:', error)
             const statusCode = Number((error as any)?.statusCode)
-            const safeStatusCode = Number.isSafeInteger(statusCode) && statusCode >= 400 && statusCode < 500 ? statusCode : 500
+            const safeStatusCode =
+                Number.isSafeInteger(statusCode) && statusCode >= 400 && statusCode < 500 ? statusCode : 500
             const publicMessage =
                 typeof (error as any)?.publicMessage === 'string'
                     ? (error as any).publicMessage
@@ -946,6 +1051,216 @@ export class APIManager extends BaseCompatibleModel {
             latest_tasks: redactTaskQueueEntriesForApi(tasks.slice(0, 10)),
             runtime,
         })
+    }
+
+    private async handleAgentStatus(): Promise<Response> {
+        const taskCounts = await DB.TaskQueue.countsByStatus()
+        const runtime = this.runtime.getRuntimeMeta?.()
+        return jsonResponse({
+            service: 'idol-bbq-utils/tweet-forwarder',
+            agent_api_version: 1,
+            uptime_sec: Math.floor(process.uptime()),
+            runtime,
+            counts: {
+                crawlers: this.config.crawlers?.length || 0,
+                processors: this.config.processors?.length || 0,
+                formatters: this.config.formatters?.length || 0,
+                forward_targets: this.config.forward_targets?.length || 0,
+                forwarders: this.config.forwarders?.length || 0,
+            },
+            task_counts: taskCounts,
+            models: buildProcessorModelCapabilities(this.config),
+            endpoints: {
+                status: '/api/agent/status',
+                models: '/api/agent/models',
+                probe_model: '/api/agent/probe-model',
+                codex_status: '/api/agent/codex/status',
+                codex_run: '/api/agent/codex/run',
+                codex_reply: '/api/agent/codex/reply',
+                runtime_status: '/api/runtime/status',
+                runtime_manifest: '/api/runtime/manifest',
+            },
+        })
+    }
+
+    private async handleAgentModels(): Promise<Response> {
+        return jsonResponse({
+            models: buildProcessorModelCapabilities(this.config),
+        })
+    }
+
+    private async handleAgentModelProbe(req: Request): Promise<Response> {
+        const body = (await req.json().catch(() => ({}))) as {
+            processor_id?: string
+            processorId?: string
+            text?: string
+            prompt?: string
+            timeout_ms?: number
+            max_tokens?: number
+            temperature?: number
+        }
+        let processorDef: Processor
+        try {
+            processorDef = this.resolveProcessorDefinition(body.processor_id || body.processorId)
+        } catch (error) {
+            return jsonResponse(
+                {
+                    success: false,
+                    error: 'processor_not_found',
+                    message: error instanceof Error ? error.message : String(error),
+                },
+                400,
+            )
+        }
+
+        const timeoutMs = clampNumber(
+            body.timeout_ms,
+            1_000,
+            AGENT_PROBE_MAX_TIMEOUT_MS,
+            processorDef.cfg_processor?.request_timeout_ms || AGENT_PROBE_DEFAULT_TIMEOUT_MS,
+        )
+        const maxTokens = clampNumber(body.max_tokens, 1, AGENT_PROBE_MAX_TOKENS, 32)
+        const temperature =
+            typeof body.temperature === 'number'
+                ? Math.max(0, Math.min(body.temperature, 2))
+                : Math.min(processorDef.cfg_processor?.temperature ?? 0, 1)
+        const text = String(body.text || 'Reply with OK.')
+            .slice(0, AGENT_PROBE_MAX_INPUT_CHARS)
+            .trim()
+        const prompt = String(body.prompt || 'You are a production health-check probe. Reply with exactly: OK')
+            .slice(0, AGENT_PROBE_MAX_PROMPT_CHARS)
+            .trim()
+
+        const probeConfig = {
+            ...(processorDef.cfg_processor || {}),
+            name: `${processorDef.cfg_processor?.name || processorDef.name || processorDef.id || processorDef.provider}-agent-probe`,
+            prompt,
+            prompt_assets: [],
+            output_schema: undefined,
+            output_schema_file: undefined,
+            response_format: 'none' as const,
+            max_tokens: maxTokens,
+            temperature,
+            request_timeout_ms: timeoutMs,
+        }
+
+        const startedAt = new Date()
+        const startMs = performance.now()
+        try {
+            const processor = await processorRegistry.create(
+                processorDef.provider,
+                processorDef.api_key,
+                this.log,
+                probeConfig,
+            )
+            try {
+                const output = await processor.process(text || 'Reply with OK.')
+                const elapsedMs = Math.max(1, Math.round(performance.now() - startMs))
+                const outputChars = output.length
+                const modelId = resolveDefaultModelId(processorDef.provider, probeConfig)
+                return jsonResponse({
+                    success: true,
+                    processor_id: processorDef.id,
+                    processor_name: processorDef.name,
+                    provider: processorDef.provider,
+                    model_id: modelId,
+                    capability: getKnownModelCapability(modelId),
+                    started_at: startedAt.toISOString(),
+                    ended_at: new Date().toISOString(),
+                    latency_ms: elapsedMs,
+                    output_chars: outputChars,
+                    chars_per_sec: Number(((outputChars * 1000) / elapsedMs).toFixed(2)),
+                    output_preview: output.slice(0, 200),
+                })
+            } finally {
+                await processor.drop()
+            }
+        } catch (error) {
+            return jsonResponse(
+                {
+                    success: false,
+                    error: 'agent_model_probe_failed',
+                    provider: processorDef.provider,
+                    processor_id: processorDef.id,
+                    message: error instanceof Error ? error.message : String(error),
+                },
+                502,
+            )
+        }
+    }
+
+    private async handleAgentCodexStatus(): Promise<Response> {
+        const service = createCodexMcpClientServiceFromEnv(process.env, process.cwd())
+        return jsonResponse(await service.status())
+    }
+
+    private async handleAgentCodexRun(req: Request): Promise<Response> {
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+        let request: CodexMcpRunRequest
+        try {
+            request = normalizeCodexRunRequest(body)
+        } catch (error) {
+            return jsonResponse(
+                {
+                    success: false,
+                    error: 'invalid_codex_run_request',
+                    message: error instanceof Error ? error.message : String(error),
+                },
+                400,
+            )
+        }
+
+        const service = createCodexMcpClientServiceFromEnv(process.env, process.cwd())
+        try {
+            return jsonResponse(await service.run(request))
+        } catch (error) {
+            return this.codexErrorResponse(error)
+        }
+    }
+
+    private async handleAgentCodexReply(req: Request): Promise<Response> {
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+        let request: CodexMcpReplyRequest
+        try {
+            request = normalizeCodexReplyRequest(body)
+        } catch (error) {
+            return jsonResponse(
+                {
+                    success: false,
+                    error: 'invalid_codex_reply_request',
+                    message: error instanceof Error ? error.message : String(error),
+                },
+                400,
+            )
+        }
+
+        const service = createCodexMcpClientServiceFromEnv(process.env, process.cwd())
+        try {
+            return jsonResponse(await service.reply(request))
+        } catch (error) {
+            return this.codexErrorResponse(error)
+        }
+    }
+
+    private codexErrorResponse(error: unknown): Response {
+        if (error instanceof CodexMcpDisabledError) {
+            return jsonResponse(
+                {
+                    success: false,
+                    error: 'codex_mcp_disabled',
+                    message: error.message,
+                },
+                403,
+            )
+        }
+        return jsonResponse(
+            {
+                success: false,
+                error: 'codex_mcp_call_failed',
+                message: error instanceof Error ? error.message : String(error),
+            },
+            502,
+        )
     }
 
     private async handleRuntimeManifest(): Promise<Response> {
@@ -1576,8 +1891,7 @@ export class APIManager extends BaseCompatibleModel {
                     ? await writeSchedulesFromProcessorResult(selected ?? parsed, input.sourceRef, {
                           scheduleUrl: body.scheduleUrl || processorDef.cfg_processor?.schedule_url,
                           scheduleApiKey: body.scheduleApiKey || processorDef.cfg_processor?.schedule_api_key,
-                          scheduleUserAgent:
-                              body.scheduleUserAgent || processorDef.cfg_processor?.schedule_user_agent,
+                          scheduleUserAgent: body.scheduleUserAgent || processorDef.cfg_processor?.schedule_user_agent,
                           scheduleWafBypassHeader:
                               body.scheduleWafBypassHeader || processorDef.cfg_processor?.schedule_waf_bypass_header,
                           minConfidence: body.minConfidence ?? processorDef.cfg_processor?.min_confidence,
@@ -1960,5 +2274,4 @@ export class APIManager extends BaseCompatibleModel {
         }
         return null
     }
-
 }

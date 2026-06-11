@@ -42,11 +42,6 @@ bots:
               账号标识: {{user_id}}
               发布时间: {{datetime}}
               原链接: {{url}}
-          collision_placeholder_part:         # (optional) append a logo-only P2 to avoid duplicate-hit collisions
-            enabled: true
-            video_path: './assets/branding/live-player-background-collision-pad-7s.mp4'
-            title: '###'
-            duration_seconds: 7
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id
@@ -116,11 +111,6 @@ bots:
               账号标识: {{user_id}}
               发布时间: {{datetime}}
               原链接: {{url}}
-          collision_placeholder_part:
-            enabled: true
-            video_path: './assets/branding/live-player-background-collision-pad-7s.mp4'
-            title: '###'
-            duration_seconds: 7
       - type: 'qq'                            # (optional) forward type (onebot 11)
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id

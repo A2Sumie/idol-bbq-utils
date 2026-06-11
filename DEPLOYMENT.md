@@ -93,8 +93,76 @@ refused even when `IDOL_BBQ_RUN_MIGRATIONS=1` is set, unless
 migration.
 
 ## Feature Configuration
+### Agent Access
+The forwarder exposes an authenticated agent-safe API subset on the configured
+runtime API port:
+
+- `GET /api/agent/status` returns compact runtime, queue, route-count, endpoint,
+  and model status.
+- `GET /api/agent/models` returns redacted processor model capability metadata.
+- `POST /api/agent/probe-model` performs a bounded live model probe and reports
+  latency plus output speed.
+- `GET /api/agent/codex/status` checks the idol-bbq -> MCP -> Codex bridge.
+- `POST /api/agent/codex/run` and `/api/agent/codex/reply` call Codex through
+  MCP when `IDOL_BBQ_CODEX_MCP_ENABLED=1`.
+
+The existing runtime API token is used. Do not put it on command lines; use the
+container config reader or environment variables.
+
+From the local operator machine:
+
+```bash
+tools/forwarder-runtime-api.sh agent-status
+tools/forwarder-runtime-api.sh codex-status
+tools/forwarder-runtime-api.sh model-capabilities
+tools/forwarder-runtime-api.sh probe-model 22_7-social-ja-zh --text "Reply OK"
+```
+
+OpenCode Go is used only as the stable DeepSeek API provider for configured
+processors. Do not use OpenCode's agent tooling in this deployment path.
+
+For `idol-bbq -> MCP -> Codex` on `3020e`, run the host-side Codex bridge from
+the same user account that is logged into Codex CLI:
+
+```bash
+cd /home/sumie/idol-bbq-utils
+read -rs IDOL_BBQ_CODEX_BRIDGE_TOKEN
+export IDOL_BBQ_CODEX_BRIDGE_TOKEN
+export IDOL_BBQ_CODEX_MCP_ENABLED=1
+bun tools/codex-mcp-bridge-server.ts
+```
+
+Then start the forwarder with:
+
+```bash
+export IDOL_BBQ_CODEX_MCP_ENABLED=1
+export IDOL_BBQ_CODEX_MCP_BRIDGE_URL=http://127.0.0.1:3099
+export IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN="$IDOL_BBQ_CODEX_BRIDGE_TOKEN"
+IDOL_BBQ_RUNTIME_MODE=api-only docker compose up -d spider
+```
+
+The bridge speaks MCP to `codex mcp-server` over stdio and exposes only the
+local `/status`, `/run`, and `/reply` HTTP endpoints. For non-container local
+testing, omit `IDOL_BBQ_CODEX_MCP_BRIDGE_URL` and the API will spawn
+`codex mcp-server` directly.
+
+For Codex CLI on `3020e`, add the project MCP server after deploying this
+commit:
+
+```bash
+codex mcp add idol-bbq -- bash -lc 'cd /home/sumie/idol-bbq-utils && exec bun tools/forwarder-mcp-server.ts'
+codex mcp list
+```
+
+This is the `Codex -> MCP -> idol-bbq` path. The project MCP server reads
+`IDOL_BBQ_AGENT_API_TOKEN`/`API_SECRET` first, then falls back to the project
+config's `api.secret`; it never prints the token.
+
 ### Batch Sending & Deduplication
 - **Media Deduplication**: Enabled by default. Duplicates are checked via SHA-256 hash against `media_hashes` table.
+- **Biliup Video Upload**: Uploads no longer append a collision-placeholder
+  P2. Legacy `video_upload.collision_placeholder_part` config is ignored so
+  Bilibili submissions use the real source video part(s) only.
 - **Route Policy Audit**:
     -   `/api/config/audit` exposes redacted config hash, route policy hash, route graph counts, diagnostics, and sensitive field paths only.
     -   `bun run audit:config` provides the same no-secret audit from the host config file.

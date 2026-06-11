@@ -16,7 +16,11 @@ usage() {
     cat <<'HELP'
 Usage:
   tools/forwarder-runtime-api.sh status
+  tools/forwarder-runtime-api.sh agent-status
+  tools/forwarder-runtime-api.sh codex-status
   tools/forwarder-runtime-api.sh manifest
+  tools/forwarder-runtime-api.sh model-capabilities
+  tools/forwarder-runtime-api.sh probe-model [processor-id] [--text TEXT] [--timeout-ms N] [--max-tokens N]
   tools/forwarder-runtime-api.sh reload
   tools/forwarder-runtime-api.sh run-crawler <crawler-name> [--website URL ...]
 
@@ -40,7 +44,7 @@ shift
 
 remote_env_prefix() {
     local name value
-    for name in CONTAINER_NAME API_HOST COMMAND_NAME CRAWLER_NAME WEBSITES_JSON; do
+    for name in CONTAINER_NAME API_HOST COMMAND_NAME CRAWLER_NAME WEBSITES_JSON PROBE_PROCESSOR_ID PROBE_TEXT PROBE_TIMEOUT_MS PROBE_MAX_TOKENS; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -50,12 +54,54 @@ remote_env_prefix() {
 
 WEBSITES_JSON=""
 CRAWLER_NAME=""
+PROBE_PROCESSOR_ID=""
+PROBE_TEXT=""
+PROBE_TIMEOUT_MS=""
+PROBE_MAX_TOKENS=""
 case "$command_name" in
-    status|manifest|reload)
+    status|agent-status|codex-status|manifest|model-capabilities|reload)
         if [ $# -ne 0 ]; then
             usage >&2
             exit 2
         fi
+        ;;
+    probe-model)
+        if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then
+            PROBE_PROCESSOR_ID="$1"
+            shift
+        fi
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --text)
+                    [ $# -ge 2 ] || {
+                        printf 'missing TEXT after --text\n' >&2
+                        exit 2
+                    }
+                    PROBE_TEXT="$2"
+                    shift 2
+                    ;;
+                --timeout-ms)
+                    [ $# -ge 2 ] || {
+                        printf 'missing N after --timeout-ms\n' >&2
+                        exit 2
+                    }
+                    PROBE_TIMEOUT_MS="$2"
+                    shift 2
+                    ;;
+                --max-tokens)
+                    [ $# -ge 2 ] || {
+                        printf 'missing N after --max-tokens\n' >&2
+                        exit 2
+                    }
+                    PROBE_MAX_TOKENS="$2"
+                    shift 2
+                    ;;
+                *)
+                    printf 'unknown argument: %s\n' "$1" >&2
+                    exit 2
+                    ;;
+            esac
+        done
         ;;
     run-crawler)
         if [ $# -lt 1 ]; then
@@ -169,8 +215,36 @@ case "$COMMAND_NAME" in
     status)
         api_request GET /api/runtime/status
         ;;
+    agent-status)
+        api_request GET /api/agent/status
+        ;;
+    codex-status)
+        api_request GET /api/agent/codex/status
+        ;;
     manifest)
         api_request GET /api/runtime/manifest
+        ;;
+    model-capabilities)
+        api_request GET /api/agent/models
+        ;;
+    probe-model)
+        body="$(python3 - "$PROBE_PROCESSOR_ID" "$PROBE_TEXT" "$PROBE_TIMEOUT_MS" "$PROBE_MAX_TOKENS" <<'PY'
+import json
+import sys
+processor_id, text, timeout_ms, max_tokens = sys.argv[1:5]
+payload = {}
+if processor_id:
+    payload["processor_id"] = processor_id
+if text:
+    payload["text"] = text
+if timeout_ms:
+    payload["timeout_ms"] = int(timeout_ms)
+if max_tokens:
+    payload["max_tokens"] = int(max_tokens)
+print(json.dumps(payload, ensure_ascii=False))
+PY
+)"
+        api_request POST /api/agent/probe-model "$body"
         ;;
     reload)
         printf 'reload:\n' >&2

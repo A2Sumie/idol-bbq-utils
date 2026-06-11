@@ -17,69 +17,50 @@ const DEFAULT_BILIUP_LINE = 'AUTO'
 const DEFAULT_BILIUP_WORKING_DIR = path.join(CACHE_DIR_ROOT, 'media', 'biliup')
 const DEFAULT_BILIUP_EXCLUDED_UIDS = ['22/7:radio', '22/7:movie']
 const DEFAULT_BILIUP_COOKIE_SYNC_URL = 'https://www.bilibili.com'
-const DEFAULT_BILIUP_COLLISION_PART_TITLE = '###'
-const DEFAULT_BILIUP_COLLISION_MAIN_PART_TITLE = '正片'
-const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_DURATION_SECONDS = 2
-const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_WIDTH = 1920
-const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_HEIGHT = 1080
-const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_FPS = 30
-const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_BACKGROUND_COLOR = '#d1e5fc'
-const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO = path.resolve(
-    process.cwd(),
-    'assets',
-    'branding',
-    'live-player-background-collision-pad-7s.mp4',
-)
-const DEFAULT_BILIUP_COLLISION_PLACEHOLDER_IMAGE = path.resolve(
-    process.cwd(),
-    'assets',
-    'branding',
-    'live-player-background.png',
-)
 const DEFAULT_BILIUP_METADATA_TIMEZONE = 'Asia/Tokyo'
 const BILIUP_ACCOUNT_DISPLAY_NAME_MAP: Record<string, string> = {
     '227_staff': '22/7',
     '227official': '22/7',
     '227keisanchu': '22/7 計算外',
-    'nananijigram22_7': '22/7',
+    nananijigram22_7: '22/7',
     'nananijigram22_7_the.3rd': '22/7 THE 3RD',
-    '_fujimasakura': '藤間桜',
-    '_nishiurasora': '西浦そら',
-    '_saitonicole': '斎藤ニコル',
-    '_takigawamiu': '滝川みう',
-    '_yagamitoa': '八神叶愛',
-    'alice__kurosaki': '黒崎ありす',
-    'asaoka_mao__': '麻丘真央',
-    'chiharu_okr': '千春',
-    'cure_rinochi': '望月りの',
-    'em_matcha227': '月城咲舞',
-    'emma_tsukishiro': '月城咲舞',
-    'hikari_kabashima': '椛島光',
-    'iko_hiyama': '桧山依子',
-    'kawase_uta': '河瀬詩',
-    'luna': '四条月',
+    _fujimasakura: '藤間桜',
+    _nishiurasora: '西浦そら',
+    _saitonicole: '斎藤ニコル',
+    _takigawamiu: '滝川みう',
+    _yagamitoa: '八神叶愛',
+    alice__kurosaki: '黒崎ありす',
+    asaoka_mao__: '麻丘真央',
+    chiharu_okr: '千春',
+    cure_rinochi: '望月りの',
+    em_matcha227: '月城咲舞',
+    emma_tsukishiro: '月城咲舞',
+    hikari_kabashima: '椛島光',
+    iko_hiyama: '桧山依子',
+    kawase_uta: '河瀬詩',
+    luna: '四条月',
     'luna.shijo': '四条月',
-    'luna_shijo': '四条月',
-    'mana__tachibana': '橘茉奈',
-    'mao_asaoka227': '麻丘真央',
-    'mao_asaoka_227': '麻丘真央',
-    'mikumo_haruka': '三雲遥加',
-    'minami__iori': '南伊織',
-    'mirei_orimoto': '折本美玲',
-    'nagomi_saijo_227': '西條和',
-    'nao_aikawa227': '相川奈央',
-    'rino_mochizuki': '望月りの',
-    'ruri_yoshizawa': '吉沢珠璃',
-    'sally_amaki': '天城サリー',
-    'sally_amaki_official': '天城サリー',
-    'sallyamaki': '天城サリー',
-    'sallyamakiofficial': '天城サリー',
-    'satsuki_shiina': '椎名桜月',
-    'shiina_satsuki227': '椎名桜月',
-    'shiina_satsuki_': '椎名桜月',
-    'tabesugiyaseruo': '蒼乃音',
-    'ui_sakura_0526': '佐倉初',
-    'yoshizawa_ruri': '吉沢珠璃',
+    luna_shijo: '四条月',
+    mana__tachibana: '橘茉奈',
+    mao_asaoka227: '麻丘真央',
+    mao_asaoka_227: '麻丘真央',
+    mikumo_haruka: '三雲遥加',
+    minami__iori: '南伊織',
+    mirei_orimoto: '折本美玲',
+    nagomi_saijo_227: '西條和',
+    nao_aikawa227: '相川奈央',
+    rino_mochizuki: '望月りの',
+    ruri_yoshizawa: '吉沢珠璃',
+    sally_amaki: '天城サリー',
+    sally_amaki_official: '天城サリー',
+    sallyamaki: '天城サリー',
+    sallyamakiofficial: '天城サリー',
+    satsuki_shiina: '椎名桜月',
+    shiina_satsuki227: '椎名桜月',
+    shiina_satsuki_: '椎名桜月',
+    tabesugiyaseruo: '蒼乃音',
+    ui_sakura_0526: '佐倉初',
+    yoshizawa_ruri: '吉沢珠璃',
 }
 
 type TemplateContext = Record<string, string>
@@ -92,7 +73,6 @@ type MediaFile = {
 type PreparedUploadVideoPart = {
     sourcePath: string
     stagedPath: string
-    partTitle?: string
 }
 
 interface ResolvedBiliupBrowserCookieSyncConfig {
@@ -112,19 +92,6 @@ interface ResolvedBiliupMetadataTemplatesConfig {
     description?: string
 }
 
-interface ResolvedBiliupCollisionPlaceholderPartConfig {
-    enabled: true
-    video_path?: string
-    image_path: string
-    title: string
-    duration_seconds: number
-    width: number
-    height: number
-    fps: number
-    ffmpeg_path: string
-    background_color: string
-}
-
 interface ResolvedBiliupVideoUploadConfig {
     enabled: boolean
     python_path: string
@@ -141,7 +108,6 @@ interface ResolvedBiliupVideoUploadConfig {
     tags: Array<string>
     exclude_uids: Array<string>
     metadata_templates?: ResolvedBiliupMetadataTemplatesConfig
-    collision_placeholder_part?: ResolvedBiliupCollisionPlaceholderPartConfig
 }
 
 interface BiliupUploadCandidate {
@@ -236,13 +202,6 @@ function truncateText(value: string, maxChars: number) {
     return `${chars.slice(0, Math.max(0, maxChars - 3)).join('')}...`
 }
 
-function defaultFfmpegPath() {
-    return resolveExistingPath(
-        [process.env.FFMPEG_PATH, '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', 'ffmpeg'],
-        'ffmpeg',
-    )
-}
-
 function normalizeTextBlock(value: string | null | undefined) {
     return String(value || '')
         .replace(/\r\n/g, '\n')
@@ -271,18 +230,12 @@ function normalizeBiliupMainTitleText(value: string | null | undefined, fallback
 
 function hasRenderedTitlePayload(value: string, context: TemplateContext) {
     const ignoredTokens = new Set(
-        [
-            context.source_tag,
-            context.platform_label,
-            context.type_label,
-            'TT',
-            'YT',
-            'X',
-            'ins',
-            'blog',
-            '社媒',
-        ]
-            .map((token) => String(token || '').trim().toLocaleLowerCase())
+        [context.source_tag, context.platform_label, context.type_label, 'TT', 'YT', 'X', 'ins', 'blog', '社媒']
+            .map((token) =>
+                String(token || '')
+                    .trim()
+                    .toLocaleLowerCase(),
+            )
             .filter(Boolean),
     )
     const payload = normalizeTextBlock(value)
@@ -534,10 +487,7 @@ function resolveDefaultTitleTemplate(article: Pick<Article, 'platform' | 'type'>
     return '【{{account_title}}】[{{source_tag}}] {{upload_summary}}'
 }
 
-function buildTitleFallback(
-    context: TemplateContext,
-    article: Pick<Article, 'platform' | 'username' | 'a_id'>,
-) {
+function buildTitleFallback(context: TemplateContext, article: Pick<Article, 'platform' | 'username' | 'a_id'>) {
     const hardFallback = normalizeBiliupMainTitleText(
         [formatPlatformTag(article), context.datetime, context.article_id].filter(Boolean).join(' '),
         context.article_id || 'Bilibili upload',
@@ -591,20 +541,6 @@ function sanitizeFileStem(value: string, fallback: string) {
     return truncateText(normalized || fallback, 64)
 }
 
-function resolveCollisionPlaceholderImagePath(candidate?: string) {
-    return resolveConfiguredPath(candidate) || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_IMAGE
-}
-
-function resolveCollisionPlaceholderVideoPath(candidate?: string) {
-    const configured = resolveConfiguredPath(candidate)
-    if (configured) {
-        return configured
-    }
-    return fs.existsSync(DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO)
-        ? DEFAULT_BILIUP_COLLISION_PLACEHOLDER_VIDEO
-        : undefined
-}
-
 function resolveMetadataTemplatesConfig(
     config?: NonNullable<BiliupVideoUploadConfig['metadata_templates']>,
 ): ResolvedBiliupMetadataTemplatesConfig | undefined {
@@ -621,32 +557,6 @@ function resolveMetadataTemplatesConfig(
     return {
         title: title || undefined,
         description: description || undefined,
-    }
-}
-
-function resolveCollisionPlaceholderPartConfig(
-    config?: NonNullable<BiliupVideoUploadConfig['collision_placeholder_part']>,
-): ResolvedBiliupCollisionPlaceholderPartConfig | undefined {
-    if (!config?.enabled) {
-        return undefined
-    }
-
-    return {
-        enabled: true,
-        video_path: resolveCollisionPlaceholderVideoPath(config.video_path),
-        image_path: resolveCollisionPlaceholderImagePath(config.image_path),
-        title: normalizeBiliupTitleText(config.title, DEFAULT_BILIUP_COLLISION_PART_TITLE),
-        duration_seconds: resolveMinNumber(
-            config.duration_seconds,
-            DEFAULT_BILIUP_COLLISION_PLACEHOLDER_DURATION_SECONDS,
-            1,
-        ),
-        width: resolveMinInteger(config.width, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_WIDTH, 320),
-        height: resolveMinInteger(config.height, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_HEIGHT, 240),
-        fps: resolveMinInteger(config.fps, DEFAULT_BILIUP_COLLISION_PLACEHOLDER_FPS, 1),
-        ffmpeg_path: config.ffmpeg_path || defaultFfmpegPath(),
-        background_color:
-            normalizeTextBlock(config.background_color) || DEFAULT_BILIUP_COLLISION_PLACEHOLDER_BACKGROUND_COLOR,
     }
 }
 
@@ -796,7 +706,6 @@ function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBil
         tags: uniqueStrings((config.tags || []).map(normalizeTag)),
         exclude_uids: uniqueStrings([...(config.exclude_uids || []), ...DEFAULT_BILIUP_EXCLUDED_UIDS]),
         metadata_templates: resolveMetadataTemplatesConfig(config.metadata_templates),
-        collision_placeholder_part: resolveCollisionPlaceholderPartConfig(config.collision_placeholder_part),
     }
 }
 
@@ -911,192 +820,18 @@ async function runBrowserCookieSync(config: ResolvedBiliupVideoUploadConfig, log
     })
 }
 
-async function runSpawn(command: string, args: string[], cwd: string, logPrefix: string, log?: Logger) {
-    const stdoutChunks: string[] = []
-    const stderrChunks: string[] = []
-
-    await new Promise<void>((resolve, reject) => {
-        const child = spawn(command, args, {
-            cwd,
-            env: process.env,
-        })
-
-        child.stdout.on('data', (chunk) => {
-            const text = chunk.toString()
-            stdoutChunks.push(text)
-            text.trim() && log?.debug(`${logPrefix} ${text.trim()}`)
-        })
-        child.stderr.on('data', (chunk) => {
-            const text = chunk.toString()
-            stderrChunks.push(text)
-            text.trim() && log?.warn(`${logPrefix} ${text.trim()}`)
-        })
-        child.on('error', (error) => reject(error))
-        child.on('close', (code) => {
-            if (code === 0) {
-                resolve()
-                return
-            }
-            reject(
-                new Error(
-                    `${command} exited with code ${code}: ${stderrChunks.join('').trim() || stdoutChunks.join('').trim()}`,
-                ),
-            )
-        })
-    })
-}
-
-async function ensureCollisionPlaceholderVideo(
-    config: ResolvedBiliupCollisionPlaceholderPartConfig,
-    workingDir: string,
-    log?: Logger,
-) {
-    if (config.video_path) {
-        if (!fs.existsSync(config.video_path)) {
-            throw new Error(`biliup collision placeholder video not found: ${config.video_path}`)
-        }
-        return config.video_path
-    }
-
-    if (!fs.existsSync(config.image_path)) {
-        throw new Error(`biliup collision placeholder image not found: ${config.image_path}`)
-    }
-
-    const stat = fs.statSync(config.image_path)
-    const cacheKey = createHash('sha1')
-        .update(
-            JSON.stringify({
-                image_path: config.image_path,
-                mtime_ms: stat.mtimeMs,
-                size: stat.size,
-                title: config.title,
-                duration_seconds: config.duration_seconds,
-                width: config.width,
-                height: config.height,
-                fps: config.fps,
-                background_color: config.background_color,
-            }),
-        )
-        .digest('hex')
-
-    const outputDir = path.join(workingDir, 'collision-placeholder-cache')
-    const outputPath = path.join(outputDir, `${cacheKey}.mp4`)
-    if (fs.existsSync(outputPath)) {
-        return outputPath
-    }
-
-    fs.mkdirSync(outputDir, { recursive: true })
-
-    const fadeOutStart = Math.max(0, config.duration_seconds - 0.3)
-    await runSpawn(
-        config.ffmpeg_path,
-        [
-            '-y',
-            '-loop',
-            '1',
-            '-i',
-            config.image_path,
-            '-f',
-            'lavfi',
-            '-i',
-            'anullsrc=channel_layout=stereo:sample_rate=48000',
-            '-t',
-            String(config.duration_seconds),
-            '-vf',
-            [
-                `scale=${config.width}:${config.height}:force_original_aspect_ratio=decrease`,
-                `pad=${config.width}:${config.height}:(ow-iw)/2:(oh-ih)/2:${config.background_color}`,
-                'format=yuv420p',
-                'fade=t=in:st=0:d=0.25',
-                `fade=t=out:st=${fadeOutStart}:d=0.25`,
-            ].join(','),
-            '-r',
-            String(config.fps),
-            '-c:v',
-            'libx264',
-            '-preset',
-            'veryfast',
-            '-pix_fmt',
-            'yuv420p',
-            '-c:a',
-            'aac',
-            '-b:a',
-            '128k',
-            '-shortest',
-            outputPath,
-        ],
-        outputDir,
-        '[biliup-collision-part]',
-        log,
-    )
-
-    return outputPath
-}
-
-function stageUploadVideoPart(sourcePath: string, stagedPath: string) {
-    try {
-        fs.symlinkSync(sourcePath, stagedPath)
-        return
-    } catch {}
-
-    try {
-        fs.linkSync(sourcePath, stagedPath)
-        return
-    } catch {}
-
-    fs.copyFileSync(sourcePath, stagedPath)
-}
-
 async function prepareUploadVideoParts(
     candidate: Pick<BiliupUploadCandidate, 'videoPaths' | 'config'>,
-    uploadDir: string,
+    _uploadDir: string,
     log?: Logger,
 ): Promise<Array<PreparedUploadVideoPart>> {
-    let parts = candidate.videoPaths.map((videoPath) => ({
-        sourcePath: videoPath,
-    }))
-
-    if (candidate.config.collision_placeholder_part && candidate.videoPaths.length === 1) {
-        try {
-            const placeholderPath = await ensureCollisionPlaceholderVideo(
-                candidate.config.collision_placeholder_part,
-                candidate.config.working_dir,
-                log,
-            )
-            parts = [
-                {
-                    sourcePath: candidate.videoPaths[0],
-                    partTitle: DEFAULT_BILIUP_COLLISION_MAIN_PART_TITLE,
-                },
-                {
-                    sourcePath: placeholderPath,
-                    partTitle: candidate.config.collision_placeholder_part.title,
-                },
-            ]
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error)
-            log?.warn(`Failed to prepare biliup collision placeholder part, continuing without it: ${message}`)
-        }
+    if ((candidate.config as any).collision_placeholder_part) {
+        log?.warn('Ignoring deprecated biliup collision_placeholder_part; uploading original video part(s) only.')
     }
-
-    return parts.map((part, index) => {
-        if (!part.partTitle) {
-            return {
-                ...part,
-                stagedPath: part.sourcePath,
-            }
-        }
-
-        const extension = path.extname(part.sourcePath) || '.mp4'
-        const stagedPath = path.join(uploadDir, `${sanitizeFileStem(part.partTitle, `part-${index + 1}`)}${extension}`)
-        if (!fs.existsSync(stagedPath)) {
-            stageUploadVideoPart(part.sourcePath, stagedPath)
-        }
-        return {
-            ...part,
-            stagedPath,
-        }
-    })
+    return candidate.videoPaths.map((videoPath) => ({
+        sourcePath: videoPath,
+        stagedPath: videoPath,
+    }))
 }
 
 async function runBiliupUpload(
@@ -1154,7 +889,9 @@ async function runBiliupUpload(
     fs.writeFileSync(cookieFile, JSON.stringify(cookieDocument, null, 2))
     const preparedVideoParts = await prepareUploadVideoParts(candidate, uploadDir, log)
     log?.info(
-        `Prepared biliup metadata for ${article.a_id}: title_length=${candidate.title.length} title_hash=${createHash('sha256')
+        `Prepared biliup metadata for ${article.a_id}: title_length=${candidate.title.length} title_hash=${createHash(
+            'sha256',
+        )
             .update(candidate.title)
             .digest('hex')
             .slice(0, 12)}`,
@@ -1163,7 +900,7 @@ async function runBiliupUpload(
         `Prepared biliup video parts for ${article.a_id}: requested=${candidate.videoPaths.length} actual=${
             preparedVideoParts.length
         } titles=${preparedVideoParts
-            .map((part, index) => part.partTitle || path.basename(part.stagedPath) || `part-${index + 1}`)
+            .map((part, index) => path.basename(part.stagedPath) || `part-${index + 1}`)
             .join(',')}`,
     )
 

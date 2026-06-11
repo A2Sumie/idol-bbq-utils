@@ -250,6 +250,259 @@ test('APIManager runtime status uses full task status counts', async () => {
     }
 })
 
+test('APIManager agent status reports model capabilities without processor secrets', async () => {
+    const originalTaskCountsByStatus = DB.TaskQueue.countsByStatus
+    ;(DB.TaskQueue as any).countsByStatus = async () => ({
+        pending: 1,
+        processing: 0,
+        failed: 0,
+        completed: 2,
+    })
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    processors: [
+                        {
+                            id: 'main',
+                            name: 'main model',
+                            provider: 'DeepSeekV4Pro',
+                            api_key: 'private-key',
+                            cfg_processor: {
+                                model_id: 'deepseek-v4-pro',
+                                name: 'OpenCode-Go-DeepSeek-v4-pro-22/7',
+                                temperature: 0.2,
+                            },
+                        },
+                    ],
+                }) as any,
+            getDeps: () => ({}),
+            getRuntimeMeta: () =>
+                ({
+                    mode: 'api-only',
+                    generation: 1,
+                }) as any,
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/agent/status', {
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+            }),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(200)
+        const payload = await response.json()
+        expect(payload.models[0]).toMatchObject({
+            processor_id: 'main',
+            provider: 'DeepSeekV4Pro',
+            model_id: 'deepseek-v4-pro',
+            capability: {
+                display_name: 'DeepSeek V4 Pro',
+                context_window: 1_000_000,
+                reasoning: true,
+            },
+        })
+        expect(JSON.stringify(payload)).not.toContain('private-key')
+    } finally {
+        ;(DB.TaskQueue as any).countsByStatus = originalTaskCountsByStatus
+    }
+})
+
+test('APIManager agent model probe uses a bounded lightweight processor config', async () => {
+    const originalCreate = processorRegistry.create
+    const calls: any[] = []
+    ;(processorRegistry as any).create = async (provider: string, apiKey: string, _log: unknown, config: any) => {
+        calls.push({ provider, apiKey, config })
+        return {
+            NAME: 'mock-probe',
+            process: async (text: string) => `OK:${text}`,
+            drop: async () => undefined,
+        }
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    processors: [
+                        {
+                            id: 'main',
+                            name: 'main model',
+                            provider: 'DeepSeekV4Pro',
+                            api_key: 'private-key',
+                            cfg_processor: {
+                                model_id: 'deepseek-v4-pro',
+                                prompt_assets: [{ path: '/private/prompt.txt' }],
+                                response_format: 'json_object',
+                                max_tokens: 2048,
+                            },
+                        },
+                    ],
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/agent/probe-model', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    processor_id: 'main',
+                    text: 'ping',
+                    timeout_ms: 10_000,
+                }),
+            }),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(200)
+        const payload = await response.json()
+        expect(payload).toMatchObject({
+            success: true,
+            provider: 'DeepSeekV4Pro',
+            model_id: 'deepseek-v4-pro',
+            output_preview: 'OK:ping',
+        })
+        expect(payload.latency_ms).toBeGreaterThan(0)
+        expect(payload.chars_per_sec).toBeGreaterThan(0)
+        expect(calls).toHaveLength(1)
+        expect(calls[0].apiKey).toBe('private-key')
+        expect(calls[0].config).toMatchObject({
+            prompt_assets: [],
+            response_format: 'none',
+            max_tokens: 32,
+            request_timeout_ms: 10_000,
+        })
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+})
+
+test('APIManager exposes Codex MCP bridge status and run endpoints', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'api-codex-mcp-fake-'))
+    const script = join(root, 'fake-codex-mcp.cjs')
+    writeFileSync(
+        script,
+        `
+const readline = require('node:readline')
+const rl = readline.createInterface({ input: process.stdin })
+function send(id, result) {
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\\n')
+}
+rl.on('line', (line) => {
+  if (!line.trim()) return
+  const msg = JSON.parse(line)
+  if (msg.method === 'initialize') {
+    send(msg.id, { protocolVersion: '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'fake-codex' } })
+    return
+  }
+  if (msg.method === 'tools/list') {
+    send(msg.id, { tools: [{ name: 'codex', title: 'Codex' }, { name: 'codex-reply', title: 'Codex Reply' }] })
+    return
+  }
+  if (msg.method === 'tools/call') {
+    const args = msg.params.arguments || {}
+    send(msg.id, {
+      structuredContent: { threadId: 'thread-api', content: 'codex:' + args.prompt },
+      content: [{ type: 'text', text: JSON.stringify({ threadId: 'thread-api', content: 'codex:' + args.prompt }) }]
+    })
+  }
+})
+`,
+    )
+
+    const originalEnabled = process.env.IDOL_BBQ_CODEX_MCP_ENABLED
+    const originalCommand = process.env.IDOL_BBQ_CODEX_MCP_COMMAND
+    const originalArgs = process.env.IDOL_BBQ_CODEX_MCP_ARGS_JSON
+    const originalBridgeUrl = process.env.IDOL_BBQ_CODEX_MCP_BRIDGE_URL
+    const originalBridgeToken = process.env.IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN
+    process.env.IDOL_BBQ_CODEX_MCP_ENABLED = '1'
+    process.env.IDOL_BBQ_CODEX_MCP_COMMAND = process.execPath
+    process.env.IDOL_BBQ_CODEX_MCP_ARGS_JSON = JSON.stringify([script])
+    delete process.env.IDOL_BBQ_CODEX_MCP_BRIDGE_URL
+    delete process.env.IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                }) as any,
+            getDeps: () => ({}),
+        })
+
+        const statusResponse = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/agent/codex/status', {
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+            }),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+        expect(statusResponse.status).toBe(200)
+        const status = await statusResponse.json()
+        expect(status).toMatchObject({
+            service: 'codex-mcp',
+            enabled: true,
+            available: true,
+            mode: 'stdio',
+        })
+        expect(status.tools.map((tool: any) => tool.name)).toEqual(['codex', 'codex-reply'])
+
+        const runResponse = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/agent/codex/run', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    prompt: 'inspect project',
+                    timeout_ms: 2_000,
+                }),
+            }),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+        expect(runResponse.status).toBe(200)
+        expect(await runResponse.json()).toMatchObject({
+            success: true,
+            thread_id: 'thread-api',
+            content: 'codex:inspect project',
+        })
+    } finally {
+        if (originalEnabled === undefined) delete process.env.IDOL_BBQ_CODEX_MCP_ENABLED
+        else process.env.IDOL_BBQ_CODEX_MCP_ENABLED = originalEnabled
+        if (originalCommand === undefined) delete process.env.IDOL_BBQ_CODEX_MCP_COMMAND
+        else process.env.IDOL_BBQ_CODEX_MCP_COMMAND = originalCommand
+        if (originalArgs === undefined) delete process.env.IDOL_BBQ_CODEX_MCP_ARGS_JSON
+        else process.env.IDOL_BBQ_CODEX_MCP_ARGS_JSON = originalArgs
+        if (originalBridgeUrl === undefined) delete process.env.IDOL_BBQ_CODEX_MCP_BRIDGE_URL
+        else process.env.IDOL_BBQ_CODEX_MCP_BRIDGE_URL = originalBridgeUrl
+        if (originalBridgeToken === undefined) delete process.env.IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN
+        else process.env.IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN = originalBridgeToken
+        rmSync(root, { recursive: true, force: true })
+    }
+})
+
 test('APIManager task list forwards operator filters safely', async () => {
     const originalTaskList = DB.TaskQueue.list
     const calls: any[] = []
@@ -344,7 +597,9 @@ test('APIManager task list redacts notification signal payload identity fields',
             getDeps: () => ({}),
         })
 
-        const response = await (manager as any).handleTasks(new URL('http://localhost/api/tasks?type=notification_signal'))
+        const response = await (manager as any).handleTasks(
+            new URL('http://localhost/api/tasks?type=notification_signal'),
+        )
         expect(response.status).toBe(200)
         const tasks = await response.json()
         const serialized = JSON.stringify(tasks)
@@ -1944,7 +2199,9 @@ test('APIManager cookie sync returns safe conflict when session lacks required c
                 ({
                     spiderPools: {
                         exportCrawlerCookies: async () => {
-                            const error = new Error('Browser session x-main is missing required x cookies: auth_token, ct0')
+                            const error = new Error(
+                                'Browser session x-main is missing required x cookies: auth_token, ct0',
+                            )
                             ;(error as any).statusCode = 409
                             ;(error as any).publicMessage =
                                 'Browser session x-main is missing required x cookies: auth_token, ct0'

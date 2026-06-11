@@ -39,6 +39,11 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
+      # Optional host-side Codex MCP bridge. OpenCode Go is only a DeepSeek API provider;
+      # this bridge is the idol-bbq -> MCP -> Codex path.
+      - IDOL_BBQ_CODEX_MCP_ENABLED=${IDOL_BBQ_CODEX_MCP_ENABLED:-0}
+      - IDOL_BBQ_CODEX_MCP_BRIDGE_URL=${IDOL_BBQ_CODEX_MCP_BRIDGE_URL:-}
+      - IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN=${IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN:-}
       # Optional live-player schedule webhook sink for extracted time-event candidates.
       - LIVE_PLAYER_SCHEDULE_WEBHOOK_URL=${LIVE_PLAYER_SCHEDULE_WEBHOOK_URL:-}
       - LIVE_PLAYER_SCHEDULE_WEBHOOK_API_KEY=${LIVE_PLAYER_SCHEDULE_WEBHOOK_API_KEY:-}

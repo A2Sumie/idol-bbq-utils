@@ -20,6 +20,18 @@ const DEEPSEEK_V4_FLASH_DEFAULT_CONFIG: ProcessorConfig = {
     },
 }
 
+const DEEPSEEK_V4_PRO_DEFAULT_CONFIG: ProcessorConfig = {
+    name: 'OpenCode-Go-DeepSeek-v4-pro',
+    model_id: 'deepseek-v4-pro',
+    base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
+    temperature: 1.0,
+    extended_payload: {
+        thinking: {
+            type: 'disabled',
+        },
+    },
+}
+
 function mergeProcessorDefaults(defaults: ProcessorConfig, config?: ProcessorConfig): ProcessorConfig {
     return {
         ...defaults,
@@ -62,6 +74,7 @@ class OpenaiLikeLLMTranslator extends BaseOpenai {
                 headers: {
                     Authorization: `Bearer ${this.api_key}`,
                 },
+                timeout: this.config?.request_timeout_ms,
             },
         )
         return res.data.choices[0].message.content as string
@@ -76,4 +89,12 @@ class DeepSeekV4FlashTranslator extends OpenaiLikeLLMTranslator {
     }
 }
 
-export { DeepSeekV4FlashTranslator, OpenaiLikeLLMTranslator }
+class DeepSeekV4ProTranslator extends OpenaiLikeLLMTranslator {
+    static _PROVIDER = ProcessorProvider.DeepSeekV4Pro
+
+    constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
+        super(api_key, log, mergeProcessorDefaults(DEEPSEEK_V4_PRO_DEFAULT_CONFIG, config))
+    }
+}
+
+export { DeepSeekV4FlashTranslator, DeepSeekV4ProTranslator, OpenaiLikeLLMTranslator }

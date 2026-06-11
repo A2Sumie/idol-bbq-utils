@@ -349,7 +349,7 @@ test('resolveVideoUploadConfig includes browser cookie sync settings', () => {
     expect(config?.browser_cookie_sync?.script_path).toBe(helperScript)
 })
 
-test('resolveVideoUploadConfig keeps metadata template and collision placeholder settings', () => {
+test('resolveVideoUploadConfig keeps metadata templates and ignores deprecated collision placeholder settings', () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-upload-template-'))
     const videoPath = path.join(tempRoot, 'pad.mp4')
     fs.writeFileSync(videoPath, 'video')
@@ -363,15 +363,13 @@ test('resolveVideoUploadConfig keeps metadata template and collision placeholder
             enabled: true,
             video_path: videoPath,
             image_path: path.join(tempRoot, 'logo.png'),
-            title: '###',
+            title: 'legacy placeholder',
             background_color: '#d1e5fc',
         },
     })
 
     expect(config?.metadata_templates?.title).toBe('【{{platform_type_label}}】{{display_name}} {{summary}}')
-    expect(config?.collision_placeholder_part?.video_path).toBe(videoPath)
-    expect(config?.collision_placeholder_part?.title).toBe('###')
-    expect(config?.collision_placeholder_part?.background_color).toBe('#d1e5fc')
+    expect((config as any).collision_placeholder_part).toBeUndefined()
 })
 
 test('resolveVideoUploadConfig falls back from invalid numeric control values', () => {
@@ -390,13 +388,10 @@ test('resolveVideoUploadConfig falls back from invalid numeric control values', 
 
     expect(config?.tid).toBe(171)
     expect(config?.threads).toBe(3)
-    expect(config?.collision_placeholder_part?.duration_seconds).toBe(2)
-    expect(config?.collision_placeholder_part?.width).toBe(1920)
-    expect(config?.collision_placeholder_part?.height).toBe(1080)
-    expect(config?.collision_placeholder_part?.fps).toBe(30)
+    expect((config as any).collision_placeholder_part).toBeUndefined()
 })
 
-test('prepareUploadVideoParts reuses persistent collision placeholder video when configured', async () => {
+test('prepareUploadVideoParts ignores deprecated collision placeholder video when configured', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-parts-persistent-'))
     const uploadDir = path.join(tempRoot, 'upload')
     fs.mkdirSync(uploadDir, { recursive: true })
@@ -426,7 +421,7 @@ test('prepareUploadVideoParts reuses persistent collision placeholder video when
                     enabled: true,
                     video_path: placeholderPath,
                     image_path: path.join(tempRoot, 'unused.png'),
-                    title: '###',
+                    title: 'legacy placeholder',
                     duration_seconds: 7,
                     width: 1920,
                     height: 1080,
@@ -439,68 +434,13 @@ test('prepareUploadVideoParts reuses persistent collision placeholder video when
         uploadDir,
     )
 
-    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '###.mp4'])
-    expect(fs.existsSync(parts[1]!.stagedPath)).toBe(true)
-})
-
-test('prepareUploadVideoParts appends collision placeholder part with clean multi-p titles', async () => {
-    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'biliup-video-parts-'))
-    const uploadDir = path.join(tempRoot, 'upload')
-    fs.mkdirSync(uploadDir, { recursive: true })
-
-    const logoPath = path.join(tempRoot, 'logo.png')
-    fs.writeFileSync(logoPath, 'logo')
-
-    const videoPath = path.join(tempRoot, 'source-video.mp4')
-    fs.writeFileSync(videoPath, 'video')
-
-    const ffmpegPath = path.join(tempRoot, 'ffmpeg')
-    fs.writeFileSync(
-        ffmpegPath,
-        `#!/bin/sh
-out=""
-for arg in "$@"; do
-  out="$arg"
-done
-printf 'placeholder' > "$out"
-`,
-        { mode: 0o755 },
-    )
-
-    const parts = await prepareUploadVideoParts(
+    expect(parts).toEqual([
         {
-            videoPaths: [videoPath],
-            config: {
-                enabled: true,
-                python_path: 'python3',
-                helper_path: '/tmp/helper.py',
-                working_dir: tempRoot,
-                submit_api: 'web',
-                line: 'AUTO',
-                tid: 171,
-                threads: 3,
-                copyright: 2,
-                tags: [],
-                exclude_uids: [],
-                collision_placeholder_part: {
-                    enabled: true,
-                    image_path: logoPath,
-                    title: '###',
-                    duration_seconds: 1,
-                    width: 1280,
-                    height: 720,
-                    fps: 24,
-                    ffmpeg_path: ffmpegPath,
-                    background_color: '#d1e5fc',
-                },
-            },
+            sourcePath: videoPath,
+            stagedPath: videoPath,
         },
-        uploadDir,
-    )
-
-    expect(parts.map((part) => path.basename(part.stagedPath))).toEqual(['正片.mp4', '###.mp4'])
-    expect(parts[1]?.partTitle).toBe('###')
-    expect(fs.existsSync(parts[1]!.stagedPath)).toBe(true)
+    ])
+    expect(fs.existsSync(path.join(uploadDir, 'legacy placeholder.mp4'))).toBe(false)
 })
 
 test('BiliForwarder skips dynamic posting when biliup upload succeeds', async () => {
