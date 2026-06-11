@@ -135,7 +135,13 @@ def upload_and_submit(uploader: BiliWeb, file_list):
             try:
                 video.cover = bili.cover_up(uploader.cover_path).replace("http:", "")
             except Exception as exc:
-                raise RuntimeError(f"biliup cover_up failed for {uploader.cover_path}: {explain_upload_error(exc)}") from exc
+                print(
+                    (
+                        f"biliup cover_up failed for {uploader.cover_path}; "
+                        f"continuing without custom cover: {explain_upload_error(exc)}"
+                    ),
+                    file=sys.stderr,
+                )
         try:
             submit_result = bili.submit(uploader.submit_api)
         except Exception as exc:
