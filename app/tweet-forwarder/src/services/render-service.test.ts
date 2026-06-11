@@ -755,6 +755,77 @@ describe('RenderService text-card', () => {
         service.cleanup(result.mediaFiles)
     })
 
+    test('retries message-pack rendering without remote meta media when card dimensions are unavailable', async () => {
+        const service = new RenderService()
+        const renderCalls: Array<any> = []
+        ;(service as any).ArticleConverter = {
+            articleToImg: async (article: any) => {
+                renderCalls.push(article)
+                const meta = JSON.stringify(article.extra?.data || {})
+                if (String(article.u_avatar || '').startsWith('https://') || meta.includes('https://')) {
+                    throw new Error('Image size cannot be determined. Please provide the width and height of the image.')
+                }
+                return Buffer.from(SAMPLE_PNG_DATA_URL.split(',')[1] || '', 'base64')
+            },
+        }
+
+        const result = await service.process(
+            {
+                id: -19,
+                a_id: 'summary-card-remote-meta-media',
+                u_id: 'message_pack',
+                username: '聚合',
+                created_at: 1710000000,
+                content: '聚合 1条 / 23:20-23:20',
+                translation: null,
+                translated_by: null,
+                url: 'https://x.com/member/status/source',
+                type: 'message_pack',
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: 'https://example.com/root-photo.jpg' }],
+                extra: {
+                    extra_type: 'message_pack_meta',
+                    data: {
+                        total: 1,
+                        range: '1条 / 23:20-23:20',
+                        groups: [
+                            {
+                                title: '消息串 1条 / 23:20-23:20',
+                                avatars: [{ url: 'https://example.com/avatar.jpg', name: 'member' }],
+                                items: [
+                                    {
+                                        index: 1,
+                                        text: '@media_member 2320⁹ X发推',
+                                        mediaLabel: '#1 图集',
+                                        media: [{ type: 'photo', url: 'https://example.com/item-photo.jpg' }],
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                } as any,
+                u_avatar: 'https://example.com/source-avatar.jpg',
+                platform: Platform.X,
+            } as any,
+            {
+                taskId: 'test-message-pack-remote-meta-media',
+                render_type: 'text-card',
+            },
+        )
+
+        expect(renderCalls).toHaveLength(2)
+        expect(renderCalls[1]?.u_avatar).toBeNull()
+        expect(renderCalls[1]?.media).toEqual([])
+        expect(renderCalls[1]?.has_media).toBe(false)
+        expect(renderCalls[1]?.extra?.data?.groups?.[0]?.avatars?.[0]?.url).toBeUndefined()
+        expect(renderCalls[1]?.extra?.data?.groups?.[0]?.items?.[0]?.media).toEqual([])
+        expect(renderCalls[1]?.extra?.data?.groups?.[0]?.items?.[0]?.mediaLabel).toBeUndefined()
+        expect(result.cardMediaFiles).toHaveLength(1)
+
+        service.cleanup(result.mediaFiles)
+    })
+
     test('renders progressive jpeg media inside the card instead of a gray tile', async () => {
         const service = new RenderService()
         const result = await service.process(

@@ -410,21 +410,63 @@ export class RenderService {
     private stripRemoteCardMediaForRender(article: Article) {
         const cloned = cloneDeep(article)
         let removed = 0
+        const stripRemoteMediaList = (media: unknown) => {
+            if (!Array.isArray(media)) {
+                return media
+            }
+            return media.filter((mediaItem) => {
+                if (
+                    mediaItem &&
+                    typeof mediaItem === 'object' &&
+                    ((mediaItem as any).type === 'photo' || (mediaItem as any).type === 'video_thumbnail') &&
+                    this.isRemoteCardMediaUrl((mediaItem as any).url)
+                ) {
+                    removed += 1
+                    return false
+                }
+                return true
+            })
+        }
+        const stripSummaryCardMeta = (value: unknown) => {
+            if (!value || typeof value !== 'object') {
+                return
+            }
+            if (Array.isArray(value)) {
+                value.forEach((item) => stripSummaryCardMeta(item))
+                return
+            }
+            const record = value as Record<string, unknown>
+            if (Array.isArray(record.media)) {
+                record.media = stripRemoteMediaList(record.media)
+                if ((record.media as unknown[]).length === 0 && 'mediaLabel' in record) {
+                    delete record.mediaLabel
+                }
+            }
+            if (Array.isArray(record.avatars)) {
+                record.avatars.forEach((avatar) => {
+                    if (avatar && typeof avatar === 'object' && this.isRemoteCardMediaUrl((avatar as any).url)) {
+                        delete (avatar as any).url
+                        removed += 1
+                    }
+                })
+            }
+            for (const [key, child] of Object.entries(record)) {
+                if (key === 'media' || key === 'avatars') {
+                    continue
+                }
+                stripSummaryCardMeta(child)
+            }
+        }
         const visit = (currentArticle: Article | null) => {
             if (!currentArticle) {
                 return
             }
+            if (this.isRemoteCardMediaUrl(currentArticle.u_avatar)) {
+                currentArticle.u_avatar = null
+                removed += 1
+            }
             if (Array.isArray(currentArticle.media)) {
-                const kept = currentArticle.media.filter((mediaItem) => {
-                    if (
-                        (mediaItem.type === 'photo' || mediaItem.type === 'video_thumbnail') &&
-                        this.isRemoteCardMediaUrl(mediaItem.url)
-                    ) {
-                        removed += 1
-                        return false
-                    }
-                    return true
-                })
+                const kept = stripRemoteMediaList(currentArticle.media) as Article['media']
                 currentArticle.media = kept as Article['media']
                 currentArticle.has_media = kept.length > 0
             }
@@ -433,6 +475,9 @@ export class RenderService {
             }
         }
         visit(cloned)
+        if ((cloned.extra as any)?.extra_type === 'message_pack_meta') {
+            stripSummaryCardMeta((cloned.extra as any).data)
+        }
         return { article: cloned, removed }
     }
 
