@@ -7,7 +7,7 @@ import YAML from 'yaml'
 import DB from '@/db'
 import EventEmitter from 'events'
 import type { ForwarderPools } from './forwarder-manager'
-import type { SpiderPools } from './spider-manager'
+import type { SpiderPools, SpiderTaskScheduler } from './spider-manager'
 import { Platform, type GenericMediaInfo } from '@idol-bbq-utils/spider/types'
 import { platformNameMap } from '@idol-bbq-utils/spider/const'
 import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
@@ -66,6 +66,7 @@ import {
     type CodexMcpReplyRequest,
     type CodexMcpRunRequest,
 } from '@/services/codex-mcp-client-service'
+import { buildCrawlerScheduleRecommendations, type CrawlerHotScheduleConfig } from '@/services/crawler-schedule-service'
 
 interface ApiConfig {
     port?: number
@@ -77,6 +78,7 @@ export interface ApiRuntimeDeps {
     emitter?: EventEmitter
     forwarderPools?: ForwarderPools
     spiderPools?: SpiderPools
+    spiderTaskScheduler?: SpiderTaskScheduler
 }
 
 export interface ApiRuntimeMeta {
@@ -540,6 +542,13 @@ export class APIManager extends BaseCompatibleModel {
         if (req.method === 'GET' && url.pathname === '/api/articles') return this.handleArticleList(url)
         if (req.method === 'GET' && url.pathname.startsWith('/api/articles/')) return this.handleArticleView(url)
         if (req.method === 'GET' && url.pathname === '/api/tasks') return this.handleTasks(url)
+        if (req.method === 'GET' && url.pathname === '/api/schedules/crawlers') return this.handleCrawlerScheduleList()
+        if (req.method === 'GET' && url.pathname === '/api/schedules/crawlers/recommendations')
+            return this.handleCrawlerScheduleRecommendations(url)
+        if (req.method === 'POST' && url.pathname === '/api/schedules/crawlers/upsert')
+            return this.handleCrawlerScheduleUpsert(req)
+        if (req.method === 'POST' && url.pathname === '/api/schedules/crawlers/insert')
+            return this.handleCrawlerScheduleInsert(req)
         if (req.method === 'GET' && url.pathname === '/api/notification-signals/summary')
             return this.handleNotificationSignalSummary(url)
         if (req.method === 'GET' && url.pathname === '/api/outbound-messages') return this.handleOutboundMessages(url)
@@ -1336,6 +1345,135 @@ export class APIManager extends BaseCompatibleModel {
             idempotency_key: url.searchParams.get('idempotency_key') || undefined,
         })
         return jsonResponse(redactTaskQueueEntriesForApi(tasks))
+    }
+
+    private async handleCrawlerScheduleList(): Promise<Response> {
+        const scheduler = this.deps.spiderTaskScheduler
+        if (!scheduler) {
+            return new Response('Spider scheduler unavailable', { status: 503 })
+        }
+        return jsonResponse({
+            success: true,
+            schedules: scheduler.getScheduleSnapshot(),
+        })
+    }
+
+    private async handleCrawlerScheduleRecommendations(url: URL): Promise<Response> {
+        const days = Number(url.searchParams.get('days') || '120')
+        return jsonResponse({
+            success: true,
+            recommendations: await buildCrawlerScheduleRecommendations(days),
+        })
+    }
+
+    private async handleCrawlerScheduleUpsert(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Crawler schedule update')
+        if (disabled) return disabled
+
+        const scheduler = this.deps.spiderTaskScheduler
+        if (!scheduler) {
+            return new Response('Spider scheduler unavailable', { status: 503 })
+        }
+        const body = (await req.json()) as {
+            crawler?: string
+            name?: string
+            schedule?: CrawlerHotScheduleConfig
+        }
+        const crawlerName = String(body.crawler || body.name || '').trim()
+        if (!crawlerName || !body.schedule || typeof body.schedule !== 'object') {
+            return new Response('Missing crawler/name or schedule', { status: 400 })
+        }
+        try {
+            const snapshot = scheduler.upsertHotSchedule(crawlerName, body.schedule)
+            await scheduler.pokeSchedules()
+            return jsonResponse({
+                success: true,
+                schedule: snapshot,
+            })
+        } catch (error) {
+            return new Response(error instanceof Error ? error.message : String(error), { status: 400 })
+        }
+    }
+
+    private resolveScheduleInsertExecuteAt(body: Record<string, unknown>) {
+        const now = Math.floor(Date.now() / 1000)
+        const delaySeconds = Number(body.delay_seconds ?? body.delaySeconds)
+        if (Number.isFinite(delaySeconds) && delaySeconds >= 0) {
+            return now + Math.floor(delaySeconds)
+        }
+        return Math.max(
+            now,
+            resolveUnixTimestamp(body.execute_at ?? body.executeAt ?? body.at ?? body.time ?? body.isoTime),
+        )
+    }
+
+    private async handleCrawlerScheduleInsert(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Crawler schedule insert')
+        if (disabled) return disabled
+
+        const scheduler = this.deps.spiderTaskScheduler
+        if (!scheduler) {
+            return new Response('Spider scheduler unavailable', { status: 503 })
+        }
+        const body = (await req.json()) as {
+            crawler?: string
+            name?: string
+            execute_at?: number | string
+            executeAt?: number | string
+            at?: number | string
+            time?: number | string
+            isoTime?: string
+            delay_seconds?: number
+            delaySeconds?: number
+            reason?: string
+            idempotency_key?: string
+            idempotencyKey?: string
+            website?: unknown
+            websites?: unknown
+        }
+        const crawlerName = String(body.crawler || body.name || '').trim()
+        const crawler = this.config.crawlers?.find((item) => item.name === crawlerName)
+        if (!crawler || !crawler.name) {
+            return new Response('Crawler not found', { status: 404 })
+        }
+        const websiteOverride = normalizeManualCrawlerWebsites(body)
+        if (websiteOverride.error) {
+            return new Response(websiteOverride.error, { status: 400 })
+        }
+        if (websiteOverride.websites && resolveCrawlerPlatform(crawler) !== Platform.Website) {
+            return new Response('website override is only supported for website crawlers', { status: 400 })
+        }
+
+        const executeAt = this.resolveScheduleInsertExecuteAt(body as Record<string, unknown>)
+        const payload = {
+            crawler: crawler.name,
+            reason: String(body.reason || 'operator schedule insert').slice(0, 200),
+            ...(websiteOverride.websites ? { websites: websiteOverride.websites } : {}),
+        }
+        const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
+        const idempotencyKey =
+            String(body.idempotency_key || body.idempotencyKey || '').trim() ||
+            DB.TaskQueue.buildIdempotencyKey(taskType, {
+                crawler: crawler.name,
+                execute_at: executeAt,
+                websites: websiteOverride.websites || [],
+            })
+        const task = await DB.TaskQueue.add(taskType, payload, executeAt, {
+            source_ref: crawler.name,
+            action_type: 'crawl',
+            idempotency_key: idempotencyKey,
+        })
+        await scheduler.pokeSchedules()
+        return jsonResponse({
+            success: true,
+            status: task.status,
+            taskQueueId: task.id,
+            crawler: crawler.name,
+            executeAt,
+            executeAtIso: new Date(executeAt * 1000).toISOString(),
+            idempotencyKey,
+            ...(websiteOverride.websites ? { websites: websiteOverride.websites } : {}),
+        })
     }
 
     private async handleNotificationSignalSummary(url: URL): Promise<Response> {

@@ -55,6 +55,15 @@ interface WebsiteBuildOptions {
     detailUrl?: string
 }
 
+type WebsiteTimeSource = 'explicit' | 'estimated_publish' | 'crawl_observed'
+
+type WebsiteArticleTime = {
+    createdAt: number
+    source: WebsiteTimeSource
+    dateText: string | null
+    crawledAt: number
+}
+
 interface WebsiteCrawlOptions {
     max_list_pages?: number
     max_detail_count?: number
@@ -327,22 +336,62 @@ function resolveAbsoluteUrl(url: string, value?: string | null): string | null {
 }
 
 function parseDateToUnix(dateText?: string | null): number {
+    return resolveWebsiteArticleTime(dateText, 'crawl_observed').createdAt
+}
+
+function isOperatorAuthoredFeed(feed: FeedKind) {
+    return !['official-blog', 'photo'].includes(feed)
+}
+
+function roundToNearbyHour(now: dayjs.Dayjs, windowMinutes = 15) {
+    const minute = now.minute()
+    if (minute <= windowMinutes) {
+        return now.startOf('hour')
+    }
+    if (60 - minute <= windowMinutes) {
+        return now.add(1, 'hour').startOf('hour')
+    }
+    return now
+}
+
+function resolveWebsiteArticleTime(dateText?: string | null, fallbackSource: WebsiteTimeSource = 'crawl_observed'): WebsiteArticleTime {
     const raw = cleanText(dateText)
     const normalized = raw.replace(/[./]/g, '-')
     const parsed = dayjs(normalized)
+    const crawledAt = dayjs()
     if (parsed.isValid()) {
         if (hasExplicitTime(raw)) {
-            return parsed.unix()
+            return {
+                createdAt: parsed.unix(),
+                source: 'explicit',
+                dateText: raw || null,
+                crawledAt: crawledAt.unix(),
+            }
         }
 
-        const now = dayjs()
-        if (parsed.isSame(now, 'day')) {
-            return now.unix()
+        if (parsed.isSame(crawledAt, 'day')) {
+            const effective = fallbackSource === 'estimated_publish' ? roundToNearbyHour(crawledAt) : crawledAt
+            return {
+                createdAt: effective.unix(),
+                source: fallbackSource,
+                dateText: raw || null,
+                crawledAt: crawledAt.unix(),
+            }
         }
 
-        return parsed.startOf('day').unix()
+        return {
+            createdAt: parsed.startOf('day').unix(),
+            source: 'explicit',
+            dateText: raw || null,
+            crawledAt: crawledAt.unix(),
+        }
     }
-    return Math.floor(Date.now() / 1000)
+    return {
+        createdAt: crawledAt.unix(),
+        source: 'crawl_observed',
+        dateText: raw || null,
+        crawledAt: crawledAt.unix(),
+    }
 }
 
 function tryParseWebsiteUrl(url: string): URL | null {
@@ -484,13 +533,17 @@ export function buildWebsiteArticle(
     const content = [title ? `【${title}】` : '', bodyText].filter(Boolean).join('\n\n') || title || summary || null
     const media = buildMedia(detail.media, listItem.thumbnail)
     const member = cleanText(detail.member || listItem.member) || null
+    const time = resolveWebsiteArticleTime(
+        detail.dateText || listItem.dateText,
+        isOperatorAuthoredFeed(config.feed) ? 'estimated_publish' : 'crawl_observed',
+    )
 
     return {
         platform: Platform.Website,
         a_id: articleId,
         u_id: config.u_id,
         username: member || config.label,
-        created_at: parseDateToUnix(detail.dateText || listItem.dateText),
+        created_at: time.createdAt,
         content,
         url: finalUrl,
         type: ArticleTypeEnum.ARTICLE,
@@ -506,6 +559,9 @@ export function buildWebsiteArticle(
                 member,
                 summary: summary || null,
                 raw_html: detail.bodyHtml,
+                time_source: time.source,
+                date_text: time.dateText,
+                crawled_at: time.crawledAt,
                 ...(detail.extraData || {}),
             },
             content: summary || title || undefined,

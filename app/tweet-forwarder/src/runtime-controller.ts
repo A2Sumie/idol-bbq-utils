@@ -26,6 +26,7 @@ interface RuntimeSnapshot {
     taskSchedulers: Array<TaskScheduler.TaskScheduler>
     compatibleModels: Array<BaseCompatibleModel>
     spiderPools?: SpiderPools
+    spiderTaskScheduler?: SpiderTaskScheduler
     forwarderPools?: ForwarderPools
     createdAt: number
     manifest: ReturnType<typeof buildRuntimeManifest>
@@ -167,6 +168,7 @@ export class RuntimeController {
             emitter: this.runtime?.emitter,
             forwarderPools: this.runtime?.forwarderPools,
             spiderPools: this.runtime?.spiderPools,
+            spiderTaskScheduler: this.runtime?.spiderTaskScheduler,
         }
     }
 
@@ -266,23 +268,23 @@ export class RuntimeController {
         }
 
         let spiderPools: SpiderPools | undefined
+        let spiderTaskScheduler: SpiderTaskScheduler | undefined
         if (crawlers && crawlers.length > 0) {
             spiderPools = new SpiderPools(this.cacheRoot, emitter, log)
             compatibleModels.push(spiderPools)
-            taskSchedulers.push(
-                new SpiderTaskScheduler(
-                    {
-                        crawlers,
-                        cfg_crawler,
-                        connections: config.connections,
-                        formatters,
-                        forward_targets,
-                        processors: config.processors,
-                    },
-                    emitter,
-                    log,
-                ),
+            spiderTaskScheduler = new SpiderTaskScheduler(
+                {
+                    crawlers,
+                    cfg_crawler,
+                    connections: config.connections,
+                    formatters,
+                    forward_targets,
+                    processors: config.processors,
+                },
+                emitter,
+                log,
             )
+            taskSchedulers.push(spiderTaskScheduler)
         }
 
         let forwarderPools: ForwarderPools | undefined
@@ -342,6 +344,7 @@ export class RuntimeController {
             taskSchedulers,
             compatibleModels,
             spiderPools,
+            spiderTaskScheduler,
             forwarderPools,
             createdAt: Date.now(),
             manifest: buildRuntimeManifest(this.configPath, config),

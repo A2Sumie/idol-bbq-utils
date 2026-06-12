@@ -166,6 +166,65 @@ const TOOLS = [
             additionalProperties: false,
         },
     },
+    {
+        name: 'idol_bbq_crawler_schedule_status',
+        description: 'Return the hot non-Cron crawler schedule snapshot.',
+        inputSchema: {
+            type: 'object',
+            properties: {},
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'idol_bbq_crawler_schedule_recommendations',
+        description: 'Return DB-derived dense stable crawler schedule recommendations.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                days: {
+                    type: 'number',
+                    description: 'History window in days. Defaults to 120.',
+                },
+            },
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'idol_bbq_crawler_schedule_insert',
+        description: 'Temporarily insert a crawler run time into the hot schedule.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                crawler: { type: 'string' },
+                execute_at: { type: ['number', 'string'] },
+                delay_seconds: { type: 'number' },
+                reason: { type: 'string' },
+                websites: {
+                    type: 'array',
+                    items: { type: 'string' },
+                },
+                idempotency_key: { type: 'string' },
+            },
+            required: ['crawler'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'idol_bbq_crawler_schedule_upsert',
+        description: 'Hot-update one crawler schedule without runtime reload.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                crawler: { type: 'string' },
+                schedule: {
+                    type: 'object',
+                    additionalProperties: true,
+                },
+            },
+            required: ['crawler', 'schedule'],
+            additionalProperties: false,
+        },
+    },
 ]
 
 function parseArgs(argv: Array<string>) {
@@ -300,6 +359,17 @@ async function callTool(name: string, args: Record<string, unknown>) {
                 return textToolResult({ success: false, error: 'confirm must be exactly "reload"' }, true)
             }
             return textToolResult(await runtimeApiRequest('POST', '/api/runtime/reload'))
+        case 'idol_bbq_crawler_schedule_status':
+            return textToolResult(await runtimeApiRequest('GET', '/api/schedules/crawlers'))
+        case 'idol_bbq_crawler_schedule_recommendations': {
+            const days = Number(args?.days || 120)
+            const suffix = Number.isFinite(days) ? `?days=${encodeURIComponent(String(Math.trunc(days)))}` : ''
+            return textToolResult(await runtimeApiRequest('GET', `/api/schedules/crawlers/recommendations${suffix}`))
+        }
+        case 'idol_bbq_crawler_schedule_insert':
+            return textToolResult(await runtimeApiRequest('POST', '/api/schedules/crawlers/insert', args || {}))
+        case 'idol_bbq_crawler_schedule_upsert':
+            return textToolResult(await runtimeApiRequest('POST', '/api/schedules/crawlers/upsert', args || {}))
         default:
             return textToolResult({ success: false, error: `unknown tool: ${name}` }, true)
     }

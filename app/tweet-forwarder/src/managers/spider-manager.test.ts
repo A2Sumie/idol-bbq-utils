@@ -69,6 +69,113 @@ test('SpiderTaskScheduler injects connected processor definitions into crawler t
     expect((scheduler as any).resolveCrawlerProcessorId(taskData)).toBe('processor-v4-flash')
 })
 
+test('SpiderTaskScheduler dispatches due non-Cron crawler slots', async () => {
+    const originalRecover = DB.TaskQueue.recoverStaleProcessing
+    const originalGetPending = DB.TaskQueue.getPending
+    ;(DB.TaskQueue as any).recoverStaleProcessing = async () => ({ count: 0 })
+    ;(DB.TaskQueue as any).getPending = async () => []
+
+    try {
+        const emitter = new EventEmitter()
+        const dispatched: any[] = []
+        emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => {
+            dispatched.push(payload)
+            emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
+                taskId: payload.taskId,
+                status: TaskScheduler.TaskStatus.COMPLETED,
+            })
+        })
+        const scheduler = new SpiderTaskScheduler(
+            {
+                crawlers: [
+                    {
+                        name: 'Hot Slot Crawler',
+                        websites: ['https://example.com/feed'],
+                        cfg_crawler: {
+                            schedule: {
+                                slots: ['18:20'],
+                                timezone: 'Asia/Tokyo',
+                                min_gap_seconds: 0,
+                            },
+                        },
+                    },
+                ],
+            },
+            emitter,
+        )
+
+        await scheduler.init()
+        const now = Date.UTC(2026, 5, 12, 9, 20, 0) / 1000
+        const runtimeSchedule = (scheduler as any).runtimeSchedules.get('Hot Slot Crawler')
+        runtimeSchedule.nextRunAt = now
+        await (scheduler as any).runScheduleTick(now)
+
+        expect(dispatched).toHaveLength(1)
+        expect(dispatched[0]?.task.data.name).toBe('Hot Slot Crawler')
+        expect(dispatched[0]?.task.meta.schedule_source).toBe('hot_schedule')
+    } finally {
+        ;(DB.TaskQueue as any).recoverStaleProcessing = originalRecover
+        ;(DB.TaskQueue as any).getPending = originalGetPending
+    }
+})
+
+test('SpiderTaskScheduler claims due scheduled crawler queue tasks', async () => {
+    const originalRecover = DB.TaskQueue.recoverStaleProcessing
+    const originalGetPending = DB.TaskQueue.getPending
+    const originalClaim = DB.TaskQueue.claimPending
+    const originalUpdate = DB.TaskQueue.updateStatus
+    const task = {
+        id: 401,
+        type: DB.TaskQueue.TYPE.ScheduledCrawlerRun,
+        payload: {
+            crawler: 'Queued Crawler',
+            reason: 'operator insert',
+        },
+        status: DB.TaskQueue.STATUS.Pending,
+        execute_at: 1777047600,
+    }
+    ;(DB.TaskQueue as any).recoverStaleProcessing = async () => ({ count: 0 })
+    ;(DB.TaskQueue as any).getPending = async () => [task]
+    ;(DB.TaskQueue as any).claimPending = async () => ({ ...task, status: DB.TaskQueue.STATUS.Processing })
+    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+
+    try {
+        const emitter = new EventEmitter()
+        const dispatched: any[] = []
+        emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => dispatched.push(payload))
+        const scheduler = new SpiderTaskScheduler(
+            {
+                crawlers: [
+                    {
+                        name: 'Queued Crawler',
+                        websites: ['https://example.com/feed'],
+                        cfg_crawler: {
+                            schedule: {
+                                enabled: false,
+                            },
+                        },
+                    },
+                ],
+            },
+            emitter,
+        )
+
+        await scheduler.init()
+        ;(scheduler as any).runtimeSchedules.clear()
+        await (scheduler as any).runScheduleTick(task.execute_at)
+
+        expect(dispatched).toHaveLength(1)
+        expect(dispatched[0]?.task.data.name).toBe('Queued Crawler')
+        expect(dispatched[0]?.task.meta.task_queue_id).toBe(401)
+        expect(dispatched[0]?.task.meta.schedule_source).toBe('task_queue')
+    } finally {
+        ;(DB.TaskQueue as any).recoverStaleProcessing = originalRecover
+        ;(DB.TaskQueue as any).getPending = originalGetPending
+        ;(DB.TaskQueue as any).claimPending = originalClaim
+        ;(DB.TaskQueue as any).updateStatus = originalUpdate
+    }
+})
+
 test('SpiderPools ignores malformed dispatch payloads without status side effects', async () => {
     const emitter = new EventEmitter()
     const statusEvents: any[] = []

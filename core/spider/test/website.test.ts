@@ -351,6 +351,43 @@ describe('buildWebsiteArticle', () => {
         )
         const after = dayjs().unix()
 
+        expect(article.created_at).toBeGreaterThanOrEqual(before - 15 * 60)
+        expect(article.created_at).toBeLessThanOrEqual(after + 15 * 60)
+        expect(article.extra?.data?.time_source).toBe('estimated_publish')
+        expect(article.extra?.data?.crawled_at).toBeGreaterThanOrEqual(before)
+        expect(article.extra?.data?.crawled_at).toBeLessThanOrEqual(after)
+    })
+
+    test('marks personal website date-only entries as crawl-observed time', () => {
+        const before = dayjs().unix()
+        const today = dayjs().format('YYYY.MM.DD')
+        const article = buildWebsiteArticle(
+            {
+                feed: 'official-blog',
+                u_id: '22/7:official-blog',
+                label: '22/7 Official Blog',
+            },
+            'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855',
+            {
+                detailUrl: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447855',
+                title: 'Blog Title',
+                dateText: today,
+                summary: null,
+                member: 'Member Name',
+                thumbnail: null,
+            },
+            {
+                title: 'Blog Title',
+                dateText: today,
+                bodyText: 'Blog Body',
+                bodyHtml: '<p>Blog Body</p>',
+                member: 'Member Name',
+                media: [],
+            },
+        )
+        const after = dayjs().unix()
+
+        expect(article.extra?.data?.time_source).toBe('crawl_observed')
         expect(article.created_at).toBeGreaterThanOrEqual(before)
         expect(article.created_at).toBeLessThanOrEqual(after)
     })

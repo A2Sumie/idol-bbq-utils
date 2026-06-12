@@ -445,6 +445,7 @@ namespace DB {
             AggregateDaily: 'aggregate_daily',
             AggregateHourly: 'aggregate_hourly',
             ManualCrawlerRun: 'manual_crawler_run',
+            ScheduledCrawlerRun: 'scheduled_crawler_run',
             NotificationSignal: 'notification_signal',
             ArticleSimulate: 'article_simulate',
             ArticleReprocess: 'article_reprocess',

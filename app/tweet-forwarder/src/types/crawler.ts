@@ -40,6 +40,31 @@ interface LiveRelayConfig extends LiveRelayTargetConfig {
     targets?: Record<string, LiveRelayTargetConfig>
 }
 
+type CrawlerScheduleSlot =
+    | string
+    | {
+          time: string
+          days?: Array<number | string>
+      }
+
+interface CrawlerScheduleWindow {
+    start: string
+    end: string
+    every_minutes: number
+    offset_minutes?: number
+    days?: Array<number | string>
+}
+
+interface CrawlerHotScheduleConfig {
+    enabled?: boolean
+    timezone?: string
+    slots?: Array<CrawlerScheduleSlot>
+    windows?: Array<CrawlerScheduleWindow>
+    min_gap_seconds?: number
+    jitter_seconds?: number
+    tick_seconds?: number
+}
+
 interface CrawlerConfig extends CommonCfgConfig {
     /**
      * crontab format, reference: https://crontab.guru/
@@ -50,6 +75,12 @@ interface CrawlerConfig extends CommonCfgConfig {
      *          m h d M w
      */
     cron?: string
+    /**
+     * Non-Cron hot-write crawler schedule. Supports daily slots and repeated
+     * windows, and can be updated at runtime through API/MCP without reload.
+     */
+    schedule?: CrawlerHotScheduleConfig
+    hot_schedule?: CrawlerHotScheduleConfig
     /**
      * Path to the cookie file
      */

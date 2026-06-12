@@ -42,6 +42,14 @@ import {
     toSpiderPlatformFromCookieHealthPlatform,
     type CookieHealthPlatform,
 } from '@/services/crawler-cookie-policy'
+import {
+    DEFAULT_TICK_SECONDS,
+    buildScheduleSnapshot,
+    nextCrawlerRunAt,
+    resolveCrawlerSchedule,
+    type CrawlerHotScheduleConfig,
+    type ResolvedCrawlerSchedule,
+} from '@/services/crawler-schedule-service'
 
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
@@ -105,6 +113,20 @@ interface CrawlerCookieExportOptions {
     timeoutMs?: number
 }
 
+type CrawlerRuntimeSchedule = {
+    crawlerName: string
+    schedule: ResolvedCrawlerSchedule
+    nextRunAt: number | null
+    lastRunAt: number | null
+}
+
+type ScheduledCrawlerRunPayload = {
+    crawler?: string
+    name?: string
+    websites?: Array<string>
+    reason?: string
+}
+
 class CrawlerCookieExportError extends Error {
     readonly statusCode = 409
     readonly publicMessage: string
@@ -153,6 +175,11 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         'crawlers' | 'cfg_crawler' | 'connections' | 'formatters' | 'forward_targets' | 'processors'
     >
     private taskEventBindings: Array<{ eventName: string; listener: (...args: any[]) => void }> = []
+    private crawlersByName = new Map<string, Crawler>()
+    private runtimeSchedules = new Map<string, CrawlerRuntimeSchedule>()
+    private scheduleTimer?: ReturnType<typeof setInterval>
+    private scheduleTickSeconds = DEFAULT_TICK_SECONDS
+    private runningScheduleTick = false
 
     constructor(
         props: Pick<
@@ -184,37 +211,31 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             this.emitter.on(binding.eventName, binding.listener)
         }
 
-        // 遍历爬虫配置，为每个爬虫创建定时任务
+        // Build non-Cron hot schedules for crawler dispatch. Legacy cron strings
+        // are expanded into daily slots only as a compatibility source.
         for (const crawler of this.props.crawlers) {
             crawler.cfg_crawler = {
                 cron: '*/30 * * * *',
                 ...this.props.cfg_crawler,
                 ...crawler.cfg_crawler,
             }
-            let { interval_time, cron } = crawler.cfg_crawler
-            cron = normalizeCronSecond(cron)
-            // 定时dispatch任务
-            const job = new CronJob(cron, async () => {
-                if (this.hasActiveCrawlerTask(crawler.name)) {
-                    this.log?.warn(`Skipping crawler ${crawler.name}: previous task is still active.`)
-                    return
-                }
-
-                const taskId = `${Math.random().toString(36).substring(2, 9)}`
-                this.log?.info(`[${taskId}] Starting to dispatch task: ${crawler.name}`)
-                const task: TaskScheduler.Task = {
-                    id: taskId,
-                    status: TaskScheduler.TaskStatus.PENDING,
-                    data: this.buildCrawlerTaskData(crawler),
-                }
-                this.tasks.set(taskId, task)
-                this.emitter.emit(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, {
-                    taskId,
-                    task: task,
+            this.crawlersByName.set(crawler.name, crawler)
+            const schedule = resolveCrawlerSchedule(crawler)
+            if (schedule) {
+                const nextRunAt = nextCrawlerRunAt(schedule, Math.floor(Date.now() / 1000), crawler.name)
+                this.runtimeSchedules.set(crawler.name, {
+                    crawlerName: crawler.name,
+                    schedule,
+                    nextRunAt,
+                    lastRunAt: null,
                 })
-            })
-            this.log?.debug(`Task dispatcher created with detail: ${JSON.stringify(crawler)}`)
-            this.cronJobs.push(job)
+                this.scheduleTickSeconds = Math.min(this.scheduleTickSeconds, schedule.tickSeconds)
+                this.log?.info(
+                    `Crawler schedule created for ${crawler.name}: source=${schedule.source} slots=${schedule.slots.length} next=${nextRunAt ? dayjs.unix(nextRunAt).format() : 'none'}`,
+                )
+            } else {
+                this.log?.warn(`Crawler ${crawler.name} has no runnable schedule.`)
+            }
 
             // Aggregation Task Scheduling
             if (crawler.cfg_crawler.aggregation && crawler.cfg_crawler.aggregation.cron) {
@@ -378,6 +399,8 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         this.cronJobs.forEach((job) => {
             job.start()
         })
+        this.restartScheduleTimer()
+        await this.runScheduleTick()
     }
 
     /**
@@ -391,6 +414,10 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             job.stop()
             this.log?.info(`Task dispatcher stopped with cron: ${job.cronTime.source}`)
         })
+        if (this.scheduleTimer) {
+            clearInterval(this.scheduleTimer)
+            this.scheduleTimer = undefined
+        }
         this.log?.info('Manager stopped')
     }
 
@@ -402,7 +429,215 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
         this.taskEventBindings = []
         this.cronJobs = []
+        this.crawlersByName.clear()
+        this.runtimeSchedules.clear()
         this.log?.info('Spider Manager dropped')
+    }
+
+    private createCrawlerTaskId(prefix: string) {
+        return `${prefix}-${Math.random().toString(36).substring(2, 9)}`
+    }
+
+    private async dispatchCrawlerTask(
+        crawler: Crawler,
+        options: {
+            source: string
+            taskIdPrefix?: string
+            scheduledAt?: number | null
+            taskQueueId?: number
+            taskQueueType?: string
+            reason?: string
+        },
+    ) {
+        if (this.hasActiveCrawlerTask(crawler.name)) {
+            this.log?.warn(`Skipping crawler ${crawler.name}: previous task is still active.`)
+            return false
+        }
+
+        const taskId = this.createCrawlerTaskId(options.taskIdPrefix || 'schedule')
+        this.log?.info(`[${taskId}] Starting to dispatch task: ${crawler.name} source=${options.source}`)
+        const task: TaskScheduler.Task = {
+            id: taskId,
+            status: TaskScheduler.TaskStatus.PENDING,
+            data: this.buildCrawlerTaskData(crawler),
+            meta: {
+                schedule_source: options.source,
+                scheduled_at: options.scheduledAt || undefined,
+                reason: options.reason || undefined,
+                ...(options.taskQueueId
+                    ? {
+                          task_queue_id: options.taskQueueId,
+                          task_queue_type: options.taskQueueType || DB.TaskQueue.TYPE.ScheduledCrawlerRun,
+                      }
+                    : {}),
+            },
+        }
+        this.tasks.set(taskId, task)
+        const dispatched = this.emitter.emit(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, {
+            taskId,
+            task,
+        })
+        if (!dispatched) {
+            this.tasks.delete(taskId)
+            this.log?.error(`No spider dispatcher registered for crawler ${crawler.name}`)
+            return false
+        }
+        return true
+    }
+
+    private async runConfiguredSchedules(now = Math.floor(Date.now() / 1000)) {
+        for (const runtimeSchedule of this.runtimeSchedules.values()) {
+            if (!runtimeSchedule.nextRunAt || runtimeSchedule.nextRunAt > now) {
+                continue
+            }
+            const crawler = this.crawlersByName.get(runtimeSchedule.crawlerName)
+            if (!crawler) {
+                this.log?.warn(`Skipping missing scheduled crawler ${runtimeSchedule.crawlerName}`)
+                runtimeSchedule.nextRunAt = nextCrawlerRunAt(
+                    runtimeSchedule.schedule,
+                    now + runtimeSchedule.schedule.minGapSeconds,
+                    runtimeSchedule.crawlerName,
+                )
+                continue
+            }
+            await this.dispatchCrawlerTask(crawler, {
+                source: runtimeSchedule.schedule.source,
+                taskIdPrefix: 'schedule',
+                scheduledAt: runtimeSchedule.nextRunAt,
+            })
+            runtimeSchedule.lastRunAt = now
+            runtimeSchedule.nextRunAt = nextCrawlerRunAt(
+                runtimeSchedule.schedule,
+                Math.max(now, runtimeSchedule.nextRunAt) + runtimeSchedule.schedule.minGapSeconds,
+                runtimeSchedule.crawlerName,
+            )
+        }
+    }
+
+    private normalizeScheduledCrawlerPayload(payload: unknown): ScheduledCrawlerRunPayload {
+        return payload && typeof payload === 'object' ? (payload as ScheduledCrawlerRunPayload) : {}
+    }
+
+    private async runQueuedScheduledCrawlerRuns(now = Math.floor(Date.now() / 1000)) {
+        await DB.TaskQueue.recoverStaleProcessing(now, 5 * 60, { types: [DB.TaskQueue.TYPE.ScheduledCrawlerRun] })
+        const dueTasks = await DB.TaskQueue.getPending(now, { types: [DB.TaskQueue.TYPE.ScheduledCrawlerRun] })
+        for (const dueTask of dueTasks) {
+            const claimedTask = await DB.TaskQueue.claimPending(dueTask.id)
+            if (!claimedTask) {
+                continue
+            }
+            const payload = this.normalizeScheduledCrawlerPayload(claimedTask.payload)
+            const crawlerName = String(payload.crawler || payload.name || '').trim()
+            const crawler = crawlerName ? this.crawlersByName.get(crawlerName) : undefined
+            if (!crawler) {
+                await DB.TaskQueue.updateStatus(claimedTask.id, DB.TaskQueue.STATUS.Failed, {
+                    last_error: `Crawler not found: ${crawlerName || '(missing)'}`,
+                    result_summary: 'scheduled crawler run failed: crawler not found',
+                })
+                continue
+            }
+            if (this.hasActiveCrawlerTask(crawler.name)) {
+                const retryAt = now + 60
+                await DB.TaskQueue.retryLater(claimedTask.id, retryAt, {
+                    last_error: 'Crawler already active; delayed scheduled run',
+                    result_summary: `scheduled crawler run delayed until ${dayjs.unix(retryAt).format()}`,
+                })
+                continue
+            }
+            const dispatchCrawler =
+                payload.websites && payload.websites.length > 0
+                    ? {
+                          ...crawler,
+                          websites: payload.websites,
+                      }
+                    : crawler
+            const dispatched = await this.dispatchCrawlerTask(dispatchCrawler, {
+                source: 'task_queue',
+                taskIdPrefix: 'scheduled',
+                scheduledAt: claimedTask.execute_at,
+                taskQueueId: claimedTask.id,
+                taskQueueType: claimedTask.type,
+                reason: payload.reason,
+            })
+            if (!dispatched) {
+                await DB.TaskQueue.updateStatus(claimedTask.id, DB.TaskQueue.STATUS.Failed, {
+                    last_error: 'No spider dispatcher registered',
+                    result_summary: 'scheduled crawler run failed: dispatcher unavailable',
+                })
+            }
+        }
+    }
+
+    private async runScheduleTick(now = Math.floor(Date.now() / 1000)) {
+        if (this.runningScheduleTick) {
+            return
+        }
+        this.runningScheduleTick = true
+        try {
+            await this.runQueuedScheduledCrawlerRuns(now)
+            await this.runConfiguredSchedules(now)
+        } catch (error) {
+            this.log?.error(`Crawler schedule tick failed: ${toErrorMessage(error)}`)
+        } finally {
+            this.runningScheduleTick = false
+        }
+    }
+
+    private restartScheduleTimer() {
+        if (this.scheduleTimer) {
+            clearInterval(this.scheduleTimer)
+        }
+        this.scheduleTimer = setInterval(() => {
+            void this.runScheduleTick()
+        }, this.scheduleTickSeconds * 1000)
+        this.scheduleTimer.unref?.()
+    }
+
+    getScheduleSnapshot() {
+        return Array.from(this.runtimeSchedules.values()).map((runtimeSchedule) =>
+            buildScheduleSnapshot(
+                runtimeSchedule.crawlerName,
+                runtimeSchedule.schedule,
+                runtimeSchedule.nextRunAt,
+                runtimeSchedule.lastRunAt,
+            ),
+        )
+    }
+
+    async pokeSchedules() {
+        await this.runScheduleTick()
+    }
+
+    upsertHotSchedule(crawlerName: string, scheduleConfig: CrawlerHotScheduleConfig) {
+        const crawler = this.crawlersByName.get(crawlerName)
+        if (!crawler) {
+            throw new Error(`Crawler not found: ${crawlerName}`)
+        }
+        crawler.cfg_crawler = {
+            ...crawler.cfg_crawler,
+            schedule: scheduleConfig,
+        }
+        const schedule = resolveCrawlerSchedule(crawler)
+        if (!schedule) {
+            this.runtimeSchedules.delete(crawlerName)
+            return buildScheduleSnapshot(crawlerName, null, null, null)
+        }
+        const nextRunAt = nextCrawlerRunAt(schedule, Math.floor(Date.now() / 1000), crawler.name)
+        const previous = this.runtimeSchedules.get(crawlerName)
+        this.runtimeSchedules.set(crawlerName, {
+            crawlerName,
+            schedule,
+            nextRunAt,
+            lastRunAt: previous?.lastRunAt || null,
+        })
+        const nextTickSeconds = Math.min(this.scheduleTickSeconds, schedule.tickSeconds)
+        if (nextTickSeconds !== this.scheduleTickSeconds) {
+            this.scheduleTickSeconds = nextTickSeconds
+            if (this.scheduleTimer) {
+                this.restartScheduleTimer()
+            }
+        }
+        return buildScheduleSnapshot(crawlerName, schedule, nextRunAt, previous?.lastRunAt || null)
     }
 
     private hasActiveCrawlerTask(crawlerName: string) {

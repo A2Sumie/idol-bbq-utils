@@ -1608,6 +1608,141 @@ test('APIManager queues manual website crawler run with one-shot website overrid
     }
 })
 
+test('APIManager hot-upserts crawler schedules without runtime reload', async () => {
+    const calls: any[] = []
+    const scheduler = {
+        upsertHotSchedule: (crawlerName: string, schedule: unknown) => {
+            calls.push({ crawlerName, schedule })
+            return {
+                crawler: crawlerName,
+                nextRunAt: 1777047600,
+                nextRunAtIso: '2026-04-24T09:00:00.000Z',
+            }
+        },
+        pokeSchedules: async () => {
+            calls.push({ poke: true })
+        },
+    }
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+            }) as any,
+        getDeps: () =>
+            ({
+                spiderTaskScheduler: scheduler,
+            }) as any,
+    })
+
+    const response = await (manager as any).handleCrawlerScheduleUpsert(
+        new Request('http://localhost/api/schedules/crawlers/upsert', {
+            method: 'POST',
+            body: JSON.stringify({
+                crawler: 'crawler-a',
+                schedule: {
+                    windows: [{ start: '18:05', end: '18:35', every_minutes: 15 }],
+                },
+            }),
+        }),
+    )
+    const payload = await response.json()
+
+    expect(payload).toMatchObject({
+        success: true,
+        schedule: {
+            crawler: 'crawler-a',
+            nextRunAt: 1777047600,
+        },
+    })
+    expect(calls).toEqual([
+        {
+            crawlerName: 'crawler-a',
+            schedule: {
+                windows: [{ start: '18:05', end: '18:35', every_minutes: 15 }],
+            },
+        },
+        { poke: true },
+    ])
+})
+
+test('APIManager inserts temporary crawler schedule points into task_queue', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+    const scheduler = {
+        pokeSchedules: async () => {
+            adds.push({ poke: true })
+        },
+    }
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 402, status: 'pending' }
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            name: 'website-crawler',
+                            websites: ['https://example.com/list'],
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    spiderTaskScheduler: scheduler,
+                }) as any,
+        })
+
+        const response = await (manager as any).handleCrawlerScheduleInsert(
+            new Request('http://localhost/api/schedules/crawlers/insert', {
+                method: 'POST',
+                body: JSON.stringify({
+                    crawler: 'website-crawler',
+                    execute_at: 1893456000,
+                    reason: 'operator spot check',
+                    websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/1'],
+                    idempotency_key: 'operator-once',
+                }),
+            }),
+        )
+        const payload = await response.json()
+
+        expect(payload).toMatchObject({
+            success: true,
+            status: 'pending',
+            taskQueueId: 402,
+            crawler: 'website-crawler',
+            executeAt: 1893456000,
+            websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/1'],
+            idempotencyKey: 'operator-once',
+        })
+        expect(adds[0]).toMatchObject({
+            type: DB.TaskQueue.TYPE.ScheduledCrawlerRun,
+            payload: {
+                crawler: 'website-crawler',
+                reason: 'operator spot check',
+                websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/news/detail/1'],
+            },
+            executeAt: 1893456000,
+            meta: {
+                source_ref: 'website-crawler',
+                action_type: 'crawl',
+                idempotency_key: 'operator-once',
+            },
+        })
+        expect(adds[1]).toEqual({ poke: true })
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
 test('APIManager rejects website override for non-website crawlers', async () => {
     const manager = new APIManager({
         getConfig: () =>

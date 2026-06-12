@@ -98,6 +98,11 @@ function formatClock(unix_timestamp: number) {
     return `${pad2(time.getUTCHours())}${pad2(time.getUTCMinutes())}${formatTimezoneSuffix()}`
 }
 
+function formatBareClock(unix_timestamp: number) {
+    const time = getRenderDate(unix_timestamp)
+    return `${pad2(time.getUTCHours())}${pad2(time.getUTCMinutes())}`
+}
+
 function formatDateKey(unixTimestamp: number) {
     const time = getRenderDate(unixTimestamp)
     return `${time.getUTCFullYear()}-${pad2(time.getUTCMonth() + 1)}-${pad2(time.getUTCDate())}`
@@ -114,6 +119,35 @@ function formatArticleTimeToken(unix_timestamp: number) {
 
 function formatArticleAttributionTimeToken(unix_timestamp: number) {
     return `${formatClock(unix_timestamp)}（${formatDisplayDate(unix_timestamp)}）`
+}
+
+function getWebsiteTimeSource(article: Article) {
+    if (article.platform !== Platform.Website || article.extra?.extra_type !== 'website_meta') {
+        return null
+    }
+    return String((article.extra.data as any)?.time_source || '').trim()
+}
+
+function formatArticleDisplayClock(article: Article) {
+    const timeSource = getWebsiteTimeSource(article)
+    if (timeSource === 'estimated_publish') {
+        return `${formatBareClock(article.created_at)} EST.`
+    }
+    if (timeSource === 'crawl_observed') {
+        return `抓取于 ${formatClock(article.created_at)}`
+    }
+    return formatClock(article.created_at)
+}
+
+function formatArticleDisplayAttributionTime(article: Article) {
+    const timeSource = getWebsiteTimeSource(article)
+    if (timeSource === 'estimated_publish') {
+        return `${formatBareClock(article.created_at)} EST.`
+    }
+    if (timeSource === 'crawl_observed') {
+        return `抓取于 ${formatArticleAttributionTimeToken(article.created_at)}`
+    }
+    return formatArticleAttributionTimeToken(article.created_at)
 }
 
 function formatArticleUserId(article: Pick<Article, 'u_id' | 'username' | 'a_id'>) {
@@ -149,7 +183,7 @@ function formatArticleSourceActionAttribution(article: Pick<Article, 'platform' 
 }
 
 function formatArticleHeaderLine(article: Article) {
-    return [formatArticleUserId(article), formatClock(article.created_at), formatArticleSourceActionLabel(article)]
+    return [formatArticleUserId(article), formatArticleDisplayClock(article), formatArticleSourceActionLabel(article)]
         .filter(Boolean)
         .join(' ')
 }
@@ -157,7 +191,7 @@ function formatArticleHeaderLine(article: Article) {
 function formatArticleAttributionLine(article: Article) {
     return [
         article.username,
-        formatArticleAttributionTimeToken(article.created_at),
+        formatArticleDisplayAttributionTime(article),
         formatArticleSourceActionAttribution(article),
     ]
         .filter(Boolean)
@@ -178,7 +212,7 @@ function formatEmptyBodyArticleLine(article: Article) {
     return [
         shouldShowUsername ? username : '',
         userId,
-        formatClock(article.created_at),
+        formatArticleDisplayClock(article),
         formatArticleSourceActionLabel(article),
     ]
         .filter(Boolean)
