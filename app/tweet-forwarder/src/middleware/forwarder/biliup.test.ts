@@ -786,7 +786,7 @@ test('BiliForwarder does not suppress uploads from coarse short-video buckets al
     }
 })
 
-test('BiliForwarder avoids writing coarse short-video dedupe keys after successful upload', async () => {
+test('BiliForwarder records text-keyed short-video dedupe keys after successful upload', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
     const originalSave = DB.MediaHash.save
     const saved: Array<{ platform: string; hash: string; a_id: string }> = []
@@ -838,10 +838,108 @@ test('BiliForwarder avoids writing coarse short-video dedupe keys after successf
             hash: 'x-reencoded-video-hash',
             a_id: `${Platform.X}:2063561843692716187`,
         })
-        expect(saved.some((item) => item.platform.startsWith('cross-short-video:'))).toBe(false)
+        const shortVideoRecords = saved.filter((item) => item.platform.startsWith('cross-short-video:'))
+        expect(shortVideoRecords.length).toBeGreaterThan(0)
+        expect(shortVideoRecords.every((item) => item.platform === 'cross-short-video:3rd')).toBe(true)
+        expect(shortVideoRecords.every((item) => item.a_id === `${Platform.X}:2063561843692716187`)).toBe(true)
+        expect(shortVideoRecords.every((item) => /^\d+:\d+:[cst]:[0-9a-f]{16}$/.test(item.hash))).toBe(true)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
         DB.MediaHash.save = originalSave
+    }
+})
+
+test('BiliForwarder suppresses TT/INS semantic short-video duplicates without dynamic fallback', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    const originalGetSingleArticleByArticleCode = DB.Article.getSingleArticleByArticleCode
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    const articles = new Map<string, any>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) =>
+        articles.get(`${platform}:${a_id}`)
+
+    const instagramArticle = {
+        platform: Platform.Instagram,
+        a_id: 'DZR9nGHxnvu',
+        u_id: 'nananijigram22_7_the.3rd',
+        username: '22/7_the 3rd',
+        type: 'post',
+        created_at: 1780826818,
+        url: 'https://www.instagram.com/p/DZR9nGHxnvu/',
+        content: '. 22/7_the 3rd 『＃叫ぶしかない青春』 Music Video公開中',
+    }
+    const tiktokArticle = {
+        platform: Platform.TikTok,
+        a_id: 'tt-same-mv-promo',
+        u_id: 'the3rd_tiktok',
+        username: '22/7_the 3rd',
+        type: 'video',
+        created_at: 1780827050,
+        url: 'https://www.tiktok.com/@the3rd_tiktok/video/1',
+        content: '22/7_the 3rd\n#叫ぶしかない青春\nMusic Video公開中',
+    }
+    articles.set(`${Platform.Instagram}:${instagramArticle.a_id}`, instagramArticle)
+    articles.set(`${Platform.TikTok}:${tiktokArticle.a_id}`, tiktokArticle)
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-test',
+    )
+
+    let uploadCalls = 0
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async () => {
+        uploadCalls += 1
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    try {
+        const first = await (forwarder as any).realSend(['instagram text'], {
+            article: instagramArticle,
+            media: [
+                {
+                    media_type: 'video',
+                    path: '/tmp/ig-video.mp4',
+                    content_hash: 'ig-reencoded-video-hash',
+                    duration_seconds: 45.787,
+                },
+            ],
+        })
+        const second = await (forwarder as any).realSend(['tiktok text'], {
+            article: tiktokArticle,
+            media: [
+                {
+                    media_type: 'video',
+                    path: '/tmp/tt-video.mp4',
+                    content_hash: 'tt-reencoded-video-hash',
+                    duration_seconds: 45.766531,
+                },
+            ],
+        })
+
+        expect(first).toEqual([{ ok: true, mode: 'biliup' }])
+        expect(second).toEqual([{ ok: true, mode: 'biliup_duplicate' }])
+        expect(uploadCalls).toBe(1)
+        expect(dynamicCalls).toBe(0)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+        ;(DB.Article as any).getSingleArticleByArticleCode = originalGetSingleArticleByArticleCode
     }
 })
 

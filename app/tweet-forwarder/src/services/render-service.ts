@@ -26,11 +26,14 @@ import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spide
 import type { MediaType } from '@idol-bbq-utils/spider/types'
 import {
     buildArticleMarker,
+    buildShortVideoDedupCandidate,
     buildVideoFingerprintCandidate,
     checkExactCrossPlatformMediaDuplicate,
+    checkShortVideoCrossPlatformDuplicate,
     checkVideoFingerprintDuplicate,
     isPersistentMediaPath,
     markExactCrossPlatformMediaSeen,
+    markShortVideoCrossPlatformSeen,
     markVideoFingerprintSeen,
     persistMediaFile,
 } from './media-cache-service'
@@ -834,6 +837,24 @@ export class RenderService {
                                     }
                                     await markVideoFingerprintSeen(videoFingerprintCandidate)
                                 }
+
+                                const shortVideoCandidate = buildShortVideoDedupCandidate(currentArticle as any, [
+                                    persisted,
+                                ])
+                                if (shortVideoCandidate) {
+                                    const shortVideoDuplicate =
+                                        await checkShortVideoCrossPlatformDuplicate(shortVideoCandidate)
+                                    if (shortVideoDuplicate) {
+                                        markDuplicate(
+                                            `Cross-platform short video text duplicate matched ${shortVideoDuplicate.a_id}`,
+                                        )
+                                        this.log?.info(
+                                            `Skipping ${articleMarker} because short video text/duration signature (${shortVideoCandidate.group}, ${shortVideoCandidate.duration_seconds.toFixed(2)}s) matches ${shortVideoDuplicate.a_id}.`,
+                                        )
+                                        return undefined
+                                    }
+                                    await markShortVideoCrossPlatformSeen(shortVideoCandidate)
+                                }
                             }
                         } catch (e) {
                             this.log?.error(`Error during duplicate check: ${e}`)
@@ -867,7 +888,8 @@ export class RenderService {
                         try {
                             const path = await plainDownloadMediaFile(url, taskId, {
                                 cookie: cookie || '',
-                                ...((currentArticle?.platform && platformPresetHeadersMap[currentArticle.platform]) || {}),
+                                ...((currentArticle?.platform && platformPresetHeadersMap[currentArticle.platform]) ||
+                                    {}),
                             })
 
                             files.push(await finalizeDownloadedFile(path, url, overrideType ? undefined : type))
@@ -977,10 +999,10 @@ export class RenderService {
             articleDepth += 1
         }
         if (
-            !skipReason
-            && deduplication
-            && rootProcessedMediaCount > 0
-            && rootDuplicateMediaCount === rootProcessedMediaCount
+            !skipReason &&
+            deduplication &&
+            rootProcessedMediaCount > 0 &&
+            rootDuplicateMediaCount === rootProcessedMediaCount
         ) {
             skipReason = rootDuplicateMediaReason || duplicateMediaReason || 'All root article media were duplicates'
         }

@@ -13,9 +13,13 @@ import {
 import DB, { type Article } from '@/db'
 import { createHash } from 'crypto'
 import {
+    buildShortVideoDedupCandidate,
     buildVideoFingerprintCandidate,
+    checkShortVideoCrossPlatformDuplicate,
     checkVideoFingerprintDuplicate,
+    markShortVideoCrossPlatformSeen,
     markVideoFingerprintSeen,
+    type ShortVideoDedupCandidate,
     type VideoFingerprintCandidate,
 } from '@/services/media-cache-service'
 
@@ -56,6 +60,7 @@ type BiliVideoUploadDedupeRecords = {
     exact: BiliVideoUploadHashRecord[]
     article?: Article
     videoMedia: Array<NonNullable<SendProps['media']>[number]>
+    shortVideos?: ShortVideoDedupCandidate[]
     fingerprints?: VideoFingerprintCandidate[]
 }
 type BiliVideoUploadDuplicate =
@@ -66,6 +71,10 @@ type BiliVideoUploadDuplicate =
       }
     | {
           kind: 'fingerprint'
+          existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>>
+      }
+    | {
+          kind: 'short-video'
           existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>>
       }
 
@@ -199,7 +208,21 @@ class BiliForwarder extends Forwarder {
         return records.fingerprints
     }
 
-    private async findDuplicateBiliVideoUpload(records: BiliVideoUploadDedupeRecords): Promise<BiliVideoUploadDuplicate | null> {
+    private resolveVideoUploadShortVideos(records: BiliVideoUploadDedupeRecords) {
+        if (!records.article) {
+            return []
+        }
+        if (!records.shortVideos) {
+            records.shortVideos = records.videoMedia
+                .map((item) => buildShortVideoDedupCandidate(records.article as any, [item as any]))
+                .filter((item): item is ShortVideoDedupCandidate => Boolean(item))
+        }
+        return records.shortVideos
+    }
+
+    private async findDuplicateBiliVideoUpload(
+        records: BiliVideoUploadDedupeRecords,
+    ): Promise<BiliVideoUploadDuplicate | null> {
         for (const record of records.exact) {
             const existing = await DB.MediaHash.checkExist(BILI_VIDEO_UPLOAD_HASH_NAMESPACE, record.hash)
             if (existing) {
@@ -212,6 +235,12 @@ class BiliForwarder extends Forwarder {
                 return { kind: 'fingerprint', existing }
             }
         }
+        for (const shortVideo of this.resolveVideoUploadShortVideos(records)) {
+            const existing = await checkShortVideoCrossPlatformDuplicate(shortVideo)
+            if (existing) {
+                return { kind: 'short-video', existing }
+            }
+        }
         return null
     }
 
@@ -221,6 +250,9 @@ class BiliForwarder extends Forwarder {
         }
         for (const fingerprint of this.resolveVideoUploadFingerprints(records)) {
             await markVideoFingerprintSeen(fingerprint)
+        }
+        for (const shortVideo of this.resolveVideoUploadShortVideos(records)) {
+            await markShortVideoCrossPlatformSeen(shortVideo)
         }
     }
 

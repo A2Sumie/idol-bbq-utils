@@ -19,15 +19,17 @@ import {
 
 const originalCheckExist = DB.MediaHash.checkExist
 const originalSave = DB.MediaHash.save
+const originalGetSingleArticleByArticleCode = DB.Article.getSingleArticleByArticleCode
 const createdPaths = new Set<string>()
 
 afterEach(() => {
     DB.MediaHash.checkExist = originalCheckExist
     DB.MediaHash.save = originalSave
+    ;(DB.Article as any).getSingleArticleByArticleCode = originalGetSingleArticleByArticleCode
     for (const targetPath of createdPaths) {
         try {
             fs.rmSync(targetPath, { recursive: true, force: true })
-        } catch { }
+        } catch {}
     }
     createdPaths.clear()
 })
@@ -108,16 +110,8 @@ test('cleanupMediaCache removes expired stored media and transient downloads', (
     expect(summary.errors).toBe(0)
 })
 
-test('cross-platform short video duration buckets no longer suppress by themselves', async () => {
-    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
-    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
-    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
-        const value = { platform, hash, a_id }
-        store.set(`${platform}:${hash}`, value)
-        return value as any
-    }
-
-    const first = buildShortVideoDedupCandidate(
+test('cross-platform short video duration buckets require meaningful text', () => {
+    const candidate = buildShortVideoDedupCandidate(
         {
             platform: Platform.Instagram,
             type: 'post',
@@ -128,47 +122,34 @@ test('cross-platform short video duration buckets no longer suppress by themselv
         } as any,
         [{ media_type: 'video', duration_seconds: 15.2 }],
     )
-    expect(first).toBeTruthy()
-    await markShortVideoCrossPlatformSeen(first!)
-
-    const second = buildShortVideoDedupCandidate(
-        {
-            platform: Platform.YouTube,
-            type: 'shorts',
-            a_id: 'yt-short-1',
-            created_at: 1710000300,
-            u_id: 'nananijigram22_7_the.3rd',
-            username: '22/7 THE 3RD',
-        } as any,
-        [{ media_type: 'video', duration_seconds: 15.6 }],
-    )
-    expect(second).toBeTruthy()
-
-    const duplicate = await checkShortVideoCrossPlatformDuplicate(second!)
-    expect(duplicate).toBeNull()
+    expect(candidate).toBeNull()
 })
 
-test('cross-platform short video group candidates are advisory only', async () => {
+test('cross-platform short video text and duration candidates suppress same content', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    const articles = new Map<string, any>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
         return value as any
     }
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) =>
+        articles.get(`${platform}:${a_id}`)
 
-    const xArticle = buildShortVideoDedupCandidate(
-        {
-            platform: Platform.X,
-            type: 'tweet',
-            a_id: '2063561843692716187',
-            created_at: 1780826457,
-            u_id: '227_staff',
-            username: '22/7(ナナブンノニジュウニ)',
-            content: '22/7_the 3rd\n『＃叫ぶしかない青春』\nMusic Video公開中',
-        } as any,
-        [{ media_type: 'video', duration_seconds: 45.766531 }],
-    )
+    const xArticleData = {
+        platform: Platform.X,
+        type: 'tweet',
+        a_id: '2063561843692716187',
+        created_at: 1780826457,
+        u_id: '227_staff',
+        username: '22/7(ナナブンノニジュウニ)',
+        content: '22/7_the 3rd\n『＃叫ぶしかない青春』\nMusic Video公開中',
+    }
+    articles.set(`${Platform.X}:${xArticleData.a_id}`, xArticleData)
+    const xArticle = buildShortVideoDedupCandidate(xArticleData as any, [
+        { media_type: 'video', duration_seconds: 45.766531 },
+    ])
     expect(xArticle?.group).toBe('3rd')
     await markShortVideoCrossPlatformSeen(xArticle!)
 
@@ -187,6 +168,51 @@ test('cross-platform short video group candidates are advisory only', async () =
     expect(instagramArticle?.group).toBe('3rd')
 
     const duplicate = await checkShortVideoCrossPlatformDuplicate(instagramArticle!)
+    expect(duplicate?.a_id).toBe(`${Platform.X}:2063561843692716187`)
+})
+
+test('cross-platform short video text candidates ignore different captions in nearby buckets', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    const articles = new Map<string, any>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) =>
+        articles.get(`${platform}:${a_id}`)
+
+    const firstArticleData = {
+        platform: Platform.X,
+        type: 'tweet',
+        a_id: 'x-mv-promo',
+        created_at: 1780826457,
+        u_id: '227_staff',
+        username: '22/7(ナナブンノニジュウニ)',
+        content: '22/7_the 3rd\n『＃叫ぶしかない青春』\nMusic Video公開中',
+    }
+    articles.set(`${Platform.X}:${firstArticleData.a_id}`, firstArticleData)
+    const first = buildShortVideoDedupCandidate(firstArticleData as any, [
+        { media_type: 'video', duration_seconds: 45.766531 },
+    ])
+    await markShortVideoCrossPlatformSeen(first!)
+
+    const second = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'post',
+            a_id: 'ig-making',
+            created_at: 1780826818,
+            u_id: 'nananijigram22_7_the.3rd',
+            username: '22/7_the 3rd',
+            content: '22/7_the 3rd 新衣装メイキング映像を公開しました',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 45.787 }],
+    )
+    expect(second).toBeTruthy()
+
+    const duplicate = await checkShortVideoCrossPlatformDuplicate(second!)
     expect(duplicate).toBeNull()
 })
 

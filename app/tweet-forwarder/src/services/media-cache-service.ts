@@ -17,6 +17,9 @@ const SHORT_VIDEO_MAX_DURATION_SECONDS = 180
 const SHORT_VIDEO_DURATION_BUCKET_MS = 500
 const SHORT_VIDEO_DURATION_TOLERANCE_BUCKETS = 2
 const SHORT_VIDEO_TIME_BUCKET_SECONDS = 6 * 3600
+const SHORT_VIDEO_TEXT_KEY_LIMIT = 6
+const SHORT_VIDEO_TEXT_MIN_COMPACT_LENGTH = 8
+const SHORT_VIDEO_SHARED_PHRASE_MIN_LENGTH = 8
 const VIDEO_FINGERPRINT_SAMPLE_RATIOS = [0.12, 0.3, 0.5, 0.7, 0.88]
 const VIDEO_FINGERPRINT_BAND_SIZE = 4
 const VIDEO_FINGERPRINT_MIN_BAND_MATCHES = 8
@@ -55,9 +58,19 @@ interface ShortVideoDedupCandidate {
     storagePlatform: string
     articleMarker: string
     signature: string
+    signaturesToStore: Array<string>
     signaturesToCheck: Array<string>
     duration_seconds: number
     group: string
+    text: ShortVideoTextFingerprint
+}
+
+interface ShortVideoTextFingerprint {
+    normalized: string
+    compact: string
+    distilledCompact: string
+    tokens: Array<string>
+    keys: Array<string>
 }
 
 interface VideoFingerprintCandidate {
@@ -156,15 +169,7 @@ function probeDurationSeconds(filePath: string) {
     try {
         const output = execFileSync(
             'ffprobe',
-            [
-                '-v',
-                'error',
-                '-show_entries',
-                'format=duration',
-                '-of',
-                'default=noprint_wrappers=1:nokey=1',
-                filePath,
-            ],
+            ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath],
             { encoding: 'utf8' },
         )
         const duration = Number(output.trim())
@@ -217,7 +222,11 @@ function buildShortVideoTimeBuckets(createdAt: number) {
 function buildShortVideoDurationBuckets(durationSeconds: number) {
     const baseBucket = Math.round((durationSeconds * 1000) / SHORT_VIDEO_DURATION_BUCKET_MS)
     const buckets = [] as number[]
-    for (let offset = -SHORT_VIDEO_DURATION_TOLERANCE_BUCKETS; offset <= SHORT_VIDEO_DURATION_TOLERANCE_BUCKETS; offset += 1) {
+    for (
+        let offset = -SHORT_VIDEO_DURATION_TOLERANCE_BUCKETS;
+        offset <= SHORT_VIDEO_DURATION_TOLERANCE_BUCKETS;
+        offset += 1
+    ) {
         buckets.push(baseBucket + offset)
     }
     return {
@@ -226,9 +235,215 @@ function buildShortVideoDurationBuckets(durationSeconds: number) {
     }
 }
 
+const SHORT_VIDEO_TEXT_STOPWORDS = new Set([
+    '22',
+    '7',
+    '227',
+    '22_7',
+    '22-7',
+    'nananiji',
+    'nananijigram',
+    'nanabunnonijuuni',
+    'the',
+    '3rd',
+    'official',
+    'staff',
+    'music',
+    'video',
+    'mv',
+    'short',
+    'shorts',
+    'tiktok',
+    'instagram',
+    'youtube',
+    '公開中',
+    'ナナニジ',
+    'ナナブンノニジュウニ',
+])
+
+const SHORT_VIDEO_COMPACT_BOILERPLATE_TERMS = [
+    '227',
+    '22_7',
+    'nananijigram',
+    'nananiji',
+    'nanabunnonijuuni',
+    'the3rd',
+    'official',
+    'staff',
+    'musicvideo',
+    'youtube',
+    'tiktok',
+    'instagram',
+    'shorts',
+    'short',
+    '公開中',
+    'ナナニジ',
+    'ナナブンノニジュウニ',
+]
+
+function normalizeShortVideoTextValue(value: string) {
+    return value
+        .normalize('NFKC')
+        .toLowerCase()
+        .replace(/https?:\/\/\S+/g, ' ')
+        .replace(/(?:www\.)\S+\.\S+/g, ' ')
+        .replace(/[@＠][\w.-]+/g, ' ')
+        .replace(/[＃#]/g, ' ')
+        .replace(/[【】「」『』（）()[\]{}<>《》.,!?！？、。:：;；'"`~^*_+=|\\/]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+}
+
+function stripShortVideoCompactBoilerplate(value: string) {
+    let result = value
+    for (const term of SHORT_VIDEO_COMPACT_BOILERPLATE_TERMS) {
+        result = result.split(term).join('')
+    }
+    return result
+}
+
+function isInformativeShortVideoToken(token: string) {
+    const compactToken = token.replace(/[._-]+/g, '')
+    if (token.length < 2 || compactToken.length < 2) {
+        return false
+    }
+    if (/^\d+$/.test(compactToken)) {
+        return false
+    }
+    return !SHORT_VIDEO_TEXT_STOPWORDS.has(token) && !SHORT_VIDEO_TEXT_STOPWORDS.has(compactToken)
+}
+
+function hashShortVideoTextKey(prefix: string, value: string) {
+    return `${prefix}:${crypto.createHash('sha1').update(value).digest('hex').slice(0, 16)}`
+}
+
+function buildShortVideoTextKeys(fingerprint: Omit<ShortVideoTextFingerprint, 'keys'>) {
+    const keys = new Set<string>()
+    if (fingerprint.distilledCompact.length >= SHORT_VIDEO_TEXT_MIN_COMPACT_LENGTH) {
+        keys.add(hashShortVideoTextKey('c', fingerprint.distilledCompact))
+    }
+
+    for (const token of fingerprint.tokens.filter((item) => item.length >= 6).slice(0, 4)) {
+        keys.add(hashShortVideoTextKey('t', token))
+    }
+
+    const signatureTokens = fingerprint.tokens
+        .filter((item) => item.length >= 3)
+        .slice(0, 8)
+        .sort()
+    if (signatureTokens.join('').length >= 10) {
+        keys.add(hashShortVideoTextKey('s', signatureTokens.join('|')))
+    }
+
+    return Array.from(keys).slice(0, SHORT_VIDEO_TEXT_KEY_LIMIT)
+}
+
+function buildShortVideoTextFingerprint(article: { content?: string | null; translation?: string | null }) {
+    const normalized = [article.content, article.translation]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map(normalizeShortVideoTextValue)
+        .filter(Boolean)
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    const compact = normalized.replace(/[^\p{L}\p{N}]+/gu, '')
+    const distilledCompact = stripShortVideoCompactBoilerplate(compact)
+    const rawTokens = normalized.match(/[\p{L}\p{N}][\p{L}\p{N}._-]*/gu) || []
+    const tokens = Array.from(
+        new Set(rawTokens.map((token) => token.replace(/^[._-]+|[._-]+$/g, '')).filter(isInformativeShortVideoToken)),
+    )
+    const base = {
+        normalized,
+        compact,
+        distilledCompact,
+        tokens,
+    }
+    return {
+        ...base,
+        keys: buildShortVideoTextKeys(base),
+    }
+}
+
+function buildShortVideoSignature(timeBucket: number, durationBucket: number, textKey: string) {
+    return `${timeBucket}:${durationBucket}:${textKey}`
+}
+
+function parseArticleMarker(marker: string) {
+    const separatorIndex = marker.indexOf(':')
+    if (separatorIndex <= 0) {
+        return null
+    }
+    const platform = Number(marker.slice(0, separatorIndex))
+    const a_id = marker.slice(separatorIndex + 1).trim()
+    if (!Number.isFinite(platform) || !a_id) {
+        return null
+    }
+    return {
+        platform: platform as Platform,
+        a_id,
+    }
+}
+
+function longestCommonSubstringLength(left: string, right: string) {
+    if (!left || !right) {
+        return 0
+    }
+    let previous = new Array(right.length + 1).fill(0)
+    let best = 0
+
+    for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+        const current = new Array(right.length + 1).fill(0)
+        for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+            if (left[leftIndex - 1] !== right[rightIndex - 1]) {
+                continue
+            }
+            const length = previous[rightIndex - 1] + 1
+            current[rightIndex] = length
+            if (length > best) {
+                best = length
+            }
+        }
+        previous = current
+    }
+
+    return best
+}
+
+function isLikelySameShortVideoText(left: ShortVideoTextFingerprint, right: ShortVideoTextFingerprint) {
+    if (left.keys.length === 0 || right.keys.length === 0) {
+        return false
+    }
+
+    const sharedPhraseLength = longestCommonSubstringLength(left.distilledCompact, right.distilledCompact)
+    if (sharedPhraseLength >= SHORT_VIDEO_SHARED_PHRASE_MIN_LENGTH) {
+        return true
+    }
+
+    const leftTokens = new Set(left.tokens)
+    const rightTokens = new Set(right.tokens)
+    const sharedTokens = Array.from(leftTokens).filter((token) => rightTokens.has(token))
+    if (sharedTokens.some((token) => token.length >= SHORT_VIDEO_TEXT_MIN_COMPACT_LENGTH)) {
+        return true
+    }
+    if (sharedTokens.length < 2) {
+        return false
+    }
+
+    const unionSize = new Set([...leftTokens, ...rightTokens]).size
+    const minSize = Math.min(leftTokens.size, rightTokens.size)
+    if (unionSize === 0 || minSize === 0) {
+        return false
+    }
+
+    const jaccard = sharedTokens.length / unionSize
+    const containment = sharedTokens.length / minSize
+    return jaccard >= 0.45 || containment >= 0.67
+}
+
 function buildShortVideoDedupCandidate(
     article: Pick<Article, 'platform' | 'type' | 'a_id' | 'created_at' | 'u_id' | 'username'> & {
         content?: string | null
+        translation?: string | null
     },
     mediaFiles: Array<{ media_type: MediaType; duration_seconds?: number }>,
 ): ShortVideoDedupCandidate | null {
@@ -241,12 +456,17 @@ function buildShortVideoDedupCandidate(
         return null
     }
 
+    const text = buildShortVideoTextFingerprint(article)
+    if (text.keys.length === 0) {
+        return null
+    }
+
     const videoFile = mediaFiles.find(
         (item) =>
-            item.media_type === 'video'
-            && typeof item.duration_seconds === 'number'
-            && item.duration_seconds > 0
-            && item.duration_seconds <= SHORT_VIDEO_MAX_DURATION_SECONDS,
+            item.media_type === 'video' &&
+            typeof item.duration_seconds === 'number' &&
+            item.duration_seconds > 0 &&
+            item.duration_seconds <= SHORT_VIDEO_MAX_DURATION_SECONDS,
     )
     if (!videoFile || typeof videoFile.duration_seconds !== 'number') {
         return null
@@ -255,27 +475,69 @@ function buildShortVideoDedupCandidate(
     const articleMarker = buildArticleMarker(article as Pick<Article, 'platform' | 'a_id'>)
     const timeBuckets = buildShortVideoTimeBuckets(article.created_at)
     const { baseBucket, buckets } = buildShortVideoDurationBuckets(videoFile.duration_seconds)
+    const baseTimeBucket = Math.floor(article.created_at / SHORT_VIDEO_TIME_BUCKET_SECONDS)
+    const signaturesToStore = text.keys.map((textKey) => buildShortVideoSignature(baseTimeBucket, baseBucket, textKey))
 
     return {
         storagePlatform: `cross-short-video:${group}`,
         articleMarker,
-        signature: `${Math.floor(article.created_at / SHORT_VIDEO_TIME_BUCKET_SECONDS)}:${baseBucket}`,
+        signature: signaturesToStore[0],
+        signaturesToStore,
         signaturesToCheck: Array.from(
-            new Set(timeBuckets.flatMap((timeBucket) => buckets.map((durationBucket) => `${timeBucket}:${durationBucket}`))),
+            new Set(
+                timeBuckets.flatMap((timeBucket) =>
+                    buckets.flatMap((durationBucket) =>
+                        text.keys.map((textKey) => buildShortVideoSignature(timeBucket, durationBucket, textKey)),
+                    ),
+                ),
+            ),
         ).sort(),
         duration_seconds: videoFile.duration_seconds,
         group,
+        text,
     }
 }
 
 async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupCandidate) {
-    void candidate
+    const candidateMarker = parseArticleMarker(candidate.articleMarker)
+    if (!candidateMarker || candidate.text.keys.length === 0) {
+        return null
+    }
+
+    for (const signature of Array.from(new Set(candidate.signaturesToCheck))) {
+        const existing = await DB.MediaHash.checkExist(candidate.storagePlatform, signature)
+        if (!existing || existing.a_id === candidate.articleMarker) {
+            continue
+        }
+
+        const existingMarker = parseArticleMarker(existing.a_id)
+        if (!existingMarker || existingMarker.platform === candidateMarker.platform) {
+            continue
+        }
+
+        const existingArticle = await DB.Article.getSingleArticleByArticleCode(
+            existingMarker.a_id,
+            existingMarker.platform,
+        )
+        if (!existingArticle) {
+            continue
+        }
+
+        const existingText = buildShortVideoTextFingerprint(existingArticle as any)
+        if (isLikelySameShortVideoText(candidate.text, existingText)) {
+            return existing
+        }
+    }
+
     return null
 }
 
 async function markShortVideoCrossPlatformSeen(candidate: ShortVideoDedupCandidate) {
-    void candidate
-    return null
+    await Promise.all(
+        Array.from(new Set(candidate.signaturesToStore)).map((signature) =>
+            DB.MediaHash.save(candidate.storagePlatform, signature, candidate.articleMarker),
+        ),
+    )
 }
 
 function sampleVideoFrameHash(filePath: string, durationSeconds: number, ratio: number) {
@@ -325,10 +587,7 @@ function buildVideoFingerprintBandKeys(durationBucket: number, frameHashes: Arra
         for (let offset = 0; offset < hash.length; offset += VIDEO_FINGERPRINT_BAND_SIZE) {
             const bandIndex = offset / VIDEO_FINGERPRINT_BAND_SIZE
             const band = hash.slice(offset, offset + VIDEO_FINGERPRINT_BAND_SIZE)
-            if (
-                band.length === VIDEO_FINGERPRINT_BAND_SIZE
-                && !/^(?:0+|f+)$/i.test(band)
-            ) {
+            if (band.length === VIDEO_FINGERPRINT_BAND_SIZE && !/^(?:0+|f+)$/i.test(band)) {
                 bandKeys.add(`band:${durationBucket}:f${frameIndex}:b${bandIndex}:${band}`)
             }
         }
@@ -343,18 +602,18 @@ function buildVideoFingerprintCandidate(
     mediaFile: Pick<StoredMediaMetadata, 'path' | 'media_type' | 'duration_seconds'>,
 ): VideoFingerprintCandidate | null {
     if (
-        mediaFile.media_type !== 'video'
-        || typeof mediaFile.duration_seconds !== 'number'
-        || mediaFile.duration_seconds <= 0
-        || mediaFile.duration_seconds > SHORT_VIDEO_MAX_DURATION_SECONDS
-        || !isSupportedShortVideoPlatform(article)
+        mediaFile.media_type !== 'video' ||
+        typeof mediaFile.duration_seconds !== 'number' ||
+        mediaFile.duration_seconds <= 0 ||
+        mediaFile.duration_seconds > SHORT_VIDEO_MAX_DURATION_SECONDS ||
+        !isSupportedShortVideoPlatform(article)
     ) {
         return null
     }
 
-    const frameHashes = VIDEO_FINGERPRINT_SAMPLE_RATIOS
-        .map((ratio) => sampleVideoFrameHash(mediaFile.path, mediaFile.duration_seconds as number, ratio))
-        .filter((hash): hash is string => Boolean(hash))
+    const frameHashes = VIDEO_FINGERPRINT_SAMPLE_RATIOS.map((ratio) =>
+        sampleVideoFrameHash(mediaFile.path, mediaFile.duration_seconds as number, ratio),
+    ).filter((hash): hash is string => Boolean(hash))
 
     if (frameHashes.length < 3) {
         return null
@@ -392,7 +651,10 @@ async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandida
         return exact
     }
 
-    const hitsByArticle = new Map<string, { count: number; existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>> }>()
+    const hitsByArticle = new Map<
+        string,
+        { count: number; existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>> }
+    >()
     for (const bandKey of candidateBandKeys) {
         const existing = await DB.MediaHash.checkExist(candidate.storagePlatform, bandKey)
         if (!existing || existing.a_id === candidate.articleMarker) {
@@ -483,7 +745,9 @@ function persistMediaFile(sourcePath: string, options: PersistMediaFileOptions):
     const now = Math.floor(Date.now() / 1000)
     const metadataPath = `${storedPath}.json`
     const existing = parseStoredMediaMetadata(metadataPath)
-    const articleMarker = options.article ? buildArticleMarker(options.article as Pick<Article, 'platform' | 'a_id'>) : ''
+    const articleMarker = options.article
+        ? buildArticleMarker(options.article as Pick<Article, 'platform' | 'a_id'>)
+        : ''
 
     const metadata: StoredMediaMetadata = {
         path: storedPath,
@@ -491,13 +755,14 @@ function persistMediaFile(sourcePath: string, options: PersistMediaFileOptions):
         media_type: options.media_type,
         size_bytes: stats.size,
         duration_seconds:
-            options.media_type === 'video'
-                ? probeDurationSeconds(storedPath) || existing?.duration_seconds
-                : undefined,
+            options.media_type === 'video' ? probeDurationSeconds(storedPath) || existing?.duration_seconds : undefined,
         source_urls: dedupeStrings([...(existing?.source_urls || []), options.source_url, options.article?.url]),
         article_markers: dedupeStrings([...(existing?.article_markers || []), articleMarker]),
         article_urls: dedupeStrings([...(existing?.article_urls || []), options.article?.url]),
-        platforms: dedupeStrings([...(existing?.platforms || []), options.article ? String(options.article.platform) : '']),
+        platforms: dedupeStrings([
+            ...(existing?.platforms || []),
+            options.article ? String(options.article.platform) : '',
+        ]),
         u_ids: dedupeStrings([...(existing?.u_ids || []), options.article?.u_id]),
         usernames: dedupeStrings([...(existing?.usernames || []), options.article?.username]),
         created_at: existing?.created_at || now,
@@ -658,7 +923,8 @@ function cleanupDownloadFiles(root: string, cutoffMs: number, summary: MediaCach
 function cleanupMediaCache(options: MediaCacheCleanupOptions = {}): MediaCacheCleanupSummary {
     const nowMs = options.nowMs || Date.now()
     const storeRetentionMs =
-        options.storeRetentionMs ?? parsePositiveEnvNumber('MEDIA_STORE_RETENTION_DAYS', DEFAULT_MEDIA_STORE_RETENTION_DAYS) * DAY_MS
+        options.storeRetentionMs ??
+        parsePositiveEnvNumber('MEDIA_STORE_RETENTION_DAYS', DEFAULT_MEDIA_STORE_RETENTION_DAYS) * DAY_MS
     const downloadRetentionMs =
         options.downloadRetentionMs ??
         parsePositiveEnvNumber('MEDIA_DOWNLOAD_RETENTION_HOURS', DEFAULT_MEDIA_DOWNLOAD_RETENTION_HOURS) * HOUR_MS
@@ -677,7 +943,8 @@ function cleanupMediaCache(options: MediaCacheCleanupOptions = {}): MediaCacheCl
 }
 
 function startMediaCacheCleanupJob(log?: MediaCacheCleanupLogger): MediaCacheCleanupJob {
-    const intervalMs = parsePositiveEnvNumber('MEDIA_CLEANUP_INTERVAL_HOURS', DEFAULT_MEDIA_CLEANUP_INTERVAL_HOURS) * HOUR_MS
+    const intervalMs =
+        parsePositiveEnvNumber('MEDIA_CLEANUP_INTERVAL_HOURS', DEFAULT_MEDIA_CLEANUP_INTERVAL_HOURS) * HOUR_MS
     let stopped = false
 
     const run = () => {
