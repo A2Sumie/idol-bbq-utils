@@ -306,6 +306,54 @@ test('BiliForwarder rejects uploaded images without size metadata in strict mode
     expect(sent).toBeFalse()
 })
 
+test('BiliForwarder uses blank fallback text for photo dynamics without body text', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-blank-photo-text-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    let sentText = ''
+    ;(forwarder as any).uploadPhoto = async () => ({
+        image_url: 'https://i0.hdslb.com/bfs/test/blank-text.jpg',
+        image_width: 900,
+        image_height: 1200,
+        img_size: 12345,
+    })
+    ;(forwarder as any).sendTextWithPhotos = async (text: string) => {
+        sentText = text
+        return { data: { code: 0, message: 'ok', data: { dyn_id_str: 'blank-photo-dynamic' } } }
+    }
+    ;(forwarder as any).fetchDynamicDetail = async () => ({
+        data: {
+            code: 0,
+            data: {
+                item: {
+                    modules: {
+                        module_dynamic: {
+                            major: {
+                                type: 'MAJOR_TYPE_DRAW',
+                                draw: {
+                                    items: [{ src: 'https://i0.hdslb.com/bfs/test/blank-text.jpg' }],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    })
+
+    await (forwarder as any).sendDynamicContent([], {
+        media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
+    })
+
+    expect(sentText).toBe(' ')
+})
+
 test('BiliForwarder suppresses pure video-thumbnail dynamics when visible media is required', async () => {
     const forwarder = new BiliForwarder(
         {

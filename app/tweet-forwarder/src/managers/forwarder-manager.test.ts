@@ -3130,6 +3130,76 @@ test('summary-card send text lists every item in the top digest', () => {
     expect(text).not.toContain('另有1条')
 })
 
+test('summary-card send text leaves Bilibili card body empty', () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+
+        protected async realSend() {
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder({ block_until: '32h' } as any, 'target-bilibili-card-empty-text')
+    const now = Math.floor(Date.now() / 1000)
+    const items = [
+        {
+            article: {
+                id: 1,
+                a_id: 'summary-bili-empty-text-1',
+                platform: Platform.X,
+                username: 'member1',
+                u_id: 'member1',
+                content: 'summary content should stay in card only',
+                url: 'https://x.com/member1/status/1',
+                type: 'tweet',
+                created_at: now,
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+            queuedAt: now,
+            cardSourceMediaFiles: [],
+            originalMediaFiles: [],
+            digestTags: [],
+        },
+    ]
+
+    const text = (pools as any).buildSummaryCardSendText(
+        {
+            routeKey: 'summary-bili-empty-text',
+            target,
+            runtime_config: undefined,
+            config: {
+                windowAlignment: 'none',
+            },
+            items: new Map(items.map((item) => [item.article.id, item])),
+            firstQueuedAt: now,
+            lastQueuedAt: now,
+        },
+        items,
+        '聚合 fallback',
+    )
+
+    expect(text).toBe('')
+})
+
 test('summary-card send text consolidates repeated and mixed retweet digest items', () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -7313,9 +7383,11 @@ test('summary-card realtime media appends rendered card after Bilibili photo dyn
         'realtime-photo-original-814.jpg',
         'realtime-photo-card-814.png',
     ])
+    expect(biliTarget.sent[0]?.texts[0]).toBe('')
     expect(qqTarget.sent[0]?.props?.media?.map((file: any) => path.basename(file.path))).toEqual([
         'realtime-photo-original-814.jpg',
     ])
+    expect(qqTarget.sent[0]?.texts[0]).toContain('@photo_uid')
 })
 
 test('summary-card realtime media appends translated content card for Bilibili photo dynamics', async () => {

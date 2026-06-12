@@ -3162,13 +3162,16 @@ class ForwarderPools extends BaseCompatibleModel {
             }
         }
 
-        const text = this.buildSummaryCardRealtimeMediaText(article, renderResult, config)
         const mediaIdentities = this.buildRenderedMediaIdentityList(mediaFilesWithTargetExtras)
         const syntheticKey = `${routeKeyValue}:${articleKey(article)}:${hashValue(mediaIdentities)}`
         const outboundIdempotencyKey = syntheticOutboundKey(target.id, 'summary_realtime_media', syntheticKey)
         const targetExtraMediaFiles = mediaFilesWithTargetExtras.filter(
             (file) => !mediaFiles.some((mediaFile) => mediaFile.path === file.path),
         )
+        const text =
+            target.NAME === 'bilibili' && targetExtraMediaFiles.length > 0
+                ? ''
+                : this.buildSummaryCardRealtimeMediaText(article, renderResult, config)
         const visibility = await this.applyTargetMediaVisibility(article, target, runtime_config, mediaFiles)
         const visibleMediaFiles = [...visibility.visibleFiles, ...targetExtraMediaFiles]
         if (visibility.policy?.duplicateBehavior === 'skip' && visibleMediaFiles.length === 0) {
@@ -4354,6 +4357,10 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private buildSummaryCardSendText(queue: SummaryCardQueue, items: SummaryCardQueueItem[], fallbackTitle: string) {
+        if (queue.target.NAME === 'bilibili') {
+            return ''
+        }
+
         const range = this.formatSummaryCardRangeForQueue(
             queue,
             items.map((item) => item.article),

@@ -504,8 +504,8 @@ class BiliForwarder extends Forwarder {
             const _res = []
 
             for (let i = 0; i < n; i++) {
-                const text = textChunks[i] || (i === 0 ? 'Forwarded content' : ' ') // Fallback text. Bilibili dynamic needs text.
                 const msgPics = picChunks[i] || [] // Type: BiliImageUploaded[]
+                const text = textChunks[i] || (msgPics.length > 0 ? ' ' : '')
 
                 _log?.debug(`Sending chunk ${i + 1}/${n}: text length ${text.length}, pics count ${msgPics.length}`)
 
