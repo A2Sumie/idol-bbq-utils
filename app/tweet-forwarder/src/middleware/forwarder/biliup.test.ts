@@ -1106,6 +1106,44 @@ test('BiliForwarder does not let rendered card media satisfy media-required sour
     expect(dynamicCalls).toBe(0)
 })
 
+test('BiliForwarder lets message-pack card media satisfy media-required dynamic posts', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            require_media: true,
+            video_upload: {
+                enabled: false,
+            },
+        } as any,
+        'bili-message-pack-card-test',
+    )
+
+    let dynamicCalls = 0
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const card = { media_type: 'photo', path: '/tmp/rendered-summary-card.png' }
+    const result = await (forwarder as any).realSend(['summary digest'], {
+        media: [card],
+        cardMedia: [card],
+        contentMedia: [],
+        article: {
+            a_id: 'summary-card-message-pack',
+            type: 'message_pack',
+            extra: {
+                extra_type: 'message_pack_meta',
+            },
+        },
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(dynamicCalls).toBe(1)
+})
+
 test('BiliForwarder allows rendered card media when media-required source media exists', async () => {
     const forwarder = new BiliForwarder(
         {

@@ -340,9 +340,19 @@ class BiliForwarder extends Forwarder {
         return item.media_type === 'photo'
     }
 
+    private isMessagePackArticle(props?: SendProps) {
+        const article = props?.article as any
+        return article?.type === 'message_pack' || article?.extra?.extra_type === 'message_pack_meta'
+    }
+
     private getRequiredSourceImageMedia(props?: SendProps) {
         if (!props) {
             return []
+        }
+        if (this.isMessagePackArticle(props)) {
+            return [...(props.contentMedia || []), ...(props.cardMedia || [])].filter((item) =>
+                this.isDynamicImageMedia(item),
+            )
         }
         if (props.contentMedia) {
             return props.contentMedia.filter((item) => this.isDynamicImageMedia(item))

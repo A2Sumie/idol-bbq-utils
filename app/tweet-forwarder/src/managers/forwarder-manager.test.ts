@@ -3130,7 +3130,7 @@ test('summary-card send text lists every item in the top digest', () => {
     expect(text).not.toContain('另有1条')
 })
 
-test('summary-card send text leaves Bilibili card body empty', () => {
+test('summary-card send text keeps Bilibili card body digest', () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'bilibili'
 
@@ -3154,17 +3154,17 @@ test('summary-card send text leaves Bilibili card body empty', () => {
         new EventEmitter(),
     )
 
-    const target = new RecordingForwarder({ block_until: '32h' } as any, 'target-bilibili-card-empty-text')
+    const target = new RecordingForwarder({ block_until: '32h' } as any, 'target-bilibili-card-digest-text')
     const now = Math.floor(Date.now() / 1000)
     const items = [
         {
             article: {
                 id: 1,
-                a_id: 'summary-bili-empty-text-1',
+                a_id: 'summary-bili-digest-text-1',
                 platform: Platform.X,
                 username: 'member1',
                 u_id: 'member1',
-                content: 'summary content should stay in card only',
+                content: 'summary content should keep a digest body',
                 url: 'https://x.com/member1/status/1',
                 type: 'tweet',
                 created_at: now,
@@ -3183,7 +3183,7 @@ test('summary-card send text leaves Bilibili card body empty', () => {
 
     const text = (pools as any).buildSummaryCardSendText(
         {
-            routeKey: 'summary-bili-empty-text',
+            routeKey: 'summary-bili-digest-text',
             target,
             runtime_config: undefined,
             config: {
@@ -3197,7 +3197,8 @@ test('summary-card send text leaves Bilibili card body empty', () => {
         '聚合 fallback',
     )
 
-    expect(text).toBe('')
+    expect(text).toContain('聚合')
+    expect(text).toContain('1. member1 x发推')
 })
 
 test('summary-card send text consolidates repeated and mixed retweet digest items', () => {
@@ -7383,7 +7384,8 @@ test('summary-card realtime media appends rendered card after Bilibili photo dyn
         'realtime-photo-original-814.jpg',
         'realtime-photo-card-814.png',
     ])
-    expect(biliTarget.sent[0]?.texts[0]).toBe('')
+    expect(biliTarget.sent[0]?.texts[0]).toContain('@photo_uid')
+    expect(biliTarget.sent[0]?.texts[0]).toContain('Photo Nick')
     expect(qqTarget.sent[0]?.props?.media?.map((file: any) => path.basename(file.path))).toEqual([
         'realtime-photo-original-814.jpg',
     ])
