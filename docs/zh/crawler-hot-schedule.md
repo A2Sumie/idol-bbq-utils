@@ -55,9 +55,8 @@ POST /api/schedules/crawlers/insert
 
 Based on the 3020e production DB, 120-day JST article timestamp distribution:
 
-- X: keep all-day 8-minute list scans with the two list crawlers offset by 4 minutes. Dense activity is strongest at 18:00-00:59 and 12:00, but X list/API behavior is stable enough to keep the existing all-day 8-minute floor.
-- Instagram: keep 15:00-23:59 every 15 minutes and 00:00-14:59 every 30 minutes. The densest buckets are 19:00-23:59, especially 21:00-23:45.
+- X: keep all-day 4-minute scans per list with the two list crawlers offset by 2 minutes. Dense activity is strongest at 18:00-00:59 and 12:00; production lag showed the old 8-minute per-list cadence commonly planned sends around 9 minutes after source time.
+- Instagram: keep 15:00-23:59 every 5 minutes and 00:00-14:59 every 10 minutes. The densest buckets are 19:00-23:59, especially 21:00-23:45; production lag showed the old 15/30-minute cadence commonly planned sends 30+ minutes after source time.
 - TikTok: keep all-day 8-minute scan. Observed density is concentrated at 18:00-23:59, but cross-platform duplicate/video handling benefits from prompt capture.
 - YouTube: keep all-day 10-minute scan; add/keep offset scans for 18:00-22:59. Production data shows 22:00-22:45 as a real update band.
 - Website/FC: keep official blog 10:00-23:59 every 10 minutes and FC broad scan 10:00-23:59 every 30 minutes; add/keep offset scans for 18:00-22:59. Old `00:00` website buckets are date-only artifacts, not true publish times.
-
