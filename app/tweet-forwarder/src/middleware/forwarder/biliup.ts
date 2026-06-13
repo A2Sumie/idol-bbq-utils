@@ -23,8 +23,30 @@ const DEFAULT_BILIUP_METADATA_TIMEZONE = 'Asia/Tokyo'
 const DEFAULT_BILIUP_TAG_TARGET_COUNT = 10
 const MAX_BILIUP_TAG_COUNT = 10
 const MAX_BILIUP_TAG_CHARS = 20
+const MAX_BILIUP_TITLE_CHARS = 80
 const BILIUP_COMMON_TAGS = ['22/7', '秋元康', '偶像', '声优偶像', '七分之二十二']
 const BILIUP_FALLBACK_TOPIC_TAGS = ['ナナニジ', '日本偶像', '声优', '日系偶像', '偶像团体', '二次元偶像']
+const BILIUP_FORBIDDEN_TITLE_PREFIX_TERMS = [
+    '震惊',
+    '惊呆',
+    '爆料',
+    '爆炸',
+    '炸裂',
+    '离谱',
+    '必看',
+    '神回',
+    '全网',
+    '独家',
+    '首发',
+    '实锤',
+    '塌房',
+    '翻车',
+    '泪目',
+    '杀疯',
+    '燃爆',
+    '逆天',
+    '不得不看',
+]
 const BILIUP_FORBIDDEN_TAGS = new Set(
     [
         '搬运',
@@ -186,6 +208,7 @@ type BiliupMemberFact = {
 }
 
 type BiliupMemberFactIndex = {
+    facts: Array<BiliupMemberFact>
     byHandle: Map<string, BiliupMemberFact>
     byName: Map<string, BiliupMemberFact>
 }
@@ -459,7 +482,7 @@ function resolveBiliupMemberFactIndex(): BiliupMemberFactIndex | null {
                 }
             }
         }
-        biliupMemberFactIndexCache = { byHandle, byName }
+        biliupMemberFactIndexCache = { facts, byHandle, byName }
     } catch {
         biliupMemberFactIndexCache = null
     }
@@ -480,8 +503,58 @@ function resolveBiliupMemberFact(article: Pick<Article, 'username' | 'u_id'>) {
         }
     }
 
-    const displayName = normalizeBiliupUploadTag(resolveDisplayName(article))
+    const displayName = normalizeBiliupUploadTag(resolveFallbackDisplayName(article))
     return displayName ? index.byName.get(normalizeBiliupTagKey(displayName)) || null : null
+}
+
+function uniqueBiliupMemberFacts(facts: Array<BiliupMemberFact | null | undefined>) {
+    const seen = new Set<string>()
+    const result: BiliupMemberFact[] = []
+    for (const fact of facts) {
+        const name = normalizeBiliupUploadTag(fact?.names?.ja || '')
+        if (!fact || !name) {
+            continue
+        }
+        const key = normalizeBiliupTagKey(name)
+        if (seen.has(key)) {
+            continue
+        }
+        seen.add(key)
+        result.push(fact)
+    }
+    return result
+}
+
+function resolveMentionedBiliupMemberFacts(
+    article: Pick<Article, 'content' | 'username' | 'u_id'>,
+    texts: string[] = [],
+) {
+    const index = resolveBiliupMemberFactIndex()
+    if (!index) {
+        return []
+    }
+
+    const haystack = collectTextBlocks(article, [article.username || '', article.u_id || '', ...texts]).join('\n')
+    if (!haystack) {
+        return []
+    }
+
+    return index.facts
+        .map((fact, order) => {
+            const name = normalizeBiliupUploadTag(fact.names?.ja || '')
+            const indexOf = name ? haystack.indexOf(name) : -1
+            return { fact, indexOf, order }
+        })
+        .filter((item) => item.indexOf >= 0)
+        .sort((a, b) => a.indexOf - b.indexOf || a.order - b.order)
+        .map((item) => item.fact)
+}
+
+function resolveDetectedBiliupMemberFacts(
+    article: Pick<Article, 'content' | 'username' | 'u_id'>,
+    texts: string[] = [],
+) {
+    return uniqueBiliupMemberFacts([resolveBiliupMemberFact(article), ...resolveMentionedBiliupMemberFacts(article, texts)])
 }
 
 function cleanupBiliupDisplayName(value: string | null | undefined) {
@@ -505,13 +578,23 @@ function resolveMappedBiliupDisplayName(article: Pick<Article, 'username' | 'u_i
     return ''
 }
 
-function resolveDisplayName(article: Pick<Article, 'username' | 'u_id'>) {
+function resolveFallbackDisplayName(article: Pick<Article, 'username' | 'u_id'>) {
     return (
         resolveMappedBiliupDisplayName(article) ||
         cleanupBiliupDisplayName(article.username) ||
         cleanupBiliupDisplayName(article.u_id) ||
         'Unknown'
     )
+}
+
+function resolveDisplayName(article: Pick<Article, 'content' | 'username' | 'u_id'>, texts: string[] = []) {
+    const memberNames = resolveDetectedBiliupMemberFacts(article, texts)
+        .map((fact) => normalizeBiliupUploadTag(fact.names?.ja || ''))
+        .filter(Boolean)
+    if (memberNames.length > 0) {
+        return memberNames.join(' ')
+    }
+    return resolveFallbackDisplayName(article)
 }
 
 function resolveTypeLabel(article: Pick<Article, 'platform' | 'type'>) {
@@ -615,6 +698,17 @@ function resolveBiliupAccountTitle(displayName: string) {
     return displayName.startsWith('22/7') ? displayName : `22/7 ${displayName}`
 }
 
+function isBiliupCollectionDisplayName(value: string) {
+    const normalized = normalizeBiliupTagKey(value).replace(/[^a-z0-9]+/g, '')
+    return (
+        normalized === '227' ||
+        normalized === '227the3rd' ||
+        normalized === '227staff' ||
+        normalized === '227official' ||
+        normalized === '227nananijigram'
+    )
+}
+
 function buildTemplateContext(
     article: Pick<Article, 'content' | 'platform' | 'username' | 'u_id' | 'a_id' | 'created_at' | 'url' | 'type'>,
     texts: string[],
@@ -627,7 +721,7 @@ function buildTemplateContext(
             .map((line) => line.trim())
             .find(Boolean) || ''
     const dateTime = formatDateTimeParts(article.created_at, timeZone)
-    const displayName = resolveDisplayName(article)
+    const displayName = resolveDisplayName(article, texts)
     const summary = primaryLine || dateTime.datetime
     const bodyWithoutRepeatedSummary = stripDuplicateLeadingSummary(blocks[0] || '', summary)
     const body = bodyWithoutRepeatedSummary || blocks[0] || ''
@@ -694,7 +788,7 @@ function deriveTitle(
     const rendered = cleanupTemplateOutput(renderTemplate(template || resolveDefaultTitleTemplate(article), context))
     const fallback = buildTitleFallback(context, article)
     const title = hasRenderedTitlePayload(rendered, context) ? rendered : fallback
-    return truncateText(normalizeBiliupMainTitleText(title, fallback), 80)
+    return truncateText(normalizeBiliupMainTitleText(title, fallback), MAX_BILIUP_TITLE_CHARS)
 }
 
 function deriveDescription(
@@ -769,18 +863,18 @@ function resolveTagGenerationConfig(
     }
 }
 
-function deriveMemberTags(article: Pick<Article, 'username' | 'u_id'>) {
-    const fact = resolveBiliupMemberFact(article)
-    const displayName = normalizeBiliupUploadTag(fact?.names?.ja || resolveDisplayName(article))
-    const tags = [displayName]
-    if (fact?.official_section === '22/7_the_3rd') {
+function deriveMemberTags(article: Pick<Article, 'content' | 'username' | 'u_id'>, texts: string[] = []) {
+    const facts = resolveDetectedBiliupMemberFacts(article, texts)
+    const displayName = normalizeBiliupUploadTag(resolveDisplayName(article, texts))
+    const tags = facts.length > 0 || isBiliupCollectionDisplayName(displayName) ? facts.map((fact) => fact.names?.ja || '') : [displayName]
+    if (facts.some((fact) => fact.official_section === '22/7_the_3rd')) {
         tags.push('22/7三期生')
     }
     return uniqueBiliupTags(tags)
 }
 
-function deriveTags(article: Pick<Article, 'username' | 'u_id'>, configuredTags: Array<string>) {
-    return uniqueBiliupTags([...BILIUP_COMMON_TAGS, ...deriveMemberTags(article), ...configuredTags])
+function deriveTags(article: Pick<Article, 'content' | 'username' | 'u_id'>, texts: string[], configuredTags: Array<string>) {
+    return uniqueBiliupTags([...BILIUP_COMMON_TAGS, ...deriveMemberTags(article, texts), ...configuredTags])
 }
 
 function completeTagsWithFallback(tags: Array<string>, targetCount = DEFAULT_BILIUP_TAG_TARGET_COUNT) {
@@ -809,30 +903,94 @@ function buildBiliupTagGenerationInput(
     return JSON.stringify(context, null, 2)
 }
 
-function parseGeneratedBiliupTags(value: string) {
+type GeneratedBiliupMetadata = {
+    tags: string[]
+    titleZh?: string
+}
+
+function parseGeneratedBiliupMetadata(value: string): GeneratedBiliupMetadata {
     const trimmed = String(value || '')
         .trim()
         .replace(/^```(?:json)?/i, '')
         .replace(/```$/i, '')
         .trim()
     if (!trimmed) {
-        return []
+        return { tags: [] }
     }
     try {
         const parsed = JSON.parse(trimmed)
         if (Array.isArray(parsed)) {
-            return parsed.map(String)
+            return { tags: parsed.map(String) }
         }
         if (Array.isArray(parsed?.tags)) {
-            return parsed.tags.map(String)
+            const titleZh =
+                typeof parsed.title_zh === 'string'
+                    ? parsed.title_zh
+                    : typeof parsed.zh_title === 'string'
+                      ? parsed.zh_title
+                      : typeof parsed.chinese_title === 'string'
+                        ? parsed.chinese_title
+                        : undefined
+            return {
+                tags: parsed.tags.map(String),
+                titleZh,
+            }
         }
     } catch {
         // Fall through to a lenient comma/newline split for non-JSON model output.
     }
-    return trimmed
-        .split(/[,\n，、]/)
-        .map((tag) => tag.trim())
-        .filter(Boolean)
+    return {
+        tags: trimmed
+            .split(/[,\n，、]/)
+            .map((tag) => tag.trim())
+            .filter(Boolean),
+    }
+}
+
+function normalizeGeneratedBiliupTitlePrefix(value: string | null | undefined, currentTitle: string) {
+    const prefix = normalizeTextBlock(value)
+        .replace(/[|｜\r\n]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/^[「『【《\[\]()（）\s]+|[」』】》\[\]()（）\s]+$/g, '')
+        .trim()
+    if (!prefix || Array.from(prefix).length < 4 || Array.from(prefix).length > 24) {
+        return ''
+    }
+    if (!/[\u3400-\u9fff]/.test(prefix) || /[\u3040-\u30ff]/.test(prefix)) {
+        return ''
+    }
+    const lowercasePrefix = prefix.toLocaleLowerCase()
+    if (BILIUP_FORBIDDEN_TITLE_PREFIX_TERMS.some((term) => lowercasePrefix.includes(term.toLocaleLowerCase()))) {
+        return ''
+    }
+    const compactPrefix = prefix.replace(/[^\p{L}\p{N}]/gu, '').toLocaleLowerCase()
+    const compactTitle = currentTitle.replace(/[^\p{L}\p{N}]/gu, '').toLocaleLowerCase()
+    if (!compactPrefix || compactTitle.startsWith(compactPrefix) || currentTitle.includes(prefix)) {
+        return ''
+    }
+    return prefix
+}
+
+function prefixBiliupTitleWithGeneratedChinese(candidate: BiliupUploadCandidate, titleZh: string | undefined) {
+    const currentTitle = normalizeBiliupMainTitleText(candidate.title, candidate.title)
+    const prefix = normalizeGeneratedBiliupTitlePrefix(titleZh, currentTitle)
+    if (!prefix || currentTitle.includes(' | ')) {
+        return false
+    }
+
+    const separator = ' | '
+    const currentLength = Array.from(currentTitle).length
+    const separatorLength = Array.from(separator).length
+    let nextPrefix = prefix
+    const availablePrefixLength = MAX_BILIUP_TITLE_CHARS - currentLength - separatorLength
+    if (availablePrefixLength < 4) {
+        return false
+    }
+    if (Array.from(nextPrefix).length > availablePrefixLength) {
+        nextPrefix = truncateText(nextPrefix, availablePrefixLength)
+    }
+    candidate.title = `${nextPrefix}${separator}${currentTitle}`
+    return true
 }
 
 async function completeBiliupUploadCandidateTags(
@@ -849,10 +1007,12 @@ async function completeBiliupUploadCandidateTags(
         const prompt =
             tagGeneration.cfg_processor?.prompt ||
             [
-                '你是B站投稿标签助手。请为22/7相关视频补充搜索友好的中文/日文标签。',
-                `固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"]}。`,
+                '你是B站投稿元数据助手。请为22/7相关视频补充搜索友好的中文/日文标签，并在信息足够时给出克制的中文标题前缀。',
+                `固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"],"title_zh":"中文标题或空字符串"}。`,
                 '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
                 '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
+                'title_zh应为4到24个中文字符，基于原文事实，吸睛但不夸张、不偏颇、不脑补；信息不足则返回空字符串。',
+                'title_zh不要使用震惊、独家、首发、实锤、翻车、塌房、必看、全网、神回等营销或定性词。',
             ].join('\n')
         try {
             const processor = await processorRegistry.create(tagGeneration.provider, tagGeneration.api_key, log, {
@@ -861,8 +1021,10 @@ async function completeBiliupUploadCandidateTags(
             })
             try {
                 const raw = await processor.process(buildBiliupTagGenerationInput(article, texts, candidate, targetCount))
-                const generatedTags = parseGeneratedBiliupTags(raw)
+                const generated = parseGeneratedBiliupMetadata(raw)
+                const generatedTags = generated.tags
                 candidate.config.tags = uniqueBiliupTags([...candidate.config.tags, ...generatedTags], targetCount)
+                prefixBiliupTitleWithGeneratedChinese(candidate, generated.titleZh)
             } finally {
                 await processor.drop().catch(() => undefined)
             }
@@ -1046,7 +1208,7 @@ function buildBiliupUploadCandidate(
         videoPaths,
         config: {
             ...resolvedConfig,
-            tags: deriveTags(article, resolvedConfig.tags),
+            tags: deriveTags(article, texts, resolvedConfig.tags),
         },
     }
 }

@@ -145,7 +145,21 @@ class BiliForwarder extends Forwarder {
 
     private resolveVideoUploadMedia(props?: SendProps) {
         const media = props?.media?.length ? props.media : [...(props?.contentMedia || []), ...(props?.cardMedia || [])]
-        return media.filter((item) => this.isRootArticleMedia(item, props))
+        const rootMedia = media.filter((item) => this.isRootArticleMedia(item, props))
+        const rootHasVideo = rootMedia.some((item) => item.media_type === 'video')
+        if (!rootHasVideo) {
+            return rootMedia
+        }
+
+        const seen = new Set(rootMedia.map((item) => item.path))
+        const referencedVideos = media.filter((item) => {
+            if (this.isRootArticleMedia(item, props) || item.media_type !== 'video' || seen.has(item.path)) {
+                return false
+            }
+            seen.add(item.path)
+            return true
+        })
+        return [...rootMedia, ...referencedVideos]
     }
 
     private buildVideoUploadMarker(article: Article | undefined, props?: SendProps) {

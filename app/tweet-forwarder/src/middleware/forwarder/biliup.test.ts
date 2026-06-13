@@ -109,6 +109,7 @@ test('completeBiliupUploadCandidateTags uses 22/7 base member tags and DeepSeek 
             calls.push({ provider, text })
             return JSON.stringify({
                 tags: ['ライブ配信', '京都出身', '三期生', '搬运', 'X'],
+                title_zh: '直播后的感谢',
             })
         },
         drop: async () => undefined,
@@ -171,6 +172,7 @@ test('completeBiliupUploadCandidateTags uses 22/7 base member tags and DeepSeek 
 
     expect(calls).toHaveLength(1)
     expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
+    expect(candidate?.title).toBe('直播后的感谢 | 【22/7 北原実咲】[X] 北原実咲 26.06.13 今日は配信ありがとうございました')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
         '22/7',
@@ -235,6 +237,64 @@ test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', (
     )
 
     expect(candidate?.title).toBe('【22/7】[X] 22/7 26.06.07 22/7_the 3rd')
+})
+
+test('buildBiliupUploadCandidate uses detected members instead of collection account names', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'post',
+            u_id: 'nananijigram22_7_the.3rd',
+            username: '22/7 THE 3RD',
+            a_id: 'ig-the3rd-members',
+            content: '北原実咲 黒崎ありす',
+            created_at: 1773985020,
+            url: 'https://www.instagram.com/p/the3rd-members/',
+        } as any,
+        ['北原実咲 黒崎ありす'],
+        [{ media_type: 'video', path: '/tmp/the3rd-members.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate?.title).toBe(
+        '【22/7 北原実咲 黒崎ありす】[ins] 北原実咲 黒崎ありす 26.03.20 北原実咲 黒崎ありす',
+    )
+    expect(candidate?.title).not.toContain('THE 3RD')
+    expect(candidate?.description).toContain('来源账号: 北原実咲 黒崎ありす')
+    expect(candidate?.config.tags).toContain('北原実咲')
+    expect(candidate?.config.tags).toContain('黒崎ありす')
+    expect(candidate?.config.tags).toContain('22/7三期生')
+    expect(candidate?.config.tags).not.toContain('22/7 THE 3RD')
+    expect(candidate?.config.tags).not.toContain('北原実咲 黒崎ありす')
+})
+
+test('buildBiliupUploadCandidate resolves staff posts to mentioned members when confident', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.X,
+            type: 'tweet',
+            u_id: '227_staff',
+            username: '22/7(ナナブンノニジュウニ)',
+            a_id: 'x-staff-kitahara',
+            content: '北原実咲の紹介動画',
+            created_at: 1773985020,
+            url: 'https://x.com/227_staff/status/x-staff-kitahara',
+        } as any,
+        ['北原実咲の紹介動画'],
+        [{ media_type: 'video', path: '/tmp/staff-kitahara.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 北原実咲 26.03.20 北原実咲の紹介動画')
+    expect(candidate?.title).not.toContain('22/7(ナナブンノニジュウニ)')
+    expect(candidate?.description).toContain('来源账号: 北原実咲')
+    expect(candidate?.config.tags).toContain('北原実咲')
+    expect(candidate?.config.tags).toContain('22/7三期生')
+    expect(candidate?.config.tags).not.toContain('22/7(ナナブンノニジュウニ)')
 })
 
 test('buildBiliupUploadCandidate maps decorative X nicknames to canonical member names', () => {
@@ -804,6 +864,81 @@ test('BiliForwarder ignores referenced videos when choosing biliup upload for qu
         expect(dynamicCalls).toBe(1)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+    }
+})
+
+test('BiliForwarder appends referenced videos as later biliup parts when root post has a video', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') =>
+        ({ platform, hash, a_id }) as any
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            require_media: true,
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-root-video-parts-test',
+    )
+
+    let uploadedVideoPaths: string[] = []
+    let dynamicCalls = 0
+    ;(forwarder as any).performBiliupUpload = async (_article: unknown, candidate: { videoPaths: string[] }) => {
+        uploadedVideoPaths = candidate.videoPaths
+    }
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const rootThumb = {
+        media_type: 'video_thumbnail',
+        path: '/tmp/root-thumb.jpg',
+        sourceArticleId: 'x-root-video',
+        sourceUserId: 'kitahara_misaki',
+    }
+    const rootVideo = {
+        media_type: 'video',
+        path: '/tmp/root-video.mp4',
+        content_hash: 'root-video-hash',
+        sourceArticleId: 'x-root-video',
+        sourceUserId: 'kitahara_misaki',
+    }
+    const refVideo = {
+        media_type: 'video',
+        path: '/tmp/ref-video.mp4',
+        content_hash: 'ref-video-hash',
+        sourceArticleId: 'ig-main-video',
+        sourceUserId: 'nananijigram22_7_the.3rd',
+    }
+
+    try {
+        const result = await (forwarder as any).realSend(['root video with referenced preview'], {
+            article: {
+                platform: Platform.X,
+                a_id: 'x-root-video',
+                u_id: 'kitahara_misaki',
+                username: '北原実咲【22/7】',
+                type: 'quoted',
+                created_at: 1781100425,
+                url: 'https://x.com/kitahara_misaki/status/x-root-video',
+                content: 'root video with referenced preview',
+            },
+            media: [rootThumb, rootVideo, refVideo],
+            contentMedia: [rootThumb, rootVideo],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'biliup' }])
+        expect(uploadedVideoPaths).toEqual(['/tmp/root-video.mp4', '/tmp/ref-video.mp4'])
+        expect(dynamicCalls).toBe(0)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
     }
 })
 
