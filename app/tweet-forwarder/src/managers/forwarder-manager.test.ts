@@ -3009,15 +3009,22 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
     expect(target.sent[0]?.texts[0]).toContain('聚合')
     expect(target.sent[0]?.texts[0]).toContain('1. member1 x发推')
+    expect(target.sent[0]?.texts[0]).toContain('2. member2 x发推')
     expect(target.sent[0]?.texts[0]).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
-    expect(packedArticles[0]?.content).toContain('【聚合】1 条')
+    expect(packedArticles[0]?.content).toContain('【聚合】2 条')
     expect(packedArticles[0]?.content).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
     expect(packedArticles[0]?.content).toContain('summary content 1')
+    expect(packedArticles[0]?.content).toContain('summary content 2')
     expect(packedArticles[0]?.extra?.extra_type).toBe('message_pack_meta')
     expect(packedArticles[0]?.extra?.data?.groups?.[0]?.avatars?.[0]).toEqual({
         url: 'https://example.com/avatar-1.jpg',
         name: 'member1',
         id: 'member1',
+    })
+    expect(packedArticles[0]?.extra?.data?.groups?.[1]?.avatars?.[0]).toEqual({
+        url: 'https://example.com/avatar-2.jpg',
+        name: 'member2',
+        id: 'member2',
     })
     expect(packedArticles[0]?.media).toEqual([
         {
@@ -3025,14 +3032,17 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
             url: `data:image/png;base64,${Buffer.from('summary-1').toString('base64')}`,
             alt: 'summary-1',
         },
+        {
+            type: 'photo',
+            url: `data:image/png;base64,${Buffer.from('summary-2').toString('base64')}`,
+            alt: 'summary-2',
+        },
     ])
-    expect(packedArticles[1]?.content).toContain('【聚合】2 条')
-    expect(packedArticles[1]?.content).toContain('summary content 2')
+    expect(packedArticles[1]?.content).toContain('【聚合】1 条')
     expect(packedArticles[1]?.content).toContain('summary content 3')
-    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('summary content 2')
-    expect(packedArticles[1]?.extra?.data?.groups).toHaveLength(2)
-    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.avatars?.[0]?.url).toBe('https://example.com/avatar-2.jpg')
-    expect(packedArticles[1]?.extra?.data?.groups?.[1]?.avatars?.[0]?.url).toBe('https://example.com/avatar-3.jpg')
+    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('summary content 3')
+    expect(packedArticles[1]?.extra?.data?.groups).toHaveLength(1)
+    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.avatars?.[0]?.url).toBe('https://example.com/avatar-3.jpg')
     expect(target.sent[1]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
 })
 
@@ -4701,7 +4711,7 @@ test('restoreSummaryCardQueues cancels open windows when summary-card config cha
     expect(target.sent).toHaveLength(0)
 })
 
-test('sendArticles keeps forwarded reference text inside summary-card items', async () => {
+test('sendArticles keeps forwarded reference text after retired idle-first summary-card batches wait for window', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -4736,6 +4746,8 @@ test('sendArticles keeps forwarded reference text inside summary-card items', as
                 threshold: 8,
                 interval_seconds: 1800,
                 include_original_media: false,
+                send_first_immediately: true,
+                send_first_native: false,
             },
         } as any,
         'target-summary-card-fold-ref',
@@ -4833,6 +4845,10 @@ test('sendArticles keeps forwarded reference text inside summary-card items', as
             [{ forwarder: target, runtime_config: undefined }],
             { render_type: 'text-card' } as any,
         )
+        expect(target.sent).toHaveLength(0)
+        expect(packedArticles).toHaveLength(0)
+        expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(1)
+
         await (pools as any).sendArticles(
             undefined,
             'summary-reply-after-idle-first',
@@ -4847,10 +4863,14 @@ test('sendArticles keeps forwarded reference text inside summary-card items', as
         ;(DB.ForwardBy as any).checkExist = originalCheckExist
     }
 
-    expect(target.sent).toHaveLength(2)
-    expect(packedArticles).toHaveLength(2)
-    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).not.toContain('（略）')
-    expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('first body should not repeat')
+    expect(target.sent).toHaveLength(1)
+    expect(packedArticles).toHaveLength(1)
+    const summaryText = (packedArticles[0]?.extra?.data?.groups || [])
+        .flatMap((group: any) => group.items || [])
+        .map((item: any) => item.text || '')
+        .join('\n')
+    expect(summaryText).not.toContain('（略）')
+    expect(summaryText).toContain('first body should not repeat')
     expect(renderTextCalls.some((call) => call.article.id === 302 && call.collapsedArticleIds)).toBeFalse()
 })
 
@@ -6070,13 +6090,13 @@ test('sendArticles promotes queued summary-card hashtag items after a storm acti
         ;(DB.ForwardBy as any).checkExist = originalCheckExist
     }
 
-    expect(target.sent).toHaveLength(2)
-    expect(packedArticles).toHaveLength(2)
-    const stormGroups = packedArticles[1]?.extra?.data?.groups || []
+    expect(target.sent).toHaveLength(1)
+    expect(packedArticles).toHaveLength(1)
+    const stormGroups = packedArticles[0]?.extra?.data?.groups || []
     expect(stormGroups).toHaveLength(1)
     expect(stormGroups[0]?.kind).toBe('storm')
     expect(stormGroups[0]?.label).toBe('#ナナニジ')
-    expect(stormGroups[0]?.items).toHaveLength(2)
+    expect(stormGroups[0]?.items).toHaveLength(3)
 })
 
 test('sendArticles keeps first queued summary-card item inside a delayed hashtag storm', async () => {
@@ -6457,6 +6477,9 @@ test('sendArticles keeps summary-card fallback compact when card rendering fails
                 render_type: 'text-card',
             } as any,
         )
+
+        backdateSummaryCardQueues(pools as any, 1800)
+        await (pools as any).flushDueSummaryCardQueues()
     } finally {
         ;(DB.ForwardBy as any).checkExist = originalCheckExist
     }

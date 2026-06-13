@@ -2688,18 +2688,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 log?.debug(`Sending idle-first summary-card item ${article.a_id} natively for ${target.id}.`)
                 return false
             }
-            const sent = await this.sendImmediateSummaryCardItem(
-                target,
-                runtime_config,
-                summaryConfig,
-                item,
-                summaryRouteKey,
+            log?.debug(
+                `Skipping retired idle-first summary-card batch for ${article.a_id} to ${target.id}; queueing for fixed window.`,
             )
-            if (!sent) {
-                await this.releaseArticleChain(item.article, item.article.platform, target.id)
-            }
-            log?.debug(`Sent idle-first summary-card item ${article.a_id} for ${target.id}.`)
-            return true
         }
 
         let realtimeMediaResult: SummaryCardRealtimeMediaResult = {
@@ -3456,35 +3447,6 @@ class ForwarderPools extends BaseCompatibleModel {
         return now > windowEnd + config.flushDelaySeconds + graceSeconds
     }
 
-    private async sendImmediateSummaryCardItem(
-        target: BaseForwarder,
-        runtime_config: ForwardTargetPlatformCommonConfig | undefined,
-        config: ResolvedSummaryCardConfig,
-        item: SummaryCardQueueItem,
-        routeKeyValue: string,
-    ) {
-        const claimed = await this.claimArticleChain(item.article, item.article.platform, target.id)
-        if (!claimed) {
-            return true
-        }
-
-        return this.sendSummaryCardBatch(
-            {
-                routeKey: routeKeyValue,
-                target,
-                runtime_config,
-                config,
-                items: new Map([[item.article.id, item]]),
-                firstQueuedAt: item.queuedAt,
-                lastQueuedAt: item.queuedAt,
-                windowStart: this.resolveSummaryCardWindowStart(item.queuedAt, config),
-                windowEnd: this.resolveSummaryCardWindowStart(item.queuedAt, config) + config.intervalSeconds,
-            },
-            [{ kind: 'thread', label: this.getArticleThreadKey(item.article), items: [item] }],
-            'idle-first',
-        )
-    }
-
     private async flushDueSummaryCardQueues() {
         const now = Math.floor(Date.now() / 1000)
         let flushed = 0
@@ -3519,7 +3481,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private async flushSummaryCardQueue(
         queueKey: string,
-        reason: 'threshold' | 'interval' | 'shutdown' | 'idle-first',
+        reason: 'threshold' | 'interval' | 'shutdown',
     ) {
         const queue = this.summaryCardQueues.get(queueKey)
         if (!queue || queue.items.size === 0) {
@@ -3600,7 +3562,7 @@ class ForwarderPools extends BaseCompatibleModel {
     private async sendSummaryCardBatch(
         queue: SummaryCardQueue,
         groups: SummaryCardGroup[],
-        reason: 'threshold' | 'interval' | 'shutdown' | 'idle-first',
+        reason: 'threshold' | 'interval' | 'shutdown',
     ) {
         const allItems = orderBy(
             groups.flatMap((group) => group.items),
