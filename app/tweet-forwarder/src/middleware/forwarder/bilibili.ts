@@ -5,7 +5,7 @@ import FormData from 'form-data'
 import fs from 'fs'
 import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
-import { buildBiliupUploadCandidate, runBiliupUpload } from './biliup'
+import { buildBiliupUploadCandidate, completeBiliupUploadCandidateTags, runBiliupUpload } from './biliup'
 import {
     normalizeForwarderImageAttachments,
     resolveForwarderImageMaxBytes,
@@ -284,6 +284,7 @@ class BiliForwarder extends Forwarder {
         if (!candidate) {
             return false
         }
+        await completeBiliupUploadCandidateTags(props?.article, texts, candidate, this.log)
 
         let dedupeRecords: BiliVideoUploadDedupeRecords
         try {

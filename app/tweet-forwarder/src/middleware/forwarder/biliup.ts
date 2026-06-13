@@ -1,7 +1,9 @@
 import { CACHE_DIR_ROOT } from '@/config'
 import type { Article } from '@/db'
+import { processorRegistry } from '@/middleware/processor'
 import { formatPlatformTag } from '@/services/render-service'
 import type { BiliupVideoUploadConfig } from '@/types/forwarder'
+import type { ProcessorConfig, ProcessorProvider } from '@/types/processor'
 import type { Logger } from '@idol-bbq-utils/log'
 import type { BrowserMode } from '@idol-bbq-utils/spider'
 import { Platform, type MediaType } from '@idol-bbq-utils/spider/types'
@@ -18,6 +20,39 @@ const DEFAULT_BILIUP_WORKING_DIR = path.join(CACHE_DIR_ROOT, 'media', 'biliup')
 const DEFAULT_BILIUP_EXCLUDED_UIDS = ['22/7:radio', '22/7:movie']
 const DEFAULT_BILIUP_COOKIE_SYNC_URL = 'https://www.bilibili.com'
 const DEFAULT_BILIUP_METADATA_TIMEZONE = 'Asia/Tokyo'
+const DEFAULT_BILIUP_TAG_TARGET_COUNT = 10
+const MAX_BILIUP_TAG_COUNT = 10
+const MAX_BILIUP_TAG_CHARS = 20
+const BILIUP_COMMON_TAGS = ['22/7', '秋元康', '偶像', '声优偶像', '七分之二十二']
+const BILIUP_FALLBACK_TOPIC_TAGS = ['ナナニジ', '日本偶像', '声优', '日系偶像', '偶像团体', '二次元偶像']
+const BILIUP_FORBIDDEN_TAGS = new Set(
+    [
+        '搬运',
+        '转载',
+        '转帖',
+        '社媒',
+        '社交媒体',
+        'social media',
+        'x',
+        'twitter',
+        '推特',
+        'instagram',
+        'ins',
+        'ig',
+        'tiktok',
+        'tt',
+        'youtube',
+        'yt',
+        '官网',
+        'blog',
+        '视频',
+        '短视频',
+        '长视频',
+        '投稿',
+        'story',
+        'shorts',
+    ].map((tag) => tag.toLocaleLowerCase()),
+)
 const BILIUP_ACCOUNT_DISPLAY_NAME_MAP: Record<string, string> = {
     '227_staff': '22/7',
     '227official': '22/7',
@@ -38,6 +73,7 @@ const BILIUP_ACCOUNT_DISPLAY_NAME_MAP: Record<string, string> = {
     hikari_kabashima: '椛島光',
     iko_hiyama: '桧山依子',
     kawase_uta: '河瀬詩',
+    kitahara_misaki: '北原実咲',
     luna: '四条月',
     'luna.shijo': '四条月',
     luna_shijo: '四条月',
@@ -92,6 +128,14 @@ interface ResolvedBiliupMetadataTemplatesConfig {
     description?: string
 }
 
+interface ResolvedBiliupTagGenerationConfig {
+    enabled: true
+    provider: ProcessorProvider | string
+    api_key: string
+    target_count: number
+    cfg_processor?: ProcessorConfig
+}
+
 interface ResolvedBiliupVideoUploadConfig {
     enabled: boolean
     python_path: string
@@ -106,6 +150,7 @@ interface ResolvedBiliupVideoUploadConfig {
     threads: number
     copyright: 1 | 2
     tags: Array<string>
+    tag_generation?: ResolvedBiliupTagGenerationConfig
     exclude_uids: Array<string>
     metadata_templates?: ResolvedBiliupMetadataTemplatesConfig
 }
@@ -127,6 +172,25 @@ type BiliupCookieDocument = {
     token_info: Record<string, unknown>
     platform: unknown
 } & Record<string, unknown>
+
+type BiliupMemberFact = {
+    official_section?: string
+    names?: {
+        ja?: string
+        kana?: string
+    }
+    sns?: Array<{
+        platform?: string
+        url?: string
+    }>
+}
+
+type BiliupMemberFactIndex = {
+    byHandle: Map<string, BiliupMemberFact>
+    byName: Map<string, BiliupMemberFact>
+}
+
+let biliupMemberFactIndexCache: BiliupMemberFactIndex | null | undefined
 
 function resolveExistingPath(candidates: Array<string | undefined>, fallback: string) {
     for (const candidate of candidates) {
@@ -175,6 +239,54 @@ function normalizeTag(tag: string) {
         .replace(/[\r\n,]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
+}
+
+function normalizeBiliupUploadTag(tag: string) {
+    const normalized = normalizeTag(tag)
+        .replace(/^[#＃]+/, '')
+        .replace(/[#＃]/g, '')
+        .trim()
+    return truncateText(normalized, MAX_BILIUP_TAG_CHARS)
+}
+
+function normalizeBiliupTagKey(tag: string) {
+    return normalizeBiliupUploadTag(tag).toLocaleLowerCase()
+}
+
+function isUsefulBiliupUploadTag(tag: string) {
+    const normalized = normalizeBiliupUploadTag(tag)
+    if (!normalized) {
+        return false
+    }
+    const key = normalized.toLocaleLowerCase()
+    if (BILIUP_FORBIDDEN_TAGS.has(key)) {
+        return false
+    }
+    if (/^https?:\/\//i.test(normalized) || normalized.startsWith('@')) {
+        return false
+    }
+    return /[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]/.test(normalized)
+}
+
+function uniqueBiliupTags(values: Array<string>, limit = MAX_BILIUP_TAG_COUNT) {
+    const seen = new Set<string>()
+    const tags: string[] = []
+    for (const value of values) {
+        const normalized = normalizeBiliupUploadTag(value)
+        if (!isUsefulBiliupUploadTag(normalized)) {
+            continue
+        }
+        const key = normalizeBiliupTagKey(normalized)
+        if (seen.has(key)) {
+            continue
+        }
+        seen.add(key)
+        tags.push(normalized)
+        if (tags.length >= limit) {
+            break
+        }
+    }
+    return tags
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -296,6 +408,80 @@ function normalizeBiliupAccountKey(value: string | null | undefined) {
         .trim()
         .replace(/^@+/, '')
         .toLocaleLowerCase()
+}
+
+function extractHandleFromSocialUrl(url: string | null | undefined) {
+    const value = String(url || '').trim()
+    if (!value) {
+        return ''
+    }
+    try {
+        const parsed = new URL(value)
+        return normalizeBiliupAccountKey(parsed.pathname.split('/').filter(Boolean)[0])
+    } catch {
+        return normalizeBiliupAccountKey(value.split('/').filter(Boolean).pop())
+    }
+}
+
+function resolveBiliupMemberFactIndex(): BiliupMemberFactIndex | null {
+    if (biliupMemberFactIndexCache !== undefined) {
+        return biliupMemberFactIndexCache
+    }
+
+    const candidates = [
+        path.join(process.cwd(), 'assets/knowledge/22_7/facts/members.json'),
+        '/app/assets/knowledge/22_7/facts/members.json',
+    ]
+    const sourcePath = candidates.find((candidate) => fs.existsSync(candidate))
+    if (!sourcePath) {
+        biliupMemberFactIndexCache = null
+        return null
+    }
+
+    try {
+        const payload = JSON.parse(fs.readFileSync(sourcePath, 'utf8')) as Array<BiliupMemberFact> | { items?: unknown }
+        const facts = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload?.items)
+              ? (payload.items as Array<BiliupMemberFact>)
+              : []
+        const byHandle = new Map<string, BiliupMemberFact>()
+        const byName = new Map<string, BiliupMemberFact>()
+        for (const fact of facts) {
+            const jaName = normalizeBiliupUploadTag(fact.names?.ja || '')
+            if (jaName) {
+                byName.set(normalizeBiliupTagKey(jaName), fact)
+            }
+            for (const sns of fact.sns || []) {
+                const handle = extractHandleFromSocialUrl(sns.url)
+                if (handle) {
+                    byHandle.set(handle, fact)
+                }
+            }
+        }
+        biliupMemberFactIndexCache = { byHandle, byName }
+    } catch {
+        biliupMemberFactIndexCache = null
+    }
+    return biliupMemberFactIndexCache
+}
+
+function resolveBiliupMemberFact(article: Pick<Article, 'username' | 'u_id'>) {
+    const index = resolveBiliupMemberFactIndex()
+    if (!index) {
+        return null
+    }
+
+    for (const candidate of [article.u_id, article.username]) {
+        const handle = normalizeBiliupAccountKey(candidate)
+        const fact = handle ? index.byHandle.get(handle) : null
+        if (fact) {
+            return fact
+        }
+    }
+
+    const displayName = normalizeBiliupUploadTag(resolveDisplayName(article))
+    return displayName ? index.byName.get(normalizeBiliupTagKey(displayName)) || null : null
 }
 
 function cleanupBiliupDisplayName(value: string | null | undefined) {
@@ -560,20 +746,137 @@ function resolveMetadataTemplatesConfig(
     }
 }
 
-function deriveTags(article: Pick<Article, 'platform' | 'username'>, configuredTags: Array<string>) {
-    const platformTag =
-        article.platform === Platform.YouTube
-            ? 'YouTube'
-            : article.platform === Platform.Instagram
-              ? 'Instagram'
-              : article.platform === Platform.TikTok
-                ? 'TikTok'
-                : article.platform === Platform.Website
-                  ? '官网'
-                  : '社媒'
-    return uniqueStrings(['22/7', platformTag, article.username || '', ...configuredTags].map(normalizeTag)).filter(
-        Boolean,
-    )
+function resolveTagGenerationConfig(
+    config?: NonNullable<BiliupVideoUploadConfig['tag_generation']>,
+): ResolvedBiliupTagGenerationConfig | undefined {
+    if (!config?.enabled) {
+        return undefined
+    }
+    const provider = String(config.provider || '').trim()
+    const api_key = String(config.api_key || '').trim()
+    if (!provider || !api_key) {
+        return undefined
+    }
+    return {
+        enabled: true,
+        provider,
+        api_key,
+        target_count: Math.min(
+            MAX_BILIUP_TAG_COUNT,
+            Math.max(1, resolveMinInteger(config.target_count, DEFAULT_BILIUP_TAG_TARGET_COUNT, 1)),
+        ),
+        cfg_processor: config.cfg_processor,
+    }
+}
+
+function deriveMemberTags(article: Pick<Article, 'username' | 'u_id'>) {
+    const fact = resolveBiliupMemberFact(article)
+    const displayName = normalizeBiliupUploadTag(fact?.names?.ja || resolveDisplayName(article))
+    const tags = [displayName]
+    if (fact?.official_section === '22/7_the_3rd') {
+        tags.push('22/7三期生')
+    }
+    return uniqueBiliupTags(tags)
+}
+
+function deriveTags(article: Pick<Article, 'username' | 'u_id'>, configuredTags: Array<string>) {
+    return uniqueBiliupTags([...BILIUP_COMMON_TAGS, ...deriveMemberTags(article), ...configuredTags])
+}
+
+function completeTagsWithFallback(tags: Array<string>, targetCount = DEFAULT_BILIUP_TAG_TARGET_COUNT) {
+    return uniqueBiliupTags([...tags, ...BILIUP_FALLBACK_TOPIC_TAGS], Math.min(MAX_BILIUP_TAG_COUNT, targetCount))
+}
+
+function buildBiliupTagGenerationInput(
+    article: Pick<Article, 'platform' | 'username' | 'u_id' | 'a_id' | 'content' | 'url' | 'type'>,
+    texts: string[],
+    candidate: BiliupUploadCandidate,
+    targetCount: number,
+) {
+    const context = {
+        title: candidate.title,
+        description: candidate.description,
+        source_url: candidate.sourceUrl,
+        platform: Platform[article.platform] || String(article.platform),
+        type: article.type || '',
+        user_id: article.u_id || '',
+        username: article.username || '',
+        article_id: article.a_id || '',
+        current_tags: candidate.config.tags,
+        target_count: targetCount,
+        text: collectTextBlocks(article, texts).join('\n\n'),
+    }
+    return JSON.stringify(context, null, 2)
+}
+
+function parseGeneratedBiliupTags(value: string) {
+    const trimmed = String(value || '')
+        .trim()
+        .replace(/^```(?:json)?/i, '')
+        .replace(/```$/i, '')
+        .trim()
+    if (!trimmed) {
+        return []
+    }
+    try {
+        const parsed = JSON.parse(trimmed)
+        if (Array.isArray(parsed)) {
+            return parsed.map(String)
+        }
+        if (Array.isArray(parsed?.tags)) {
+            return parsed.tags.map(String)
+        }
+    } catch {
+        // Fall through to a lenient comma/newline split for non-JSON model output.
+    }
+    return trimmed
+        .split(/[,\n，、]/)
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+}
+
+async function completeBiliupUploadCandidateTags(
+    article: Article | undefined,
+    texts: string[],
+    candidate: BiliupUploadCandidate,
+    log?: Logger,
+) {
+    const tagGeneration = candidate.config.tag_generation
+    const targetCount = tagGeneration?.target_count || DEFAULT_BILIUP_TAG_TARGET_COUNT
+    candidate.config.tags = uniqueBiliupTags(candidate.config.tags, targetCount)
+
+    if (article && tagGeneration && candidate.config.tags.length < targetCount) {
+        const prompt =
+            tagGeneration.cfg_processor?.prompt ||
+            [
+                '你是B站投稿标签助手。请为22/7相关视频补充搜索友好的中文/日文标签。',
+                `固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"]}。`,
+                '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
+                '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
+            ].join('\n')
+        try {
+            const processor = await processorRegistry.create(tagGeneration.provider, tagGeneration.api_key, log, {
+                ...(tagGeneration.cfg_processor || {}),
+                prompt,
+            })
+            try {
+                const raw = await processor.process(buildBiliupTagGenerationInput(article, texts, candidate, targetCount))
+                const generatedTags = parseGeneratedBiliupTags(raw)
+                candidate.config.tags = uniqueBiliupTags([...candidate.config.tags, ...generatedTags], targetCount)
+            } finally {
+                await processor.drop().catch(() => undefined)
+            }
+        } catch (error) {
+            log?.warn(
+                `Biliup tag generation failed for ${article.a_id || 'unknown'}; using deterministic tags: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+        }
+    }
+
+    candidate.config.tags = completeTagsWithFallback(candidate.config.tags, targetCount)
+    return candidate
 }
 
 function normalizeBiliupCookieDocument(document: unknown): BiliupCookieDocument {
@@ -703,7 +1006,8 @@ function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBil
         tid: resolveMinInteger(config.tid, DEFAULT_BILIUP_TID, 1),
         threads: resolveMinInteger(config.threads, DEFAULT_BILIUP_THREADS, 1),
         copyright: config.copyright === 1 ? 1 : 2,
-        tags: uniqueStrings((config.tags || []).map(normalizeTag)),
+        tags: uniqueBiliupTags(config.tags || []),
+        tag_generation: resolveTagGenerationConfig(config.tag_generation),
         exclude_uids: uniqueStrings([...(config.exclude_uids || []), ...DEFAULT_BILIUP_EXCLUDED_UIDS]),
         metadata_templates: resolveMetadataTemplatesConfig(config.metadata_templates),
     }
@@ -1010,6 +1314,7 @@ export {
     DEFAULT_BILIUP_EXCLUDED_UIDS,
     buildBiliupUploadCandidate,
     buildCookieDocument,
+    completeBiliupUploadCandidateTags,
     normalizeBiliupCookieDocument,
     resolveBrowserCookieSyncConfig,
     resolveVideoUploadConfig,

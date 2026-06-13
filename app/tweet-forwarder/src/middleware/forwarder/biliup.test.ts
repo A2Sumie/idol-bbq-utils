@@ -4,10 +4,12 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { BiliForwarder } from './bilibili'
+import { processorRegistry } from '@/middleware/processor'
 import DB from '@/db'
 import {
     buildBiliupUploadCandidate,
     buildCookieDocument,
+    completeBiliupUploadCandidateTags,
     normalizeBiliupCookieDocument,
     prepareUploadVideoParts,
     resolveBrowserCookieSyncConfig,
@@ -40,8 +42,8 @@ test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', (
     expect(candidate?.title).toBe('22/7 新视频标题')
     expect(candidate?.coverPath).toBe('/tmp/cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/video.mp4'])
-    expect(candidate?.config.tags).toContain('YouTube')
-    expect(candidate?.config.tags).toContain('长视频')
+    expect(candidate?.config.tags).not.toContain('YouTube')
+    expect(candidate?.config.tags).not.toContain('长视频')
 })
 
 test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads without text', () => {
@@ -96,7 +98,95 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     expect(candidate?.title).toBe('【22/7 TikTok Member】[TT] TikTok Member 26.03.20 TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
-    expect(candidate?.config.tags).toContain('TikTok')
+    expect(candidate?.config.tags).not.toContain('TikTok')
+})
+
+test('completeBiliupUploadCandidateTags uses 22/7 base member tags and DeepSeek fillers', async () => {
+    const originalCreate = (processorRegistry as any).create
+    const calls: Array<{ provider: string; text: string }> = []
+    ;(processorRegistry as any).create = async (provider: string) => ({
+        process: async (text: string) => {
+            calls.push({ provider, text })
+            return JSON.stringify({
+                tags: ['ライブ配信', '京都出身', '三期生', '搬运', 'X'],
+            })
+        },
+        drop: async () => undefined,
+    })
+
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.X,
+            type: 'tweet',
+            u_id: 'kitahara_misaki',
+            username: '北原実咲【22/7】',
+            a_id: 'x-kitahara-video',
+            content: '今日は配信ありがとうございました',
+            created_at: 1781320000,
+            url: 'https://x.com/kitahara_misaki/status/1',
+        } as any,
+        ['今日は配信ありがとうございました'],
+        [{ media_type: 'video', path: '/tmp/kitahara.mp4' }],
+        {
+            enabled: true,
+            tags: ['搬运', '社媒'],
+            tag_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'test-key',
+                target_count: 10,
+            },
+        },
+    )
+
+    try {
+        expect(candidate).toBeTruthy()
+        expect(candidate?.config.tags).toEqual([
+            '22/7',
+            '秋元康',
+            '偶像',
+            '声优偶像',
+            '七分之二十二',
+            '北原実咲',
+            '22/7三期生',
+        ])
+
+        await completeBiliupUploadCandidateTags(
+            {
+                platform: Platform.X,
+                type: 'tweet',
+                u_id: 'kitahara_misaki',
+                username: '北原実咲【22/7】',
+                a_id: 'x-kitahara-video',
+                content: '今日は配信ありがとうございました',
+                created_at: 1781320000,
+                url: 'https://x.com/kitahara_misaki/status/1',
+            } as any,
+            ['今日は配信ありがとうございました'],
+            candidate!,
+        )
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
+    expect(candidate?.config.tags).toHaveLength(10)
+    expect(candidate?.config.tags).toEqual([
+        '22/7',
+        '秋元康',
+        '偶像',
+        '声优偶像',
+        '七分之二十二',
+        '北原実咲',
+        '22/7三期生',
+        'ライブ配信',
+        '京都出身',
+        '三期生',
+    ])
+    expect(candidate?.config.tags).not.toContain('搬运')
+    expect(candidate?.config.tags).not.toContain('社媒')
+    expect(candidate?.config.tags).not.toContain('X')
 })
 
 test('buildBiliupUploadCandidate falls back from empty-shell metadata titles', () => {

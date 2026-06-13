@@ -2,6 +2,7 @@ import type { BrowserMode } from '@idol-bbq-utils/spider'
 import type { Platform, TaskType } from '@idol-bbq-utils/spider/types'
 import type { CommonCfgConfig } from './common'
 import type { Media } from './media'
+import type { ProcessorConfig, ProcessorProvider } from './processor'
 
 enum ForwardTargetPlatformEnum {
     None = 'none',
@@ -24,6 +25,14 @@ type BiliupBrowserCookieSyncConfig = {
 type BiliupMetadataTemplatesConfig = {
     title?: string
     description?: string
+}
+
+type BiliupTagGenerationConfig = {
+    enabled?: boolean
+    provider?: ProcessorProvider | string
+    api_key?: string
+    cfg_processor?: ProcessorConfig
+    target_count?: number
 }
 
 type BiliupCollisionPlaceholderPartConfig = {
@@ -53,6 +62,7 @@ type BiliupVideoUploadConfig = {
     threads?: number
     copyright?: 1 | 2
     tags?: Array<string>
+    tag_generation?: BiliupTagGenerationConfig
     exclude_uids?: Array<string>
     metadata_templates?: BiliupMetadataTemplatesConfig
     collision_placeholder_part?: BiliupCollisionPlaceholderPartConfig
