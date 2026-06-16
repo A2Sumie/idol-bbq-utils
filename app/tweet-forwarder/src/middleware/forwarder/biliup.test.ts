@@ -46,6 +46,76 @@ test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', (
     expect(candidate?.config.tags).not.toContain('长视频')
 })
 
+test('buildBiliupUploadCandidate prefers stored translations for YouTube upload titles', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.YouTube,
+            type: 'video',
+            u_id: '227SMEJ',
+            username: '22/7 OFFICIAL YouTube CHANNEL',
+            a_id: 'yt-translated-title',
+            content: '新番組のお知らせ\n\n22/7の新しい企画が始まります',
+            translation: '新节目的通知\n\n22/7的新企划即将开始',
+            translated_by: 'DeepSeek V4 Pro',
+            created_at: 1710900000,
+            url: 'https://www.youtube.com/watch?v=yt-translated-title',
+        } as any,
+        [],
+        [
+            { media_type: 'video_thumbnail', path: '/tmp/yt-translated-cover.jpg' },
+            { media_type: 'video', path: '/tmp/yt-translated-video.mp4' },
+        ],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate).toBeTruthy()
+    expect(candidate?.title).toBe('新节目的通知')
+    expect(candidate?.description).toContain('22/7的新企划即将开始')
+    expect(candidate?.description).toContain('来源平台: YouTube视频')
+})
+
+test('buildBiliupUploadCandidate skips Sally member-only posts but keeps Sally YouTube videos', () => {
+    const memberOnlyPost = buildBiliupUploadCandidate(
+        {
+            platform: Platform.X,
+            type: 'tweet',
+            u_id: 'sally_amaki',
+            username: '天城サリー',
+            a_id: 'sally-member-only-x',
+            content: 'Subscribers only: thank you for watching tonight',
+            created_at: 1710900000,
+            url: 'https://x.com/sally_amaki/status/sally-member-only-x',
+        } as any,
+        ['Subscribers only: thank you for watching tonight'],
+        [{ media_type: 'video', path: '/tmp/sally-member-only.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+    const youtubeMemberVideo = buildBiliupUploadCandidate(
+        {
+            platform: Platform.YouTube,
+            type: 'video',
+            u_id: 'sallyamakiofficial',
+            username: 'Sally Amaki',
+            a_id: 'sally-member-video',
+            content: 'Members-only stream archive',
+            created_at: 1710900000,
+            url: 'https://www.youtube.com/watch?v=sally-member-video',
+        } as any,
+        ['Members-only stream archive'],
+        [{ media_type: 'video', path: '/tmp/sally-member-video.mp4' }],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(memberOnlyPost).toBeNull()
+    expect(youtubeMemberVideo).toBeTruthy()
+})
+
 test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads without text', () => {
     const candidate = buildBiliupUploadCandidate(
         {
@@ -101,7 +171,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     expect(candidate?.config.tags).not.toContain('TikTok')
 })
 
-test('completeBiliupUploadCandidateTags uses 22/7 base member tags and DeepSeek fillers', async () => {
+test('completeBiliupUploadCandidateTags replaces title payload without appending original text', async () => {
     const originalCreate = (processorRegistry as any).create
     const calls: Array<{ provider: string; text: string }> = []
     ;(processorRegistry as any).create = async (provider: string) => ({
@@ -109,7 +179,7 @@ test('completeBiliupUploadCandidateTags uses 22/7 base member tags and DeepSeek 
             calls.push({ provider, text })
             return JSON.stringify({
                 tags: ['ライブ配信', '京都出身', '三期生', '搬运', 'X'],
-                title_zh: '直播后的感谢',
+                title_zh: '北原実咲 26.06.13 直播后的感谢',
             })
         },
         drop: async () => undefined,
@@ -172,7 +242,9 @@ test('completeBiliupUploadCandidateTags uses 22/7 base member tags and DeepSeek 
 
     expect(calls).toHaveLength(1)
     expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
-    expect(candidate?.title).toBe('直播后的感谢 | 【22/7 北原実咲】[X] 北原実咲 26.06.13 今日は配信ありがとうございました')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 直播后的感谢')
+    expect(candidate?.title).not.toContain(' | ')
+    expect(candidate?.title).not.toContain('26.06.13 今日は')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
         '22/7',
