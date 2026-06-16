@@ -10,6 +10,13 @@
 
 ## Standard Workflow
 
+Production code changes are GitHub-first. Do not patch the 3020e tracked
+source tree as the primary implementation path. Land the source change locally,
+verify it, commit it, and push it to GitHub before changing containers, images,
+or remote working trees. If a machine-side hot patch is unavoidable for an
+incident, treat it as temporary: record it, back-port it into Git, push it, and
+only then converge the machine from the committed state.
+
 ### 1. Development (Local)
 1.  Make changes in `idol-bbq-utils` (this repository).
 2.  If local Chrome is used for automation or mobile emulation, launch it with an isolated profile and restore normal desktop Chrome behavior before finishing by closing orphaned headless processes and reopening a regular GUI window if needed.
