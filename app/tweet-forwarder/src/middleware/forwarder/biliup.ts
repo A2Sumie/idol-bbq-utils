@@ -76,6 +76,8 @@ const BILIUP_FORBIDDEN_TAGS = new Set(
     ].map((tag) => tag.toLocaleLowerCase()),
 )
 const BILIUP_ACCOUNT_DISPLAY_NAME_MAP: Record<string, string> = {
+    '22_7_channel': '22/7',
+    '227smej': '22/7',
     '227_staff': '22/7',
     '227official': '22/7',
     '227keisanchu': '22/7 計算外',
@@ -412,6 +414,21 @@ function normalizeComparableText(value: string | null | undefined) {
         .replace(/\s+/g, ' ')
         .trim()
         .toLocaleLowerCase()
+}
+
+function compactComparableText(value: string | null | undefined) {
+    return normalizeTextBlock(value)
+        .replace(/[^\p{L}\p{N}]/gu, '')
+        .toLocaleLowerCase()
+}
+
+function firstNonEmptyLine(value: string | null | undefined) {
+    return (
+        normalizeTextBlock(value)
+            .split('\n')
+            .map((line) => line.trim())
+            .find(Boolean) || ''
+    )
 }
 
 function stripDuplicateLeadingSummary(block: string, summary: string) {
@@ -796,9 +813,13 @@ function cleanupTemplateOutput(value: string) {
         .trim()
 }
 
+function isYoutubeLongVideo(article: Pick<Article, 'platform' | 'type'>) {
+    return article.platform === Platform.YouTube && article.type !== 'shorts'
+}
+
 function resolveDefaultTitleTemplate(article: Pick<Article, 'platform' | 'type'>) {
-    if (article.platform === Platform.YouTube && article.type !== 'shorts') {
-        return '{{summary}}'
+    if (isYoutubeLongVideo(article)) {
+        return '【{{account_title}}】{{upload_summary}}'
     }
     return '【{{account_title}}】[{{source_tag}}] {{upload_summary}}'
 }
@@ -829,6 +850,61 @@ function deriveTitle(
     return truncateText(normalizeBiliupMainTitleText(title, fallback), MAX_BILIUP_TITLE_CHARS)
 }
 
+function extractOriginalBiliupTitleLine(article: Pick<Article, 'content'> | undefined) {
+    return normalizeBiliupMainTitleText(firstNonEmptyLine(article?.content), '')
+}
+
+function isYoutubeTitleAnnouncementLine(line: string, originalTitle: string, summary: string) {
+    const text = normalizeTextBlock(line)
+    if (!text) {
+        return false
+    }
+
+    const lowerText = text.toLocaleLowerCase()
+    const hasAnnouncement =
+        /公開|已公开|已發布|已发布|发布|發布|公開しました|released|is out|now available/i.test(text)
+    if (!hasAnnouncement) {
+        return false
+    }
+
+    const compactLine = compactComparableText(text)
+    const compactOriginalTitle = compactComparableText(originalTitle)
+    const compactSummary = compactComparableText(summary)
+    return (
+        Boolean(compactOriginalTitle && compactLine.includes(compactOriginalTitle)) ||
+        Boolean(compactSummary && compactLine.includes(compactSummary)) ||
+        lowerText.includes('audition documentary')
+    )
+}
+
+function stripLeadingYoutubeTitleAnnouncements(body: string, originalTitle: string, summary: string) {
+    const lines = normalizeTextBlock(body).split('\n')
+    let changed = false
+    while (lines[0] !== undefined && !lines[0]!.trim()) {
+        lines.shift()
+        changed = true
+    }
+    while (lines[0] !== undefined && isYoutubeTitleAnnouncementLine(lines[0]!, originalTitle, summary)) {
+        lines.shift()
+        changed = true
+        while (lines[0] !== undefined && !lines[0]!.trim()) {
+            lines.shift()
+        }
+    }
+    return changed ? lines.join('\n').trim() : body
+}
+
+function resolveDescriptionBody(
+    article: Pick<Article, 'content' | 'platform' | 'type'>,
+    context: TemplateContext,
+) {
+    const body = context.body_or_summary
+    if (!isYoutubeLongVideo(article)) {
+        return body
+    }
+    return stripLeadingYoutubeTitleAnnouncements(body, extractOriginalBiliupTitleLine(article), context.summary) || body
+}
+
 function deriveDescription(
     article: Pick<Article, 'content' | 'platform' | 'username' | 'u_id' | 'a_id' | 'created_at' | 'url' | 'type'> & {
         translation?: string | null
@@ -842,8 +918,9 @@ function deriveDescription(
         return cleanupTemplateOutput(renderTemplate(template, context))
     }
 
+    const body = resolveDescriptionBody(article, context)
     const sections = [
-        context.body_or_summary,
+        body,
         `来源平台: ${context.platform_type_label}`,
         `来源账号: ${context.display_name}`,
         context.user_id ? `账号标识: ${context.user_id}` : '',
@@ -1073,15 +1150,55 @@ function normalizeGeneratedBiliupTitle(value: string | null | undefined, current
     if (BILIUP_FORBIDDEN_TITLE_TERMS.some((term) => lowercaseTitle.includes(term.toLocaleLowerCase()))) {
         return ''
     }
-    const compactTitle = strippedTitle.replace(/[^\p{L}\p{N}]/gu, '').toLocaleLowerCase()
-    const compactCurrent = currentTitle.replace(/[^\p{L}\p{N}]/gu, '').toLocaleLowerCase()
-    if (!compactTitle || compactCurrent.includes(compactTitle)) {
+    const compactTitle = compactComparableText(strippedTitle)
+    if (!compactTitle) {
         return ''
     }
     return strippedTitle
 }
 
-function replaceBiliupTitlePayloadWithGeneratedChinese(candidate: BiliupUploadCandidate, titleZh: string | undefined) {
+function appendOriginalPayloadToGeneratedTitle(generatedTitle: string, originalTitle: string) {
+    const originalPayload = normalizeBiliupMainTitleText(originalTitle, '')
+    if (!originalPayload) {
+        return generatedTitle
+    }
+
+    const compactGenerated = compactComparableText(generatedTitle)
+    const compactOriginal = compactComparableText(originalPayload)
+    if (!compactOriginal || compactGenerated.includes(compactOriginal) || compactOriginal.includes(compactGenerated)) {
+        return generatedTitle
+    }
+    return `${generatedTitle} | ${originalPayload}`
+}
+
+function buildGeneratedBiliupTitlePayload(generatedTitle: string, originalTitle: string, maxChars: number) {
+    const combined = appendOriginalPayloadToGeneratedTitle(generatedTitle, originalTitle)
+    if (Array.from(combined).length <= maxChars) {
+        return combined
+    }
+
+    const originalPayload = normalizeBiliupMainTitleText(originalTitle, '')
+    if (!originalPayload || combined === generatedTitle) {
+        return truncateText(generatedTitle, maxChars)
+    }
+
+    const separator = ' | '
+    const originalChars = Array.from(originalPayload)
+    const minOriginalLength = Math.min(originalChars.length, 24)
+    const generatedLimit = Math.max(4, maxChars - Array.from(separator).length - minOriginalLength)
+    const fittedGenerated = truncateText(generatedTitle, generatedLimit)
+    const originalLimit = maxChars - Array.from(fittedGenerated).length - Array.from(separator).length
+    if (originalLimit >= 4) {
+        return `${fittedGenerated}${separator}${truncateText(originalPayload, originalLimit)}`
+    }
+    return truncateText(combined, maxChars)
+}
+
+function replaceBiliupTitlePayloadWithGeneratedChinese(
+    candidate: BiliupUploadCandidate,
+    titleZh: string | undefined,
+    originalTitle?: string,
+) {
     const currentTitle = normalizeBiliupMainTitleText(candidate.title, candidate.title)
     const generatedTitle = normalizeGeneratedBiliupTitle(titleZh, currentTitle)
     if (!generatedTitle) {
@@ -1090,8 +1207,10 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(candidate: BiliupUploadCa
 
     const structuredMatch = currentTitle.match(/^(【[^】]+】(?:\[[^\]]+\])?\s*)(.+)$/)
     const fixedPrefix = structuredMatch?.[1] || ''
+    const currentPayload = structuredMatch?.[2] || currentTitle
+    const originalPayload = normalizeBiliupMainTitleText(originalTitle, '') || currentPayload
     if (!fixedPrefix) {
-        candidate.title = truncateText(generatedTitle, MAX_BILIUP_TITLE_CHARS)
+        candidate.title = buildGeneratedBiliupTitlePayload(generatedTitle, originalPayload, MAX_BILIUP_TITLE_CHARS)
         return true
     }
 
@@ -1099,7 +1218,7 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(candidate: BiliupUploadCa
     if (availableTitleLength < 4) {
         return false
     }
-    candidate.title = `${fixedPrefix}${truncateText(generatedTitle, availableTitleLength)}`
+    candidate.title = `${fixedPrefix}${buildGeneratedBiliupTitlePayload(generatedTitle, originalPayload, availableTitleLength)}`
     return true
 }
 
@@ -1122,7 +1241,7 @@ async function completeBiliupUploadCandidateTags(
                 '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
                 '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
                 'title_zh应为4到32个中文字符，基于原文事实，不夸张、不偏颇、不脑补；信息不足则返回空字符串。',
-                'title_zh会放在固定账号/来源前缀之后，原文标题和正文留在简介里；不要重复账号名、平台名、日期、原文标题或搬运属性词。',
+                'title_zh会放在固定账号/来源前缀之后，并与原标题用分隔符组合；不要重复账号名、平台名、日期、原标题或搬运属性词。',
             ].join('\n')
         try {
             const processor = await processorRegistry.create(tagGeneration.provider, tagGeneration.api_key, log, {
@@ -1134,7 +1253,11 @@ async function completeBiliupUploadCandidateTags(
                 const generated = parseGeneratedBiliupMetadata(raw)
                 const generatedTags = generated.tags
                 candidate.config.tags = uniqueBiliupTags([...candidate.config.tags, ...generatedTags], targetCount)
-                replaceBiliupTitlePayloadWithGeneratedChinese(candidate, generated.titleZh)
+                replaceBiliupTitlePayloadWithGeneratedChinese(
+                    candidate,
+                    generated.titleZh,
+                    extractOriginalBiliupTitleLine(article),
+                )
             } finally {
                 await processor.drop().catch(() => undefined)
             }

@@ -204,6 +204,10 @@ namespace YoutubeApiJsonParser {
         }]
     }
 
+    function firstString(values: Array<unknown>): string {
+        return values.find((value): value is string => typeof value === 'string' && Boolean(value.trim()))?.trim() || ''
+    }
+
     /**
      *
      * @param relativeTime like "1 hour ago", "2 days ago"
@@ -274,6 +278,56 @@ namespace YoutubeApiJsonParser {
         }
     }
 
+    function lockupMetadataTextParts(item: any): Array<string> {
+        const rows = item?.metadata?.lockupMetadataViewModel?.metadata?.contentMetadataViewModel?.metadataRows
+        if (!Array.isArray(rows)) {
+            return []
+        }
+        return rows.flatMap((row: any) => {
+            if (!Array.isArray(row?.metadataParts)) {
+                return []
+            }
+            return row.metadataParts
+                .map((part: any) => textParser(part?.text) || part?.accessibilityLabel)
+                .map((text: string) => text.trim())
+                .filter(Boolean)
+        })
+    }
+
+    function lockupVideoParser(item: any, channelMeta: ChannelMeta): YoutubeArticle | null {
+        const contentType = String(item?.contentType || '')
+        if (contentType && !contentType.includes('VIDEO')) {
+            return null
+        }
+        const videoId = item?.contentId
+            || firstString(JSONPath({ path: '$..watchEndpoint.videoId', json: item }))
+            || firstString(JSONPath({ path: '$..addToPlaylistCommand.videoId', json: item }))
+        if (!videoId) {
+            return null
+        }
+
+        const title = textParser(item?.metadata?.lockupMetadataViewModel?.title)
+        const publishedText = lockupMetadataTextParts(item).find((text) => /ago/i.test(text)) || ''
+        const thumbnail = thumbnailParser(item?.contentImage?.thumbnailViewModel?.image)
+            || thumbnailParser(item?.contentImage?.thumbnailViewModel)
+        const media = mediaParser(thumbnail)
+        return {
+            platform: Platform.YouTube,
+            a_id: videoId,
+            u_id: channelMeta.handle,
+            username: channelMeta.title,
+            created_at: relativeTimeParser(publishedText),
+            content: buildContent(title, null),
+            url: `https://www.youtube.com/watch?v=${videoId}`,
+            type: ArticleTypeEnum.VIDEO,
+            ref: null,
+            has_media: media.length > 0,
+            media,
+            extra: null,
+            u_avatar: channelMeta.avatar,
+        }
+    }
+
     function shortsParserItem(item: any, channelMeta: ChannelMeta): YoutubeArticle | null {
         const videoId = item?.onTap?.innertubeCommand?.reelWatchEndpoint?.videoId
             || item?.navigationEndpoint?.reelWatchEndpoint?.videoId
@@ -307,13 +361,24 @@ namespace YoutubeApiJsonParser {
         if (!json) {
             return []
         }
-        const items = JSONPath({
+        const videoRendererItems = JSONPath({
             path: '$..videoRenderer',
             json,
         })
-        return items
-            .map((item: any) => videoParser(item, channelMeta))
-            .filter((item): item is YoutubeArticle => Boolean(item))
+        const lockupItems = JSONPath({
+            path: '$..lockupViewModel',
+            json,
+        })
+        const articles = [
+            ...videoRendererItems.map((item: any) => videoParser(item, channelMeta)),
+            ...lockupItems.map((item: any) => lockupVideoParser(item, channelMeta)),
+        ].filter((item): item is YoutubeArticle => Boolean(item))
+
+        const dedup = new Map<string, YoutubeArticle>()
+        for (const article of articles) {
+            dedup.set(article.a_id, article)
+        }
+        return Array.from(dedup.values())
     }
 
     export function shortsParser(json: any, channelMeta: ChannelMeta): Array<YoutubeArticle> {

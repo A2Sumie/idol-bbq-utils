@@ -18,6 +18,21 @@ const channelHeaderFixture = {
     },
 }
 
+const officialChannelHeaderFixture = {
+    c4TabbedHeaderRenderer: {
+        title: '22/7 OFFICIAL YouTube CHANNEL',
+        channelHandleText: {
+            runs: [{ text: '@227SMEJ' }],
+        },
+        avatar: {
+            thumbnails: [
+                { url: '//yt3.example.com/s48-official.jpg', width: 48 },
+                { url: '//yt3.example.com/s176-official.jpg', width: 176 },
+            ],
+        },
+    },
+}
+
 const videosFixture = {
     header: channelHeaderFixture,
     richGridRenderer: {
@@ -39,6 +54,60 @@ const videosFixture = {
                             thumbnails: [
                                 { url: 'https://i.ytimg.com/vi/bBRUMp_WNUU/hqdefault.jpg', width: 480 },
                             ],
+                        },
+                    },
+                },
+            },
+        }],
+    },
+}
+
+const lockupVideosFixture = {
+    header: officialChannelHeaderFixture,
+    richGridRenderer: {
+        contents: [{
+            richItemRenderer: {
+                content: {
+                    lockupViewModel: {
+                        contentId: 'X6J9TphDexM',
+                        contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
+                        contentImage: {
+                            thumbnailViewModel: {
+                                image: {
+                                    sources: [
+                                        { url: 'https://i.ytimg.com/vi/X6J9TphDexM/hqdefault.jpg', width: 168 },
+                                        { url: 'https://i.ytimg.com/vi/X6J9TphDexM/hqdefault.jpg', width: 336 },
+                                    ],
+                                },
+                            },
+                        },
+                        metadata: {
+                            lockupMetadataViewModel: {
+                                title: {
+                                    content: '22/7_the 3rd AUDITION DOCUMENTARY -Misaki Kitahara-',
+                                },
+                                metadata: {
+                                    contentMetadataViewModel: {
+                                        metadataRows: [{
+                                            metadataParts: [
+                                                { text: { content: '412 views' } },
+                                                { text: { content: '46 minutes ago' }, accessibilityLabel: '46 minutes ago' },
+                                            ],
+                                        }],
+                                    },
+                                },
+                            },
+                        },
+                        rendererContext: {
+                            commandContext: {
+                                onTap: {
+                                    innertubeCommand: {
+                                        watchEndpoint: {
+                                            videoId: 'X6J9TphDexM',
+                                        },
+                                    },
+                                },
+                            },
                         },
                     },
                 },
@@ -105,6 +174,24 @@ test('YouTube videos parser extracts channel videos', () => {
     expect(videos[0]?.media?.[0]).toEqual({
         type: 'video_thumbnail',
         url: 'https://i.ytimg.com/vi/bBRUMp_WNUU/hqdefault.jpg',
+    })
+})
+
+test('YouTube videos parser extracts current lockup view model videos', () => {
+    const channelMeta = YoutubeApiJsonParser.channelMetaParser(lockupVideosFixture, '@fallback')
+    const videos = YoutubeApiJsonParser.videosParser(lockupVideosFixture, channelMeta)
+
+    expect(videos).toHaveLength(1)
+    expect(videos[0]?.type).toBe('video')
+    expect(videos[0]?.a_id).toBe('X6J9TphDexM')
+    expect(videos[0]?.u_id).toBe('227SMEJ')
+    expect(videos[0]?.username).toBe('22/7 OFFICIAL YouTube CHANNEL')
+    expect(videos[0]?.url).toBe('https://www.youtube.com/watch?v=X6J9TphDexM')
+    expect(videos[0]?.content).toBe('22/7_the 3rd AUDITION DOCUMENTARY -Misaki Kitahara-')
+    expect(videos[0]?.created_at).toBeGreaterThan(0)
+    expect(videos[0]?.media?.[0]).toEqual({
+        type: 'video_thumbnail',
+        url: 'https://i.ytimg.com/vi/X6J9TphDexM/hqdefault.jpg',
     })
 })
 

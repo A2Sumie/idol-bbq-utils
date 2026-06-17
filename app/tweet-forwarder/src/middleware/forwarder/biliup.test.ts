@@ -39,9 +39,10 @@ test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', (
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('22/7 新视频标题')
+    expect(candidate?.title).toBe('【22/7】22/7 新视频标题')
     expect(candidate?.coverPath).toBe('/tmp/cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/video.mp4'])
+    expect(candidate?.title).not.toContain('[YT]')
     expect(candidate?.config.tags).not.toContain('YouTube')
     expect(candidate?.config.tags).not.toContain('长视频')
 })
@@ -71,9 +72,89 @@ test('buildBiliupUploadCandidate prefers stored translations for YouTube upload 
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('新节目的通知')
+    expect(candidate?.title).toBe('【22/7】新节目的通知')
+    expect(candidate?.title).not.toContain('[YT]')
     expect(candidate?.description).toContain('22/7的新企划即将开始')
     expect(candidate?.description).toContain('来源平台: YouTube视频')
+})
+
+test('completeBiliupUploadCandidateTags formats official YouTube long video metadata', async () => {
+    const originalCreate = (processorRegistry as any).create
+    const originalTitle = '22/7 3期生 AUDITION DOCUMENTARY - 北原実咲 -'
+    const translationTitle = '北原実咲三期生试镜纪录片'
+    const generatedTitle = '三期生试镜纪录片'
+    const calls: Array<{ provider: string; text: string }> = []
+    ;(processorRegistry as any).create = async (provider: string) => ({
+        process: async (text: string) => {
+            calls.push({ provider, text })
+            return JSON.stringify({
+                tags: ['オーディション', '北原実咲', '三期生', 'ナナニジライブ'],
+                title_zh: translationTitle,
+            })
+        },
+        drop: async () => undefined,
+    })
+
+    const article = {
+        platform: Platform.YouTube,
+        type: 'video',
+        u_id: '227SMEJ',
+        username: '22/7 OFFICIAL YouTube CHANNEL',
+        a_id: 'X6J9TphDexM',
+        content: `${originalTitle}\n\n${originalTitle}　を公開\n\n22/7 3期生 定期公演「ナナニジライブ2026」Final開催決定！`,
+        translation: `${translationTitle}\n\n${originalTitle} 已公开。\n\n22/7三期生定期公演「ナナニジライブ2026」Final 确定举办！`,
+        translated_by: 'DeepSeek V4 Pro',
+        created_at: 1781694017,
+        url: 'https://www.youtube.com/watch?v=X6J9TphDexM',
+    } as any
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [
+            { media_type: 'video_thumbnail', path: '/tmp/official-cover.jpg' },
+            { media_type: 'video', path: '/tmp/official-video.mp4' },
+        ],
+        {
+            enabled: true,
+            tag_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'test-key',
+                target_count: 10,
+            },
+        },
+    )
+
+    try {
+        expect(candidate).toBeTruthy()
+        expect(candidate?.title).toBe(`【22/7 北原実咲】${translationTitle}`)
+        expect(candidate?.title).not.toContain('[YT]')
+        expect(candidate?.description.split('\n')[0]).toBe('22/7三期生定期公演「ナナニジライブ2026」Final 确定举办！')
+        expect(candidate?.description).toContain('来源平台: YouTube视频')
+
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
+    expect(calls[0]?.text).toContain(originalTitle)
+    expect(candidate?.title).toBe(`【22/7 北原実咲】${generatedTitle} | ${originalTitle}`)
+    expect(candidate?.title).not.toContain('[YT]')
+    expect(candidate?.config.tags).toHaveLength(10)
+    expect(candidate?.config.tags).toEqual([
+        '22/7',
+        '秋元康',
+        '偶像',
+        '声优偶像',
+        '七分之二十二',
+        '北原実咲',
+        '22/7三期生',
+        'オーディション',
+        '三期生',
+        'ナナニジライブ',
+    ])
 })
 
 test('buildBiliupUploadCandidate skips Sally member-only posts but keeps Sally YouTube videos', () => {
@@ -171,7 +252,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     expect(candidate?.config.tags).not.toContain('TikTok')
 })
 
-test('completeBiliupUploadCandidateTags replaces title payload without appending original text', async () => {
+test('completeBiliupUploadCandidateTags replaces title payload and appends original text', async () => {
     const originalCreate = (processorRegistry as any).create
     const calls: Array<{ provider: string; text: string }> = []
     ;(processorRegistry as any).create = async (provider: string) => ({
@@ -242,8 +323,7 @@ test('completeBiliupUploadCandidateTags replaces title payload without appending
 
     expect(calls).toHaveLength(1)
     expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
-    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 直播后的感谢')
-    expect(candidate?.title).not.toContain(' | ')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 直播后的感谢 | 今日は配信ありがとうございました')
     expect(candidate?.title).not.toContain('26.06.13 今日は')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
