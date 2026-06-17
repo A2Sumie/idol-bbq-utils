@@ -242,6 +242,7 @@ raw_status = subprocess.check_output(
 )
 entries = [entry for entry in raw_status.split(b"\0") if entry]
 rows = []
+seen_paths = set()
 i = 0
 while i < len(entries):
     entry = entries[i]
@@ -269,6 +270,48 @@ while i < len(entries):
             "remote_head_hash": remote_head_hash,
         }
     )
+    seen_paths.add(path)
+
+ignored_source_asset_paths = subprocess.check_output(
+    [
+        "git",
+        "ls-files",
+        "-z",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--",
+        "assets/branding",
+        "assets/fonts",
+        "assets/knowledge",
+        "assets/tweet-forwarder/config.example.prod.8c4g.yaml",
+        "assets/tweet-forwarder/config.example.prod.yaml",
+        "assets/tweet-forwarder/config.example.prod.zh.yaml",
+        "assets/tweet-forwarder/config.example.yaml",
+    ],
+    stderr=subprocess.DEVNULL,
+)
+for raw_path in ignored_source_asset_paths.split(b"\0"):
+    if not raw_path:
+        continue
+    path = raw_path.decode("utf-8", "surrogateescape")
+    if path in seen_paths or not is_source_path(path):
+        continue
+    path_bucket = bucket(path)
+    worktree_hash = ""
+    remote_head_hash = run(["git", "rev-parse", f"HEAD:{path}"])
+    if os.path.isfile(path):
+        worktree_hash = run(["git", "hash-object", f"--path={path}", "--", path])
+    rows.append(
+        {
+            "status": "!!",
+            "bucket": path_bucket,
+            "path": path,
+            "worktree_hash": worktree_hash,
+            "remote_head_hash": remote_head_hash,
+        }
+    )
+    seen_paths.add(path)
 
 remote_head_source_files = {}
 raw_head = subprocess.check_output(
