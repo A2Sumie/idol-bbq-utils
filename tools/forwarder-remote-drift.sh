@@ -185,6 +185,8 @@ def bucket(path):
         return "core"
     if path.startswith("tools/"):
         return "tools"
+    if is_source_asset_path(path):
+        return "source-assets"
     if path in SOURCE_EXACT:
         return "repo-source"
     if path.startswith("assets/backups/"):
@@ -201,6 +203,18 @@ SOURCE_PREFIXES = (
     "core/",
     "tools/",
 )
+SOURCE_ASSET_PREFIXES = (
+    "assets/branding/",
+    "assets/fonts/",
+    "assets/knowledge/",
+)
+SOURCE_ASSET_EXACT = {
+    "assets/tweet-forwarder/config.example.8c4g.yaml",
+    "assets/tweet-forwarder/config.example.prod.8c4g.yaml",
+    "assets/tweet-forwarder/config.example.prod.yaml",
+    "assets/tweet-forwarder/config.example.prod.zh.yaml",
+    "assets/tweet-forwarder/config.example.yaml",
+}
 SOURCE_EXACT = {
     "package.json",
     "bun.lock",
@@ -213,10 +227,12 @@ SOURCE_EXACT = {
 }
 
 
+def is_source_asset_path(path):
+    return path in SOURCE_ASSET_EXACT or path.startswith(SOURCE_ASSET_PREFIXES)
+
+
 def is_source_path(path):
-    if path.startswith("assets/"):
-        return False
-    return path in SOURCE_EXACT or path.startswith(SOURCE_PREFIXES)
+    return path in SOURCE_EXACT or path.startswith(SOURCE_PREFIXES) or is_source_asset_path(path)
 
 
 repo = os.environ.get("REMOTE_REPO") or os.path.join(os.path.expanduser("~"), "idol-bbq-utils")
@@ -305,6 +321,18 @@ SOURCE_PREFIXES = (
     "core/",
     "tools/",
 )
+SOURCE_ASSET_PREFIXES = (
+    "assets/branding/",
+    "assets/fonts/",
+    "assets/knowledge/",
+)
+SOURCE_ASSET_EXACT = {
+    "assets/tweet-forwarder/config.example.8c4g.yaml",
+    "assets/tweet-forwarder/config.example.prod.8c4g.yaml",
+    "assets/tweet-forwarder/config.example.prod.yaml",
+    "assets/tweet-forwarder/config.example.prod.zh.yaml",
+    "assets/tweet-forwarder/config.example.yaml",
+}
 SOURCE_EXACT = {
     "package.json",
     "bun.lock",
@@ -340,6 +368,8 @@ def bucket(path):
         return "core"
     if path.startswith("tools/"):
         return "tools"
+    if is_source_asset_path(path):
+        return "source-assets"
     if path in SOURCE_EXACT:
         return "repo-source"
     if path.startswith("assets/backups/"):
@@ -349,10 +379,12 @@ def bucket(path):
     return "other"
 
 
+def is_source_asset_path(path):
+    return path in SOURCE_ASSET_EXACT or path.startswith(SOURCE_ASSET_PREFIXES)
+
+
 def is_source_path(path):
-    if path.startswith("assets/"):
-        return False
-    return path in SOURCE_EXACT or path.startswith(SOURCE_PREFIXES)
+    return path in SOURCE_EXACT or path.startswith(SOURCE_PREFIXES) or is_source_asset_path(path)
 
 def relation(row):
     path = row["path"]

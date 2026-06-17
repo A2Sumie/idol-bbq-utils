@@ -88,12 +88,20 @@ import sys
 with open(drift_path, "r", encoding="utf-8") as handle:
     drift = json.load(handle)
 
-protected_prefixes = ("assets/",)
+runtime_asset_prefixes = (
+    "assets/backups/",
+    "assets/cookies/",
+)
 protected_exact = {
     "assets/config.yaml",
+    "assets/refactor.db-journal",
+    "assets/remote_config.yaml",
     "assets/refactor.db",
     "assets/refactor.db-shm",
     "assets/refactor.db-wal",
+    "assets/tweet-forwarder/config.yaml",
+    "assets/tweet-forwarder/data.db",
+    "assets/tweet-forwarder/x.cookies",
 }
 source_prefixes = (
     "app/tweet-forwarder/src/",
@@ -102,6 +110,18 @@ source_prefixes = (
     "core/",
     "tools/",
 )
+source_asset_prefixes = (
+    "assets/branding/",
+    "assets/fonts/",
+    "assets/knowledge/",
+)
+source_asset_exact = {
+    "assets/tweet-forwarder/config.example.8c4g.yaml",
+    "assets/tweet-forwarder/config.example.prod.8c4g.yaml",
+    "assets/tweet-forwarder/config.example.prod.yaml",
+    "assets/tweet-forwarder/config.example.prod.zh.yaml",
+    "assets/tweet-forwarder/config.example.yaml",
+}
 source_exact = {
     "package.json",
     "bun.lock",
@@ -151,6 +171,8 @@ def bucket(path):
         return "core"
     if path.startswith("tools/"):
         return "tools"
+    if is_source_asset_path(path):
+        return "source-assets"
     if path in source_exact:
         return "repo-source"
     if path.startswith("assets/backups/"):
@@ -164,10 +186,20 @@ def unsafe_path(path):
     return path.startswith("/") or "\x00" in path or any(part == ".." for part in path.split("/"))
 
 
+def is_source_asset_path(path):
+    return path in source_asset_exact or path.startswith(source_asset_prefixes)
+
+
+def is_runtime_asset_path(path):
+    return (
+        path in protected_exact
+        or path.startswith(runtime_asset_prefixes)
+        or path.startswith("assets/config.yaml.")
+    )
+
+
 def is_local_source_path(path):
-    if path.startswith("assets/"):
-        return False
-    return path in source_exact or path.startswith(source_prefixes)
+    return path in source_exact or path.startswith(source_prefixes) or is_source_asset_path(path)
 
 
 def is_runtime_path(row):
@@ -175,8 +207,7 @@ def is_runtime_path(row):
     return (
         row["bucket"].startswith("runtime-")
         or row["relation"] == "runtime_artifact"
-        or path.startswith(protected_prefixes)
-        or path in protected_exact
+        or is_runtime_asset_path(path)
     )
 
 
@@ -337,17 +368,35 @@ with open(path_file, "rb") as handle:
 
 protected_exact = {
     "assets/config.yaml",
+    "assets/refactor.db-journal",
+    "assets/remote_config.yaml",
     "assets/refactor.db",
     "assets/refactor.db-shm",
     "assets/refactor.db-wal",
+    "assets/tweet-forwarder/config.yaml",
+    "assets/tweet-forwarder/data.db",
+    "assets/tweet-forwarder/x.cookies",
 }
+runtime_asset_prefixes = (
+    "assets/backups/",
+    "assets/cookies/",
+)
+
+
+def protected_asset_path(path):
+    return (
+        path in protected_exact
+        or path.startswith(runtime_asset_prefixes)
+        or path.startswith("assets/config.yaml.")
+    )
+
+
 bad = [
     path
     for path in paths
     if path.startswith("/")
     or "\x00" in path
-    or path.startswith("assets/")
-    or path in protected_exact
+    or protected_asset_path(path)
     or any(part == ".." for part in path.split("/"))
 ]
 if bad:
@@ -440,18 +489,34 @@ with open(path_file, "rb") as handle:
 
 protected_exact = {
     "assets/config.yaml",
+    "assets/refactor.db-journal",
+    "assets/remote_config.yaml",
     "assets/refactor.db",
     "assets/refactor.db-shm",
     "assets/refactor.db-wal",
+    "assets/tweet-forwarder/config.yaml",
+    "assets/tweet-forwarder/data.db",
+    "assets/tweet-forwarder/x.cookies",
 }
+runtime_asset_prefixes = (
+    "assets/backups/",
+    "assets/cookies/",
+)
+
+
+def protected_asset_path(path):
+    return (
+        path in protected_exact
+        or path.startswith(runtime_asset_prefixes)
+        or path.startswith("assets/config.yaml.")
+    )
 
 
 def unsafe(path):
     return (
         path.startswith("/")
         or "\x00" in path
-        or path.startswith("assets/")
-        or path in protected_exact
+        or protected_asset_path(path)
         or any(part == ".." for part in path.split("/"))
     )
 
@@ -475,7 +540,9 @@ Usage: tools/forwarder-remote-converge.sh [--dry-run|--archive-only|--apply --ye
 
 Builds a guarded convergence plan for the dirty remote idol-bbq-utils worktree.
 The desired source state is the current local HEAD. Runtime assets such as
-assets/config.yaml, database files, and assets/backups are always protected.
+assets/config.yaml, cookies, database files, and assets/backups are always
+protected; tracked source assets such as fonts, knowledge, branding, and example
+configs are converged with source code.
 
 Modes:
   --dry-run       Print the plan only. This is the default and performs no
