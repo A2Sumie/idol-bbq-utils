@@ -113,16 +113,103 @@ test('cleanupMediaCache removes expired stored media and transient downloads', (
 test('cross-platform short video duration buckets require meaningful text', () => {
     const candidate = buildShortVideoDedupCandidate(
         {
-            platform: Platform.Instagram,
-            type: 'post',
-            a_id: 'ig-short-1',
+            platform: Platform.X,
+            type: 'tweet',
+            a_id: 'x-short-1',
             created_at: 1710000000,
-            u_id: 'nananijigram22_7_the.3rd',
+            u_id: '227_staff',
             username: '22/7 THE 3RD',
         } as any,
         [{ media_type: 'video', duration_seconds: 15.2 }],
     )
     expect(candidate).toBeNull()
+})
+
+test('instagram/tiktok short video fallback suppresses sparse-caption cross-platform duplicates', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    const articles = new Map<string, any>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) =>
+        articles.get(`${platform}:${a_id}`)
+
+    const instagramArticleData = {
+        platform: Platform.Instagram,
+        type: 'post',
+        a_id: 'ig-sparse-reel',
+        created_at: 1780826818,
+        u_id: 'nananijigram22_7_the.3rd',
+        username: '22/7_the 3rd',
+    }
+    articles.set(`${Platform.Instagram}:${instagramArticleData.a_id}`, instagramArticleData)
+    const instagramArticle = buildShortVideoDedupCandidate(instagramArticleData as any, [
+        { media_type: 'video', duration_seconds: 45.787 },
+    ])
+    expect(instagramArticle?.group).toBe('3rd')
+    expect(instagramArticle?.text.keys).toEqual([])
+    await markShortVideoCrossPlatformSeen(instagramArticle!)
+
+    const tiktokArticle = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.TikTok,
+            type: 'video',
+            a_id: 'tt-sparse-repost',
+            created_at: 1780827050,
+            u_id: 'the3rd_tiktok',
+            username: '22/7_the 3rd',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 45.766531 }],
+    )
+    expect(tiktokArticle?.text.keys).toEqual([])
+
+    const duplicate = await checkShortVideoCrossPlatformDuplicate(tiktokArticle!)
+    expect(duplicate?.a_id).toBe(`${Platform.Instagram}:ig-sparse-reel`)
+})
+
+test('instagram/tiktok short video fallback does not suppress same-platform sparse videos', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    const articles = new Map<string, any>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) =>
+        articles.get(`${platform}:${a_id}`)
+
+    const firstArticleData = {
+        platform: Platform.Instagram,
+        type: 'post',
+        a_id: 'ig-sparse-first',
+        created_at: 1780826818,
+        u_id: 'nananijigram22_7_the.3rd',
+        username: '22/7_the 3rd',
+    }
+    articles.set(`${Platform.Instagram}:${firstArticleData.a_id}`, firstArticleData)
+    const first = buildShortVideoDedupCandidate(firstArticleData as any, [
+        { media_type: 'video', duration_seconds: 45.787 },
+    ])
+    await markShortVideoCrossPlatformSeen(first!)
+
+    const second = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'story',
+            a_id: 'ig-sparse-second',
+            created_at: 1780827050,
+            u_id: 'nananijigram22_7_the.3rd',
+            username: '22/7_the 3rd',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 45.766531 }],
+    )
+
+    const duplicate = await checkShortVideoCrossPlatformDuplicate(second!)
+    expect(duplicate).toBeNull()
 })
 
 test('cross-platform short video text and duration candidates suppress same content', async () => {

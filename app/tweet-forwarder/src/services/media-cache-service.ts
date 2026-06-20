@@ -20,6 +20,7 @@ const SHORT_VIDEO_TIME_BUCKET_SECONDS = 6 * 3600
 const SHORT_VIDEO_TEXT_KEY_LIMIT = 6
 const SHORT_VIDEO_TEXT_MIN_COMPACT_LENGTH = 8
 const SHORT_VIDEO_SHARED_PHRASE_MIN_LENGTH = 8
+const SHORT_VIDEO_INSTAGRAM_TIKTOK_FALLBACK_KEY = 'p:instagram-tiktok'
 const VIDEO_FINGERPRINT_SAMPLE_RATIOS = [0.12, 0.3, 0.5, 0.7, 0.88]
 const VIDEO_FINGERPRINT_BAND_SIZE = 4
 const VIDEO_FINGERPRINT_MIN_BAND_MATCHES = 8
@@ -60,6 +61,7 @@ interface ShortVideoDedupCandidate {
     signature: string
     signaturesToStore: Array<string>
     signaturesToCheck: Array<string>
+    coarseFallbackSignaturesToCheck: Array<string>
     duration_seconds: number
     group: string
     text: ShortVideoTextFingerprint
@@ -212,6 +214,17 @@ function isSupportedShortVideoPlatform(article: Pick<Article, 'platform' | 'type
         return true
     }
     return false
+}
+
+function isInstagramTikTokShortVideoPlatform(platform: Platform) {
+    return platform === Platform.Instagram || platform === Platform.TikTok
+}
+
+function isInstagramTikTokShortVideoPair(left: Platform, right: Platform) {
+    return (
+        (left === Platform.Instagram && right === Platform.TikTok) ||
+        (left === Platform.TikTok && right === Platform.Instagram)
+    )
 }
 
 function buildShortVideoTimeBuckets(createdAt: number) {
@@ -456,11 +469,6 @@ function buildShortVideoDedupCandidate(
         return null
     }
 
-    const text = buildShortVideoTextFingerprint(article)
-    if (text.keys.length === 0) {
-        return null
-    }
-
     const videoFile = mediaFiles.find(
         (item) =>
             item.media_type === 'video' &&
@@ -472,26 +480,40 @@ function buildShortVideoDedupCandidate(
         return null
     }
 
+    const text = buildShortVideoTextFingerprint(article)
+    const coarseFallbackKeys = isInstagramTikTokShortVideoPlatform(article.platform)
+        ? [SHORT_VIDEO_INSTAGRAM_TIKTOK_FALLBACK_KEY]
+        : []
+    if (text.keys.length === 0 && coarseFallbackKeys.length === 0) {
+        return null
+    }
+
     const articleMarker = buildArticleMarker(article as Pick<Article, 'platform' | 'a_id'>)
     const timeBuckets = buildShortVideoTimeBuckets(article.created_at)
     const { baseBucket, buckets } = buildShortVideoDurationBuckets(videoFile.duration_seconds)
     const baseTimeBucket = Math.floor(article.created_at / SHORT_VIDEO_TIME_BUCKET_SECONDS)
     const signaturesToStore = text.keys.map((textKey) => buildShortVideoSignature(baseTimeBucket, baseBucket, textKey))
+    const coarseFallbackSignaturesToStore = coarseFallbackKeys.map((textKey) =>
+        buildShortVideoSignature(baseTimeBucket, baseBucket, textKey),
+    )
+    const textSignaturesToCheck = timeBuckets.flatMap((timeBucket) =>
+        buckets.flatMap((durationBucket) =>
+            text.keys.map((textKey) => buildShortVideoSignature(timeBucket, durationBucket, textKey)),
+        ),
+    )
+    const coarseFallbackSignaturesToCheck = timeBuckets.flatMap((timeBucket) =>
+        buckets.flatMap((durationBucket) =>
+            coarseFallbackKeys.map((textKey) => buildShortVideoSignature(timeBucket, durationBucket, textKey)),
+        ),
+    )
 
     return {
         storagePlatform: `cross-short-video:${group}`,
         articleMarker,
-        signature: signaturesToStore[0],
-        signaturesToStore,
-        signaturesToCheck: Array.from(
-            new Set(
-                timeBuckets.flatMap((timeBucket) =>
-                    buckets.flatMap((durationBucket) =>
-                        text.keys.map((textKey) => buildShortVideoSignature(timeBucket, durationBucket, textKey)),
-                    ),
-                ),
-            ),
-        ).sort(),
+        signature: signaturesToStore[0] || coarseFallbackSignaturesToStore[0],
+        signaturesToStore: Array.from(new Set([...signaturesToStore, ...coarseFallbackSignaturesToStore])).sort(),
+        signaturesToCheck: Array.from(new Set([...textSignaturesToCheck, ...coarseFallbackSignaturesToCheck])).sort(),
+        coarseFallbackSignaturesToCheck: Array.from(new Set(coarseFallbackSignaturesToCheck)).sort(),
         duration_seconds: videoFile.duration_seconds,
         group,
         text,
@@ -500,10 +522,11 @@ function buildShortVideoDedupCandidate(
 
 async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupCandidate) {
     const candidateMarker = parseArticleMarker(candidate.articleMarker)
-    if (!candidateMarker || candidate.text.keys.length === 0) {
+    if (!candidateMarker) {
         return null
     }
 
+    const coarseFallbackSignatures = new Set(candidate.coarseFallbackSignaturesToCheck)
     for (const signature of Array.from(new Set(candidate.signaturesToCheck))) {
         const existing = await DB.MediaHash.checkExist(candidate.storagePlatform, signature)
         if (!existing || existing.a_id === candidate.articleMarker) {
@@ -512,6 +535,13 @@ async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupC
 
         const existingMarker = parseArticleMarker(existing.a_id)
         if (!existingMarker || existingMarker.platform === candidateMarker.platform) {
+            continue
+        }
+        const isCoarseFallbackSignature = coarseFallbackSignatures.has(signature)
+        if (
+            isCoarseFallbackSignature &&
+            !isInstagramTikTokShortVideoPair(candidateMarker.platform, existingMarker.platform)
+        ) {
             continue
         }
 
@@ -524,6 +554,9 @@ async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupC
         }
 
         const existingText = buildShortVideoTextFingerprint(existingArticle as any)
+        if (isCoarseFallbackSignature && (candidate.text.keys.length === 0 || existingText.keys.length === 0)) {
+            return existing
+        }
         if (isLikelySameShortVideoText(candidate.text, existingText)) {
             return existing
         }
