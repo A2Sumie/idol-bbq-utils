@@ -153,6 +153,7 @@ __pycache__/
 # Ignored assets
 assets/cookies/
 assets/*.db
+assets/*-journal
 
 
 
