@@ -794,6 +794,28 @@ export class APIManager extends BaseCompatibleModel {
         )
     }
 
+    private resolveProcessorForApi(processorId?: string | null) {
+        const normalized = String(processorId || '').trim()
+        if (!normalized) {
+            return undefined
+        }
+        return (this.config.processors || []).find(
+            (processor) => processor.id === normalized || processor.name === normalized,
+        )
+    }
+
+    private buildImmediateHydrateCrawler(crawler: CrawlerConfig, processorId?: string) {
+        const processor = this.resolveProcessorForApi(processorId)
+        return {
+            ...crawler,
+            cfg_crawler: {
+                ...(this.config.cfg_crawler || {}),
+                ...(crawler.cfg_crawler || {}),
+                ...(processor ? { processor } : {}),
+            },
+        } as CrawlerConfig
+    }
+
     async drop() {
         if (this.server) {
             this.server.stop()
@@ -2158,26 +2180,66 @@ export class APIManager extends BaseCompatibleModel {
             return jsonResponse({ success: false, error: 'crawler_platform_mismatch', x: link }, 400)
         }
 
-        const article = await DB.Article.getSingleArticleByArticleCode(link.statusId, Platform.X)
+        const processorId = body.processorId || this.resolveCrawlerProcessorIdForApi(crawler)
+        let article = await DB.Article.getSingleArticleByArticleCode(link.statusId, Platform.X)
+        let hydrated = false
         if (!article) {
-            return jsonResponse(
-                {
-                    success: false,
-                    status: 'missing_article',
-                    error: 'article_not_found',
-                    x: link,
-                    crawlerName: crawler.name || (crawler as any).id,
-                    targetIds,
-                    message: 'Article is not in DB yet; direct hydrate is not implemented by this endpoint.',
-                },
-                404,
-            )
+            if (!this.deps.spiderPools) {
+                return jsonResponse({ success: false, error: 'spider_runtime_unavailable', x: link }, 503)
+            }
+            let hydratedIds: Array<number>
+            try {
+                hydratedIds = await this.deps.spiderPools.hydrateArticleUrlForImmediate(
+                    link.url,
+                    this.buildImmediateHydrateCrawler(crawler, processorId) as any,
+                    {
+                        contextLabel: `qq-x-link:${link.statusId}`,
+                    },
+                )
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error)
+                this.log?.warn(`QQ X link hydrate failed for ${link.url}: ${message}`)
+                return jsonResponse(
+                    {
+                        success: false,
+                        status: 'hydrate_failed',
+                        error: 'article_hydrate_failed',
+                        message,
+                        x: link,
+                        crawlerName: crawler.name || (crawler as any).id,
+                        targetIds,
+                    },
+                    502,
+                )
+            }
+            hydrated = true
+            article = await DB.Article.getSingleArticleByArticleCode(link.statusId, Platform.X)
+            if (!article && hydratedIds.length > 0) {
+                const hydratedArticles = await Promise.all(
+                    hydratedIds.map((id) => DB.Article.getSingleArticle(id, Platform.X).catch(() => undefined)),
+                )
+                article = hydratedArticles.find((candidate) => candidate?.a_id === link.statusId) || hydratedArticles[0]
+            }
+            if (!article) {
+                return jsonResponse(
+                    {
+                        success: false,
+                        status: 'missing_article',
+                        error: 'article_not_found_after_hydrate',
+                        x: link,
+                        crawlerName: crawler.name || (crawler as any).id,
+                        targetIds,
+                        hydratedIds,
+                    },
+                    404,
+                )
+            }
         }
 
         const result = await this.deps.forwarderPools.sendImmediateXLinkArticle(article as any, {
             crawlerName: crawler.name || (crawler as any).id,
             targetIds,
-            processorId: body.processorId || this.resolveCrawlerProcessorIdForApi(crawler),
+            processorId,
             badgeLabel: body.badgeLabel,
         })
         return jsonResponse({
@@ -2185,6 +2247,7 @@ export class APIManager extends BaseCompatibleModel {
             x: link,
             crawlerName: crawler.name || (crawler as any).id,
             targetIds,
+            hydrated,
             result,
         })
     }

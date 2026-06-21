@@ -1,7 +1,7 @@
 import { Platform } from '@/types'
 import { BaseSpider, SpiderRegistry, SpiderPriority, type SpiderPlugin } from './base'
 import { InstagramSpider } from './instagram'
-import { XListSpider, XUserTimeLineSpider } from './x'
+import { XListSpider, XStatusSpider, XUserTimeLineSpider } from './x'
 import { TiktokSpider } from './tiktok'
 import { YoutubeSpider } from './youtube'
 import { NanabunnonijyuuniWebsiteSpider } from './website'
@@ -20,6 +20,18 @@ const XListPlugin: SpiderPlugin = {
     priority: SpiderPriority.HIGH,
     urlPattern: XListSpider._VALID_URL,
     create: (log) => new XListSpider(log).init(),
+}
+
+const XStatusPlugin: SpiderPlugin = {
+    id: 'x-status',
+    platform: Platform.X,
+    priority: SpiderPriority.HIGH,
+    urlPattern: XStatusSpider._VALID_URL,
+    create: (log) => new XStatusSpider(log).init(),
+    extractBasicInfo: (url) => {
+        const result = XStatusSpider._VALID_URL.exec(url)?.groups
+        return result?.id ? { u_id: result.id, platform: Platform.X } : undefined
+    },
 }
 
 const InstagramPlugin: SpiderPlugin = {
@@ -57,6 +69,7 @@ const WebsitePlugin: SpiderPlugin = {
 }
 
 const spiderRegistry = SpiderRegistry.getInstance()
+    .register(XStatusPlugin)
     .register(XUserTimelinePlugin)
     .register(XListPlugin)
     .register(InstagramPlugin)
@@ -72,6 +85,7 @@ namespace Spider {
     }
 
     const spiders: Array<SpiderConstructor> = [
+        XStatusSpider,
         XUserTimeLineSpider,
         XListSpider,
         InstagramSpider,

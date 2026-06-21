@@ -223,6 +223,51 @@ test('X replies parser keeps direct reply timeline entries', async () => {
     expect(replies[0]?.ref).toBe('200')
 })
 
+test('X tweet detail parser selects the requested status from a conversation response', async () => {
+    const json = {
+        data: {
+            threaded_conversation_with_injections_v2: {
+                instructions: [
+                    {
+                        type: 'TimelineAddEntries',
+                        entries: [
+                            {
+                                entryId: 'tweet-500',
+                                content: {
+                                    itemContent: {
+                                        tweet_results: {
+                                            result: buildXTimelineTweetResult('500', 'other_member', 'thread head'),
+                                        },
+                                    },
+                                },
+                            },
+                            {
+                                entryId: 'tweet-501',
+                                content: {
+                                    itemContent: {
+                                        tweet_results: {
+                                            result: buildXTimelineTweetResult('501', 'target_member', 'target text'),
+                                        },
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+        },
+    }
+
+    const tweet = X.XApiJsonParser.tweetDetailParser(json, '501')
+
+    expect(tweet).toMatchObject({
+        a_id: '501',
+        u_id: 'target_member',
+        content: 'target text',
+        url: 'https://x.com/target_member/status/501',
+    })
+})
+
 test('X follows browser parser fails fast on login pages', async () => {
     const listeners = new Map<string, (data: any) => void>()
     const page = {

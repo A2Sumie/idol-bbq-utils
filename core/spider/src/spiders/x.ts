@@ -39,6 +39,7 @@ enum XApis {
     UserByScreenName = 'UserByScreenName',
     ListLatestTweetsTimeline = 'ListLatestTweetsTimeline',
     ListMembers = 'ListMembers',
+    TweetDetail = 'TweetDetail',
 }
 
 const DEFAULT_QUERY_APIS = [
@@ -279,6 +280,54 @@ class XUserTimeLineSpider extends BaseSpider {
         }
 
         throw new Error('Invalid task type')
+    }
+}
+
+class XStatusSpider extends BaseSpider {
+    static _VALID_URL = new RegExp(X_BASE_VALID_URL.source + /(?<id>\w+)\/status\/(?<statusId>\d+)/.source)
+    static _PLATFORM = Platform.X
+    BASE_URL: string = 'https://x.com/'
+    NAME: string = 'X Status Spider'
+
+    init(): this {
+        super.init()
+        return this
+    }
+
+    async _crawl<T extends TaskType>(
+        url: string,
+        page: Page | undefined,
+        config: {
+            crawl_engine: CrawlEngine
+            task_type: T
+            cookieString?: string
+            requestHeaders?: Record<string, string>
+        },
+    ): Promise<TaskTypeResult<T, Platform.X>> {
+        const result = super._match_valid_url(url, XStatusSpider)?.groups
+        if (!result) {
+            throw new Error(`Invalid URL: ${url}`)
+        }
+        const { id, statusId } = result
+        if (!id || !statusId) {
+            throw new Error(`Invalid URL: ${url}, status id not found`)
+        }
+        if (config.task_type !== 'article') {
+            throw new Error('X Status Spider only supports article crawl')
+        }
+
+        let cookieString = config.cookieString
+        if (!cookieString && page) {
+            const cookies = await page.browserContext().cookies()
+            cookieString = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+        }
+        if (!cookieString) {
+            throw new Error('Cookie string is required for X status hydrate')
+        }
+
+        const apiClient = new XApiClient(config.requestHeaders, page, this.log)
+        const article = await apiClient.grabTweetDetail(id, statusId, cookieString)
+        return (article ? [article] : []) as TaskTypeResult<T, Platform.X>
     }
 }
 
@@ -878,6 +927,10 @@ class XApiClient {
         await this.captureListViewportUsers(listId)
     }
 
+    async prepareTweetDetailOperation(screenName: string, statusId: string) {
+        await this.captureOperationsFromPage(`${this.BASE_URL}/${screenName}/status/${statusId}`, [XApis.TweetDetail])
+    }
+
     getSampledListUsers(listId: string) {
         return this.listViewportUsers.get(listId) || []
     }
@@ -1455,6 +1508,83 @@ class XApiClient {
         return XApiJsonParser.tweetsRepliesParser(json)
     }
 
+    async grabTweetDetail(screenName: string, statusId: string, cookie: string) {
+        await this.prepareTweetDetailOperation(screenName, statusId)
+        const referer = `${this.BASE_URL}/${screenName}/status/${statusId}`
+        const profile = this.getOperationProfile(XApis.TweetDetail)
+        let url = profile?.url
+
+        if (!url) {
+            const query_id = await this.resolveQueryId(XApis.TweetDetail)
+            const query_path = `${this.API_PREFIX}/${query_id}/${XApis.TweetDetail}`
+            const variables = {
+                focalTweetId: statusId,
+                with_rux_injections: false,
+                rankingMode: 'Relevance',
+                includePromotedContent: true,
+                withCommunity: true,
+                withQuickPromoteEligibilityTweetFields: true,
+                withBirdwatchNotes: true,
+                withVoice: true,
+            }
+            const features = {
+                rweb_video_screen_enabled: false,
+                profile_label_improvements_pcf_label_in_post_enabled: true,
+                rweb_tipjar_consumption_enabled: true,
+                verified_phone_label_enabled: false,
+                creator_subscriptions_tweet_preview_api_enabled: true,
+                responsive_web_graphql_timeline_navigation_enabled: true,
+                responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+                premium_content_api_read_enabled: false,
+                communities_web_enable_tweet_community_results_fetch: true,
+                c9s_tweet_anatomy_moderator_badge_enabled: true,
+                responsive_web_grok_analyze_button_fetch_trends_enabled: false,
+                responsive_web_grok_analyze_post_followups_enabled: true,
+                responsive_web_jetfuel_frame: false,
+                responsive_web_grok_share_attachment_enabled: true,
+                articles_preview_enabled: true,
+                responsive_web_edit_tweet_api_enabled: true,
+                graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+                view_counts_everywhere_api_enabled: true,
+                longform_notetweets_consumption_enabled: true,
+                responsive_web_twitter_article_tweet_consumption_enabled: true,
+                tweet_awards_web_tipping_enabled: false,
+                responsive_web_grok_show_grok_translated_post: false,
+                responsive_web_grok_analysis_button_from_backend: false,
+                creator_subscriptions_quote_tweet_preview_enabled: false,
+                freedom_of_speech_not_reach_fetch_enabled: true,
+                standardized_nudges_misinfo: true,
+                tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
+                longform_notetweets_rich_text_read_enabled: true,
+                longform_notetweets_inline_media_enabled: true,
+                responsive_web_grok_image_annotation_enabled: true,
+                responsive_web_enhance_cards_enabled: false,
+            }
+            const fieldToggles = {
+                withArticleRichContentState: true,
+                withArticlePlainText: false,
+                withGrokAnalyze: false,
+            }
+            const query = this.generateParams(features, variables, fieldToggles)
+            url = `${this.BASE_URL}${query_path}?${query.toString()}`
+        }
+
+        const res = await fetchWithTimeout(url, {
+            headers: this.buildOperationHeaders(XApis.TweetDetail, cookie, {
+                fallbackOperations: [XApis.UserTweets],
+                referer,
+            }),
+        })
+        if (!res.ok) {
+            throw new Error(`Failed to fetch tweet detail: ${res.status} ${res.statusText}`)
+        }
+        const json = await res.json()
+        if (json.errors) {
+            throw new Error(`Failed to fetch tweet detail: ${json.errors[0].message}`)
+        }
+        return XApiJsonParser.tweetDetailParser(json, statusId)
+    }
+
     async grabFollowsNumber(id: string, cookie: string) {
         const user_info = await this.getRawUserInfo(id, cookie)
         if (!user_info) {
@@ -1854,9 +1984,7 @@ namespace XApiJsonParser {
                 String(variant?.content_type || '').includes('mp4'),
             )
             const candidates = mp4Variants.length > 0 ? mp4Variants : playableVariants
-            return candidates
-                .sort((a: any, b: any) => (b?.bitrate || 0) - (a?.bitrate || 0))[0]
-                ?.url
+            return candidates.sort((a: any, b: any) => (b?.bitrate || 0) - (a?.bitrate || 0))[0]?.url
         }
         return media
             .map((m: any) => {
@@ -1920,11 +2048,7 @@ namespace XApiJsonParser {
                   : replyToId
                     ? ArticleTypeEnum.CONVERSATION
                     : ArticleTypeEnum.TWEET,
-            ref: quotedResult
-                ? tweetParser(quotedResult)
-                : retweetedResult
-                  ? tweetParser(retweetedResult)
-                  : replyToId,
+            ref: quotedResult ? tweetParser(quotedResult) : retweetedResult ? tweetParser(retweetedResult) : replyToId,
             media: mediaParser(legacy?.extended_entities?.media || legacy?.entities?.media),
             has_media: !!legacy?.extended_entities?.media || !!legacy?.entities?.media,
             extra: Card.cardParser(result.card?.legacy),
@@ -2094,6 +2218,20 @@ namespace XApiJsonParser {
         return [...conversationArticles, ...directReplyArticles] as Array<GenericArticle<Platform.X>>
     }
 
+    export function tweetDetailParser(json: any, statusId?: string) {
+        const tweetResults = JSONPath({ path: '$..tweet_results.result', json })
+            .map((result: any) => result?.tweet || result)
+            .filter(Boolean)
+        const targetResult =
+            (statusId ? tweetResults.find((result: any) => getTweetResultId(result) === statusId) : null) ||
+            tweetResults[0]
+        const article = targetResult ? tweetParser(targetResult) : null
+        if (!article) {
+            throw new Error(`Tweet detail json did not contain tweet ${statusId || ''}`.trim())
+        }
+        return article
+    }
+
     export function oldFollowsParser(user: any): GenericFollows {
         if (!user) {
             throw new Error('Follows json format may have changed')
@@ -2251,7 +2389,7 @@ namespace XApiJsonParser {
                     })
                     .catch((error) => {
                         fail(error)
-                })
+                    })
             }
         })
         try {
@@ -2333,6 +2471,6 @@ type Card<T extends CardTypeEnum> = {
 
 type ExtraContentType = Card<CardTypeEnum> | null
 
-export { ArticleTypeEnum, XApiJsonParser, XUserTimeLineSpider, XListSpider }
+export { ArticleTypeEnum, XApiJsonParser, XUserTimeLineSpider, XStatusSpider, XListSpider }
 
 export type { ExtraContentType, XListApiEngine }

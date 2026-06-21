@@ -716,6 +716,141 @@ class SpiderPools extends BaseCompatibleModel {
         this.emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, this.dispatchListener)
     }
 
+    async hydrateArticleUrlForImmediate(
+        rawUrl: string,
+        crawler: Crawler,
+        options: {
+            contextLabel?: string
+        } = {},
+    ): Promise<Array<number>> {
+        if (this.stopping) {
+            throw new Error('Spider pool is shutting down')
+        }
+
+        const url = new URL(rawUrl)
+        const spiderPlugin = spiderRegistry.findByUrl(url.href)
+        if (!spiderPlugin) {
+            throw new Error(`Spider not found for ${url.href}`)
+        }
+
+        let spider = this.spiders.get(spiderPlugin.id)
+        if (!spider) {
+            spider = spiderPlugin.create(this.log)
+            this.spiders.set(spiderPlugin.id, spider)
+        }
+
+        const cfg_crawler = crawler.cfg_crawler || {}
+        const taskId = `immediate-hydrate-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`
+        const ctx: TaskScheduler.TaskCtx = {
+            taskId,
+            task: {
+                id: taskId,
+                status: TaskScheduler.TaskStatus.RUNNING,
+                data: {
+                    ...crawler,
+                    websites: [url.href],
+                    task_type: 'article',
+                    cfg_crawler,
+                } satisfies Crawler,
+            },
+            log: this.log?.child({
+                label: options.contextLabel || crawler.name || (crawler as any).id || 'immediate-hydrate',
+                trace_id: taskId,
+            }),
+        }
+
+        let processor: BaseProcessor | undefined
+        const processor_cfg = (cfg_crawler as any).processor || (cfg_crawler as any).translator
+        if (processor_cfg) {
+            const processorCacheKey = crypto
+                .createHash('md5')
+                .update(
+                    JSON.stringify({
+                        id: processor_cfg.id,
+                        name: processor_cfg.name,
+                        provider: processor_cfg.provider,
+                        cfg_processor: processor_cfg.cfg_processor || processor_cfg.cfg_translator,
+                    }),
+                )
+                .digest('hex')
+            processor = this.processors.get(processorCacheKey)
+            if (!processor) {
+                processor = await processorRegistry.create(
+                    processor_cfg.provider,
+                    processor_cfg.api_key,
+                    this.log,
+                    processor_cfg.cfg_processor || processor_cfg.cfg_translator,
+                )
+                this.processors.set(processorCacheKey, processor)
+                ctx.log?.info(`Processor instance created for ${processor_cfg.provider}`)
+            }
+        }
+
+        let cookieString: string | undefined
+        const cookie_file = cfg_crawler.cookie_file
+        if (cookie_file) {
+            const cookies = parseNetscapeCookieToPuppeteerCookie(
+                resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
+            )
+            cookieString = cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join('; ')
+        }
+
+        const crawl_engine = cfg_crawler.engine
+        const browserRequest = this.resolveBrowserRequest(cfg_crawler, url, spiderPlugin.platform)
+        const requestHeaders = buildBrowserRequestHeaders(browserRequest.device_profile, {
+            extraHeaders: browserRequest.extra_headers,
+            locale: browserRequest.locale,
+            timezone: browserRequest.timezone,
+            userAgent: cfg_crawler.user_agent,
+            viewport: browserRequest.viewport,
+        })
+        const needsBrowser = this.shouldUseBrowserAssist(crawl_engine, spiderPlugin.platform)
+        const waitTime = this.resolveWaitTime(
+            cfg_crawler.interval_time || {
+                min: 0,
+                max: 0,
+            },
+        )
+        let page: Page | undefined
+
+        try {
+            if (needsBrowser) {
+                page = await this.browserPool.createPage({
+                    ...browserRequest,
+                    user_agent: cfg_crawler.user_agent,
+                })
+                if (cookie_file) {
+                    await page
+                        .browserContext()
+                        .setCookie(
+                            ...parseNetscapeCookieToPuppeteerCookie(
+                                resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
+                            ),
+                        )
+                }
+            }
+
+            if (page && crawl_engine?.startsWith('api')) {
+                await this.primeBrowserSession(page, url, ctx.log)
+            }
+
+            const sessionCookieString =
+                needsBrowser && page ? await this.getBrowserCookieString(page, url).catch(() => undefined) : undefined
+            const effectiveCookieString = this.mergeCookieStrings(cookieString, sessionCookieString)
+
+            if (waitTime > 0) {
+                ctx.log?.info(`[${taskId}] immediate hydrate wait for ${waitTime}ms before ${url.href}`)
+                await delay(waitTime)
+            }
+
+            return await this.crawlArticle(ctx, spider, url, page, processor, effectiveCookieString, requestHeaders)
+        } finally {
+            if (page) {
+                await page.close().catch(() => null)
+            }
+        }
+    }
+
     private getLinkedTaskQueueId(task: TaskScheduler.Task) {
         const value = task.meta?.task_queue_id
         const id = typeof value === 'number' ? value : Number(value)

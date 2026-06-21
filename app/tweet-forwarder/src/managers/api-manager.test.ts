@@ -2168,7 +2168,148 @@ test('APIManager QQ X-link endpoint sends existing X article to matching QQ grou
     }
 })
 
-test('APIManager QQ X-link endpoint reports missing DB article without scheduling', async () => {
+test('APIManager QQ X-link endpoint hydrates missing DB article and sends immediately', async () => {
+    const originalArticleGet = DB.Article.getSingleArticleByArticleCode
+    const sendCalls: Array<any[]> = []
+    const hydrateCalls: Array<any[]> = []
+    let articleGetCalls = 0
+
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) => {
+        articleGetCalls += 1
+        if (articleGetCalls === 1) {
+            return null
+        }
+        return {
+            id: 207,
+            a_id,
+            platform,
+            content: 'hydrated x text',
+            url: 'https://x.com/kyu0817a/status/2068528507651842559',
+            created_at: 1_777_777_777,
+            media: [],
+            extra: null,
+        }
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            id: 'x-list',
+                            name: 'x-list',
+                            origin: 'https://x.com/i/lists/123',
+                            cfg_crawler: {
+                                engine: 'api',
+                            },
+                        },
+                    ],
+                    processors: [
+                        {
+                            id: 'translator',
+                            name: 'translator',
+                            provider: 'noop',
+                            api_key: 'test-key',
+                        },
+                    ],
+                    connections: {
+                        'crawler-processor': {
+                            'x-list': 'translator',
+                        },
+                    },
+                    forward_targets: [
+                        {
+                            id: 'qq-1',
+                            platform: 'qq',
+                            cfg_platform: {
+                                url: 'http://127.0.0.1:3001',
+                                token: 'bot-token',
+                                group_id: '999',
+                            },
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    forwarderPools: {
+                        sendImmediateXLinkArticle: async (...args: any[]) => {
+                            sendCalls.push(args)
+                            return { sent: true }
+                        },
+                    },
+                    spiderPools: {
+                        hydrateArticleUrlForImmediate: async (...args: any[]) => {
+                            hydrateCalls.push(args)
+                            return [207]
+                        },
+                    },
+                }) as any,
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/actions/qq/x-link', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+                body: JSON.stringify({
+                    group_id: '999',
+                    raw_message: 'https://x.com/kyu0817a/status/2068528507651842559',
+                }),
+            }),
+            {
+                timeout: () => undefined,
+            },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toMatchObject({
+            success: true,
+            x: {
+                username: 'kyu0817a',
+                statusId: '2068528507651842559',
+            },
+            crawlerName: 'x-list',
+            targetIds: ['qq-1'],
+            hydrated: true,
+            result: {
+                sent: true,
+            },
+        })
+        expect(hydrateCalls).toHaveLength(1)
+        expect(hydrateCalls[0][0]).toBe('https://x.com/kyu0817a/status/2068528507651842559')
+        expect(hydrateCalls[0][1]).toMatchObject({
+            id: 'x-list',
+            cfg_crawler: {
+                engine: 'api',
+                processor: {
+                    id: 'translator',
+                },
+            },
+        })
+        expect(sendCalls).toHaveLength(1)
+        expect(sendCalls[0][0]).toMatchObject({
+            id: 207,
+            a_id: '2068528507651842559',
+            platform: Platform.X,
+        })
+        expect(sendCalls[0][1]).toEqual({
+            crawlerName: 'x-list',
+            targetIds: ['qq-1'],
+            processorId: 'translator',
+            badgeLabel: undefined,
+        })
+    } finally {
+        ;(DB.Article as any).getSingleArticleByArticleCode = originalArticleGet
+    }
+})
+
+test('APIManager QQ X-link endpoint reports hydrate failures as JSON', async () => {
     const originalArticleGet = DB.Article.getSingleArticleByArticleCode
     let sendCalled = false
 
@@ -2207,6 +2348,11 @@ test('APIManager QQ X-link endpoint reports missing DB article without schedulin
                             sendCalled = true
                         },
                     },
+                    spiderPools: {
+                        hydrateArticleUrlForImmediate: async () => {
+                            throw new Error('X auth expired')
+                        },
+                    },
                 }) as any,
         })
 
@@ -2227,11 +2373,12 @@ test('APIManager QQ X-link endpoint reports missing DB article without schedulin
             'test-secret',
         )
 
-        expect(response.status).toBe(404)
+        expect(response.status).toBe(502)
         expect(await response.json()).toMatchObject({
             success: false,
-            status: 'missing_article',
-            error: 'article_not_found',
+            status: 'hydrate_failed',
+            error: 'article_hydrate_failed',
+            message: 'X auth expired',
             x: {
                 username: 'kyu0817a',
                 statusId: '2068528507651842559',
