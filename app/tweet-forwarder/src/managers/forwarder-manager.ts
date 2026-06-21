@@ -4808,6 +4808,7 @@ class ForwarderPools extends BaseCompatibleModel {
             if (!currentArticle) {
                 return
             }
+            let usedTranslatedText = false
 
             if (Array.isArray(currentArticle.media)) {
                 currentArticle.media = currentArticle.media.map((mediaItem) => {
@@ -4831,6 +4832,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     this.isUsefulSummaryCardTranslation(nextExtra.content, nextExtra.translation)
                 ) {
                     nextExtra.content = nextExtra.translation
+                    usedTranslatedText = true
                 }
                 delete nextExtra.translation
                 currentArticle.extra = nextExtra as any
@@ -4840,6 +4842,23 @@ class ForwarderPools extends BaseCompatibleModel {
                 const translatedContent = String(currentArticle.translation || '').trim()
                 if (this.isUsefulSummaryCardTranslation(currentArticle.content, translatedContent)) {
                     currentArticle.content = translatedContent
+                    usedTranslatedText = true
+                }
+                const websiteMeta = currentArticle.extra as any
+                if (
+                    usedTranslatedText &&
+                    currentArticle.platform === Platform.Website &&
+                    websiteMeta?.extra_type === 'website_meta' &&
+                    websiteMeta.data &&
+                    typeof websiteMeta.data === 'object' &&
+                    typeof websiteMeta.data.raw_html === 'string'
+                ) {
+                    const dataWithoutRawHtml = { ...websiteMeta.data }
+                    delete dataWithoutRawHtml.raw_html
+                    currentArticle.extra = {
+                        ...websiteMeta,
+                        data: dataWithoutRawHtml,
+                    } as any
                 }
             }
 

@@ -5727,6 +5727,61 @@ test('translated card article requires visible translated body text', () => {
     expect(translatedCardArticle.extra?.data?.translated_badge_label).toBe('译文')
 })
 
+test('translated website card article drops raw html blocks that still contain original text', () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text-card',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const websiteArticle = {
+        id: 934,
+        a_id: 'website-translated-raw-html',
+        platform: Platform.Website,
+        username: '桧山依子',
+        u_id: 'hiyama-yoriko',
+        content: '【今日のブログ】\n\n原文本文です',
+        translation: '【今天的博客】\n\n这是译文正文',
+        translated_by: 'LLM',
+        url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/934',
+        type: 'article',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: true,
+        media: [{ type: 'photo', url: 'https://example.com/blog-photo.jpg' }],
+        extra: {
+            content: '今日のブログ',
+            translation: '今天的博客',
+            translated_by: 'LLM',
+            extra_type: 'website_meta',
+            data: {
+                site: '22/7',
+                feed: 'fc-blog',
+                title: '今日のブログ',
+                raw_html: '<p>原文本文です</p><img src="/blog-photo.jpg" alt="photo">',
+            },
+        },
+        u_avatar: null,
+    } as any
+
+    const translatedCardArticle = (pools as any).buildTranslatedCardArticle(websiteArticle, '译文')
+    expect(translatedCardArticle.content).toBe('【今天的博客】\n\n这是译文正文')
+    expect(translatedCardArticle.extra?.content).toBe('今天的博客')
+    expect(translatedCardArticle.extra?.data?.raw_html).toBeUndefined()
+    expect(translatedCardArticle.extra?.data?.title).toBe('今日のブログ')
+    expect(translatedCardArticle.extra?.data?.translated_badge_label).toBe('译文')
+    expect(websiteArticle.extra.data.raw_html).toContain('原文本文です')
+})
+
 test('summary-card translation reprocesses unchanged Japanese translations before rendering', async () => {
     const processCalls: string[] = []
     const articleUpdates: Array<{ id: number; patch: any }> = []
