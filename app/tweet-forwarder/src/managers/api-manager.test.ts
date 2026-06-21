@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import crypto from 'crypto'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import { APIManager } from './api-manager'
@@ -2191,6 +2192,134 @@ test('APIManager QQ X-link endpoint sends existing X article to matching QQ grou
     } finally {
         ;(DB.Article as any).getSingleArticleByArticleCode = originalArticleGet
     }
+})
+
+test('APIManager QQ X-link endpoint accepts NapCat HTTP client signature', async () => {
+    const originalArticleGet = DB.Article.getSingleArticleByArticleCode
+    const sendCalls: any[] = []
+
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) => ({
+        id: 216,
+        a_id,
+        platform,
+        content: 'signed x text',
+        url: `https://x.com/kyu0817a/status/${a_id}`,
+        created_at: 1_777_777_777,
+        media: [],
+        extra: null,
+    })
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            id: 'x-list',
+                            name: 'x-list',
+                            origin: 'https://x.com/i/lists/123',
+                        },
+                    ],
+                    forward_targets: [
+                        {
+                            id: 'qq-1',
+                            platform: 'qq',
+                            cfg_platform: {
+                                url: 'http://127.0.0.1:3001',
+                                token: 'bot-token',
+                                group_id: '999',
+                            },
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    forwarderPools: {
+                        sendImmediateXLinkArticle: async (...args: any[]) => {
+                            sendCalls.push(args)
+                            return { sent: true }
+                        },
+                    },
+                }) as any,
+        })
+        const body = JSON.stringify({
+            post_type: 'message',
+            message_type: 'group',
+            group_id: 999,
+            raw_message: 'https://x.com/kyu0817a/status/2068528507651842559',
+        })
+        const signature = crypto.createHmac('sha1', 'test-secret').update(body).digest('hex')
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/actions/qq/x-link', {
+                method: 'POST',
+                headers: {
+                    'x-signature': `sha1=${signature}`,
+                },
+                body,
+            }),
+            {
+                timeout: () => undefined,
+            },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toMatchObject({
+            success: true,
+            targetIds: ['qq-1'],
+            x: {
+                username: 'kyu0817a',
+                statusId: '2068528507651842559',
+            },
+        })
+        expect(sendCalls).toHaveLength(1)
+    } finally {
+        ;(DB.Article as any).getSingleArticleByArticleCode = originalArticleGet
+    }
+})
+
+test('APIManager QQ X-link endpoint ignores signed OneBot events without X links', async () => {
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+            }) as any,
+        getDeps: () => ({}),
+    })
+    const body = JSON.stringify({
+        post_type: 'message',
+        message_type: 'group',
+        group_id: 999,
+        raw_message: '普通聊天',
+    })
+    const signature = crypto.createHmac('sha1', 'test-secret').update(body).digest('hex')
+
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/actions/qq/x-link', {
+            method: 'POST',
+            headers: {
+                'x-signature': `sha1=${signature}`,
+            },
+            body,
+        }),
+        {
+            timeout: () => undefined,
+        },
+        'test-secret',
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+        success: true,
+        status: 'ignored',
+        reason: 'no_x_status_link',
+    })
 })
 
 test('APIManager QQ X-link endpoint hydrates missing DB article and sends immediately', async () => {

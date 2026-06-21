@@ -132,6 +132,25 @@ function jsonResponse(payload: unknown, status = 200) {
     })
 }
 
+function timingSafeEqualText(left: string, right: string) {
+    const leftBuffer = Buffer.from(left)
+    const rightBuffer = Buffer.from(right)
+    return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer)
+}
+
+function verifyOneBotHttpClientSignature(rawBody: string, signature: string | null, secret: string) {
+    const normalizedSignature = String(signature || '').trim()
+    if (!normalizedSignature.startsWith('sha1=')) {
+        return false
+    }
+    const expected = `sha1=${crypto.createHmac('sha1', secret).update(rawBody).digest('hex')}`
+    return timingSafeEqualText(normalizedSignature, expected)
+}
+
+function isOneBotEventBody(value: unknown) {
+    return Boolean(value && typeof value === 'object' && typeof (value as { post_type?: unknown }).post_type === 'string')
+}
+
 const MAX_BUN_IDLE_TIMEOUT_SECONDS = 255
 const DEFAULT_CIC_ORIGIN = 'https://cic.n2nj.moe'
 const MAX_MANUAL_CRAWLER_WEBSITES = 20
@@ -581,7 +600,12 @@ export class APIManager extends BaseCompatibleModel {
         }
 
         const authHeader = req.headers.get('Authorization')
-        if (!authHeader || authHeader !== `Bearer ${secret}`) {
+        let authorized = authHeader === `Bearer ${secret}`
+        if (!authorized && req.method === 'POST' && url.pathname === '/api/actions/qq/x-link') {
+            const rawBody = await req.clone().text()
+            authorized = verifyOneBotHttpClientSignature(rawBody, req.headers.get('x-signature'), secret)
+        }
+        if (!authorized) {
             return new Response('Unauthorized', { status: 401 })
         }
 
@@ -2170,11 +2194,8 @@ export class APIManager extends BaseCompatibleModel {
         const disabled = this.rejectUnlessOnline('QQ X link immediate send')
         if (disabled) return disabled
 
-        if (!this.deps.forwarderPools) {
-            return new Response('Forwarder runtime unavailable', { status: 503 })
-        }
-
         const body = (await req.json()) as {
+            post_type?: string
             url?: string
             text?: string
             raw_message?: string
@@ -2191,7 +2212,14 @@ export class APIManager extends BaseCompatibleModel {
             extractXStatusLink(body.raw_message) ||
             extractXStatusLink(body.message)
         if (!link) {
+            if (isOneBotEventBody(body)) {
+                return jsonResponse({ success: true, status: 'ignored', reason: 'no_x_status_link' })
+            }
             return jsonResponse({ success: false, error: 'x_status_link_required' }, 400)
+        }
+
+        if (!this.deps.forwarderPools) {
+            return new Response('Forwarder runtime unavailable', { status: 503 })
         }
 
         const targetIds = body.targetIds
