@@ -33,6 +33,11 @@ bots:
         token: '$$$'
         group_id: '$$$'
         url: 'http://localhost:33333'
+        # send_mode: 'merged_forward'
+        # merged_forward:
+        #   enabled: true
+        #   node_name: 'idol-bbq'
+        #   node_uin: '10000'
     config:                                  # (not required) forwarder configurations
       user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0'                 # (not required) puppeteer supported user agent
       interval_time:

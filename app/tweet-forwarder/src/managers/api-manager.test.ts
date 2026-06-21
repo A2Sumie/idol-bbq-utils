@@ -83,6 +83,7 @@ test('APIManager blocks high-risk actions in api-only mode before queue side eff
             ['/api/actions/articles/simulate', { platform: 'x', content: 'hello' }],
             ['/api/actions/articles/reprocess', { platform: 'x', id: 1 }],
             ['/api/actions/articles/resend', { platform: 'x', id: 1, crawlerName: 'crawler-a' }],
+            ['/api/actions/qq/x-link', { raw_message: 'https://x.com/kyu0817a/status/2068528507651842559' }],
             ['/api/actions/processors/run', { text: 'hello' }],
             ['/api/cookies/sync', { finder: 'crawler-a' }],
             ['/api/archives/archive-a/upload', {}],
@@ -2045,6 +2046,201 @@ test('APIManager resend infers website crawler platform from websites config', a
         ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
         ;(DB.TaskQueue as any).add = originalTaskAdd
         ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
+test('APIManager QQ X-link endpoint sends existing X article to matching QQ group target', async () => {
+    const originalArticleGet = DB.Article.getSingleArticleByArticleCode
+    const sendCalls: any[] = []
+
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) => {
+        expect(a_id).toBe('2068528507651842559')
+        expect(platform).toBe(Platform.X)
+        return {
+            id: 206,
+            a_id,
+            platform,
+            content: 'original x text',
+            url: 'https://x.com/kyu0817a/status/2068528507651842559',
+            created_at: 1_777_777_777,
+            media: [],
+            extra: null,
+        }
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            id: 'x-list',
+                            name: 'x-list',
+                            origin: 'https://x.com/i/lists/123',
+                            paths: ['kyu0817a'],
+                        },
+                    ],
+                    connections: {
+                        'crawler-processor': {
+                            'x-list': 'translator',
+                        },
+                    },
+                    forward_targets: [
+                        {
+                            id: 'qq-1',
+                            platform: 'qq',
+                            cfg_platform: {
+                                url: 'http://127.0.0.1:3001',
+                                token: 'bot-token',
+                                group_id: '999',
+                            },
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    forwarderPools: {
+                        sendImmediateXLinkArticle: async (...args: any[]) => {
+                            sendCalls.push(args)
+                            return { sent: true }
+                        },
+                    },
+                }) as any,
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/actions/qq/x-link', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+                body: JSON.stringify({
+                    post_type: 'message',
+                    message_type: 'group',
+                    group_id: '999',
+                    message: [
+                        {
+                            type: 'text',
+                            data: {
+                                text: '看看 https://x.com/kyu0817a/status/2068528507651842559?s=46&t=abc',
+                            },
+                        },
+                    ],
+                }),
+            }),
+            {
+                timeout: () => undefined,
+            },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(200)
+        expect(await response.json()).toMatchObject({
+            success: true,
+            x: {
+                username: 'kyu0817a',
+                statusId: '2068528507651842559',
+                url: 'https://x.com/kyu0817a/status/2068528507651842559',
+            },
+            crawlerName: 'x-list',
+            targetIds: ['qq-1'],
+            result: {
+                sent: true,
+            },
+        })
+        expect(sendCalls).toHaveLength(1)
+        expect(sendCalls[0][0]).toMatchObject({
+            id: 206,
+            a_id: '2068528507651842559',
+            platform: Platform.X,
+        })
+        expect(sendCalls[0][1]).toEqual({
+            crawlerName: 'x-list',
+            targetIds: ['qq-1'],
+            processorId: 'translator',
+            badgeLabel: undefined,
+        })
+    } finally {
+        ;(DB.Article as any).getSingleArticleByArticleCode = originalArticleGet
+    }
+})
+
+test('APIManager QQ X-link endpoint reports missing DB article without scheduling', async () => {
+    const originalArticleGet = DB.Article.getSingleArticleByArticleCode
+    let sendCalled = false
+
+    ;(DB.Article as any).getSingleArticleByArticleCode = async () => null
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            id: 'x-list',
+                            name: 'x-list',
+                            origin: 'https://x.com/i/lists/123',
+                        },
+                    ],
+                    forward_targets: [
+                        {
+                            id: 'qq-1',
+                            platform: 'qq',
+                            cfg_platform: {
+                                url: 'http://127.0.0.1:3001',
+                                token: 'bot-token',
+                                group_id: '999',
+                            },
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    forwarderPools: {
+                        sendImmediateXLinkArticle: async () => {
+                            sendCalled = true
+                        },
+                    },
+                }) as any,
+        })
+
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/actions/qq/x-link', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                },
+                body: JSON.stringify({
+                    group_id: '999',
+                    raw_message: 'https://x.com/kyu0817a/status/2068528507651842559',
+                }),
+            }),
+            {
+                timeout: () => undefined,
+            },
+            'test-secret',
+        )
+
+        expect(response.status).toBe(404)
+        expect(await response.json()).toMatchObject({
+            success: false,
+            status: 'missing_article',
+            error: 'article_not_found',
+            x: {
+                username: 'kyu0817a',
+                statusId: '2068528507651842559',
+            },
+            targetIds: ['qq-1'],
+        })
+        expect(sendCalled).toBeFalse()
+    } finally {
+        ;(DB.Article as any).getSingleArticleByArticleCode = originalArticleGet
     }
 })
 

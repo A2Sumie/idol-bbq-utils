@@ -10,6 +10,7 @@ import type { Article, ArticleWithId, DBFollows } from '@/db'
 import {
     BaseForwarder,
     type DiscardedMediaBatch,
+    type ForwarderSendResult,
     getForwarderProviderResult,
     isForwarderSentResult,
     PartialForwarderSendError,
@@ -138,6 +139,12 @@ type MediaVisibilityResult = {
         hash: string
         a_id: string
     }>
+}
+type ImmediateXLinkSendOptions = {
+    crawlerName?: string
+    targetIds: Array<string>
+    processorId?: string
+    badgeLabel?: string
 }
 
 const DEFAULT_TAG_DIGEST_THRESHOLD = 3
@@ -1532,6 +1539,122 @@ class ForwarderPools extends BaseCompatibleModel {
                 { forceSend: true },
                 { routeKey: path.routeKey },
             )
+        }
+    }
+
+    async sendImmediateXLinkArticle(article: ArticleWithId, options: ImmediateXLinkSendOptions) {
+        const targetIds = uniquePreserveOrder(options.targetIds.map((id) => id.trim()))
+        if (targetIds.length === 0) {
+            throw new Error('No QQ target ids resolved for immediate X link send')
+        }
+        const taskLog = this.log?.child({ label: `qq-x-link:${article.a_id}` })
+        const targets = this.resolveTargetInstances(
+            targetIds.map((id) => ({ id })),
+            taskLog,
+        )
+        if (targets.length === 0) {
+            throw new Error(`No target instances found for immediate X link send: ${targetIds.join(', ')}`)
+        }
+
+        const crawler = options.crawlerName
+            ? this.props.crawlers?.find(
+                  (item) => item.name === options.crawlerName || (item as any).id === options.crawlerName,
+              )
+            : undefined
+        const cfg_forwarder = crawler
+            ? buildAutoBoundForwarderTaskData(crawler, this.props).forwarderTaskData.cfg_forwarder
+            : this.props.cfg_forwarder
+        if (options.processorId) {
+            await this.prepareArticleChainTranslations(
+                options.processorId,
+                [article],
+                `QQ X link immediate ${article.a_id}`,
+            )
+        }
+
+        const refreshedArticle =
+            (await DB.Article.getSingleArticle(article.id, article.platform).catch(() => null)) || article
+        const translatedCardArticle = this.buildTranslatedCardArticle(refreshedArticle, options.badgeLabel || '译文')
+        const cardArticle = translatedCardArticle || refreshedArticle
+        const cardFeatures = ['media-contain']
+        if (translatedCardArticle) {
+            cardFeatures.push('translated-corner-badge')
+        }
+        const cardResult = await this.renderService.process(cardArticle, {
+            taskId: `qq-x-link-${article.id || article.a_id}`,
+            render_type: 'text-card',
+            card_features: mergeFeatureFlags(cfg_forwarder?.card_features, cardFeatures),
+            mediaConfig: cfg_forwarder?.media,
+            deduplication: false,
+        })
+        cardResult.mediaFiles ||= []
+        cardResult.cardMediaFiles ||= []
+        cardResult.originalMediaFiles ||= []
+
+        const originalText = this.renderService.renderText(stripArticleTranslations(refreshedArticle), {
+            render_type: 'text',
+        })
+        const sends: Array<{
+            target_id: string
+            part: 'card' | 'text' | 'media'
+            result: ForwarderSendResult
+        }> = []
+
+        try {
+            for (const { forwarder: target } of targets) {
+                if (cardResult.cardMediaFiles.length > 0) {
+                    sends.push({
+                        target_id: target.id,
+                        part: 'card',
+                        result: await target.send('', {
+                            media: cardResult.cardMediaFiles,
+                            cardMedia: cardResult.cardMediaFiles,
+                            contentMedia: [],
+                            timestamp: refreshedArticle.created_at,
+                            article: cloneDeep(cardArticle),
+                            forceSend: true,
+                            bypassMediaBatch: true,
+                        }),
+                    })
+                }
+
+                if (originalText.trim()) {
+                    sends.push({
+                        target_id: target.id,
+                        part: 'text',
+                        result: await target.send(originalText, {
+                            timestamp: refreshedArticle.created_at,
+                            article: stripArticleTranslations(cloneDeep(refreshedArticle)),
+                            forceSend: true,
+                            bypassMediaBatch: true,
+                        }),
+                    })
+                }
+
+                if (cardResult.originalMediaFiles.length > 0) {
+                    sends.push({
+                        target_id: target.id,
+                        part: 'media',
+                        result: await target.send('', {
+                            media: cardResult.originalMediaFiles,
+                            contentMedia: cardResult.originalMediaFiles,
+                            timestamp: refreshedArticle.created_at,
+                            article: cloneDeep(refreshedArticle),
+                            forceSend: true,
+                            bypassMediaBatch: true,
+                        }),
+                    })
+                }
+            }
+        } finally {
+            this.renderService.cleanup(cardResult.mediaFiles)
+        }
+
+        return {
+            article_key: articleKey(refreshedArticle),
+            translated_card: Boolean(translatedCardArticle),
+            target_ids: targets.map(({ forwarder }) => forwarder.id),
+            sends,
         }
     }
 
@@ -3479,10 +3602,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
-    private async flushSummaryCardQueue(
-        queueKey: string,
-        reason: 'threshold' | 'interval' | 'shutdown',
-    ) {
+    private async flushSummaryCardQueue(queueKey: string, reason: 'threshold' | 'interval' | 'shutdown') {
         const queue = this.summaryCardQueues.get(queueKey)
         if (!queue || queue.items.size === 0) {
             this.summaryCardQueues.delete(queueKey)
@@ -4770,6 +4890,47 @@ class ForwarderPools extends BaseCompatibleModel {
         return article
     }
 
+    private hasVisibleTranslatedCardText(original: ArticleWithId | Article, translated: ArticleWithId | Article) {
+        const visit = (
+            originalArticle?: ArticleWithId | Article | null,
+            translatedArticle?: ArticleWithId | Article | null,
+        ): boolean => {
+            if (!originalArticle || !translatedArticle) {
+                return false
+            }
+
+            const originalContent = String(originalArticle.content || '').trim()
+            const translatedContent = String(translatedArticle.content || '').trim()
+            if (originalContent !== translatedContent && translatedContent.length > 0) {
+                return true
+            }
+
+            const originalExtraContent = String((originalArticle.extra as any)?.content || '').trim()
+            const translatedExtraContent = String((translatedArticle.extra as any)?.content || '').trim()
+            if (originalExtraContent !== translatedExtraContent && translatedExtraContent.length > 0) {
+                return true
+            }
+
+            if (originalArticle.ref && translatedArticle.ref) {
+                return visit(
+                    originalArticle.ref as ArticleWithId | Article,
+                    translatedArticle.ref as ArticleWithId | Article,
+                )
+            }
+            return false
+        }
+
+        return visit(original, translated)
+    }
+
+    private buildTranslatedCardArticle(article: ArticleWithId, badgeLabel: string) {
+        const translatedArticle = this.buildArticleTextVariant(article, 'translated')
+        if (!this.hasVisibleTranslatedCardText(article, translatedArticle)) {
+            return null
+        }
+        return this.attachTranslatedCardBadgeLabel(translatedArticle, badgeLabel)
+    }
+
     private async buildTranslatedNativeCompanionCard(
         article: ArticleWithId,
         renderResult: Pick<RenderResult, 'cardMediaFiles' | 'originalMediaFiles'>,
@@ -4805,10 +4966,11 @@ class ForwarderPools extends BaseCompatibleModel {
             return null
         }
 
-        const translatedArticle = this.attachTranslatedCardBadgeLabel(
-            this.buildArticleTextVariant(article, 'translated'),
-            translatedCard.badgeLabel,
-        )
+        const translatedArticle = this.buildTranslatedCardArticle(article, translatedCard.badgeLabel)
+        if (!translatedArticle) {
+            this.log?.debug(`Skip native translated companion for ${target.id}: no visible translated card text`)
+            return null
+        }
         return this.renderService.process(translatedArticle, {
             taskId: `${taskId}-${target.id}-${article.a_id}-translated-card`,
             render_type: cfg_forwarder?.render_type,

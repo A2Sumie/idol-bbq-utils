@@ -4,6 +4,7 @@ import { Logger } from '@idol-bbq-utils/log'
 import fs from 'fs'
 import path from 'path'
 import YAML from 'yaml'
+import crypto from 'crypto'
 import DB from '@/db'
 import EventEmitter from 'events'
 import type { ForwarderPools } from './forwarder-manager'
@@ -67,6 +68,7 @@ import {
     type CodexMcpRunRequest,
 } from '@/services/codex-mcp-client-service'
 import { buildCrawlerScheduleRecommendations, type CrawlerHotScheduleConfig } from '@/services/crawler-schedule-service'
+import { ForwardTargetPlatformEnum } from '@/types/forwarder'
 
 interface ApiConfig {
     port?: number
@@ -105,6 +107,14 @@ export interface ApiRuntimeControl {
     reloadRuntime?: (config?: AppConfig) => Promise<ApiRuntimeReloadResult>
 }
 
+type CrawlerConfig = NonNullable<AppConfig['crawlers']>[number]
+type ForwardTargetConfig = NonNullable<AppConfig['forward_targets']>[number]
+type XStatusLink = {
+    username: string
+    statusId: string
+    url: string
+}
+
 interface NetscapeCookieLike {
     name: string
     value: string
@@ -135,6 +145,7 @@ const AGENT_CODEX_DEFAULT_TIMEOUT_MS = 120_000
 const AGENT_CODEX_MAX_TIMEOUT_MS = 240_000
 const AGENT_CODEX_MAX_PROMPT_CHARS = 20_000
 const AGENT_CODEX_MAX_INSTRUCTION_CHARS = 8_000
+const X_STATUS_LINK_RE = /https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,20})\/status\/(\d+)/i
 
 function publicCookieFileMetadata(cookieFile?: string | null) {
     const normalized = String(cookieFile || '').trim()
@@ -176,6 +187,45 @@ function resolveCrawlerPlatform(
     crawler?: { origin?: string | null; websites?: Array<string> | null } | null,
 ): Platform | null {
     return resolvePlatformFromOrigin(crawler?.origin) || resolvePlatformFromOrigin(crawler?.websites?.[0])
+}
+
+function normalizeXStatusUrl(username: string, statusId: string) {
+    return `https://x.com/${username}/status/${statusId}`
+}
+
+function extractOneBotText(value: unknown): string {
+    if (typeof value === 'string') {
+        return value
+    }
+    if (Array.isArray(value)) {
+        return value
+            .map((item) => extractOneBotText(item))
+            .filter(Boolean)
+            .join('\n')
+    }
+    if (value && typeof value === 'object') {
+        const segment = value as any
+        if (segment.type === 'text') {
+            return String(segment.data?.text || '')
+        }
+        if (typeof segment.text === 'string') {
+            return segment.text
+        }
+    }
+    return ''
+}
+
+function extractXStatusLink(value: unknown): XStatusLink | null {
+    const text = extractOneBotText(value)
+    const match = text.match(X_STATUS_LINK_RE)
+    if (!match) {
+        return null
+    }
+    return {
+        username: match[1],
+        statusId: match[2],
+        url: normalizeXStatusUrl(match[1], match[2]),
+    }
 }
 
 function flattenArticleChain(article: Article & { id: number }) {
@@ -586,6 +636,7 @@ export class APIManager extends BaseCompatibleModel {
             return this.handleArticleReprocess(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/articles/resend')
             return this.handleArticleResend(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/qq/x-link') return this.handleQqXLink(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/processors/run') return this.handleProcessorRun(req)
 
         return new Response(`Not Found: ${req.method} ${url.pathname}`, { status: 404 })
@@ -647,6 +698,99 @@ export class APIManager extends BaseCompatibleModel {
                 runtime_mode: mode,
             },
             503,
+        )
+    }
+
+    private resolveForwardTargetRuntimeId(target: ForwardTargetConfig) {
+        if (target.id) {
+            return target.id
+        }
+        const cfg_platform = {
+            ...(this.config.cfg_forward_target || {}),
+            ...(target.cfg_platform || {}),
+        }
+        const { block_until, replace_regex, ...restToBeHashed } = cfg_platform as any
+        const forwarderToBeHashed = {
+            ...target,
+            cfg_platform: {
+                ...restToBeHashed,
+            },
+        }
+        return `${target.platform}-${crypto.createHash('md5').update(JSON.stringify(forwarderToBeHashed)).digest('hex')}`
+    }
+
+    private resolveQqTargetIdsForGroup(groupId: unknown) {
+        const normalizedGroupId = String(groupId || '').trim()
+        if (!normalizedGroupId) {
+            return []
+        }
+        return Array.from(
+            new Set(
+                (this.config.forward_targets || [])
+                    .filter(
+                        (target) =>
+                            target.platform === ForwardTargetPlatformEnum.QQ &&
+                            String((target.cfg_platform as any)?.group_id || '').trim() === normalizedGroupId,
+                    )
+                    .map((target) => this.resolveForwardTargetRuntimeId(target))
+                    .filter(Boolean),
+            ),
+        )
+    }
+
+    private isXLikeCrawler(crawler: CrawlerConfig) {
+        return resolveCrawlerPlatform(crawler as any) === Platform.X
+    }
+
+    private resolveXLinkCrawler(link: XStatusLink, crawlerName?: string | null) {
+        const crawlers = this.config.crawlers || []
+        if (crawlerName) {
+            return crawlers.find((crawler) => crawler.name === crawlerName || (crawler as any).id === crawlerName)
+        }
+
+        const username = link.username.toLocaleLowerCase()
+        const scored = crawlers
+            .filter((crawler) => this.isXLikeCrawler(crawler))
+            .map((crawler) => {
+                const haystack = [
+                    crawler.name,
+                    (crawler as any).id,
+                    crawler.origin,
+                    ...(crawler.websites || []),
+                    ...(crawler.paths || []),
+                    (crawler as any).u_id,
+                ]
+                    .map((value) => String(value || '').toLocaleLowerCase())
+                    .join('\n')
+                let score = 1
+                if (haystack.includes(`/${username}`) || haystack.includes(`@${username}`)) {
+                    score += 10
+                } else if (haystack.includes(username)) {
+                    score += 3
+                }
+                return { crawler, score }
+            })
+        scored.sort((a, b) => b.score - a.score)
+        return scored[0]?.crawler
+    }
+
+    private resolveCrawlerProcessorIdForApi(crawler: CrawlerConfig | undefined) {
+        if (!crawler) {
+            return undefined
+        }
+        const connections = this.config.connections?.['crawler-processor'] || {}
+        const keys = Array.from(
+            new Set([String((crawler as any).id || '').trim(), String(crawler.name || '').trim()].filter(Boolean)),
+        )
+        for (const key of keys) {
+            const processorId = String(connections[key] || '').trim()
+            if (processorId) {
+                return processorId
+            }
+        }
+        return (
+            String((crawler as any).processor_id || (crawler as any).cfg_crawler?.processor_id || '').trim() ||
+            undefined
         )
     }
 
@@ -1969,6 +2113,80 @@ export class APIManager extends BaseCompatibleModel {
             })
             throw error
         }
+    }
+
+    private async handleQqXLink(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('QQ X link immediate send')
+        if (disabled) return disabled
+
+        if (!this.deps.forwarderPools) {
+            return new Response('Forwarder runtime unavailable', { status: 503 })
+        }
+
+        const body = (await req.json()) as {
+            url?: string
+            text?: string
+            raw_message?: string
+            message?: unknown
+            group_id?: string | number
+            crawlerName?: string
+            targetIds?: Array<string>
+            processorId?: string
+            badgeLabel?: string
+        }
+        const link =
+            extractXStatusLink(body.url) ||
+            extractXStatusLink(body.text) ||
+            extractXStatusLink(body.raw_message) ||
+            extractXStatusLink(body.message)
+        if (!link) {
+            return jsonResponse({ success: false, error: 'x_status_link_required' }, 400)
+        }
+
+        const targetIds = body.targetIds
+            ? Array.from(new Set(body.targetIds.map((id) => String(id || '').trim()).filter(Boolean)))
+            : this.resolveQqTargetIdsForGroup(body.group_id)
+        if (targetIds.length === 0) {
+            return jsonResponse({ success: false, error: 'qq_target_required' }, 400)
+        }
+
+        const crawler = this.resolveXLinkCrawler(link, body.crawlerName)
+        if (!crawler) {
+            return jsonResponse({ success: false, error: 'x_crawler_not_found', x: link }, 400)
+        }
+        if (resolveCrawlerPlatform(crawler) !== Platform.X) {
+            return jsonResponse({ success: false, error: 'crawler_platform_mismatch', x: link }, 400)
+        }
+
+        const article = await DB.Article.getSingleArticleByArticleCode(link.statusId, Platform.X)
+        if (!article) {
+            return jsonResponse(
+                {
+                    success: false,
+                    status: 'missing_article',
+                    error: 'article_not_found',
+                    x: link,
+                    crawlerName: crawler.name || (crawler as any).id,
+                    targetIds,
+                    message: 'Article is not in DB yet; direct hydrate is not implemented by this endpoint.',
+                },
+                404,
+            )
+        }
+
+        const result = await this.deps.forwarderPools.sendImmediateXLinkArticle(article as any, {
+            crawlerName: crawler.name || (crawler as any).id,
+            targetIds,
+            processorId: body.processorId || this.resolveCrawlerProcessorIdForApi(crawler),
+            badgeLabel: body.badgeLabel,
+        })
+        return jsonResponse({
+            success: true,
+            x: link,
+            crawlerName: crawler.name || (crawler as any).id,
+            targetIds,
+            result,
+        })
     }
 
     private async handleProcessorRun(req: Request): Promise<Response> {

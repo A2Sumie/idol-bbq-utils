@@ -39,6 +39,11 @@ bots:
         token: 'onebot 11 token'              # (必须) onebot 11 token
         group_id: 'qq group id'               # (必须) qq群号
         url: 'onebot server url'              # (必须) onebot 服务器地址
+        # send_mode: 'merged_forward'          # (可选) 使用 NapCat/go-cqhttp 兼容群合并转发
+        # merged_forward:
+        #   enabled: true
+        #   node_name: 'idol-bbq'
+        #   node_uin: '10000'
     config:                                   # (可选) 任务配置，可覆盖全局配置
       # 设置user-agent
       user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0'                 # (可选) puppeteer supported user agent
@@ -91,6 +96,11 @@ bots:
         token: 'onebot 11 token'
         group_id: 'qq group id'
         url: 'onebot server url'
+        # send_mode: 'merged_forward'
+        # merged_forward:
+        #   enabled: true
+        #   node_name: 'idol-bbq'
+        #   node_uin: '10000'
     config:
       interval_time:
         max: 0

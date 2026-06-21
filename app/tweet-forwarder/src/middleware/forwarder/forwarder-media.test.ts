@@ -126,6 +126,65 @@ test('QQForwarder rejects OneBot failed JSON responses even when HTTP succeeds',
     ).toThrow(/status=failed retcode=200 message=EventChecker Failed/)
 })
 
+test('QQForwarder can package text and media as OneBot merged-forward nodes', async () => {
+    const forwarder = new QQForwarder(
+        {
+            group_id: '123',
+            url: 'http://127.0.0.1:3001',
+            token: '',
+            send_mode: 'merged_forward',
+            merged_forward: {
+                node_name: '七虹信标',
+                node_uin: '227',
+                max_segments_per_node: 2,
+            },
+        } as any,
+        'qq-merged-forward-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    const mergedPayloads: any[] = []
+    ;(forwarder as any).sendWithPayload = async () => {
+        throw new Error('normal send should not be used')
+    }
+    ;(forwarder as any).sendMergedForwardPayload = async (segments: any, config: any) => {
+        mergedPayloads.push({ segments, config })
+        return { ok: true, mode: 'merged_forward' }
+    }
+
+    const result = await (forwarder as any).realSend(['translated card text', 'original text'], {
+        media: [
+            {
+                media_type: 'photo',
+                path: '/tmp/card.png',
+            },
+            {
+                media_type: 'video',
+                path: '/tmp/source.mp4',
+            },
+            {
+                media_type: 'video_thumbnail',
+                path: '/tmp/thumbnail.jpg',
+            },
+        ],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'merged_forward' }])
+    expect(mergedPayloads).toHaveLength(1)
+    expect(mergedPayloads[0].config).toMatchObject({
+        enabled: true,
+        nodeName: '七虹信标',
+        nodeUin: '227',
+        maxSegmentsPerNode: 2,
+    })
+    expect(mergedPayloads[0].segments).toEqual([
+        { type: 'text', data: { text: 'translated card text' } },
+        { type: 'text', data: { text: 'original text' } },
+        { type: 'image', data: { file: 'file:///tmp/card.png' } },
+        { type: 'video', data: { file: 'file:///tmp/source.mp4' } },
+    ])
+})
+
 test('QQForwarder compresses oversized image attachments before building image segments', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-image-compress-'))
     const sourcePath = path.join(tempRoot, 'oversized.ppm')
@@ -454,7 +513,6 @@ test('BiliForwarder treats code-zero photo dynamics without visible detail media
     )
     ;(forwarder as any).minInterval = 0
     ;(forwarder as any).dynamicDetailValidationRetries = 0
-
     ;(forwarder as any).uploadPhoto = async () => ({
         image_url: 'https://i0.hdslb.com/bfs/test/missing-major.jpg',
         image_width: 900,

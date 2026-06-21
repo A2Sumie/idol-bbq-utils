@@ -83,6 +83,20 @@ type PlatformConfigMap = {
         url: string
         group_id: string
         token: string
+        /**
+         * Default is normal OneBot /send_group_msg. Set send_mode to merged_forward,
+         * or enable merged_forward, to use NapCat/go-cqhttp compatible
+         * /send_group_forward_msg payloads.
+         */
+        send_mode?: 'normal' | 'merged_forward'
+        merged_forward?:
+            | boolean
+            | {
+                  enabled?: boolean
+                  node_name?: string
+                  node_uin?: string | number
+                  max_segments_per_node?: number
+              }
     }
 }
 

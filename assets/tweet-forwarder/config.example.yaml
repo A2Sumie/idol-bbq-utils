@@ -46,6 +46,11 @@ bots:
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id
         url: 'onebot server url'              # (required) onebot server url
+        # send_mode: 'merged_forward'          # (optional) use NapCat/go-cqhttp compatible group merged-forward
+        # merged_forward:
+        #   enabled: true
+        #   node_name: 'idol-bbq'
+        #   node_uin: '10000'
     config:                                   # (optional) forwarder configurations
       user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'                             # (optional) puppeteer supported user agent
       cron: "*/5 4-23 * * *"                  
@@ -115,6 +120,11 @@ bots:
         token: 'onebot 11 token'              # (required) onebot 11 token
         group_id: 'qq group id'               # (required) qq group id
         url: 'onebot server url'              # (required) onebot server url
+        # send_mode: 'merged_forward'          # (optional) use NapCat/go-cqhttp compatible group merged-forward
+        # merged_forward:
+        #   enabled: true
+        #   node_name: 'idol-bbq'
+        #   node_uin: '10000'
     config:
       interval_time:
         max: 0

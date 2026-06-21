@@ -5459,8 +5459,7 @@ test('summary-card translation requires complete coverage for three-layer forwar
         process: async (text: string) => {
             processCalls.push(text)
             const current =
-                text.match(/当前待译】\n([\s\S]*?)(?:\n\n【第|\n\n【当前待译字段】|$)/)?.[1]?.trim() ||
-                text.trim()
+                text.match(/当前待译】\n([\s\S]*?)(?:\n\n【第|\n\n【当前待译字段】|$)/)?.[1]?.trim() || text.trim()
             return `译:${current}`
         },
         drop: async () => undefined,
@@ -5575,6 +5574,63 @@ test('summary-card translation requires complete coverage for three-layer forwar
     expect(translatedVariant.content).toBe('译:outer reply body')
     expect(translatedVariant.ref.content).toBe('译:middle quote body')
     expect(translatedVariant.ref.ref.content).toBe('译:root source body')
+})
+
+test('translated card article requires visible translated body text', () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text-card',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const mediaOnlyTranslatedArticle = {
+        id: 933,
+        a_id: 'media-only-translated',
+        platform: Platform.X,
+        username: 'member',
+        u_id: 'member',
+        content: '',
+        translation: null,
+        translated_by: null,
+        url: 'https://x.com/member/status/933',
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: true,
+        media: [
+            {
+                type: 'photo',
+                url: 'https://example.com/media-only-translated.jpg',
+                alt: 'original alt',
+                translation: 'translated alt',
+            },
+        ],
+        extra: null,
+        u_avatar: null,
+    } as any
+    expect((pools as any).hasArticleChainTranslatedContent([mediaOnlyTranslatedArticle])).toBeTrue()
+    expect((pools as any).buildTranslatedCardArticle(mediaOnlyTranslatedArticle, '译文')).toBeNull()
+
+    const bodyTranslatedArticle = {
+        ...mediaOnlyTranslatedArticle,
+        a_id: 'body-translated',
+        content: 'original body',
+        translation: 'translated body',
+        translated_by: 'LLM',
+    }
+    const translatedCardArticle = (pools as any).buildTranslatedCardArticle(bodyTranslatedArticle, '译文')
+    expect(translatedCardArticle.content).toBe('translated body')
+    expect(translatedCardArticle.translation).toBeNull()
+    expect(translatedCardArticle.extra?.data?.translated_badge_label).toBe('译文')
 })
 
 test('summary-card translation reprocesses unchanged Japanese translations before rendering', async () => {
@@ -7852,7 +7908,9 @@ test('summary-card realtime Bilibili photo tail card keeps original-card fallbac
                     created_at: Math.floor(Date.now() / 1000),
                     ref: null,
                     has_media: true,
-                    media: [{ type: 'photo', url: 'https://example.com/realtime-translation-missing-original-815.jpg' }],
+                    media: [
+                        { type: 'photo', url: 'https://example.com/realtime-translation-missing-original-815.jpg' },
+                    ],
                     extra: null,
                     u_avatar: null,
                 },
