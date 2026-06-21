@@ -132,6 +132,32 @@ class QQForwarder extends Forwarder {
             }))
     }
 
+    private buildMediaSegmentsInOrder(media: NonNullable<SendProps['media']>): OneBotMessageSegment[] {
+        return media.flatMap((item) => {
+            if (item.media_type === 'photo') {
+                return [
+                    {
+                        type: 'image' as const,
+                        data: {
+                            file: `file://${item.path}`,
+                        },
+                    },
+                ]
+            }
+            if (item.media_type === 'video') {
+                return [
+                    {
+                        type: 'video' as const,
+                        data: {
+                            file: `file://${item.path}`,
+                        },
+                    },
+                ]
+            }
+            return []
+        })
+    }
+
     private buildTextSegments(texts: string[]): OneBotTextSegment[] {
         return texts.filter(Boolean).map((text) => ({
             type: 'text',
@@ -185,7 +211,7 @@ class QQForwarder extends Forwarder {
         try {
             const mergedForwardConfig = this.normalizeMergedForwardConfig(props)
             if (mergedForwardConfig.enabled) {
-                const segments = [...this.buildTextSegments(texts), ...pics, ...videos]
+                const segments = [...this.buildTextSegments(texts), ...this.buildMediaSegmentsInOrder(media)]
                 if (segments.length > 0) {
                     const res = await this.sendMergedForwardPayload(segments, mergedForwardConfig)
                     _res.push(res)

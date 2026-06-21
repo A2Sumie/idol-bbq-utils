@@ -1596,55 +1596,32 @@ class ForwarderPools extends BaseCompatibleModel {
         })
         const sends: Array<{
             target_id: string
-            part: 'card' | 'text' | 'media'
+            part: 'merged_forward'
             result: ForwarderSendResult
         }> = []
 
         try {
             for (const { forwarder: target } of targets) {
-                if (cardResult.cardMediaFiles.length > 0) {
-                    sends.push({
-                        target_id: target.id,
-                        part: 'card',
-                        result: await target.send('', {
-                            media: cardResult.cardMediaFiles,
-                            cardMedia: cardResult.cardMediaFiles,
-                            contentMedia: [],
-                            timestamp: refreshedArticle.created_at,
-                            article: cloneDeep(cardArticle),
-                            forceSend: true,
-                            bypassMediaBatch: true,
-                        }),
-                    })
-                }
-
-                if (originalText.trim()) {
-                    sends.push({
-                        target_id: target.id,
-                        part: 'text',
-                        result: await target.send(originalText, {
-                            timestamp: refreshedArticle.created_at,
-                            article: stripArticleTranslations(cloneDeep(refreshedArticle)),
-                            forceSend: true,
-                            bypassMediaBatch: true,
-                        }),
-                    })
-                }
-
-                if (cardResult.originalMediaFiles.length > 0) {
-                    sends.push({
-                        target_id: target.id,
-                        part: 'media',
-                        result: await target.send('', {
-                            media: cardResult.originalMediaFiles,
-                            contentMedia: cardResult.originalMediaFiles,
-                            timestamp: refreshedArticle.created_at,
-                            article: cloneDeep(refreshedArticle),
-                            forceSend: true,
-                            bypassMediaBatch: true,
-                        }),
-                    })
-                }
+                const prefixedText = originalText.trim() ? `[X解析]\n${originalText}` : '[X解析]'
+                sends.push({
+                    target_id: target.id,
+                    part: 'merged_forward',
+                    result: await target.send(prefixedText, {
+                        media: [...cardResult.originalMediaFiles, ...cardResult.cardMediaFiles],
+                        contentMedia: cardResult.originalMediaFiles,
+                        cardMedia: cardResult.cardMediaFiles,
+                        timestamp: refreshedArticle.created_at,
+                        article: cloneDeep(cardArticle),
+                        forceSend: true,
+                        bypassMediaBatch: true,
+                        runtime_config: {
+                            send_mode: 'merged_forward',
+                            merged_forward: {
+                                enabled: true,
+                            },
+                        } as any,
+                    }),
+                })
             }
         } finally {
             this.renderService.cleanup(cardResult.mediaFiles)

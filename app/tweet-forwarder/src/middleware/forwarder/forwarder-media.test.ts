@@ -185,6 +185,44 @@ test('QQForwarder can package text and media as OneBot merged-forward nodes', as
     ])
 })
 
+test('QQForwarder keeps media order inside merged-forward nodes', async () => {
+    const forwarder = new QQForwarder(
+        {
+            group_id: '123',
+            url: 'http://127.0.0.1:3001',
+            token: '',
+            send_mode: 'merged_forward',
+        } as any,
+        'qq-merged-forward-order-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    const mergedPayloads: any[] = []
+    ;(forwarder as any).sendMergedForwardPayload = async (segments: any, config: any) => {
+        mergedPayloads.push({ segments, config })
+        return { ok: true, mode: 'merged_forward' }
+    }
+
+    await (forwarder as any).realSend(['[X解析]\noriginal text'], {
+        media: [
+            {
+                media_type: 'video',
+                path: '/tmp/source.mp4',
+            },
+            {
+                media_type: 'photo',
+                path: '/tmp/card.png',
+            },
+        ],
+    })
+
+    expect(mergedPayloads[0].segments).toEqual([
+        { type: 'text', data: { text: '[X解析]\noriginal text' } },
+        { type: 'video', data: { file: 'file:///tmp/source.mp4' } },
+        { type: 'image', data: { file: 'file:///tmp/card.png' } },
+    ])
+})
+
 test('QQForwarder compresses oversized image attachments before building image segments', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-image-compress-'))
     const sourcePath = path.join(tempRoot, 'oversized.ppm')

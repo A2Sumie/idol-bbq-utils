@@ -1021,6 +1021,100 @@ test('ForwarderPools resendArticle can limit delivery to selected targets with f
     expect(capturedSends[0].taskId).not.toBe(capturedSends[1].taskId)
 })
 
+test('ForwarderPools sendImmediateXLinkArticle sends one merged-forward parse in text media card order', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return { ok: true }
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder({ block_until: '32h' } as any, 'qq-1')
+    ;(pools as any).resolveTargetInstances = () => [{ forwarder: target, runtime_config: undefined }]
+
+    const article = {
+        id: 980,
+        a_id: '2068452355688083860',
+        platform: Platform.X,
+        username: 'X user',
+        u_id: 'x_user',
+        content: 'original x text',
+        translation: 'translated x text',
+        translated_by: 'translator',
+        url: 'https://x.com/x_user/status/2068452355688083860',
+        type: 'tweet',
+        created_at: 1_782_019_314,
+        ref: null,
+        has_media: true,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const sourceVideo = { media_type: 'video', path: '/tmp/x-source.mp4' }
+    const sourcePhoto = { media_type: 'photo', path: '/tmp/x-source.jpg' }
+    const card = { media_type: 'photo', path: '/tmp/x-card.png' }
+    const cleaned: any[] = []
+
+    ;(DB.Article as any).getSingleArticle = async () => article
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'card text',
+            textCollapseMode: 'article',
+            cardMediaFiles: [card],
+            originalMediaFiles: [sourceVideo, sourcePhoto],
+            mediaFiles: [sourceVideo, sourcePhoto, card],
+        }),
+        renderText: (input: any) => input.content || '',
+        cleanup: (files: any) => cleaned.push(files),
+    }
+
+    const result = await (pools as any).sendImmediateXLinkArticle(article, {
+        targetIds: ['qq-1'],
+    })
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts).toEqual(['[X解析]\noriginal x text'])
+    expect(target.sent[0]?.props?.media).toEqual([sourceVideo, sourcePhoto, card])
+    expect(target.sent[0]?.props?.contentMedia).toEqual([sourceVideo, sourcePhoto])
+    expect(target.sent[0]?.props?.cardMedia).toEqual([card])
+    expect(target.sent[0]?.props?.runtime_config).toMatchObject({
+        send_mode: 'merged_forward',
+        merged_forward: {
+            enabled: true,
+        },
+    })
+    expect(target.sent[0]?.props?.forceSend).toBeTrue()
+    expect(target.sent[0]?.props?.bypassMediaBatch).toBeTrue()
+    expect(result.sends).toMatchObject([
+        {
+            target_id: 'qq-1',
+            part: 'merged_forward',
+            result: {
+                status: 'sent',
+            },
+        },
+    ])
+    expect(cleaned).toEqual([[sourceVideo, sourcePhoto, card]])
+})
+
 test('ForwarderPools resolves article subscribers as inline forwarding paths', () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
