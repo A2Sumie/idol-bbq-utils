@@ -2322,6 +2322,64 @@ test('APIManager QQ X-link endpoint ignores signed OneBot events without X links
     })
 })
 
+test('APIManager QQ X-link endpoint ignores signed OneBot links from unmapped groups', async () => {
+    const manager = new APIManager({
+        getConfig: () =>
+            ({
+                api: {
+                    secret: 'test-secret',
+                },
+                crawlers: [
+                    {
+                        id: 'x-list',
+                        name: 'x-list',
+                        origin: 'https://x.com/i/lists/123',
+                    },
+                ],
+                forward_targets: [],
+            }) as any,
+        getDeps: () =>
+            ({
+                forwarderPools: {
+                    sendImmediateXLinkArticle: async () => {
+                        throw new Error('unmapped OneBot event should not send')
+                    },
+                },
+            }) as any,
+    })
+    const body = JSON.stringify({
+        post_type: 'message',
+        message_type: 'group',
+        group_id: 123456,
+        raw_message: 'https://x.com/kyu0817a/status/2068528507651842559',
+    })
+    const signature = crypto.createHmac('sha1', 'test-secret').update(body).digest('hex')
+
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/actions/qq/x-link', {
+            method: 'POST',
+            headers: {
+                'x-signature': `sha1=${signature}`,
+            },
+            body,
+        }),
+        {
+            timeout: () => undefined,
+        },
+        'test-secret',
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+        success: true,
+        status: 'ignored',
+        reason: 'unmapped_qq_group',
+        x: {
+            statusId: '2068528507651842559',
+        },
+    })
+})
+
 test('APIManager QQ X-link endpoint hydrates missing DB article and sends immediately', async () => {
     const originalArticleGet = DB.Article.getSingleArticleByArticleCode
     const sendCalls: Array<any[]> = []

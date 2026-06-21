@@ -2226,6 +2226,14 @@ export class APIManager extends BaseCompatibleModel {
             ? Array.from(new Set(body.targetIds.map((id) => String(id || '').trim()).filter(Boolean)))
             : this.resolveQqTargetIdsForGroup(body.group_id)
         if (targetIds.length === 0) {
+            if (isOneBotEventBody(body)) {
+                return jsonResponse({
+                    success: true,
+                    status: 'ignored',
+                    reason: 'unmapped_qq_group',
+                    x: link,
+                })
+            }
             return jsonResponse({ success: false, error: 'qq_target_required' }, 400)
         }
 
