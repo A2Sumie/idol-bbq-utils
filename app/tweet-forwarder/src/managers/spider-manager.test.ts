@@ -176,6 +176,68 @@ test('SpiderTaskScheduler claims due scheduled crawler queue tasks', async () =>
     }
 })
 
+test('SpiderTaskScheduler uses queued crawler websites as one-shot target override', async () => {
+    const originalRecover = DB.TaskQueue.recoverStaleProcessing
+    const originalGetPending = DB.TaskQueue.getPending
+    const originalClaim = DB.TaskQueue.claimPending
+    const originalUpdate = DB.TaskQueue.updateStatus
+    const task = {
+        id: 402,
+        type: DB.TaskQueue.TYPE.ScheduledCrawlerRun,
+        payload: {
+            crawler: 'Tiktok抓取',
+            websites: ['https://www.tiktok.com/@tabesugiyaseruzo'],
+            reason: 'x tiktok link',
+        },
+        status: DB.TaskQueue.STATUS.Pending,
+        execute_at: 1777047600,
+    }
+    ;(DB.TaskQueue as any).recoverStaleProcessing = async () => ({ count: 0 })
+    ;(DB.TaskQueue as any).getPending = async () => [task]
+    ;(DB.TaskQueue as any).claimPending = async () => ({ ...task, status: DB.TaskQueue.STATUS.Processing })
+    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+
+    try {
+        const emitter = new EventEmitter()
+        const dispatched: any[] = []
+        emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => dispatched.push(payload))
+        const scheduler = new SpiderTaskScheduler(
+            {
+                crawlers: [
+                    {
+                        name: 'Tiktok抓取',
+                        origin: 'https://www.tiktok.com',
+                        paths: ['/@227official', '/@sally_amaki_official'],
+                        cfg_crawler: {
+                            schedule: {
+                                enabled: false,
+                            },
+                        },
+                    },
+                ],
+            },
+            emitter,
+        )
+
+        await scheduler.init()
+        ;(scheduler as any).runtimeSchedules.clear()
+        await (scheduler as any).runScheduleTick(task.execute_at)
+
+        expect(dispatched).toHaveLength(1)
+        expect(dispatched[0]?.task.data).toMatchObject({
+            name: 'Tiktok抓取',
+            websites: ['https://www.tiktok.com/@tabesugiyaseruzo'],
+        })
+        expect(dispatched[0]?.task.data.origin).toBeUndefined()
+        expect(dispatched[0]?.task.data.paths).toBeUndefined()
+    } finally {
+        ;(DB.TaskQueue as any).recoverStaleProcessing = originalRecover
+        ;(DB.TaskQueue as any).getPending = originalGetPending
+        ;(DB.TaskQueue as any).claimPending = originalClaim
+        ;(DB.TaskQueue as any).updateStatus = originalUpdate
+    }
+})
+
 test('SpiderPools ignores malformed dispatch payloads without status side effects', async () => {
     const emitter = new EventEmitter()
     const statusEvents: any[] = []

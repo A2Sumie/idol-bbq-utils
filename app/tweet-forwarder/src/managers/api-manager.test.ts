@@ -1610,6 +1610,76 @@ test('APIManager queues manual website crawler run with one-shot website overrid
     }
 })
 
+test('APIManager queues manual TikTok crawler run with matching one-shot website override', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const dispatched: any[] = []
+    const queuePayloads: any[] = []
+
+    ;(DB.TaskQueue as any).add = async (_type: string, payload: any) => {
+        queuePayloads.push(payload)
+        return { id: 91, payload }
+    }
+    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: {
+                        secret: 'test-secret',
+                    },
+                    crawlers: [
+                        {
+                            name: 'Tiktok抓取',
+                            origin: 'https://www.tiktok.com',
+                        },
+                    ],
+                }) as any,
+            getDeps: () =>
+                ({
+                    emitter: {
+                        emit: (_event: string, payload: any) => {
+                            dispatched.push(payload)
+                            return true
+                        },
+                    },
+                }) as any,
+        })
+
+        const response = await (manager as any).handleCrawlerRun(
+            new Request('http://localhost/api/actions/crawlers/run', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name: 'Tiktok抓取',
+                    websites: ['https://www.tiktok.com/@tabesugiyaseruzo'],
+                }),
+            }),
+        )
+        const payload = await response.json()
+
+        expect(payload).toMatchObject({
+            success: true,
+            status: 'queued',
+            crawler: 'Tiktok抓取',
+            websites: ['https://www.tiktok.com/@tabesugiyaseruzo'],
+        })
+        expect(queuePayloads[0]).toMatchObject({
+            crawler: 'Tiktok抓取',
+            websites: ['https://www.tiktok.com/@tabesugiyaseruzo'],
+        })
+        expect(dispatched[0].task.data).toMatchObject({
+            name: 'Tiktok抓取',
+            websites: ['https://www.tiktok.com/@tabesugiyaseruzo'],
+        })
+        expect(dispatched[0].task.data.origin).toBeUndefined()
+        expect(dispatched[0].task.data.paths).toBeUndefined()
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
 test('APIManager hot-upserts crawler schedules without runtime reload', async () => {
     const calls: any[] = []
     const scheduler = {
@@ -1745,7 +1815,7 @@ test('APIManager inserts temporary crawler schedule points into task_queue', asy
     }
 })
 
-test('APIManager rejects website override for non-website crawlers', async () => {
+test('APIManager rejects website override when URL platform does not match crawler platform', async () => {
     const manager = new APIManager({
         getConfig: () =>
             ({
@@ -1775,7 +1845,7 @@ test('APIManager rejects website override for non-website crawlers', async () =>
     )
 
     expect(response.status).toBe(400)
-    expect(await response.text()).toBe('website override is only supported for website crawlers')
+    expect(await response.text()).toBe('website override platform mismatch: expected X, got Website')
 })
 
 test('APIManager records failed processor runs when processor execution fails', async () => {

@@ -50,6 +50,7 @@ import {
     type CrawlerHotScheduleConfig,
     type ResolvedCrawlerSchedule,
 } from '@/services/crawler-schedule-service'
+import { enqueueMissingTikTokLinksFromXArticle } from '@/services/x-tiktok-link-ingest-service'
 
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
@@ -549,6 +550,8 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                     ? {
                           ...crawler,
                           websites: payload.websites,
+                          origin: undefined,
+                          paths: undefined,
                       }
                     : crawler
             const dispatched = await this.dispatchCrawlerTask(dispatchCrawler, {
@@ -1731,6 +1734,10 @@ class SpiderPools extends BaseCompatibleModel {
             const persisted = res || (await DB.Article.checkExist(article))
             if (persisted) {
                 dispatch_article_ids.push(persisted.id)
+                await enqueueMissingTikTokLinksFromXArticle(article, {
+                    crawlerConfig: cfg_crawler,
+                    log: ctx.log,
+                })
             }
         }
         ctx.log?.info(`[${url.href}] ${saved_articles_count} articles saved.`)

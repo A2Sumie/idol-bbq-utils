@@ -621,6 +621,9 @@ test('ForwarderTaskScheduler dispatches immediate tasks with article_ids_by_url 
     expect(dispatched).toHaveLength(1)
     expect(dispatched[0].taskId).toBe('spider-spider-1')
     expect(dispatched[0].task.data.name).toBe('22/7-cast-成员统一列表')
+    expect(dispatched[0].task.data.websites).toEqual(['https://x.com/i/lists/1936785344072151389'])
+    expect(dispatched[0].task.data.origin).toBeUndefined()
+    expect(dispatched[0].task.data.paths).toBeUndefined()
     expect(dispatched[0].task.data.article_ids_by_url).toEqual({
         'https://x.com/i/lists/1936785344072151389': [101, 102],
     })

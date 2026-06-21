@@ -208,6 +208,30 @@ function resolveCrawlerPlatform(
     return resolvePlatformFromOrigin(crawler?.origin) || resolvePlatformFromOrigin(crawler?.websites?.[0])
 }
 
+function validateCrawlerWebsiteOverridePlatform(
+    crawler: { origin?: string | null; websites?: Array<string> | null },
+    websites?: Array<string>,
+) {
+    if (!websites?.length) {
+        return null
+    }
+
+    const crawlerPlatform = resolveCrawlerPlatform(crawler)
+    if (!crawlerPlatform || crawlerPlatform === Platform.Website) {
+        return null
+    }
+
+    for (const website of websites) {
+        const websitePlatform = resolvePlatformFromOrigin(website)
+        if (websitePlatform !== crawlerPlatform) {
+            return `website override platform mismatch: expected ${platformNameMap[crawlerPlatform]}, got ${
+                platformNameMap[websitePlatform || Platform.Website]
+            }`
+        }
+    }
+    return null
+}
+
 function normalizeXStatusUrl(username: string, statusId: string) {
     return `https://x.com/${username}/status/${statusId}`
 }
@@ -1659,8 +1683,9 @@ export class APIManager extends BaseCompatibleModel {
         if (websiteOverride.error) {
             return new Response(websiteOverride.error, { status: 400 })
         }
-        if (websiteOverride.websites && resolveCrawlerPlatform(crawler) !== Platform.Website) {
-            return new Response('website override is only supported for website crawlers', { status: 400 })
+        const websiteOverridePlatformError = validateCrawlerWebsiteOverridePlatform(crawler, websiteOverride.websites)
+        if (websiteOverridePlatformError) {
+            return new Response(websiteOverridePlatformError, { status: 400 })
         }
 
         const executeAt = this.resolveScheduleInsertExecuteAt(body as Record<string, unknown>)
@@ -1848,13 +1873,16 @@ export class APIManager extends BaseCompatibleModel {
         if (websiteOverride.error) {
             return new Response(websiteOverride.error, { status: 400 })
         }
-        if (websiteOverride.websites && resolveCrawlerPlatform(crawler) !== Platform.Website) {
-            return new Response('website override is only supported for website crawlers', { status: 400 })
+        const websiteOverridePlatformError = validateCrawlerWebsiteOverridePlatform(crawler, websiteOverride.websites)
+        if (websiteOverridePlatformError) {
+            return new Response(websiteOverridePlatformError, { status: 400 })
         }
         const dispatchCrawler = websiteOverride.websites
             ? {
                   ...crawler,
                   websites: websiteOverride.websites,
+                  origin: undefined,
+                  paths: undefined,
               }
             : crawler
 

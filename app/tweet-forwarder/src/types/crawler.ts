@@ -22,6 +22,11 @@ interface CrawlerPostProcessorConfig {
     min_confidence?: number
 }
 
+interface XTikTokLinkIngestConfig {
+    enabled?: boolean
+    crawler?: string
+}
+
 interface LiveRelayTargetConfig {
     enabled?: boolean
     player_id?: string
@@ -113,6 +118,8 @@ interface CrawlerConfig extends CommonCfgConfig {
     processor?: Processor
     processor_id?: string
     post_processors?: Array<CrawlerPostProcessorConfig>
+    x_tiktok_link_ingest?: XTikTokLinkIngestConfig | false
+    tiktok_link_ingest_crawler?: string
 
     // Aggregation (Batch Formatting) Configuration
     aggregation?: AggregationConfig

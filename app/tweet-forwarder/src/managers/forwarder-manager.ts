@@ -683,12 +683,16 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
         })
 
         const { forwarderTaskData } = buildAutoBoundForwarderTaskData(crawler, this.props)
+        const resultWebsites = Object.keys(articleIdsByUrl)
         const forwardTaskId = `spider-${taskId}`
         const task: TaskScheduler.Task = {
             id: forwardTaskId,
             status: TaskScheduler.TaskStatus.PENDING,
             data: {
                 ...forwarderTaskData,
+                websites: resultWebsites,
+                origin: undefined,
+                paths: undefined,
                 connections: this.props.connections,
                 article_ids_by_url: articleIdsByUrl,
             },
