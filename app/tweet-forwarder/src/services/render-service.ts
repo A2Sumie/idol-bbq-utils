@@ -38,7 +38,7 @@ import {
     persistMediaFile,
 } from './media-cache-service'
 import { isNonLiveOutboundSendMode } from './outbound-send-mode'
-import { execFileSync } from 'child_process'
+import { execFileSync, spawnSync } from 'child_process'
 
 export interface RenderedMediaFile {
     path: string
@@ -66,6 +66,19 @@ export interface RenderResult {
 
 const CARD_TEXT_TITLE_THRESHOLD = 1000
 const LONG_TEXT_CARD_TYPES = new Set(['message_pack', 'summary'])
+const INSTAGRAM_STILL_VIDEO_ARTICLE_TYPES = new Set(['story'])
+const STILL_VIDEO_FRAME_SAMPLE_FPS = 4
+const STILL_VIDEO_ANALYSIS_MAX_SECONDS = 45
+const AUDIO_SILENT_MAX_VOLUME_DB = -60
+const AUDIO_ANALYSIS_MAX_SECONDS = 30
+
+interface PersistedMediaFile {
+    path: string
+    hash: string
+    media_type: MediaType
+    size_bytes: number
+    duration_seconds?: number
+}
 
 function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
@@ -692,6 +705,154 @@ export class RenderService {
         }
     }
 
+    private isInstagramStillVideoCandidate(article: Pick<Article, 'platform' | 'type' | 'url'>, mediaType: MediaType) {
+        if (mediaType !== 'video' || article.platform !== Platform.Instagram) {
+            return false
+        }
+        const articleType = String(article.type || '').trim().toLowerCase()
+        const articleUrl = String(article.url || '')
+        return INSTAGRAM_STILL_VIDEO_ARTICLE_TYPES.has(articleType) || /\/stories\//i.test(articleUrl)
+    }
+
+    private probeAudioStreamCount(filePath: string) {
+        try {
+            const output = execFileSync(
+                process.env.FFPROBE_PATH || 'ffprobe',
+                [
+                    '-v',
+                    'error',
+                    '-select_streams',
+                    'a',
+                    '-show_entries',
+                    'stream=index',
+                    '-of',
+                    'csv=p=0',
+                    filePath,
+                ],
+                { encoding: 'utf8', timeout: 10_000 },
+            )
+            if (!output.trim()) {
+                return 0
+            }
+            return output.split(/\r?\n/).filter((line) => line.trim()).length
+        } catch {
+            return null
+        }
+    }
+
+    private probeAudioMaxVolumeDb(filePath: string) {
+        const result = spawnSync(
+            process.env.FFMPEG_PATH || 'ffmpeg',
+            [
+                '-v',
+                'info',
+                '-t',
+                String(AUDIO_ANALYSIS_MAX_SECONDS),
+                '-i',
+                filePath,
+                '-vn',
+                '-sn',
+                '-dn',
+                '-af',
+                'volumedetect',
+                '-f',
+                'null',
+                '-',
+            ],
+            { encoding: 'utf8', maxBuffer: 1024 * 1024, timeout: 30_000 },
+        )
+        if (result.error || result.status !== 0) {
+            return null
+        }
+
+        const output = `${result.stdout || ''}\n${result.stderr || ''}`
+        const match = /max_volume:\s*(-inf|-?\d+(?:\.\d+)?)\s*dB/i.exec(output)
+        if (!match) {
+            return null
+        }
+        return match[1] === '-inf' ? Number.NEGATIVE_INFINITY : Number(match[1])
+    }
+
+    private isVideoSilent(filePath: string) {
+        const audioStreams = this.probeAudioStreamCount(filePath)
+        if (audioStreams === null) {
+            return false
+        }
+        if (audioStreams === 0) {
+            return true
+        }
+
+        const maxVolumeDb = this.probeAudioMaxVolumeDb(filePath)
+        return typeof maxVolumeDb === 'number' && maxVolumeDb <= AUDIO_SILENT_MAX_VOLUME_DB
+    }
+
+    private isVideoCompletelyStill(filePath: string) {
+        try {
+            const output = execFileSync(
+                process.env.FFMPEG_PATH || 'ffmpeg',
+                [
+                    '-v',
+                    'error',
+                    '-t',
+                    String(STILL_VIDEO_ANALYSIS_MAX_SECONDS),
+                    '-i',
+                    filePath,
+                    '-map',
+                    '0:v:0',
+                    '-vf',
+                    `fps=${STILL_VIDEO_FRAME_SAMPLE_FPS}`,
+                    '-f',
+                    'framemd5',
+                    'pipe:1',
+                ],
+                {
+                    encoding: 'utf8',
+                    maxBuffer: 4 * 1024 * 1024,
+                    stdio: ['ignore', 'pipe', 'ignore'],
+                    timeout: 45_000,
+                },
+            )
+            const hashes = output
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter((line) => line && !line.startsWith('#'))
+                .map((line) => line.split(',').at(-1)?.trim())
+                .filter((hash): hash is string => Boolean(hash))
+            return hashes.length > 0 && new Set(hashes).size === 1
+        } catch {
+            return false
+        }
+    }
+
+    private shouldTreatVideoAsStaticImage(article: Article, videoPath: string, mediaType: MediaType) {
+        if (!this.isInstagramStillVideoCandidate(article, mediaType)) {
+            return false
+        }
+        return this.isVideoSilent(videoPath) && this.isVideoCompletelyStill(videoPath)
+    }
+
+    private extractStillVideoPhoto(videoPath: string, article: Article, sourceUrl?: string): PersistedMediaFile | null {
+        try {
+            const outputPath = path.join(
+                path.dirname(videoPath),
+                `${path.basename(videoPath, path.extname(videoPath))}-still.jpg`,
+            )
+            execFileSync(
+                process.env.FFMPEG_PATH || 'ffmpeg',
+                ['-y', '-v', 'error', '-i', videoPath, '-frames:v', '1', '-q:v', '2', outputPath],
+                { stdio: 'ignore', timeout: 15_000 },
+            )
+            return persistMediaFile(outputPath, {
+                article: article as any,
+                media_type: 'photo',
+                source_url: sourceUrl,
+            })
+        } catch (error) {
+            this.log?.warn(`Failed to extract still photo from Instagram video ${article.a_id}: ${error}`)
+            return null
+        }
+    }
+
     private normalizeVideoThumbnailsForSend(files: Array<RenderedMediaFile>, article: Article) {
         const result: Array<RenderedMediaFile> = []
         const thumbnailGroups = new Set<string>()
@@ -767,6 +928,21 @@ export class RenderService {
                         media_type: resolvedMediaType,
                         source_url: sourceUrl,
                     })
+                    let effectiveMediaType = resolvedMediaType
+                    let effectivePersisted: PersistedMediaFile = persisted
+                    if (
+                        currentArticle &&
+                        this.shouldTreatVideoAsStaticImage(currentArticle, persisted.path, resolvedMediaType)
+                    ) {
+                        const stillPhoto = this.extractStillVideoPhoto(persisted.path, currentArticle, sourceUrl)
+                        if (stillPhoto) {
+                            this.log?.info(
+                                `Downgrading silent still Instagram video ${currentArticle.a_id} to photo for send.`,
+                            )
+                            effectiveMediaType = 'photo'
+                            effectivePersisted = stillPhoto
+                        }
+                    }
                     if (currentIsRootArticle) {
                         rootProcessedMediaCount += 1
                     }
@@ -775,7 +951,7 @@ export class RenderService {
                             const platformStr = currentArticle?.platform ? String(currentArticle.platform) : '0'
                             const articleId = currentArticle?.a_id || ''
                             const articleMarker = buildArticleMarker(currentArticle as any)
-                            const hash = persisted.hash
+                            const hash = effectivePersisted.hash
                             const markDuplicate = (reason: string) => {
                                 duplicateMediaReason = reason
                                 if (currentIsRootArticle) {
@@ -802,12 +978,12 @@ export class RenderService {
                             }
 
                             const exactMediaDuplicate = await checkExactCrossPlatformMediaDuplicate(
-                                resolvedMediaType,
+                                effectiveMediaType,
                                 hash,
                                 articleMarker,
                             )
                             if (exactMediaDuplicate) {
-                                const duplicateKind = resolvedMediaType === 'video' ? 'video' : 'media'
+                                const duplicateKind = effectiveMediaType === 'video' ? 'video' : 'media'
                                 markDuplicate(
                                     `Cross-platform exact ${duplicateKind} duplicate matched ${exactMediaDuplicate.a_id}`,
                                 )
@@ -816,12 +992,12 @@ export class RenderService {
                                 )
                                 return undefined
                             }
-                            await markExactCrossPlatformMediaSeen(resolvedMediaType, hash, articleMarker)
+                            await markExactCrossPlatformMediaSeen(effectiveMediaType, hash, articleMarker)
 
-                            if (resolvedMediaType === 'video') {
+                            if (effectiveMediaType === 'video') {
                                 const videoFingerprintCandidate = buildVideoFingerprintCandidate(
                                     currentArticle as any,
-                                    persisted,
+                                    effectivePersisted,
                                 )
                                 if (videoFingerprintCandidate) {
                                     const fingerprintDuplicate =
@@ -839,7 +1015,7 @@ export class RenderService {
                                 }
 
                                 const shortVideoCandidate = buildShortVideoDedupCandidate(currentArticle as any, [
-                                    persisted,
+                                    effectivePersisted,
                                 ])
                                 if (shortVideoCandidate) {
                                     const shortVideoDuplicate =
@@ -861,19 +1037,19 @@ export class RenderService {
                         }
                     }
                     const dimensions =
-                        resolvedMediaType === 'photo' || resolvedMediaType === 'video_thumbnail'
-                            ? this.mediaFileDimensions(persisted.path)
+                        effectiveMediaType === 'photo' || effectiveMediaType === 'video_thumbnail'
+                            ? this.mediaFileDimensions(effectivePersisted.path)
                             : null
                     return {
-                        path: persisted.path,
-                        media_type: resolvedMediaType,
+                        path: effectivePersisted.path,
+                        media_type: effectiveMediaType,
                         sourceArticleId: currentArticle?.a_id || undefined,
                         sourceUserId: currentArticle?.u_id || undefined,
                         sourceUrl,
                         ...dimensions,
-                        content_hash: persisted.hash,
-                        size_bytes: persisted.size_bytes,
-                        duration_seconds: persisted.duration_seconds,
+                        content_hash: effectivePersisted.hash,
+                        size_bytes: effectivePersisted.size_bytes,
+                        duration_seconds: effectivePersisted.duration_seconds,
                         persistent: true,
                     }
                 }

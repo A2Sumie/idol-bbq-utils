@@ -9,6 +9,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import os from 'os'
 import path from 'path'
 import { inflateSync } from 'zlib'
+import { execFileSync } from 'child_process'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 process.env.RENDER_REMOTE_ASSETS = '0'
@@ -1239,6 +1240,132 @@ describe('RenderService media deduplication', () => {
         service.cleanup(first.mediaFiles)
         DB.MediaHash.checkExist = originalCheckExist
         DB.MediaHash.save = originalSave
+    })
+
+    test('downgrades silent still Instagram story videos to photo media', async () => {
+        const service = new RenderService()
+        const tempDir = mkdtempSync(path.join(os.tmpdir(), 'render-static-ig-video-'))
+        const stillPath = path.join(tempDir, 'still.png')
+        const sourceVideoPath = path.join(tempDir, 'source.mp4')
+        writeFileSync(stillPath, Buffer.from(SAMPLE_PNG_DATA_URL.split(',')[1] || '', 'base64'))
+        execFileSync(
+            process.env.FFMPEG_PATH || 'ffmpeg',
+            [
+                '-y',
+                '-v',
+                'error',
+                '-f',
+                'lavfi',
+                '-i',
+                'color=c=black:s=16x16:r=1:d=1',
+                '-frames:v',
+                '1',
+                '-pix_fmt',
+                'yuv420p',
+                sourceVideoPath,
+            ],
+            { stdio: 'ignore', timeout: 10_000 },
+        )
+        const sourceVideoDataUrl = `data:video/mp4;base64,${readFileSync(sourceVideoPath).toString('base64')}`
+        ;(service as any).shouldTreatVideoAsStaticImage = (
+            article: { platform: Platform; type: string },
+            _videoPath: string,
+            mediaType: string,
+        ) => article.platform === Platform.Instagram && article.type === 'story' && mediaType === 'video'
+        ;(service as any).extractStillVideoPhoto = () => ({
+            path: stillPath,
+            hash: 'still-photo-hash',
+            media_type: 'photo',
+            size_bytes: readFileSync(stillPath).length,
+        })
+
+        try {
+            const result = await service.process(
+                {
+                    ...buildMediaArticle('ig-static-video-story'),
+                    media: [
+                        {
+                            type: 'video' as const,
+                            url: sourceVideoDataUrl,
+                        },
+                    ],
+                } as any,
+                {
+                    taskId: 'test-static-ig-video-story',
+                    render_type: 'text-compact',
+                    mediaConfig: {
+                        type: 'no-storage' as const,
+                        use: {
+                            tool: MediaToolEnum.DEFAULT,
+                        },
+                    },
+                    deduplication: false,
+                },
+            )
+
+            expect(result.mediaFiles).toHaveLength(1)
+            expect(result.mediaFiles[0]?.media_type).toBe('photo')
+            expect(result.mediaFiles.some((item) => item.media_type === 'video')).toBeFalse()
+            expect(result.originalMediaFiles[0]?.content_hash).toBe('still-photo-hash')
+
+            service.cleanup(result.mediaFiles)
+        } finally {
+            rmSync(tempDir, { recursive: true, force: true })
+        }
+    })
+
+    test('limits static-video downgrade checks to Instagram story-like videos', () => {
+        const service = new RenderService()
+        const storyArticle = buildMediaArticle('ig-story-candidate')
+
+        expect((service as any).isInstagramStillVideoCandidate(storyArticle, 'video')).toBeTrue()
+        expect((service as any).isInstagramStillVideoCandidate(storyArticle, 'photo')).toBeFalse()
+        expect(
+            (service as any).isInstagramStillVideoCandidate(
+                {
+                    ...storyArticle,
+                    type: 'post',
+                    url: 'https://www.instagram.com/p/abc123/',
+                },
+                'video',
+            ),
+        ).toBeFalse()
+        expect(
+            (service as any).isInstagramStillVideoCandidate(
+                {
+                    ...storyArticle,
+                    platform: Platform.TikTok,
+                },
+                'video',
+            ),
+        ).toBeFalse()
+        expect(
+            (service as any).isInstagramStillVideoCandidate(
+                {
+                    ...storyArticle,
+                    type: 'post',
+                    url: 'https://www.instagram.com/stories/member/123/',
+                },
+                'video',
+            ),
+        ).toBeTrue()
+    })
+
+    test('requires both silent audio and static frames before video downgrade', () => {
+        const service = new RenderService()
+        const article = buildMediaArticle('ig-silent-still-story')
+
+        ;(service as any).isVideoSilent = () => false
+        ;(service as any).isVideoCompletelyStill = () => true
+        expect((service as any).shouldTreatVideoAsStaticImage(article, '/tmp/story.mp4', 'video')).toBeFalse()
+
+        ;(service as any).isVideoSilent = () => true
+        ;(service as any).isVideoCompletelyStill = () => false
+        expect((service as any).shouldTreatVideoAsStaticImage(article, '/tmp/story.mp4', 'video')).toBeFalse()
+
+        ;(service as any).isVideoSilent = () => true
+        ;(service as any).isVideoCompletelyStill = () => true
+        expect((service as any).shouldTreatVideoAsStaticImage(article, '/tmp/story.mp4', 'video')).toBeTrue()
     })
 
     test('does not skip a quoted root article when only referenced media is duplicate', async () => {
