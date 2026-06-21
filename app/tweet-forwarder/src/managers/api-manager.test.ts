@@ -2105,7 +2105,23 @@ test('APIManager QQ X-link endpoint sends existing X article to matching QQ grou
                     forwarderPools: {
                         sendImmediateXLinkArticle: async (...args: any[]) => {
                             sendCalls.push(args)
-                            return { sent: true }
+                            const providerResult: Record<string, unknown> = {}
+                            providerResult.self = providerResult
+                            return {
+                                article_key: 'x:2068528507651842559',
+                                translated_card: true,
+                                target_ids: ['qq-1'],
+                                sends: [
+                                    {
+                                        target_id: 'qq-1',
+                                        part: 'card',
+                                        result: {
+                                            status: 'sent',
+                                            providerResult,
+                                        },
+                                    },
+                                ],
+                            }
                         },
                     },
                 }) as any,
@@ -2148,7 +2164,16 @@ test('APIManager QQ X-link endpoint sends existing X article to matching QQ grou
             crawlerName: 'x-list',
             targetIds: ['qq-1'],
             result: {
-                sent: true,
+                article_key: 'x:2068528507651842559',
+                translated_card: true,
+                target_ids: ['qq-1'],
+                sends: [
+                    {
+                        target_id: 'qq-1',
+                        part: 'card',
+                        status: 'sent',
+                    },
+                ],
             },
         })
         expect(sendCalls).toHaveLength(1)

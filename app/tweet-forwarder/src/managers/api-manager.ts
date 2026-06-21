@@ -238,6 +238,35 @@ function flattenArticleChain(article: Article & { id: number }) {
     return chain
 }
 
+function summarizeImmediateXLinkSendResult(result: unknown) {
+    if (!result || typeof result !== 'object') {
+        return result
+    }
+
+    const raw = result as Record<string, any>
+    if (!Array.isArray(raw.sends)) {
+        try {
+            return JSON.parse(JSON.stringify(raw))
+        } catch {
+            return { summarized: true }
+        }
+    }
+
+    return {
+        article_key: raw.article_key,
+        translated_card: Boolean(raw.translated_card),
+        target_ids: Array.isArray(raw.target_ids) ? raw.target_ids.map((id) => String(id)) : [],
+        sends: raw.sends.map((send: any) => ({
+            target_id: String(send?.target_id || ''),
+            part: send?.part,
+            status: send?.result?.status,
+            reason: send?.result?.reason,
+            pendingUnits: send?.result?.pendingUnits,
+            threshold: send?.result?.threshold,
+        })),
+    }
+}
+
 function tryParseJson(value: string) {
     try {
         return JSON.parse(value)
@@ -2248,7 +2277,7 @@ export class APIManager extends BaseCompatibleModel {
             crawlerName: crawler.name || (crawler as any).id,
             targetIds,
             hydrated,
-            result,
+            result: summarizeImmediateXLinkSendResult(result),
         })
     }
 
