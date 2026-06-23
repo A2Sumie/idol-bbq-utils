@@ -1431,6 +1431,8 @@ class ForwarderPools extends BaseCompatibleModel {
             .createHash('md5')
             .update(`article:${websites.join(',')}`)
             .digest('hex')
+        let attemptedPaths = 0
+        let failedPaths = 0
 
         for (const website of websites) {
             if (this.shouldStopForShutdown(ctx.log, 'article forwarding loop')) {
@@ -1470,15 +1472,32 @@ class ForwarderPools extends BaseCompatibleModel {
                 /**
                  * 查询当前网站下的近10篇文章并查询转发
                  */
-                await this.processSingleArticleTask(
-                    ctx,
-                    url.href,
-                    path.targets,
-                    path.formatterConfig,
-                    article_ids_by_url?.[url.href],
-                    path.routeKey,
-                )
+                attemptedPaths += 1
+                try {
+                    await this.processSingleArticleTask(
+                        ctx,
+                        url.href,
+                        path.targets,
+                        path.formatterConfig,
+                        article_ids_by_url?.[url.href],
+                        path.routeKey,
+                    )
+                } catch (error) {
+                    failedPaths += 1
+                    ctx.log?.error(
+                        `Article forwarding path failed for ${url.href} via ${path.formatterName}: ${toErrorMessage(error)}`,
+                    )
+                }
             }
+        }
+
+        if (failedPaths > 0) {
+            ctx.log?.warn(
+                `Article forwarding completed with ${failedPaths}/${attemptedPaths} path failure(s); remaining paths were processed.`,
+            )
+        }
+        if (attemptedPaths > 0 && failedPaths === attemptedPaths) {
+            throw new Error(`All article forwarding paths failed for ${websites.length} website(s)`)
         }
     }
 

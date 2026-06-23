@@ -27,6 +27,11 @@ interface XTikTokLinkIngestConfig {
     crawler?: string
 }
 
+interface XYouTubeLinkIngestConfig {
+    enabled?: boolean
+    crawler?: string
+}
+
 interface LiveRelayTargetConfig {
     enabled?: boolean
     player_id?: string
@@ -120,6 +125,8 @@ interface CrawlerConfig extends CommonCfgConfig {
     post_processors?: Array<CrawlerPostProcessorConfig>
     x_tiktok_link_ingest?: XTikTokLinkIngestConfig | false
     tiktok_link_ingest_crawler?: string
+    x_youtube_link_ingest?: XYouTubeLinkIngestConfig | false
+    youtube_link_ingest_crawler?: string
 
     // Aggregation (Batch Formatting) Configuration
     aggregation?: AggregationConfig
