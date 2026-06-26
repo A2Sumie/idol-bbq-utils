@@ -26,6 +26,7 @@ type DBFollows = Prisma.crawler_followsGetPayload<{}>
 type DBTaskQueue = Prisma.task_queueGetPayload<{}>
 type DBProcessorRun = Prisma.processor_runsGetPayload<{}>
 type DBOutboundMessage = Prisma.outbound_messagesGetPayload<{}>
+type DBContentFingerprint = Prisma.article_content_fingerprintsGetPayload<{}>
 type DBAggregationWindow = Prisma.aggregation_windowsGetPayload<{}>
 type DBAggregationItem = Prisma.aggregation_itemsGetPayload<{}>
 type DBTargetHealth = Prisma.target_healthGetPayload<{}>
@@ -932,6 +933,152 @@ namespace DB {
         }
     }
 
+    export namespace ContentFingerprint {
+        export const STATUS = {
+            Sent: 'sent',
+            Released: 'released',
+        } as const
+
+        export type Status = (typeof STATUS)[keyof typeof STATUS]
+
+        /**
+         * Atomically claim a forwarding-time content fingerprint for a target/scope. Returns `allowed: false`
+         * with the existing record when an active (status='sent') fingerprint is present within the optional
+         * window; otherwise inserts/refreshes the row and returns `allowed: true`. Mirrors MediaHash slot
+         * claiming but keyed on rendered article content rather than per-file media identity.
+         */
+        export async function claim(options: {
+            scope: string
+            target_id: string
+            fingerprint: string
+            article_key?: string | null
+            platform?: string | number | null
+            article_id?: number | null
+            windowSeconds?: number
+            now?: number
+        }): Promise<{ allowed: boolean; record: DBContentFingerprint }> {
+            const now = Math.floor(Number(options.now || Date.now() / 1000))
+            const windowSeconds = Math.max(0, Math.floor(Number(options.windowSeconds || 0)))
+            const platform = options.platform === undefined || options.platform === null ? null : String(options.platform)
+            const existing = await prisma.article_content_fingerprints.findUnique({
+                where: {
+                    scope_target_id_fingerprint: {
+                        scope: options.scope,
+                        target_id: options.target_id,
+                        fingerprint: options.fingerprint,
+                    },
+                },
+            })
+            if (existing) {
+                const active =
+                    existing.status === STATUS.Sent &&
+                    (windowSeconds <= 0 || Number(existing.updated_at || existing.created_at || 0) >= now - windowSeconds)
+                if (active) {
+                    return { allowed: false, record: existing }
+                }
+                const inactiveWhere =
+                    windowSeconds > 0
+                        ? {
+                              OR: [
+                                  { status: { not: STATUS.Sent } },
+                                  { status: STATUS.Sent, updated_at: { lt: now - windowSeconds } },
+                              ],
+                          }
+                        : { status: { not: STATUS.Sent } }
+                const refreshed = await prisma.article_content_fingerprints.updateMany({
+                    where: {
+                        scope: options.scope,
+                        target_id: options.target_id,
+                        fingerprint: options.fingerprint,
+                        ...inactiveWhere,
+                    },
+                    data: {
+                        article_key: options.article_key ?? null,
+                        platform,
+                        article_id: options.article_id ?? null,
+                        status: STATUS.Sent,
+                        updated_at: now,
+                    },
+                })
+                if (refreshed.count > 0) {
+                    const record = await prisma.article_content_fingerprints.findUniqueOrThrow({
+                        where: {
+                            scope_target_id_fingerprint: {
+                                scope: options.scope,
+                                target_id: options.target_id,
+                                fingerprint: options.fingerprint,
+                            },
+                        },
+                    })
+                    return { allowed: true, record }
+                }
+                const raced = await prisma.article_content_fingerprints.findUnique({
+                    where: {
+                        scope_target_id_fingerprint: {
+                            scope: options.scope,
+                            target_id: options.target_id,
+                            fingerprint: options.fingerprint,
+                        },
+                    },
+                })
+                if (raced) {
+                    return { allowed: false, record: raced }
+                }
+            }
+            try {
+                const record = await prisma.article_content_fingerprints.create({
+                    data: {
+                        scope: options.scope,
+                        target_id: options.target_id,
+                        fingerprint: options.fingerprint,
+                        article_key: options.article_key ?? null,
+                        platform,
+                        article_id: options.article_id ?? null,
+                        status: STATUS.Sent,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                })
+                return { allowed: true, record }
+            } catch (error) {
+                if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                    const raced = await prisma.article_content_fingerprints.findUniqueOrThrow({
+                        where: {
+                            scope_target_id_fingerprint: {
+                                scope: options.scope,
+                                target_id: options.target_id,
+                                fingerprint: options.fingerprint,
+                            },
+                        },
+                    })
+                    return { allowed: false, record: raced }
+                }
+                throw error
+            }
+        }
+
+        /**
+         * Release a previously claimed fingerprint so it no longer suppresses future sends. Used when the
+         * provider send did not actually become visible (queued/blocked/dry_run/failed), keeping the ledger
+         * aligned with real visible deliveries.
+         */
+        export async function release(options: {
+            scope: string
+            target_id: string
+            fingerprint: string
+        }): Promise<void> {
+            await prisma.article_content_fingerprints
+                .deleteMany({
+                    where: {
+                        scope: options.scope,
+                        target_id: options.target_id,
+                        fingerprint: options.fingerprint,
+                    },
+                })
+                .catch(() => undefined)
+        }
+    }
+
     export namespace OutboundMessage {
         const FAILED_RETRY_LIMIT = 5
         const FAILED_RETRY_BASE_SECONDS = 60
@@ -1438,6 +1585,7 @@ export type {
     ArticleWithId,
     DBAggregationItem,
     DBAggregationWindow,
+    DBContentFingerprint,
     DBFollows,
     DBOutboundMessage,
     DBProcessorRun,

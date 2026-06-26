@@ -35,6 +35,19 @@ type BiliupTagGenerationConfig = {
     target_count?: number
 }
 
+type BiliupTitleGenerationConfig = {
+    enabled?: boolean
+    provider?: ProcessorProvider | string
+    api_key?: string
+    cfg_processor?: ProcessorConfig
+    /**
+     * Minimum/maximum Chinese character length accepted for a generated main title payload.
+     * Generated titles outside this range fail the correctness guard and fall back to the deterministic title.
+     */
+    target_min_chars?: number
+    target_max_chars?: number
+}
+
 type BiliupCollisionPlaceholderPartConfig = {
     enabled?: boolean
     video_path?: string
@@ -63,6 +76,12 @@ type BiliupVideoUploadConfig = {
     copyright?: 1 | 2
     tags?: Array<string>
     tag_generation?: BiliupTagGenerationConfig
+    /**
+     * First-class Bilibili main-title generation. When a provider/api_key is available it is attempted by
+     * default (enabled defaults to true), with a strict correctness guard and deterministic fallback.
+     * Distinct from tag_generation, which only contributes tags.
+     */
+    title_generation?: boolean | BiliupTitleGenerationConfig
     exclude_uids?: Array<string>
     metadata_templates?: BiliupMetadataTemplatesConfig
     collision_placeholder_part?: BiliupCollisionPlaceholderPartConfig
@@ -219,6 +238,18 @@ interface ForwardTargetPlatformCommonConfig {
               window_seconds?: number
               max_visible?: number
               duplicate_behavior?: 'skip' | 'text_only'
+          }
+    /**
+     * Forwarding-time content fingerprint dedup. Independent switch (default off). When enabled, an article
+     * whose rendered text + media identity fingerprint already sent to this target is skipped before the
+     * provider send. Useful for high-noise groups where the same content reappears under different article ids
+     * (e.g. group `813433032`). window_seconds=0 (default) means the fingerprint never expires.
+     */
+    content_fingerprint_dedup?:
+        | boolean
+        | {
+              enabled?: boolean
+              window_seconds?: number
           }
     /**
      * Maximum image attachment size before provider upload. Values up to 10000 are treated as KiB for legacy configs;
@@ -407,4 +438,5 @@ export type {
     ForwardTargetPlatformConfig,
     ForwardTargetPlatformCommonConfig,
     BiliupVideoUploadConfig,
+    BiliupTitleGenerationConfig,
 }

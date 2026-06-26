@@ -24,6 +24,8 @@ const DEFAULT_BILIUP_TAG_TARGET_COUNT = 10
 const MAX_BILIUP_TAG_COUNT = 10
 const MAX_BILIUP_TAG_CHARS = 20
 const MAX_BILIUP_TITLE_CHARS = 80
+const DEFAULT_BILIUP_TITLE_MIN_CHARS = 4
+const DEFAULT_BILIUP_TITLE_MAX_CHARS = 32
 const BILIUP_COMMON_TAGS = ['22/7', '秋元康', '偶像', '声优偶像', '七分之二十二']
 const BILIUP_FALLBACK_TOPIC_TAGS = ['ナナニジ', '日本偶像', '声优', '日系偶像', '偶像团体', '二次元偶像']
 const BILIUP_FORBIDDEN_TITLE_TERMS = [
@@ -170,6 +172,15 @@ interface ResolvedBiliupTagGenerationConfig {
     cfg_processor?: ProcessorConfig
 }
 
+interface ResolvedBiliupTitleGenerationConfig {
+    enabled: true
+    provider: ProcessorProvider | string
+    api_key: string
+    target_min_chars: number
+    target_max_chars: number
+    cfg_processor?: ProcessorConfig
+}
+
 interface ResolvedBiliupVideoUploadConfig {
     enabled: boolean
     python_path: string
@@ -185,6 +196,7 @@ interface ResolvedBiliupVideoUploadConfig {
     copyright: 1 | 2
     tags: Array<string>
     tag_generation?: ResolvedBiliupTagGenerationConfig
+    title_generation?: ResolvedBiliupTitleGenerationConfig
     exclude_uids: Array<string>
     metadata_templates?: ResolvedBiliupMetadataTemplatesConfig
 }
@@ -980,6 +992,47 @@ function resolveTagGenerationConfig(
     }
 }
 
+/**
+ * Resolve a first-class title-generation config. Title generation is decoupled from tag generation:
+ * when `title_generation` is omitted it defaults to ON and reuses the tag-generation provider/key
+ * (preserving historical default-on behavior); an explicit `false` disables it; an object can point at
+ * its own provider/key. Without a usable provider/api_key it resolves to undefined (deterministic only).
+ */
+function resolveTitleGenerationConfig(
+    config?: BiliupVideoUploadConfig,
+): ResolvedBiliupTitleGenerationConfig | undefined {
+    if (!config) {
+        return undefined
+    }
+    const raw = config.title_generation
+    if (raw === false) {
+        return undefined
+    }
+    const objectConfig = typeof raw === 'object' && raw ? raw : {}
+    if (typeof raw === 'object' && raw && raw.enabled === false) {
+        return undefined
+    }
+    // Fall back to tag-generation credentials so existing tag_generation-only configs keep generating titles.
+    const provider = String(objectConfig.provider || config.tag_generation?.provider || '').trim()
+    const api_key = String(objectConfig.api_key || config.tag_generation?.api_key || '').trim()
+    if (!provider || !api_key) {
+        return undefined
+    }
+    const minChars = Math.max(1, resolveMinInteger(objectConfig.target_min_chars, DEFAULT_BILIUP_TITLE_MIN_CHARS, 1))
+    const maxChars = Math.max(
+        minChars,
+        resolveMinInteger(objectConfig.target_max_chars, DEFAULT_BILIUP_TITLE_MAX_CHARS, minChars),
+    )
+    return {
+        enabled: true,
+        provider,
+        api_key,
+        target_min_chars: minChars,
+        target_max_chars: maxChars,
+        cfg_processor: objectConfig.cfg_processor || config.tag_generation?.cfg_processor,
+    }
+}
+
 function deriveMemberTags(
     article: Pick<Article, 'content' | 'username' | 'u_id'> & { translation?: string | null },
     texts: string[] = [],
@@ -1110,6 +1163,12 @@ type GeneratedBiliupMetadata = {
     titleZh?: string
 }
 
+type BiliupMetadataProcessorConfig = {
+    provider: ProcessorProvider | string
+    api_key: string
+    cfg_processor?: ProcessorConfig
+}
+
 function parseGeneratedBiliupMetadata(value: string): GeneratedBiliupMetadata {
     const trimmed = String(value || '')
         .trim()
@@ -1124,17 +1183,17 @@ function parseGeneratedBiliupMetadata(value: string): GeneratedBiliupMetadata {
         if (Array.isArray(parsed)) {
             return { tags: parsed.map(String) }
         }
-        if (Array.isArray(parsed?.tags)) {
-            const titleZh =
-                typeof parsed.title_zh === 'string'
-                    ? parsed.title_zh
-                    : typeof parsed.zh_title === 'string'
-                      ? parsed.zh_title
-                      : typeof parsed.chinese_title === 'string'
-                        ? parsed.chinese_title
-                        : undefined
+        const titleZh =
+            typeof parsed?.title_zh === 'string'
+                ? parsed.title_zh
+                : typeof parsed?.zh_title === 'string'
+                  ? parsed.zh_title
+                  : typeof parsed?.chinese_title === 'string'
+                    ? parsed.chinese_title
+                    : undefined
+        if (Array.isArray(parsed?.tags) || titleZh) {
             return {
-                tags: parsed.tags.map(String),
+                tags: Array.isArray(parsed?.tags) ? parsed.tags.map(String) : [],
                 titleZh,
             }
         }
@@ -1209,14 +1268,20 @@ function stripLeadingGeneratedTitleContext(value: string, currentTitle: string) 
     return title
 }
 
-function normalizeGeneratedBiliupTitle(value: string | null | undefined, currentTitle: string) {
+function normalizeGeneratedBiliupTitle(
+    value: string | null | undefined,
+    currentTitle: string,
+    bounds?: { minChars?: number; maxChars?: number },
+) {
+    const minChars = Math.max(1, Math.floor(bounds?.minChars ?? DEFAULT_BILIUP_TITLE_MIN_CHARS))
+    const maxChars = Math.max(minChars, Math.floor(bounds?.maxChars ?? DEFAULT_BILIUP_TITLE_MAX_CHARS))
     const title = normalizeTextBlock(value)
         .replace(/[|｜\r\n]+/g, ' ')
         .replace(/\s+/g, ' ')
         .replace(/^[「『【《\[\]()（）\s]+|[」』】》\[\]()（）\s]+$/g, '')
         .trim()
     const strippedTitle = stripLeadingGeneratedTitleContext(title, currentTitle)
-    if (!strippedTitle || Array.from(strippedTitle).length < 4 || Array.from(strippedTitle).length > 32) {
+    if (!strippedTitle || Array.from(strippedTitle).length < minChars || Array.from(strippedTitle).length > maxChars) {
         return ''
     }
     if (!/[\u3400-\u9fff]/.test(strippedTitle) || /[\u3040-\u30ff]/.test(strippedTitle)) {
@@ -1274,9 +1339,32 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(
     candidate: BiliupUploadCandidate,
     titleZh: string | undefined,
     originalTitle?: string,
+    bounds?: { minChars?: number; maxChars?: number },
 ) {
+    // Preserve the source title as a description-level reference anchor whenever the generated Chinese title
+    // replaces it and the original would otherwise be lost (truncated or dropped from the bounded title).
+    // Skip when the original is already fully visible in the title or description so we never duplicate it.
+    function appendOriginalTitleReferenceToDescription(target: BiliupUploadCandidate, original?: string) {
+        const originalNormalized = normalizeBiliupMainTitleText(original, '')
+        if (!originalNormalized) {
+            return
+        }
+        const compactOriginal = compactComparableText(originalNormalized)
+        if (!compactOriginal) {
+            return
+        }
+        const compactTitle = compactComparableText(target.title)
+        const compactDescription = compactComparableText(target.description)
+        if (compactTitle.includes(compactOriginal) || compactDescription.includes(compactOriginal)) {
+            return
+        }
+        target.description = cleanupTemplateOutput(
+            [target.description, `原标题: ${originalNormalized}`].filter(Boolean).join('\n'),
+        )
+    }
+
     const currentTitle = normalizeBiliupMainTitleText(candidate.title, candidate.title)
-    const generatedTitle = normalizeGeneratedBiliupTitle(titleZh, currentTitle)
+    const generatedTitle = normalizeGeneratedBiliupTitle(titleZh, currentTitle, bounds)
     if (!generatedTitle) {
         return false
     }
@@ -1287,6 +1375,7 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(
     const originalPayload = normalizeBiliupMainTitleText(originalTitle, '') || currentPayload
     if (!fixedPrefix) {
         candidate.title = buildGeneratedBiliupTitlePayload(generatedTitle, originalPayload, MAX_BILIUP_TITLE_CHARS)
+        appendOriginalTitleReferenceToDescription(candidate, originalTitle)
         return true
     }
 
@@ -1295,7 +1384,94 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(
         return false
     }
     candidate.title = `${fixedPrefix}${buildGeneratedBiliupTitlePayload(generatedTitle, originalPayload, availableTitleLength)}`
+    appendOriginalTitleReferenceToDescription(candidate, originalTitle)
     return true
+}
+
+function stableJsonStringify(value: unknown): string {
+    if (value === null || typeof value !== 'object') {
+        return JSON.stringify(value)
+    }
+    if (Array.isArray(value)) {
+        return `[${value.map((item) => stableJsonStringify(item)).join(',')}]`
+    }
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${stableJsonStringify(record[key])}`)
+        .join(',')}}`
+}
+
+function stableProcessorConfigFingerprint(config?: ProcessorConfig) {
+    return config ? stableJsonStringify(config) : ''
+}
+
+function isSameBiliupMetadataProcessor(
+    left?: BiliupMetadataProcessorConfig,
+    right?: BiliupMetadataProcessorConfig,
+) {
+    return Boolean(
+        left &&
+            right &&
+            String(left.provider) === String(right.provider) &&
+            String(left.api_key) === String(right.api_key) &&
+            stableProcessorConfigFingerprint(left.cfg_processor) === stableProcessorConfigFingerprint(right.cfg_processor),
+    )
+}
+
+function buildBiliupMetadataGenerationPrompt(
+    cfgProcessor: ProcessorConfig | undefined,
+    titleMinChars: number,
+    titleMaxChars: number,
+) {
+    return (
+        cfgProcessor?.prompt ||
+        [
+            '你是B站投稿元数据助手。请为22/7相关视频补充搜索友好的中文/日文标签，并在信息足够时给出克制的中文标题。',
+            `固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"],"title_zh":"中文标题或空字符串"}。`,
+            '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
+            '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
+            '输入JSON中的title_candidates和evidence是标题依据；优先使用source=translation_first_line/original_first_line/detected_member_facts的高置信事实。',
+            `title_zh应为${titleMinChars}到${titleMaxChars}个中文字符，基于原文事实，不夸张、不偏颇、不脑补；信息不足则返回空字符串。`,
+            'title_zh会放在固定账号/来源前缀之后，并与原标题用分隔符组合；不要重复账号名、平台名、日期、原标题或搬运属性词。',
+        ].join('\n')
+    )
+}
+
+async function runBiliupMetadataGeneration(
+    article: Article,
+    texts: string[],
+    candidate: BiliupUploadCandidate,
+    targetCount: number,
+    processorConfig: BiliupMetadataProcessorConfig,
+    titleBounds: { minChars: number; maxChars: number },
+    log: Logger | undefined,
+    label: string,
+) {
+    const prompt = buildBiliupMetadataGenerationPrompt(
+        processorConfig.cfg_processor,
+        titleBounds.minChars,
+        titleBounds.maxChars,
+    )
+    try {
+        const processor = await processorRegistry.create(processorConfig.provider, processorConfig.api_key, log, {
+            ...(processorConfig.cfg_processor || {}),
+            prompt,
+        })
+        try {
+            const raw = await processor.process(buildBiliupTagGenerationInput(article, texts, candidate, targetCount))
+            return parseGeneratedBiliupMetadata(raw)
+        } finally {
+            await processor.drop().catch(() => undefined)
+        }
+    } catch (error) {
+        log?.warn(
+            `Biliup ${label} generation failed for ${article.a_id || 'unknown'}; using deterministic fallback: ${
+                error instanceof Error ? error.message : String(error)
+            }`,
+        )
+        return null
+    }
 }
 
 async function completeBiliupUploadCandidateTags(
@@ -1305,45 +1481,91 @@ async function completeBiliupUploadCandidateTags(
     log?: Logger,
 ) {
     const tagGeneration = candidate.config.tag_generation
+    const titleGeneration = candidate.config.title_generation
     const targetCount = tagGeneration?.target_count || DEFAULT_BILIUP_TAG_TARGET_COUNT
     candidate.config.tags = uniqueBiliupTags(candidate.config.tags, targetCount)
 
-    if (article && tagGeneration && candidate.config.tags.length < targetCount) {
-        const prompt =
-            tagGeneration.cfg_processor?.prompt ||
-            [
-                '你是B站投稿元数据助手。请为22/7相关视频补充搜索友好的中文/日文标签，并在信息足够时给出克制的中文标题。',
-                `固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"],"title_zh":"中文标题或空字符串"}。`,
-                '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
-                '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
-                '输入JSON中的title_candidates和evidence是标题依据；优先使用source=translation_first_line/original_first_line/detected_member_facts的高置信事实。',
-                'title_zh应为4到32个中文字符，基于原文事实，不夸张、不偏颇、不脑补；信息不足则返回空字符串。',
-                'title_zh会放在固定账号/来源前缀之后，并与原标题用分隔符组合；不要重复账号名、平台名、日期、原标题或搬运属性词。',
-            ].join('\n')
-        try {
-            const processor = await processorRegistry.create(tagGeneration.provider, tagGeneration.api_key, log, {
-                ...(tagGeneration.cfg_processor || {}),
-                prompt,
-            })
-            try {
-                const raw = await processor.process(buildBiliupTagGenerationInput(article, texts, candidate, targetCount))
-                const generated = parseGeneratedBiliupMetadata(raw)
-                const generatedTags = generated.tags
-                candidate.config.tags = uniqueBiliupTags([...candidate.config.tags, ...generatedTags], targetCount)
-                replaceBiliupTitlePayloadWithGeneratedChinese(
-                    candidate,
-                    generated.titleZh,
-                    extractOriginalBiliupTitleLine(article),
-                )
-            } finally {
-                await processor.drop().catch(() => undefined)
+    const needTags = Boolean(article && tagGeneration && candidate.config.tags.length < targetCount)
+    const needTitle = Boolean(article && titleGeneration)
+
+    if (article && (needTags || needTitle)) {
+        const tagProcessor = tagGeneration
+            ? {
+                  provider: tagGeneration.provider,
+                  api_key: tagGeneration.api_key,
+                  cfg_processor: tagGeneration.cfg_processor,
+              }
+            : undefined
+        const titleProcessor = titleGeneration
+            ? {
+                  provider: titleGeneration.provider,
+                  api_key: titleGeneration.api_key,
+                  cfg_processor: titleGeneration.cfg_processor,
+              }
+            : undefined
+        const titleMinChars = titleGeneration?.target_min_chars ?? DEFAULT_BILIUP_TITLE_MIN_CHARS
+        const titleMaxChars = titleGeneration?.target_max_chars ?? DEFAULT_BILIUP_TITLE_MAX_CHARS
+        const titleBounds = { minChars: titleMinChars, maxChars: titleMaxChars }
+        const applyGeneratedTags = (generated: GeneratedBiliupMetadata | null) => {
+            if (!needTags || !generated) {
+                return
             }
-        } catch (error) {
-            log?.warn(
-                `Biliup tag generation failed for ${article.a_id || 'unknown'}; using deterministic tags: ${
-                    error instanceof Error ? error.message : String(error)
-                }`,
+            candidate.config.tags = uniqueBiliupTags([...candidate.config.tags, ...generated.tags], targetCount)
+        }
+        const applyGeneratedTitle = (generated: GeneratedBiliupMetadata | null) => {
+            if (!needTitle || !generated) {
+                return
+            }
+            replaceBiliupTitlePayloadWithGeneratedChinese(
+                candidate,
+                generated.titleZh,
+                extractOriginalBiliupTitleLine(article),
+                titleBounds,
             )
+        }
+
+        if (needTags && needTitle && isSameBiliupMetadataProcessor(tagProcessor, titleProcessor)) {
+            const generated = await runBiliupMetadataGeneration(
+                article,
+                texts,
+                candidate,
+                targetCount,
+                tagProcessor!,
+                titleBounds,
+                log,
+                'metadata',
+            )
+            applyGeneratedTags(generated)
+            applyGeneratedTitle(generated)
+        } else {
+            if (needTags && tagProcessor) {
+                applyGeneratedTags(
+                    await runBiliupMetadataGeneration(
+                        article,
+                        texts,
+                        candidate,
+                        targetCount,
+                        tagProcessor,
+                        titleBounds,
+                        log,
+                        'tag',
+                    ),
+                )
+            }
+            if (needTitle && titleProcessor) {
+                applyGeneratedTitle(
+                    await runBiliupMetadataGeneration(
+                        article,
+                        texts,
+                        candidate,
+                        targetCount,
+                        titleProcessor,
+                        titleBounds,
+                        log,
+                        'title',
+                    ),
+                )
+            }
         }
     }
 
@@ -1480,6 +1702,7 @@ function resolveVideoUploadConfig(config?: BiliupVideoUploadConfig): ResolvedBil
         copyright: config.copyright === 1 ? 1 : 2,
         tags: uniqueBiliupTags(config.tags || []),
         tag_generation: resolveTagGenerationConfig(config.tag_generation),
+        title_generation: resolveTitleGenerationConfig(config),
         exclude_uids: uniqueStrings([...(config.exclude_uids || []), ...DEFAULT_BILIUP_EXCLUDED_UIDS]),
         metadata_templates: resolveMetadataTemplatesConfig(config.metadata_templates),
     }

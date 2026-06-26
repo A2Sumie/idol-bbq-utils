@@ -194,6 +194,26 @@ model media_hashes {
   @@index([hash])
 }
 
+// Forwarding-time content fingerprint ledger. Suppresses near-identical re-sends of the same
+// content to one target/scope even when article ids differ. Independent from media_hashes
+// (which tracks visible media slots) and from outbound_messages (per idempotency key).
+model article_content_fingerprints {
+  id          Int     @id @default(autoincrement())
+  scope       String
+  target_id   String
+  fingerprint String
+  article_key String?
+  platform    String?
+  article_id  Int?
+  status      String  @default("sent")
+  created_at  Int
+  updated_at  Int
+
+  @@unique([scope, target_id, fingerprint], map: "article_content_fingerprints_scope_target_fingerprint_key")
+  @@index([target_id, status])
+  @@index([fingerprint])
+}
+
 model outbound_messages {
   id                   Int     @id @default(autoincrement())
   idempotency_key      String  @unique

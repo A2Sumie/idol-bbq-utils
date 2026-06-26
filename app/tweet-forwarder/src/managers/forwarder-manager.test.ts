@@ -27,6 +27,7 @@ const originalAggregationWindow = { ...DB.AggregationWindow }
 const originalTargetHealth = { ...DB.TargetHealth }
 const originalForwardBy = { ...DB.ForwardBy }
 const originalMediaHash = { ...DB.MediaHash }
+const originalContentFingerprint = { ...DB.ContentFingerprint }
 const originalArticle = { ...DB.Article }
 
 beforeEach(() => {
@@ -36,12 +37,15 @@ beforeEach(() => {
     const aggregationItems = new Map<string, any>()
     const forwardByRecords = new Map<string, any>()
     const mediaHashRecords = new Map<string, any>()
+    const contentFingerprintRecords = new Map<string, any>()
     let nextWindowId = 1
     let nextItemId = 1
 
     const forwardByKey = (refId: number, platform: string | number, botId: string, taskType: string) =>
         `${platform}:${refId}:${botId}:${taskType}`
     const mediaHashKey = (platform: string, hash: string) => `${platform}:${hash}`
+    const contentFingerprintKey = (scope: string, targetId: string, fingerprint: string) =>
+        `${scope}:${targetId}:${fingerprint}`
 
     ;(DB.ForwardBy as any).checkExist = async (
         refId: number,
@@ -134,6 +138,48 @@ beforeEach(() => {
         return released
     }
     ;(DB.MediaHash as any).__records = mediaHashRecords
+    ;(DB.ContentFingerprint as any).claim = async (options: any) => {
+        const key = contentFingerprintKey(options.scope, options.target_id, options.fingerprint)
+        const now = Math.floor(Number(options.now || Date.now() / 1000))
+        const windowSeconds = Math.max(0, Math.floor(Number(options.windowSeconds || 0)))
+        const existing = contentFingerprintRecords.get(key)
+        if (existing) {
+            const active =
+                existing.status === 'sent' &&
+                (windowSeconds <= 0 || Number(existing.updated_at || existing.created_at || 0) >= now - windowSeconds)
+            if (active) {
+                return { allowed: false, record: existing }
+            }
+            Object.assign(existing, {
+                article_key: options.article_key ?? null,
+                platform: options.platform === undefined || options.platform === null ? null : String(options.platform),
+                article_id: options.article_id ?? null,
+                status: 'sent',
+                updated_at: now,
+            })
+            return { allowed: true, record: existing }
+        }
+        const record = {
+            id: contentFingerprintRecords.size + 1,
+            scope: options.scope,
+            target_id: options.target_id,
+            fingerprint: options.fingerprint,
+            article_key: options.article_key ?? null,
+            platform: options.platform === undefined || options.platform === null ? null : String(options.platform),
+            article_id: options.article_id ?? null,
+            status: 'sent',
+            created_at: now,
+            updated_at: now,
+        }
+        contentFingerprintRecords.set(key, record)
+        return { allowed: true, record }
+    }
+    ;(DB.ContentFingerprint as any).release = async (options: any) => {
+        contentFingerprintRecords.delete(
+            contentFingerprintKey(options.scope, options.target_id, options.fingerprint),
+        )
+    }
+    ;(DB.ContentFingerprint as any).__records = contentFingerprintRecords
     ;(DB.OutboundMessage as any).claim = async (data: any) => {
         const existing = outboundRecords.get(data.idempotency_key)
         if (existing && existing.status !== 'failed') {
@@ -322,6 +368,7 @@ afterEach(() => {
     Object.assign(DB.TargetHealth, originalTargetHealth)
     Object.assign(DB.ForwardBy, originalForwardBy)
     Object.assign(DB.MediaHash, originalMediaHash)
+    Object.assign(DB.ContentFingerprint, originalContentFingerprint)
     Object.assign(DB.Article, originalArticle)
 })
 
@@ -10348,4 +10395,463 @@ test('summary-card media duplicate budget keeps one in-card representative per c
     expect(originalItemTexts[0]).toContain('duplicate text 0')
     expect(originalItemTexts[0]).not.toContain('duplicate translated 0')
     expect(translatedItemTexts[0]).toContain('duplicate translated 0')
+})
+
+function makeContentFingerprintArticle(id: number, aId: string, content: string) {
+    return {
+        id,
+        a_id: aId,
+        platform: Platform.X,
+        username: 'member',
+        u_id: 'member',
+        content,
+        url: `https://x.com/member/status/${aId}`,
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+}
+
+function makeContentFingerprintPools() {
+    return new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: { render_type: 'text' } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+}
+
+test('content_fingerprint_dedup skips a same-content article that already sent to the target', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[] }> = []
+        protected async realSend(texts: string[]): Promise<any> {
+            this.sent.push({ texts })
+            return
+        }
+    }
+
+    const pools = makeContentFingerprintPools()
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '813433032',
+            content_fingerprint_dedup: true,
+        } as any,
+        'target-fp-dedup',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'fp-dedup-first',
+            [makeContentFingerprintArticle(900, 'fp-first', '同一条内容用于指纹去重')],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+        await (pools as any).sendArticles(
+            undefined,
+            'fp-dedup-second',
+            [makeContentFingerprintArticle(901, 'fp-second', '同一条内容用于指纹去重')],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    // Only the first identical article reaches the provider; the second is fingerprint-suppressed.
+    expect(target.sent).toHaveLength(1)
+    const outboundRecords = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values())
+    expect(
+        outboundRecords.some(
+            (record) =>
+                record.status === 'skipped' &&
+                record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
+        ),
+    ).toBeTrue()
+})
+
+test('content_fingerprint_dedup disabled lets identical content send twice', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[] }> = []
+        protected async realSend(texts: string[]): Promise<any> {
+            this.sent.push({ texts })
+            return
+        }
+    }
+
+    const pools = makeContentFingerprintPools()
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '925668659',
+            // no content_fingerprint_dedup -> default off
+        } as any,
+        'target-fp-off',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'fp-off-first',
+            [makeContentFingerprintArticle(910, 'fp-off-first', '同一条内容但未开启指纹')],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+        await (pools as any).sendArticles(
+            undefined,
+            'fp-off-second',
+            [makeContentFingerprintArticle(911, 'fp-off-second', '同一条内容但未开启指纹')],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(2)
+    const fingerprintRecords = (DB.ContentFingerprint as any).__records as Map<string, any>
+    expect(fingerprintRecords.size).toBe(0)
+})
+
+test('content_fingerprint_dedup releases the claim when the send is blocked', async () => {
+    class BlockingForwarder extends Forwarder {
+        NAME = 'recording'
+        attempts = 0
+        protected async realSend(): Promise<any> {
+            this.attempts += 1
+            return
+        }
+        public async send(): Promise<any> {
+            this.attempts += 1
+            return { status: 'blocked', reason: 'simulated_block' }
+        }
+    }
+
+    const pools = makeContentFingerprintPools()
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const target = new BlockingForwarder(
+        {
+            block_until: '32h',
+            group_id: '813433032',
+            content_fingerprint_dedup: { enabled: true },
+        } as any,
+        'target-fp-block',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'fp-block-first',
+            [makeContentFingerprintArticle(920, 'fp-block-first', '被拦截的内容应释放指纹')],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    // A blocked send is not a visible delivery, so the fingerprint must be released (not retained).
+    const fingerprintRecords = (DB.ContentFingerprint as any).__records as Map<string, any>
+    expect(fingerprintRecords.size).toBe(0)
+})
+
+test('content_fingerprint_dedup does not claim fingerprints in non-live outbound mode', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[] }> = []
+        protected async realSend(texts: string[]): Promise<any> {
+            this.sent.push({ texts })
+            return
+        }
+    }
+
+    const previousMode = process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
+    process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = 'blocked'
+    const pools = makeContentFingerprintPools()
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '813433032',
+            content_fingerprint_dedup: { enabled: true },
+        } as any,
+        'target-fp-non-live',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'fp-non-live',
+            [makeContentFingerprintArticle(930, 'fp-non-live', '非 live 模式不应记录内容指纹')],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+        if (previousMode === undefined) {
+            delete process.env.IDOL_BBQ_OUTBOUND_SEND_MODE
+        } else {
+            process.env.IDOL_BBQ_OUTBOUND_SEND_MODE = previousMode
+        }
+    }
+
+    expect(target.sent).toHaveLength(0)
+    const fingerprintRecords = (DB.ContentFingerprint as any).__records as Map<string, any>
+    expect(fingerprintRecords.size).toBe(0)
+})
+
+function makeRealtimeFingerprintArticle(id: number, content: string) {
+    return {
+        id,
+        a_id: `summary-realtime-fp-${id}`,
+        platform: Platform.X,
+        username: 'fp realtime member',
+        u_id: 'fp_realtime_member',
+        content,
+        url: `https://x.com/fp_realtime_member/status/${id}`,
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: true,
+        media: [{ type: 'photo', url: 'https://example.com/realtime-fp-source.jpg' }],
+        extra: null,
+        u_avatar: null,
+    } as any
+}
+
+function makeRealtimeFingerprintRenderService() {
+    // Stable content_hash so two different article ids carry the same media identity, mirroring a real
+    // re-post of the same image under a new article id. Visibility is left disabled in these tests so only
+    // the content fingerprint can suppress the second realtime media push.
+    return {
+        process: async (article: any) => {
+            const file = {
+                media_type: 'photo',
+                path: `/tmp/realtime-fp-${article.id}.jpg`,
+                sourceArticleId: article.a_id,
+                sourceUrl: 'https://example.com/realtime-fp-source.jpg',
+                content_hash: 'realtime-fp-stable-hash',
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [file],
+                mediaFiles: [file],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+}
+
+test('content_fingerprint_dedup suppresses a duplicate realtime media push without media visibility', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'qq'
+        sent: Array<{ texts: string[]; props: any }> = []
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = makeContentFingerprintPools()
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = makeRealtimeFingerprintRenderService()
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '813433032',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'none',
+                flush_on_threshold: false,
+            },
+            // No media_visibility here on purpose: isolate the content fingerprint as the only dedup gate.
+            content_fingerprint_dedup: { enabled: true, window_seconds: 432000 },
+        } as any,
+        'target-realtime-fp-dedup',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        for (const id of [940, 941]) {
+            await (pools as any).sendArticles(
+                undefined,
+                `summary-realtime-fp-${id}`,
+                [makeRealtimeFingerprintArticle(id, '同一条实时媒体内容')],
+                [{ forwarder: target, runtime_config: undefined }],
+                { render_type: 'text-card' } as any,
+            )
+        }
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    // Only the first realtime media push reaches the provider; the second identical one is fingerprint-suppressed.
+    expect(target.sent).toHaveLength(1)
+    const realtimeOutbound = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values()).filter(
+        (record: any) => record.task_kind === 'summary_realtime_media' && record.target_id === target.id,
+    )
+    expect(
+        realtimeOutbound.some(
+            (record: any) =>
+                record.status === 'skipped' &&
+                record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
+        ),
+    ).toBeTrue()
+    const fingerprintRecords = (DB.ContentFingerprint as any).__records as Map<string, any>
+    expect(fingerprintRecords.size).toBe(1)
+})
+
+test('content_fingerprint_dedup disabled lets identical realtime media push twice', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'qq'
+        sent: Array<{ texts: string[]; props: any }> = []
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = makeContentFingerprintPools()
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = makeRealtimeFingerprintRenderService()
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '925668659',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'none',
+                flush_on_threshold: false,
+            },
+            // no content_fingerprint_dedup and no media_visibility -> default off both ways.
+        } as any,
+        'target-realtime-fp-off',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        for (const id of [950, 951]) {
+            await (pools as any).sendArticles(
+                undefined,
+                `summary-realtime-fp-off-${id}`,
+                [makeRealtimeFingerprintArticle(id, '同一条实时媒体但未开启指纹')],
+                [{ forwarder: target, runtime_config: undefined }],
+                { render_type: 'text-card' } as any,
+            )
+        }
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    expect(target.sent).toHaveLength(2)
+    const fingerprintRecords = (DB.ContentFingerprint as any).__records as Map<string, any>
+    expect(fingerprintRecords.size).toBe(0)
+})
+
+test('content_fingerprint_dedup releases the claim when a realtime media send is blocked', async () => {
+    class BlockingForwarder extends Forwarder {
+        NAME = 'qq'
+        attempts = 0
+        protected async realSend(): Promise<any> {
+            this.attempts += 1
+            return
+        }
+        public async send(): Promise<any> {
+            this.attempts += 1
+            return { status: 'blocked', reason: 'simulated_block' }
+        }
+    }
+
+    const pools = makeContentFingerprintPools()
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = makeRealtimeFingerprintRenderService()
+
+    const target = new BlockingForwarder(
+        {
+            block_until: '32h',
+            group_id: '813433032',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'none',
+                flush_on_threshold: false,
+            },
+            content_fingerprint_dedup: { enabled: true },
+        } as any,
+        'target-realtime-fp-block',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'summary-realtime-fp-block',
+            [makeRealtimeFingerprintArticle(960, '被拦截的实时媒体内容应释放指纹')],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    // A blocked realtime send is not a visible delivery, so the fingerprint must be released (not retained).
+    const fingerprintRecords = (DB.ContentFingerprint as any).__records as Map<string, any>
+    expect(fingerprintRecords.size).toBe(0)
 })

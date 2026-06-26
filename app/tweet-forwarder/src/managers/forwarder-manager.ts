@@ -127,6 +127,9 @@ type ResolvedMediaVisibilityPolicy = {
     maxVisible: number
     duplicateBehavior: MediaVisibilityDuplicateBehavior
 }
+type ResolvedContentFingerprintConfig = {
+    windowSeconds: number
+}
 type MediaVisibilityResult = {
     policy: ResolvedMediaVisibilityPolicy | null
     originalCount: number
@@ -278,6 +281,22 @@ function resolveMediaVisibilityPolicy(
         windowSeconds: Math.max(60, rawWindowSeconds),
         maxVisible: Math.max(1, Number.isFinite(rawMaxVisible) ? rawMaxVisible : 1),
         duplicateBehavior: (objectConfig as any).duplicate_behavior === 'text_only' ? 'text_only' : 'skip',
+    }
+}
+
+function resolveContentFingerprintConfig(
+    config: ForwardTargetPlatformCommonConfig | undefined,
+): ResolvedContentFingerprintConfig | null {
+    const raw = config?.content_fingerprint_dedup
+    // Default off: only a literal `true` or an object that does not opt out (`enabled !== false`) turns it on.
+    const enabled = raw === true || (typeof raw === 'object' && raw !== null && raw.enabled !== false)
+    if (!enabled) {
+        return null
+    }
+    const objectConfig = typeof raw === 'object' && raw ? raw : {}
+    const rawWindowSeconds = Math.floor(Number((objectConfig as any).window_seconds || 0))
+    return {
+        windowSeconds: Number.isFinite(rawWindowSeconds) && rawWindowSeconds > 0 ? rawWindowSeconds : 0,
     }
 }
 
@@ -2056,6 +2075,8 @@ class ForwarderPools extends BaseCompatibleModel {
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     let visibilityForRelease: MediaVisibilityResult | null = null
                     let targetRenderResultForCleanup: RenderResult | null = null
+                    let contentFingerprintForRelease: { scope: string; targetId: string; fingerprint: string } | null =
+                        null
                     try {
                         if (this.shouldStopForShutdown(log, `sendArticles target ${target.id}`)) {
                             hadNonErrorOutcome = true
@@ -2351,6 +2372,55 @@ class ForwarderPools extends BaseCompatibleModel {
                             hadNonErrorOutcome = true
                             return
                         }
+                        // Durable visible-completion guard: an ordinary article must not be re-sent to a target that
+                        // already visibly delivered the same article under a different idempotency key or task kind
+                        // (e.g. an earlier `article`/`manual_article` send, or a `summary_realtime_media` media push).
+                        // The exact-key OutboundMessage.claim below only catches same-key replays; this closes the
+                        // cross-key / cross-task duplicate hole that hurt high-noise targets the most.
+                        if (!options?.forceSend) {
+                            const priorVisibleArticle = await DB.OutboundMessage.findLatestVisibleCompletion({
+                                target_id: target.id,
+                                task_kinds: ['article', 'manual_article', 'summary_realtime_media'],
+                                article_key: articleKey(article),
+                            }).catch((error) => {
+                                log?.warn(
+                                    `Failed durable article visible-completion precheck for ${article.a_id} to ${target.id}: ${
+                                        error instanceof Error ? error.message : String(error)
+                                    }`,
+                                )
+                                return null
+                            })
+                            if (
+                                priorVisibleArticle &&
+                                priorVisibleArticle.idempotency_key !== outboundIdempotencyKey
+                            ) {
+                                log?.debug(
+                                    `Skipping article ${article.a_id} for ${target.id}: already visibly delivered as ${priorVisibleArticle.status} (${priorVisibleArticle.task_kind})`,
+                                )
+                                await DB.ForwardBy.save(article.id, platform, target.id, 'article').catch(
+                                    () => undefined,
+                                )
+                                await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(
+                                    () => undefined,
+                                )
+                                await this.markArticleOutboundSkipped(
+                                    log,
+                                    article,
+                                    target,
+                                    routeKeyForTarget,
+                                    'article_visible_completion_elsewhere',
+                                    {
+                                        existing_task_kind: priorVisibleArticle.task_kind,
+                                        existing_status: priorVisibleArticle.status,
+                                        existing_idempotency_key: priorVisibleArticle.idempotency_key,
+                                    },
+                                    targetRenderResult,
+                                )
+                                error_for_all = false
+                                hadNonErrorOutcome = true
+                                return
+                            }
+                        }
                         const outbound = await DB.OutboundMessage.claim({
                             idempotency_key: outboundIdempotencyKey,
                             route_key: routeKeyForTarget,
@@ -2384,6 +2454,70 @@ class ForwarderPools extends BaseCompatibleModel {
                             await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                             hadNonErrorOutcome = true
                             return
+                        }
+
+                        // Forwarding-time content fingerprint dedup (independent switch, default off). Claim a
+                        // per-target/scope fingerprint of the rendered text + media identity right before sending.
+                        // A duplicate marks the outbound `skipped` (article stays saved) and suppresses the send.
+                        if (!options?.forceSend && !isNonLiveOutboundSendMode()) {
+                            const fingerprintConfig = resolveContentFingerprintConfig(
+                                target.getEffectiveConfig(runtime_config),
+                            )
+                            if (fingerprintConfig) {
+                                const fingerprintScope = this.buildContentFingerprintScope(target)
+                                const fingerprint = this.buildArticleContentFingerprint(text, [
+                                    ...mediaFiles,
+                                    ...cardMediaFiles,
+                                    ...contentMediaFiles,
+                                ])
+                                const claim = await DB.ContentFingerprint.claim({
+                                    scope: fingerprintScope,
+                                    target_id: target.id,
+                                    fingerprint,
+                                    article_key: articleKey(article),
+                                    platform: target.NAME,
+                                    article_id: Number.isFinite(Number(article.id)) ? Number(article.id) : null,
+                                    windowSeconds: fingerprintConfig.windowSeconds,
+                                }).catch((error) => {
+                                    log?.warn(
+                                        `Content fingerprint claim failed for ${article.a_id} to ${target.id}; proceeding with send: ${
+                                            error instanceof Error ? error.message : String(error)
+                                        }`,
+                                    )
+                                    return null
+                                })
+                                if (claim && !claim.allowed) {
+                                    log?.debug(
+                                        `Skipping article ${article.a_id} for ${target.id}: content fingerprint duplicate`,
+                                    )
+                                    await DB.OutboundMessage.markSkipped(
+                                        outboundIdempotencyKey,
+                                        'content_fingerprint_duplicate',
+                                        {
+                                            scope: fingerprintScope,
+                                            existing_article_key: claim.record.article_key || null,
+                                            existing_article_id: claim.record.article_id || null,
+                                            window_seconds: fingerprintConfig.windowSeconds,
+                                        },
+                                    ).catch(() => undefined)
+                                    await DB.ForwardBy.save(article.id, platform, target.id, 'article').catch(
+                                        () => undefined,
+                                    )
+                                    await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(
+                                        () => undefined,
+                                    )
+                                    error_for_all = false
+                                    hadNonErrorOutcome = true
+                                    return
+                                }
+                                if (claim && claim.allowed) {
+                                    contentFingerprintForRelease = {
+                                        scope: fingerprintScope,
+                                        targetId: target.id,
+                                        fingerprint,
+                                    }
+                                }
+                            }
                         }
 
                         await DB.OutboundMessage.markSending(outboundIdempotencyKey)
@@ -2466,6 +2600,8 @@ class ForwarderPools extends BaseCompatibleModel {
                             await DB.ForwardBy.save(article.id, platform, target.id, 'article')
                         }
                         visibilityForRelease = null
+                        // Visible send succeeded: keep the content fingerprint claimed (do not release in finally).
+                        contentFingerprintForRelease = null
                         error_for_all = false
                         hadNonErrorOutcome = true
                     } catch (error) {
@@ -2484,6 +2620,8 @@ class ForwarderPools extends BaseCompatibleModel {
                                 summarizeProviderResult(partialError.partialResults),
                                 partialError,
                             )
+                            // Partial counts as a visible completion; keep the fingerprint claimed.
+                            contentFingerprintForRelease = null
                             await DB.TargetHealth.mark({
                                 target_id: target.id,
                                 provider: target.NAME,
@@ -2514,6 +2652,9 @@ class ForwarderPools extends BaseCompatibleModel {
                             await this.releaseArticleChain(article, platform, target.id)
                         }
                     } finally {
+                        // Any non-visible outcome (queued/blocked/dry_run/failed/skip/early-return/exception) releases
+                        // the content fingerprint so it never suppresses a future genuine send.
+                        await this.releaseContentFingerprintClaim(contentFingerprintForRelease).catch(() => undefined)
                         if (targetRenderResultForCleanup) {
                             this.renderService.cleanup(targetRenderResultForCleanup.mediaFiles)
                         }
@@ -2534,7 +2675,11 @@ class ForwarderPools extends BaseCompatibleModel {
                         for (const { forwarder: target } of to) {
                             let currentArticle: ArticleWithId | null = cloned_article
                             while (currentArticle && typeof currentArticle === 'object') {
-                                await DB.ForwardBy.save(currentArticle.id, platform, target.id, 'article')
+                                const nodePlatform =
+                                    currentArticle === cloned_article
+                                        ? platform
+                                        : (currentArticle.platform ?? platform)
+                                await DB.ForwardBy.save(currentArticle.id, nodePlatform, target.id, 'article')
                                 currentArticle = currentArticle.ref as ArticleWithId | null
                             }
                         }
@@ -3250,6 +3395,35 @@ class ForwarderPools extends BaseCompatibleModel {
         })
     }
 
+    private buildContentFingerprintScope(target: BaseForwarder) {
+        return `content-fp:${hashValue({ target_id: target.id }).slice(0, 32)}`
+    }
+
+    private buildArticleContentFingerprint(text: string | undefined, mediaFiles: Array<RenderedMediaFile>) {
+        const normalizedText = String(text || '')
+            .replace(/\s+/g, ' ')
+            .trim()
+        const mediaIdentities = uniquePreserveOrder(
+            mediaFiles
+                .map((file) => this.buildRenderedMediaIdentity(file))
+                .filter((value): value is string => Boolean(value)),
+        ).sort()
+        return hashValue({ text: normalizedText, media: mediaIdentities })
+    }
+
+    private async releaseContentFingerprintClaim(
+        claim: { scope: string; targetId: string; fingerprint: string } | null | undefined,
+    ) {
+        if (!claim || isNonLiveOutboundSendMode()) {
+            return
+        }
+        await DB.ContentFingerprint.release({
+            scope: claim.scope,
+            target_id: claim.targetId,
+            fingerprint: claim.fingerprint,
+        }).catch(() => undefined)
+    }
+
     private async sendSummaryCardRealtimeMedia(
         log: Logger | undefined,
         article: ArticleWithId,
@@ -3372,6 +3546,7 @@ class ForwarderPools extends BaseCompatibleModel {
             extra: { mediaIdentitiesHash: hashValue(mediaIdentities) },
         })
 
+        let contentFingerprintForRelease: { scope: string; targetId: string; fingerprint: string } | null = null
         try {
             const outbound = await DB.OutboundMessage.claim({
                 idempotency_key: outboundIdempotencyKey,
@@ -3394,6 +3569,63 @@ class ForwarderPools extends BaseCompatibleModel {
                     handled: visibleCompletion,
                     visibleMediaSent: visibleCompletion,
                     skippedDuplicate: false,
+                }
+            }
+
+            // Forwarding-time content fingerprint dedup for the realtime media path (independent switch, default
+            // off). This push is the dominant delivery path for `media_realtime` + `send_first_native` targets, so
+            // without this the per-target `content_fingerprint_dedup` switch would never take effect here. Mirrors
+            // the native sendArticles contract: claim after the outbound claim and before markSending, keep the
+            // claim on visible (sent/partial) sends, and release it on any non-visible outcome via `finally`.
+            if (!isNonLiveOutboundSendMode()) {
+                const fingerprintConfig = resolveContentFingerprintConfig(target.getEffectiveConfig(runtime_config))
+                if (fingerprintConfig) {
+                    const fingerprintScope = this.buildContentFingerprintScope(target)
+                    // Fingerprint the stable source media (plus realtime text), not the visibility-filtered or
+                    // locally synthesized files (video thumbnails / translated tail cards), so identical source
+                    // content yields the same fingerprint across article ids and media-visibility states.
+                    const fingerprint = this.buildArticleContentFingerprint(text, mediaFiles)
+                    const claim = await DB.ContentFingerprint.claim({
+                        scope: fingerprintScope,
+                        target_id: target.id,
+                        fingerprint,
+                        article_key: currentArticleKey,
+                        platform: target.NAME,
+                        article_id: Number.isFinite(Number(article.id)) ? Number(article.id) : null,
+                        windowSeconds: fingerprintConfig.windowSeconds,
+                    }).catch((error) => {
+                        log?.warn(
+                            `Content fingerprint claim failed for realtime media ${article.a_id} to ${target.id}; proceeding with send: ${
+                                error instanceof Error ? error.message : String(error)
+                            }`,
+                        )
+                        return null
+                    })
+                    if (claim && !claim.allowed) {
+                        log?.debug(
+                            `Skipping summary realtime media for ${article.a_id} to ${target.id}: content fingerprint duplicate`,
+                        )
+                        await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, 'content_fingerprint_duplicate', {
+                            scope: fingerprintScope,
+                            existing_article_key: claim.record.article_key || null,
+                            existing_article_id: claim.record.article_id || null,
+                            window_seconds: fingerprintConfig.windowSeconds,
+                        }).catch(() => undefined)
+                        await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
+                        return {
+                            hadMedia: true,
+                            handled: true,
+                            visibleMediaSent: false,
+                            skippedDuplicate: true,
+                        }
+                    }
+                    if (claim && claim.allowed) {
+                        contentFingerprintForRelease = {
+                            scope: fingerprintScope,
+                            targetId: target.id,
+                            fingerprint,
+                        }
+                    }
                 }
             }
 
@@ -3467,6 +3699,8 @@ class ForwarderPools extends BaseCompatibleModel {
                 last_provider_code: providerCode(providerResult),
                 details: summarizeProviderResult(providerResult),
             })
+            // Visible send succeeded: keep the content fingerprint claimed (do not release in finally).
+            contentFingerprintForRelease = null
             return {
                 hadMedia: true,
                 handled: true,
@@ -3490,6 +3724,8 @@ class ForwarderPools extends BaseCompatibleModel {
                     disabled_reason: error.message,
                     details: summarizeProviderResult(error.partialResults),
                 }).catch(() => undefined)
+                // Partial counts as a visible completion; keep the fingerprint claimed.
+                contentFingerprintForRelease = null
                 return {
                     hadMedia: true,
                     handled: true,
@@ -3517,6 +3753,10 @@ class ForwarderPools extends BaseCompatibleModel {
                 visibleMediaSent: false,
                 skippedDuplicate: false,
             }
+        } finally {
+            // Any non-visible outcome (queued/blocked/dry_run/failed/early return) releases the content
+            // fingerprint so it never suppresses a future genuine send. Visible sends null this out above.
+            await this.releaseContentFingerprintClaim(contentFingerprintForRelease).catch(() => undefined)
         }
     }
 
@@ -5669,7 +5909,11 @@ class ForwarderPools extends BaseCompatibleModel {
 
         let currentArticle = article.ref as ArticleWithId | null
         while (currentArticle && typeof currentArticle === 'object') {
-            await DB.ForwardBy.save(currentArticle.id, platform, targetId, 'article')
+            // Each ref node is recorded under its own platform (falling back to the root platform when a node
+            // lacks one). Cross-platform references (e.g. a YouTube video promoted from an X link) would otherwise
+            // be marked under the root platform, so the later same-platform root dispatch would not see them as
+            // forwarded and would re-send the duplicate.
+            await DB.ForwardBy.save(currentArticle.id, currentArticle.platform ?? platform, targetId, 'article')
             currentArticle = currentArticle.ref as ArticleWithId | null
         }
         return true
@@ -5720,7 +5964,8 @@ class ForwarderPools extends BaseCompatibleModel {
     private async releaseArticleChain(article: ArticleWithId, platform: Platform, targetId: string) {
         let currentArticle: ArticleWithId | null = article
         while (currentArticle && typeof currentArticle === 'object') {
-            await DB.ForwardBy.deleteRecord(currentArticle.id, platform, targetId, 'article')
+            const nodePlatform = currentArticle === article ? platform : (currentArticle.platform ?? platform)
+            await DB.ForwardBy.deleteRecord(currentArticle.id, nodePlatform, targetId, 'article')
             currentArticle = currentArticle.ref as ArticleWithId | null
         }
     }

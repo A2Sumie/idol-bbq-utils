@@ -1744,3 +1744,268 @@ test('BiliForwarder tightens X action header spacing for Bilibili posts', async 
     expect(dynamicTexts[1]).toContain('@member 0204⁹ X引用:\n引用本文')
     expect(dynamicTexts[1]).not.toContain('X引用\n\n引用本文')
 })
+
+function buildYoutubeTitleGenArticle() {
+    const originalTitle = '22/7 3期生 AUDITION DOCUMENTARY - 北原実咲 -'
+    return {
+        article: {
+            platform: Platform.YouTube,
+            type: 'video',
+            u_id: '227SMEJ',
+            username: '22/7 OFFICIAL YouTube CHANNEL',
+            a_id: 'title-gen-doc',
+            content: `${originalTitle}\n\n公演本文`,
+            created_at: 1781694017,
+            url: 'https://www.youtube.com/watch?v=title-gen-doc',
+        } as any,
+        originalTitle,
+    }
+}
+
+test('title_generation runs independently when tag_generation is absent', async () => {
+    const { article, originalTitle } = buildYoutubeTitleGenArticle()
+    const originalCreate = (processorRegistry as any).create
+    const calls: Array<{ provider: string; text: string }> = []
+    ;(processorRegistry as any).create = async (provider: string) => ({
+        process: async (text: string) => {
+            calls.push({ provider, text })
+            return JSON.stringify({ tags: [], title_zh: '北原実咲试镜纪录片' })
+        },
+        drop: async () => undefined,
+    })
+
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/title-gen-doc.mp4' }],
+        {
+            enabled: true,
+            // No tag_generation block at all; title_generation must still be able to run with its own creds.
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+
+    try {
+        expect(candidate).toBeTruthy()
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
+    // The leading account name is stripped from the generated payload, leaving the distinctive Chinese title.
+    expect(candidate?.title).toContain('试镜纪录片')
+    // The original source title is preserved (here it still fits inside the bounded title, so no description anchor).
+    expect(`${candidate?.title}\n${candidate?.description}`).toContain(originalTitle)
+})
+
+test('title_generation preserves a long original title as a description reference anchor', async () => {
+    const originalCreate = (processorRegistry as any).create
+    // A long original first line cannot also fit inside the bounded main title, so it must survive in the description.
+    const longOriginalTitle =
+        '北原実咲 三期生 定期公演 ナナニジライブ2026 Final 開催決定 スペシャル ロング ドキュメンタリー 完全版 公開記念 特別映像'
+    const article = {
+        platform: Platform.YouTube,
+        type: 'video',
+        u_id: '227SMEJ',
+        username: '22/7 OFFICIAL YouTube CHANNEL',
+        a_id: 'title-gen-long',
+        content: `${longOriginalTitle}\n\n公演本文`,
+        created_at: 1781694017,
+        url: 'https://www.youtube.com/watch?v=title-gen-long',
+    } as any
+    ;(processorRegistry as any).create = async () => ({
+        process: async () => JSON.stringify({ tags: [], title_zh: '试镜纪录片完全版' }),
+        drop: async () => undefined,
+    })
+
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/title-gen-long.mp4' }],
+        {
+            enabled: true,
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+
+    try {
+        expect(candidate).toBeTruthy()
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(candidate?.title).toContain('试镜纪录片完全版')
+    // The tail of the long original is dropped from the bounded title but kept as a description anchor.
+    expect(candidate?.title).not.toContain('公開記念')
+    expect(candidate?.description).toContain('原标题:')
+    expect(candidate?.description).toContain(longOriginalTitle)
+})
+
+test('title_generation: false keeps the deterministic title even with tag_generation creds', async () => {
+    const { article } = buildYoutubeTitleGenArticle()
+    const originalCreate = (processorRegistry as any).create
+    const calls: Array<{ provider: string; text: string }> = []
+    ;(processorRegistry as any).create = async (provider: string) => ({
+        process: async (text: string) => {
+            calls.push({ provider, text })
+            return JSON.stringify({ tags: ['北原実咲'], title_zh: '不应被采用的标题' })
+        },
+        drop: async () => undefined,
+    })
+
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/title-gen-doc.mp4' }],
+        {
+            enabled: true,
+            title_generation: false,
+            tag_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'tag-key',
+                target_count: 10,
+            },
+        },
+    )
+    const deterministicTitle = candidate?.title
+
+    try {
+        expect(candidate).toBeTruthy()
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    // Tag generation still ran (one combined call), but the generated title must be ignored.
+    expect(calls).toHaveLength(1)
+    expect(candidate?.title).toBe(deterministicTitle)
+    expect(candidate?.title).not.toContain('不应被采用的标题')
+    expect(candidate?.config.tags).toContain('北原実咲')
+})
+
+test('title_generation guard failure falls back to the deterministic title', async () => {
+    const { article } = buildYoutubeTitleGenArticle()
+    const originalCreate = (processorRegistry as any).create
+    ;(processorRegistry as any).create = async () => ({
+        // Latin-only output fails the Chinese-title correctness guard and must not overwrite the title.
+        process: async () => JSON.stringify({ tags: [], title_zh: 'audition documentary' }),
+        drop: async () => undefined,
+    })
+
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/title-gen-doc.mp4' }],
+        {
+            enabled: true,
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+    const deterministicTitle = candidate?.title
+
+    try {
+        expect(candidate).toBeTruthy()
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(candidate?.title).toBe(deterministicTitle)
+    expect(candidate?.title).not.toContain('audition documentary')
+})
+
+test('title_generation with separate credentials runs separately from tag_generation', async () => {
+    const { article } = buildYoutubeTitleGenArticle()
+    const originalCreate = (processorRegistry as any).create
+    const calls: Array<{ provider: string; text: string }> = []
+    ;(processorRegistry as any).create = async (provider: string) => ({
+        process: async (text: string) => {
+            calls.push({ provider, text })
+            if (provider === 'TagProvider') {
+                return JSON.stringify({ tags: ['北原実咲'], title_zh: '不应使用标签模型标题' })
+            }
+            return JSON.stringify({ title_zh: '北原実咲试镜纪录片' })
+        },
+        drop: async () => undefined,
+    })
+
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/title-gen-doc.mp4' }],
+        {
+            enabled: true,
+            tag_generation: {
+                enabled: true,
+                provider: 'TagProvider' as any,
+                api_key: 'tag-key',
+                target_count: 10,
+            },
+            title_generation: {
+                enabled: true,
+                provider: 'TitleProvider',
+                api_key: 'title-key',
+            },
+        },
+    )
+
+    try {
+        expect(candidate).toBeTruthy()
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(calls.map((call) => call.provider)).toEqual(['TagProvider', 'TitleProvider'])
+    expect(candidate?.config.tags).toContain('北原実咲')
+    expect(candidate?.title).toContain('试镜纪录片')
+    expect(candidate?.title).not.toContain('不应使用标签模型标题')
+})
+
+test('resolveVideoUploadConfig reuses tag_generation creds for title_generation by default', () => {
+    const resolved = resolveVideoUploadConfig({
+        enabled: true,
+        tag_generation: {
+            enabled: true,
+            provider: 'DeepSeekV4Pro',
+            api_key: 'shared-key',
+            target_count: 10,
+        },
+    })
+    expect(resolved?.title_generation).toMatchObject({
+        enabled: true,
+        provider: 'DeepSeekV4Pro',
+        api_key: 'shared-key',
+    })
+
+    const disabled = resolveVideoUploadConfig({
+        enabled: true,
+        title_generation: false,
+        tag_generation: {
+            enabled: true,
+            provider: 'DeepSeekV4Pro',
+            api_key: 'shared-key',
+            target_count: 10,
+        },
+    })
+    expect(disabled?.title_generation).toBeUndefined()
+
+    const noCreds = resolveVideoUploadConfig({ enabled: true })
+    expect(noCreds?.title_generation).toBeUndefined()
+})

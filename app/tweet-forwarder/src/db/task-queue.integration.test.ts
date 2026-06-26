@@ -149,6 +149,32 @@ async function createAggregationSchema(prisma: PrismaClientInstance) {
     )
 }
 
+async function createContentFingerprintSchema(prisma: PrismaClientInstance) {
+    await prisma.$executeRawUnsafe(`
+        CREATE TABLE "article_content_fingerprints" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "scope" TEXT NOT NULL,
+            "target_id" TEXT NOT NULL,
+            "fingerprint" TEXT NOT NULL,
+            "article_key" TEXT,
+            "platform" TEXT,
+            "article_id" INTEGER,
+            "status" TEXT NOT NULL DEFAULT 'sent',
+            "created_at" INTEGER NOT NULL,
+            "updated_at" INTEGER NOT NULL
+        )
+    `)
+    await prisma.$executeRawUnsafe(
+        'CREATE UNIQUE INDEX "article_content_fingerprints_scope_target_fingerprint_key" ON "article_content_fingerprints"("scope", "target_id", "fingerprint")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "article_content_fingerprints_target_id_status_idx" ON "article_content_fingerprints"("target_id", "status")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "article_content_fingerprints_fingerprint_idx" ON "article_content_fingerprints"("fingerprint")',
+    )
+}
+
 async function createArticleSchema(prisma: PrismaClientInstance) {
     for (const table of ['twitter_article', 'instagram_article']) {
         await prisma.$executeRawUnsafe(`
@@ -204,6 +230,7 @@ beforeEach(async () => {
     await createOutboundMessageSchema(testPrisma)
     await createProcessorRunSchema(testPrisma)
     await createAggregationSchema(testPrisma)
+    await createContentFingerprintSchema(testPrisma)
     await createArticleSchema(testPrisma)
 })
 
@@ -1083,4 +1110,57 @@ test('AggregationWindow item platform round-trips into Article restore lookup on
         platform: Platform.Instagram,
         a_id: 'ig-post',
     })
+})
+
+test('ContentFingerprint claim suppresses duplicates and release re-opens the slot on SQLite', async () => {
+    const base = {
+        scope: 'content-fp:test-scope',
+        target_id: 'target-fp',
+        fingerprint: 'fp-abc',
+        article_key: 'x:1',
+        platform: 'QQ',
+        article_id: 1,
+    }
+
+    const first = await DB.ContentFingerprint.claim(base)
+    expect(first.allowed).toBeTrue()
+
+    // Same fingerprint for same scope/target is suppressed while active.
+    const second = await DB.ContentFingerprint.claim({ ...base, article_key: 'x:2', article_id: 2 })
+    expect(second.allowed).toBeFalse()
+    expect(second.record.article_key).toBe('x:1')
+
+    // A different target is unaffected by the first claim.
+    const otherTarget = await DB.ContentFingerprint.claim({ ...base, target_id: 'target-fp-other' })
+    expect(otherTarget.allowed).toBeTrue()
+
+    // Releasing the original re-opens the slot for the same scope/target/fingerprint.
+    await DB.ContentFingerprint.release({
+        scope: base.scope,
+        target_id: base.target_id,
+        fingerprint: base.fingerprint,
+    })
+    const reclaimed = await DB.ContentFingerprint.claim({ ...base, article_key: 'x:3', article_id: 3 })
+    expect(reclaimed.allowed).toBeTrue()
+    expect(reclaimed.record.article_key).toBe('x:3')
+})
+
+test('ContentFingerprint windowSeconds expires stale fingerprints on SQLite', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    const base = {
+        scope: 'content-fp:test-window',
+        target_id: 'target-window',
+        fingerprint: 'fp-window',
+    }
+
+    const first = await DB.ContentFingerprint.claim({ ...base, now: now - 1000 })
+    expect(first.allowed).toBeTrue()
+
+    // Within the window the duplicate is still suppressed.
+    const blocked = await DB.ContentFingerprint.claim({ ...base, windowSeconds: 5000, now })
+    expect(blocked.allowed).toBeFalse()
+
+    // Past the window the same fingerprint is allowed again (claim refreshed).
+    const expired = await DB.ContentFingerprint.claim({ ...base, windowSeconds: 100, now })
+    expect(expired.allowed).toBeTrue()
 })
