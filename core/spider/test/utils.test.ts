@@ -5,6 +5,9 @@ import { tmpdir } from 'os'
 import {
     auditNetscapeCookieFile,
     getCookieString,
+    HTTPClient,
+    HttpStatusError,
+    HttpTimeoutError,
     parseNetscapeCookieToPuppeteerCookie,
     SimpleExpiringCache,
 } from '../src/utils'
@@ -138,4 +141,35 @@ test('SimpleExpiringCache treats ttl as seconds', async () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
 
     expect(cache.get('short')).toBeNull()
+})
+
+test('HTTPClient throws status errors for non-2xx responses by default', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => new Response('blocked', { status: 429 })) as any
+
+    try {
+        await expect(HTTPClient.download_webpage('https://example.com/rate-limited')).rejects.toBeInstanceOf(
+            HttpStatusError,
+        )
+    } finally {
+        globalThis.fetch = originalFetch
+    }
+})
+
+test('HTTPClient bounds hanging requests with HttpTimeoutError', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: string, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), {
+                once: true,
+            })
+        })) as any
+
+    try {
+        await expect(
+            HTTPClient.download_webpage('https://example.com/slow', {}, { timeout: 1 }),
+        ).rejects.toBeInstanceOf(HttpTimeoutError)
+    } finally {
+        globalThis.fetch = originalFetch
+    }
 })

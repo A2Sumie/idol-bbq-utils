@@ -2,6 +2,7 @@ import dayjs from 'dayjs'
 import { test, expect } from 'bun:test'
 import { spiderRegistry } from '../src'
 import { YoutubeApiJsonParser, YoutubeSpider } from '../src/spiders/youtube'
+import { HTTPClient } from '../src/utils'
 
 const channelHeaderFixture = {
     c4TabbedHeaderRenderer: {
@@ -148,6 +149,36 @@ const shortsFixture = {
     },
 }
 
+function buildYoutubeInitialData(json: any) {
+    return `<script>var ytInitialData = ${JSON.stringify(json)};</script>`
+}
+
+function buildYoutubeDetailHtml(videoId: string) {
+    return `<script>var ytInitialPlayerResponse = ${JSON.stringify({
+        videoDetails: {
+            title: `Hydrated ${videoId}`,
+            shortDescription: `Detail for ${videoId}`,
+            thumbnail: {
+                thumbnails: [{ url: `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`, width: 1280 }],
+            },
+        },
+        microformat: {
+            playerMicroformatRenderer: {
+                publishDate: '2026-03-17',
+                uploadDate: '2026-03-17',
+            },
+        },
+    })};</script>`
+}
+
+function buildYoutubePage() {
+    return {
+        browserContext: () => ({
+            cookies: async () => [],
+        }),
+    } as any
+}
+
 test('YouTube Spider URL Validation supports hyphenated handles', () => {
     const url = 'https://www.youtube.com/@anime-english-club'
     const plugin = spiderRegistry.findByUrl(url)
@@ -236,4 +267,69 @@ test('YouTube detail parser extracts publish date and metadata', () => {
     expect(detail.title).toBe('Fresh upload')
     expect(detail.description).toBe('A brand new clip')
     expect(detail.thumbnail).toBe('https://i.ytimg.com/vi/bBRUMp_WNUU/hqdefault.jpg')
+})
+
+test('YouTube grabArticles bounds detail hydration to the newest configured limit', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const requestedUrls: Array<string> = []
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        requestedUrls.push(url)
+        if (url.includes('/videos?')) {
+            return new Response(buildYoutubeInitialData(videosFixture))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData(shortsFixture))
+        }
+        const videoId = new URL(url).searchParams.get('v') || url.split('/').pop() || 'unknown'
+        return new Response(buildYoutubeDetailHtml(videoId))
+    }
+
+    try {
+        const articles = await YoutubeApiJsonParser.grabArticles(
+            buildYoutubePage(),
+            'https://www.youtube.com/@anime-english-club',
+            {
+                hydrate_limit: 1,
+                hydrate_concurrency: 1,
+            },
+        )
+
+        const detailRequests = requestedUrls.filter((url) => url.includes('/watch?') || url.includes('/shorts/'))
+        expect(detailRequests).toHaveLength(1)
+        expect(articles).toHaveLength(2)
+        expect(articles.some((article) => article.content?.startsWith('Hydrated '))).toBeTrue()
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
+test('YouTube grabArticles skips detail hydration for already-known articles', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const requestedUrls: Array<string> = []
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        requestedUrls.push(url)
+        if (url.includes('/videos?')) {
+            return new Response(buildYoutubeInitialData(videosFixture))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData(shortsFixture))
+        }
+        const videoId = new URL(url).searchParams.get('v') || url.split('/').pop() || 'unknown'
+        return new Response(buildYoutubeDetailHtml(videoId))
+    }
+
+    try {
+        await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@anime-english-club', {
+            hydrate_limit: 8,
+            hydrate_concurrency: 2,
+            isArticleKnown: (a_id) => a_id === 'bBRUMp_WNUU',
+        })
+
+        const detailRequests = requestedUrls.filter((url) => url.includes('/watch?') || url.includes('/shorts/'))
+        expect(detailRequests).toHaveLength(1)
+        expect(detailRequests[0]).toContain('/shorts/NYnbjoDltqA')
+        expect(detailRequests[0]).not.toContain('bBRUMp_WNUU')
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
 })

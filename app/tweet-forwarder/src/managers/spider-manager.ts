@@ -1,10 +1,12 @@
 import { Logger } from '@idol-bbq-utils/log'
 import {
     buildBrowserRequestHeaders,
+    HttpStatusError,
+    HttpTimeoutError,
     spiderRegistry,
     parseNetscapeCookieToPuppeteerCookie,
 } from '@idol-bbq-utils/spider'
-import type { BrowserMode } from '@idol-bbq-utils/spider'
+import type { BrowserMode, DeviceProfile } from '@idol-bbq-utils/spider'
 import { Page } from 'puppeteer-core'
 import { CronJob } from 'cron'
 import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
@@ -51,6 +53,59 @@ import {
     type ResolvedCrawlerSchedule,
 } from '@/services/crawler-schedule-service'
 import { enqueueMissingExternalMediaLinksFromXArticle } from '@/services/x-tiktok-link-ingest-service'
+
+/**
+ * Host that only renders content for mobile clients (Fanclub). It must be crawled with a
+ * phone-shaped browser profile or member content is not visible.
+ */
+const MOBILE_REQUIRED_HOST = 'nanabunnonijyuuni-mobile.com'
+/**
+ * Default mobile profile for Fanclub / mobile-only hosts: a large Samsung Android Chrome phone,
+ * matching a manual Chrome DevTools emulation of a big Samsung screen.
+ */
+const DEFAULT_MOBILE_DEVICE_PROFILE: DeviceProfile = 'mobile_android_chrome_samsung_large'
+/**
+ * Device profiles accepted for mobile-required hosts. iOS Safari stays allowed for explicit
+ * opt-in, but desktop profiles are rejected.
+ */
+const MOBILE_DEVICE_PROFILES: ReadonlySet<DeviceProfile> = new Set<DeviceProfile>([
+    'mobile_android_chrome_samsung_large',
+    'mobile_ios_safari_portrait',
+])
+const RISK_COOLDOWN_MS: Record<CrawlErrorClass, number> = {
+    auth: 30 * 60 * 1000,
+    rate_limit: 20 * 60 * 1000,
+    timeout: 0,
+    transient: 0,
+    parser: 0,
+    unknown: 0,
+}
+
+type CrawlErrorClass = 'auth' | 'rate_limit' | 'timeout' | 'transient' | 'parser' | 'unknown'
+
+interface CrawlTargetError {
+    url: string
+    classification: CrawlErrorClass
+    message: string
+}
+
+interface CrawlTargetSkip {
+    url: string
+    reason: string
+}
+
+interface CrawlTargetContext {
+    url: URL
+    platform: Platform
+    sessionProfile?: string
+    deviceProfile?: string
+}
+
+interface CrawlRiskCooldown {
+    expiresAt: number
+    classification: CrawlErrorClass
+    message: string
+}
 
 function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
@@ -147,20 +202,111 @@ function toErrorMessage(error: unknown) {
     return error instanceof Error ? error.message : String(error)
 }
 
-function summarizeCrawlerTaskResult(crawlerName: string | undefined, result: Array<CrawlerTaskResult>) {
+function unwrapRetryError(error: unknown): unknown {
+    let current = error
+    const seen = new Set<unknown>()
+    while (current && typeof current === 'object' && !seen.has(current)) {
+        seen.add(current)
+        const originalError = (current as { originalError?: unknown }).originalError
+        if (!originalError) {
+            break
+        }
+        current = originalError
+    }
+    return current
+}
+
+function statusFromMessage(message: string) {
+    const match = message.match(/\b(40[1389]|429|5\d\d)\b/)
+    return match ? Number(match[1]) : null
+}
+
+function classifyCrawlError(error: unknown): CrawlErrorClass {
+    const root = unwrapRetryError(error)
+    if (root instanceof HttpTimeoutError) {
+        return 'timeout'
+    }
+    if (root instanceof HttpStatusError) {
+        if (root.status === 401 || root.status === 403) {
+            return 'auth'
+        }
+        if (root.status === 429) {
+            return 'rate_limit'
+        }
+        if (root.status === 408) {
+            return 'timeout'
+        }
+        if (root.status >= 500) {
+            return 'transient'
+        }
+    }
+
+    const message = toErrorMessage(root).toLowerCase()
+    const status = statusFromMessage(message)
+    if (status === 401 || status === 403) {
+        return 'auth'
+    }
+    if (status === 429) {
+        return 'rate_limit'
+    }
+    if (status === 408) {
+        return 'timeout'
+    }
+    if (status && status >= 500) {
+        return 'transient'
+    }
+    if (
+        /\b(login|logged out|auth|unauthorized|forbidden|csrf|cookie|cookies expired|check your cookies)\b/.test(
+            message,
+        )
+    ) {
+        return 'auth'
+    }
+    if (/\b(rate limit|rate-limit|too many requests|reached the limit|temporarily blocked)\b/.test(message)) {
+        return 'rate_limit'
+    }
+    if (/\b(timeout|timed out|navigation timeout|aborterror)\b/.test(message)) {
+        return 'timeout'
+    }
+    if (/\b(econnreset|socket hang up|network|fetch failed|temporarily unavailable|bad gateway|service unavailable)\b/.test(message)) {
+        return 'transient'
+    }
+    if (/\b(format may have changed|cannot find|missing initial data|parse|parser|unexpected token)\b/.test(message)) {
+        return 'parser'
+    }
+    return 'unknown'
+}
+
+function shouldRetryCrawlError(error: unknown) {
+    const classification = classifyCrawlError(error)
+    return classification !== 'auth' && classification !== 'rate_limit' && classification !== 'parser'
+}
+
+function summarizeCrawlerTaskResult(
+    crawlerName: string | undefined,
+    result: Array<CrawlerTaskResult>,
+    errors: Array<CrawlTargetError> = [],
+    skips: Array<CrawlTargetSkip> = [],
+) {
     const articleCount = result
         .filter((item) => item.task_type === 'article')
         .reduce((count, item) => count + item.data.length, 0)
     const followsCount = result
         .filter((item) => item.task_type === 'follows')
         .reduce((count, item) => count + item.data.length, 0)
-    return `crawler ${crawlerName || 'unknown'} completed: ${articleCount} article(s), ${followsCount} follow(s)`
+    const suffix = [
+        errors.length > 0 ? `${errors.length} warning(s)` : null,
+        skips.length > 0 ? `${skips.length} skipped` : null,
+    ].filter(Boolean)
+    return `crawler ${crawlerName || 'unknown'} completed: ${articleCount} article(s), ${followsCount} follow(s)${
+        suffix.length > 0 ? `; ${suffix.join(', ')}` : ''
+    }`
 }
 
-function summarizeCrawlerErrors(errors: Array<unknown>) {
+function summarizeCrawlerErrors(errors: Array<CrawlTargetError>) {
     return errors
         .slice(0, 3)
-        .map(toErrorMessage)
+        .map((error) => `${error.url} [${error.classification}]: ${error.message}`)
         .join('; ')
 }
 
@@ -697,6 +843,7 @@ class SpiderPools extends BaseCompatibleModel {
     private processors: Map<string, BaseProcessor> = new Map()
     private browserPool: BrowserSessionPool
     private instagramLiveRelay: InstagramLiveRelayService
+    private riskCooldowns = new Map<string, CrawlRiskCooldown>()
     /**
      * BaseSpider._VALID_URL.source
      */
@@ -846,7 +993,16 @@ class SpiderPools extends BaseCompatibleModel {
                 await delay(waitTime)
             }
 
-            return await this.crawlArticle(ctx, spider, url, page, processor, effectiveCookieString, requestHeaders)
+            return await this.crawlArticle(
+                ctx,
+                spider,
+                url,
+                page,
+                processor,
+                effectiveCookieString,
+                requestHeaders,
+                spiderPlugin.platform,
+            )
         } finally {
             if (page) {
                 await page.close().catch(() => null)
@@ -1035,7 +1191,8 @@ class SpiderPools extends BaseCompatibleModel {
         }
 
         let result: Array<CrawlerTaskResult> = []
-        let errors: Array<any> = []
+        let errors: Array<CrawlTargetError> = []
+        let skips: Array<CrawlTargetSkip> = []
         let cancelledByShutdown = false
 
         try {
@@ -1045,6 +1202,7 @@ class SpiderPools extends BaseCompatibleModel {
                     cancelledByShutdown = true
                     break
                 }
+                let targetContext: CrawlTargetContext | undefined
                 // 单次系列爬虫任务
                 try {
                     const url = new URL(website)
@@ -1069,6 +1227,22 @@ class SpiderPools extends BaseCompatibleModel {
                         userAgent: user_agent,
                         viewport: browserRequest.viewport,
                     })
+                    targetContext = {
+                        url,
+                        platform: spiderPlugin.platform,
+                        sessionProfile: browserRequest.session_profile,
+                        deviceProfile: browserRequest.device_profile,
+                    }
+                    const activeCooldown = this.getActiveCooldown(targetContext)
+                    if (activeCooldown) {
+                        const reason = `${activeCooldown.classification} cooldown until ${dayjs(activeCooldown.expiresAt).format()}: ${activeCooldown.message}`
+                        ctx.log?.warn(`[${url.href}] Skipping crawler target during ${reason}`)
+                        skips.push({
+                            url: url.href,
+                            reason,
+                        })
+                        continue
+                    }
                     const needsBrowser = this.shouldUseBrowserAssist(crawl_engine, spiderPlugin.platform)
                     const waitTime = this.resolveWaitTime(interval_time)
 
@@ -1146,6 +1320,7 @@ class SpiderPools extends BaseCompatibleModel {
                             processor,
                             effectiveCookieString,
                             requestHeaders,
+                            spiderPlugin.platform,
                         )
 
                         result.push({
@@ -1168,9 +1343,11 @@ class SpiderPools extends BaseCompatibleModel {
                                 }),
                             {
                                 retries: RETRY_LIMIT,
+                                shouldRetry: (error) => shouldRetryCrawlError(error),
                                 onFailedAttempt: (error) => {
+                                    const classification = classifyCrawlError(error)
                                     ctx.log?.error(
-                                        `[${url.href}] Crawl follows failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
+                                        `[${url.href}] Crawl follows failed (${classification}), there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
                                     )
                                 },
                             },
@@ -1191,7 +1368,16 @@ class SpiderPools extends BaseCompatibleModel {
                         break
                     }
                     ctx.log?.error(`Error while crawling for ${website}: ${error}`)
-                    errors.push(error)
+                    const classification = classifyCrawlError(error)
+                    const message = toErrorMessage(unwrapRetryError(error))
+                    if (targetContext) {
+                        this.setCooldownForError(targetContext, classification, message)
+                    }
+                    errors.push({
+                        url: website,
+                        classification,
+                        message,
+                    })
                     continue
                 }
             }
@@ -1207,7 +1393,7 @@ class SpiderPools extends BaseCompatibleModel {
             return
         }
 
-        if (errors.length > 0) {
+        if (errors.length > 0 && result.length === 0) {
             this.emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
                 taskId,
                 status: TaskScheduler.TaskStatus.FAILED,
@@ -1218,7 +1404,8 @@ class SpiderPools extends BaseCompatibleModel {
             })
         } else {
             await this.updateLinkedTaskQueue(ctx, DB.TaskQueue.STATUS.Completed, {
-                result_summary: summarizeCrawlerTaskResult(name, result),
+                ...(errors.length > 0 ? { last_error: summarizeCrawlerErrors(errors) } : {}),
+                result_summary: summarizeCrawlerTaskResult(name, result, errors, skips),
             })
             try {
                 this.emitter.emit(`spider:${TaskScheduler.TaskEvent.FINISHED}`, {
@@ -1484,19 +1671,28 @@ class SpiderPools extends BaseCompatibleModel {
     }
 
     private resolveBrowserRequest(cfg_crawler: Crawler['cfg_crawler'] | undefined, url: URL, platform: Platform) {
-        const requiresMobileProfile = platform === Platform.Website || url.hostname === 'nanabunnonijyuuni-mobile.com'
+        const requiresMobileProfile = platform === Platform.Website || url.hostname === MOBILE_REQUIRED_HOST
+        // Fanclub / mobile-only hosts must look like a real phone, otherwise member content is not
+        // rendered. Default to the large Samsung Android Chrome profile and only allow explicit
+        // mobile overrides (iOS Safari is allowed but discouraged).
         const deviceProfile =
-            cfg_crawler?.device_profile || (requiresMobileProfile ? 'mobile_ios_safari_portrait' : 'desktop_chrome')
+            cfg_crawler?.device_profile ||
+            (requiresMobileProfile ? DEFAULT_MOBILE_DEVICE_PROFILE : 'desktop_chrome')
 
-        if (requiresMobileProfile && deviceProfile !== 'mobile_ios_safari_portrait') {
-            throw new Error(`Crawler for ${url.hostname} must use mobile_ios_safari_portrait, got ${deviceProfile}`)
+        if (requiresMobileProfile && !MOBILE_DEVICE_PROFILES.has(deviceProfile)) {
+            throw new Error(
+                `Crawler for ${url.hostname} must use a mobile device profile (${Array.from(MOBILE_DEVICE_PROFILES).join(
+                    ', ',
+                )}), got ${deviceProfile}`,
+            )
         }
 
         return {
             browser_mode: cfg_crawler?.browser_mode,
             device_profile: deviceProfile,
             session_profile:
-                cfg_crawler?.session_profile || (requiresMobileProfile ? `mobile:${url.hostname}` : undefined),
+                cfg_crawler?.session_profile ||
+                (requiresMobileProfile ? `${deviceProfile}:${url.hostname}` : undefined),
             extra_headers: cfg_crawler?.extra_headers,
             viewport: cfg_crawler?.viewport,
             locale: cfg_crawler?.locale,
@@ -1514,6 +1710,39 @@ class SpiderPools extends BaseCompatibleModel {
         }
 
         return crawl_engine.startsWith('api')
+    }
+
+    private crawlCooldownKey(context: CrawlTargetContext) {
+        return [
+            context.platform,
+            context.url.hostname,
+            context.sessionProfile || context.deviceProfile || 'stateless',
+        ].join(':')
+    }
+
+    private getActiveCooldown(context: CrawlTargetContext): CrawlRiskCooldown | null {
+        const key = this.crawlCooldownKey(context)
+        const cooldown = this.riskCooldowns.get(key)
+        if (!cooldown) {
+            return null
+        }
+        if (cooldown.expiresAt <= Date.now()) {
+            this.riskCooldowns.delete(key)
+            return null
+        }
+        return cooldown
+    }
+
+    private setCooldownForError(context: CrawlTargetContext, classification: CrawlErrorClass, message: string) {
+        const duration = RISK_COOLDOWN_MS[classification] || 0
+        if (duration <= 0) {
+            return
+        }
+        this.riskCooldowns.set(this.crawlCooldownKey(context), {
+            expiresAt: Date.now() + duration,
+            classification,
+            message,
+        })
     }
 
     private resolveWaitTime(interval_time: NonNullable<Crawler['cfg_crawler']>['interval_time']) {
@@ -1644,6 +1873,7 @@ class SpiderPools extends BaseCompatibleModel {
         processor?: BaseProcessor,
         cookieString?: string,
         requestHeaders?: Record<string, string>,
+        platform?: Platform,
     ): Promise<Array<number>> {
         const { cfg_crawler } = ctx.task.data as Crawler
         const {
@@ -1674,12 +1904,17 @@ class SpiderPools extends BaseCompatibleModel {
                     max_detail_count,
                     detail_interval_time,
                     block_resource_types,
+                    isArticleKnown: platform
+                        ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
+                        : undefined,
                 }),
             {
                 retries: RETRY_LIMIT,
+                shouldRetry: (error) => shouldRetryCrawlError(error),
                 onFailedAttempt: (error) => {
+                    const classification = classifyCrawlError(error)
                     ctx.log?.error(
-                        `[${url.href}] Crawl article failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
+                        `[${url.href}] Crawl article failed (${classification}), there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
                     )
                 },
             },

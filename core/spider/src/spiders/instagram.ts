@@ -34,6 +34,21 @@ enum ArticleTypeEnum {
     // REEL = 'reel',
 }
 
+/**
+ * Fine-grained Instagram article sub-tasks. When no sub_task_type is configured, both posts and
+ * stories are crawled (stories best-effort). Configure `sub_task_type` to restrict to one.
+ */
+enum InstagramArticleTaskType {
+    posts = 'posts',
+    stories = 'stories',
+}
+
+/**
+ * Stories are higher-risk and frequently empty. Bound the navigation so a slow/blocked stories
+ * page cannot stall the crawler slot; failures are isolated and never drop posts.
+ */
+const INSTAGRAM_STORIES_TIMEOUT_MS = 12000
+
 interface InstagramProfileStatus {
     platform: Platform.Instagram
     u_id: string
@@ -126,18 +141,41 @@ class InstagramSpider extends BaseSpider {
         }
         const { id } = result
         const _url = `${this.BASE_URL}${id}`
-        const { task_type } = config
+        const { task_type, sub_task_type } = config
 
         if (!page) {
             throw new Error('Instagram spider requires a Page instance')
         }
 
         if (task_type === 'article') {
-            this.log?.info('Trying to grab posts.')
-            const res = await InsApiJsonParser.grabPosts(page, _url)
-            this.log?.info(`Trying to grab stories.`)
-            const stories = await InsApiJsonParser.grabStories(page, `${this.BASE_URL}stories/${id}/`)
-            return res.concat(stories) as TaskTypeResult<T, Platform.Instagram>
+            const wantPosts =
+                !sub_task_type ||
+                sub_task_type.length === 0 ||
+                sub_task_type.includes(InstagramArticleTaskType.posts)
+            const wantStories =
+                !sub_task_type ||
+                sub_task_type.length === 0 ||
+                sub_task_type.includes(InstagramArticleTaskType.stories)
+
+            const articles: Array<GenericArticle<Platform.Instagram>> = []
+            if (wantPosts) {
+                this.log?.info('Trying to grab posts.')
+                articles.push(...(await InsApiJsonParser.grabPosts(page, _url)))
+            }
+            if (wantStories) {
+                this.log?.info(`Trying to grab stories.`)
+                // Stories are best-effort: a failure or timeout here must never drop posts or fail
+                // the whole Instagram crawl.
+                try {
+                    const stories = await InsApiJsonParser.grabStories(page, `${this.BASE_URL}stories/${id}/`, {
+                        timeout: INSTAGRAM_STORIES_TIMEOUT_MS,
+                    })
+                    articles.push(...stories)
+                } catch (error) {
+                    this.log?.warn(`Failed to grab stories for ${id}, keeping posts only: ${error}`)
+                }
+            }
+            return articles as TaskTypeResult<T, Platform.Instagram>
         }
 
         if (task_type === 'follows') {
@@ -536,12 +574,13 @@ namespace InsApiJsonParser {
                 width: number
                 height: number
             }
+            timeout?: number
         } = {},
     ): Promise<Array<GenericArticle<Platform.Instagram>>> {
         if (config.viewport) {
             await page.setViewport(config.viewport)
         }
-        await page.goto(url)
+        await page.goto(url, config.timeout ? { timeout: config.timeout } : undefined)
         try {
             await checkLogin(page)
             await checkSomethingWrong(page)
@@ -606,6 +645,6 @@ namespace InsApiJsonParser {
     }
 }
 
-export { ArticleTypeEnum, InsApiJsonParser }
+export { ArticleTypeEnum, InstagramArticleTaskType, InsApiJsonParser }
 export type { InstagramProfileStatus }
 export { InstagramSpider }

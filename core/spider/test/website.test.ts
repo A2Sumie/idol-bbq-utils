@@ -84,6 +84,7 @@ describe('resolveWebsiteCrawlOptions', () => {
                 min: 0,
                 max: 60000,
             },
+            blockResourceTypes: ['font', 'image', 'media'],
         })
     })
 })

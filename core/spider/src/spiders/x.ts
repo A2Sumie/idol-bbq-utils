@@ -14,7 +14,6 @@ import { Page } from 'puppeteer-core'
 import { JSONPath } from 'jsonpath-plus'
 import type { Logger } from '@idol-bbq-utils/log'
 import { waitForResponse } from '@/spiders/base'
-import { defaultViewport } from './base'
 import { UserAgent } from '@/utils'
 import { v4 as uuidv4 } from 'uuid'
 import { noop } from 'puppeteer-core/lib/esm/third_party/rxjs/rxjs.js'
@@ -2281,9 +2280,7 @@ namespace XApiJsonParser {
                 width: number
                 height: number
             }
-        } = {
-            viewport: defaultViewport,
-        },
+        } = {},
     ): Promise<Array<GenericArticle<Platform.X>>> {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
@@ -2303,7 +2300,11 @@ namespace XApiJsonParser {
             }
         })
         try {
-            await page.setViewport(config.viewport ?? defaultViewport)
+            // Keep the realistic viewport applied by the browser profile; only override when
+            // a caller explicitly requests a specific viewport.
+            if (config.viewport) {
+                await page.setViewport(config.viewport)
+            }
             await page.goto(url)
             await checkLogin(page)
             await checkSomethingWrong(page)
@@ -2332,9 +2333,7 @@ namespace XApiJsonParser {
                 width: number
                 height: number
             }
-        } = {
-            viewport: defaultViewport,
-        },
+        } = {},
     ): Promise<Array<GenericArticle<Platform.X>>> {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
@@ -2353,7 +2352,9 @@ namespace XApiJsonParser {
                     })
             }
         })
-        await page.setViewport(config.viewport ?? defaultViewport)
+        if (config.viewport) {
+            await page.setViewport(config.viewport)
+        }
         await page.goto(url)
         try {
             await checkLogin(page)
@@ -2393,7 +2394,6 @@ namespace XApiJsonParser {
             }
         })
         try {
-            await page.setViewport(defaultViewport)
             await page.goto(url)
             await checkLogin(page)
             await checkSomethingWrong(page)

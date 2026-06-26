@@ -5,7 +5,7 @@ import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createLogger, winston, format } from '@idol-bbq-utils/log'
 import type { GenericFollows } from '../src/types'
-import { InsApiJsonParser } from '../src/spiders/instagram'
+import { InstagramSpider, InsApiJsonParser } from '../src/spiders/instagram'
 import { test, expect } from 'bun:test'
 
 const dataPath = (...parts: Array<string>) => join(import.meta.dir, 'data', ...parts)
@@ -481,4 +481,49 @@ test('Instagram stories keep a non-empty username when og:title does not expose 
     expect(stories[0]?.u_id).toBe('nananijigram22_7')
     expect(stories[0]?.username).toBe('nananijigram22_7')
     expect(stories[0]?.url).toBe('https://www.instagram.com/stories/nananijigram22_7/36963634381048167')
+})
+
+test('Instagram article crawl defaults to posts and best-effort stories', async () => {
+    const originalGrabPosts = InsApiJsonParser.grabPosts
+    const originalGrabStories = InsApiJsonParser.grabStories
+    const calls: Array<string> = []
+    ;(InsApiJsonParser as any).grabPosts = async () => {
+        calls.push('posts')
+        return [
+            {
+                platform: 2,
+                a_id: 'POSTONLY',
+                u_id: 'instagram',
+                username: 'Instagram',
+                created_at: 1773845200,
+                content: 'post survives',
+                url: 'https://www.instagram.com/p/POSTONLY/',
+                type: 'post',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ]
+    }
+    ;(InsApiJsonParser as any).grabStories = async (_page: any, _url: string, config: any) => {
+        calls.push(`stories:${config?.timeout}`)
+        throw new Error('stories blocked')
+    }
+
+    try {
+        const spider = new InstagramSpider()
+        const articles = await spider.crawl('https://www.instagram.com/instagram/', {} as any, 'ig-default', {
+            task_type: 'article',
+            crawl_engine: 'browser',
+        })
+
+        expect(calls).toEqual(['posts', 'stories:12000'])
+        expect(articles).toHaveLength(1)
+        expect(articles[0]?.a_id).toBe('POSTONLY')
+    } finally {
+        ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
+        ;(InsApiJsonParser as any).grabStories = originalGrabStories
+    }
 })

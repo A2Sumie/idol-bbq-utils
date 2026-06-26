@@ -84,6 +84,8 @@ interface ResolvedWebsiteCrawlOptions {
     blockResourceTypes: Array<string>
 }
 
+const DEFAULT_BLOCK_RESOURCE_TYPES = ['font', 'image', 'media']
+
 export interface WebsitePhotoEntry {
     modalId: string
     dataCode?: string | null
@@ -219,8 +221,9 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
 function resolveWebsiteCrawlOptions(options: WebsiteCrawlOptions = {}): ResolvedWebsiteCrawlOptions {
     const minDelay = clampInteger(options.detail_interval_time?.min, DEFAULT_DETAIL_INTERVAL_TIME.min, 0, 60000)
     const maxDelay = clampInteger(options.detail_interval_time?.max, Math.max(minDelay, DEFAULT_DETAIL_INTERVAL_TIME.max), minDelay, 60000)
+    const rawBlockResourceTypes = options.block_resource_types || DEFAULT_BLOCK_RESOURCE_TYPES
     const blockResourceTypes = Array.from(
-        new Set((options.block_resource_types || []).map((value) => String(value || '').trim()).filter((value) => WEBSITE_RESOURCE_TYPES.has(value))),
+        new Set(rawBlockResourceTypes.map((value) => String(value || '').trim()).filter((value) => WEBSITE_RESOURCE_TYPES.has(value))),
     )
 
     return {

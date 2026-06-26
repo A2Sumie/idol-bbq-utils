@@ -2,8 +2,14 @@ import type { Page, Viewport } from 'puppeteer-core'
 import { UserAgent } from './http'
 
 type BrowserMode = 'headless' | 'headed-xvfb'
-type DeviceProfile = 'desktop_chrome' | 'mobile_ios_safari_portrait'
+type DeviceProfile = 'desktop_chrome' | 'mobile_ios_safari_portrait' | 'mobile_android_chrome_samsung_large'
 type ScreenOrientationType = 'landscape-primary' | 'portrait-primary'
+
+/**
+ * Rendering engine behind the profile. Used to drive capability-based fingerprint shims
+ * instead of brittle equality checks against individual profile names.
+ */
+type ProfileEngine = 'chromium' | 'webkit'
 
 interface ProfileViewport extends Viewport {
     width: number
@@ -66,6 +72,14 @@ interface ProfileUserAgentData {
 
 interface BrowserProfileConfig {
     deviceProfile: DeviceProfile
+    /** Underlying engine. Chromium-backed profiles keep window.chrome and UA-CH. */
+    engine: ProfileEngine
+    /** Whether the profile emulates a mobile device (touch UI, mobile UA-CH). */
+    isMobile: boolean
+    /** Whether touch input should be emulated for this profile. */
+    hasTouch: boolean
+    /** Whether the profile should expose a Chrome-like window.chrome object. */
+    chromeLike: boolean
     userAgent: string
     viewport: ProfileViewport
     windowSize: ProfileWindowSize
@@ -101,6 +115,10 @@ const CHROME_BRANDS: Array<ProfileUserAgentBrandVersion> = [
         version: CHROME_MAJOR_VERSION,
     },
 ]
+const CHROME_FULL_VERSION_LIST: Array<ProfileUserAgentBrandVersion> = CHROME_BRANDS.map((brand) => ({
+    brand: brand.brand,
+    version: brand.brand === 'Not_A Brand' ? '99.0.0.0' : CHROME_FULL_VERSION,
+}))
 const PDF_MIME_TYPES: Array<ProfileMimeType> = [
     {
         type: 'application/pdf',
@@ -137,6 +155,10 @@ const CHROME_PDF_PLUGINS: Array<ProfilePlugin> = [
 const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
     desktop_chrome: {
         deviceProfile: 'desktop_chrome',
+        engine: 'chromium',
+        isMobile: false,
+        hasTouch: false,
+        chromeLike: true,
         userAgent: UserAgent.CHROME,
         viewport: {
             width: 1440,
@@ -183,10 +205,7 @@ const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
         pdfViewerEnabled: true,
         userAgentData: {
             brands: CHROME_BRANDS,
-            fullVersionList: CHROME_BRANDS.map((brand) => ({
-                brand: brand.brand,
-                version: brand.brand === 'Not_A Brand' ? '99.0.0.0' : CHROME_FULL_VERSION,
-            })),
+            fullVersionList: CHROME_FULL_VERSION_LIST,
             mobile: false,
             platform: 'Windows',
             platformVersion: '10.0.0',
@@ -199,6 +218,10 @@ const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
     },
     mobile_ios_safari_portrait: {
         deviceProfile: 'mobile_ios_safari_portrait',
+        engine: 'webkit',
+        isMobile: true,
+        hasTouch: true,
+        chromeLike: false,
         userAgent: UserAgent.MOBILE_IOS_SAFARI,
         viewport: {
             width: 430,
@@ -234,6 +257,72 @@ const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
         hardwareConcurrency: 6,
         plugins: [],
         userAgentData: null,
+    },
+    mobile_android_chrome_samsung_large: {
+        deviceProfile: 'mobile_android_chrome_samsung_large',
+        engine: 'chromium',
+        isMobile: true,
+        hasTouch: true,
+        chromeLike: true,
+        userAgent: UserAgent.MOBILE_ANDROID_CHROME,
+        // Samsung Galaxy S23 Ultra-like large Android phone, matching a manual Chrome DevTools
+        // device emulation of a big Samsung screen.
+        viewport: {
+            width: 412,
+            height: 915,
+            deviceScaleFactor: 3.5,
+            hasTouch: true,
+            isLandscape: false,
+            isMobile: true,
+        },
+        windowSize: {
+            width: 412,
+            height: 915,
+        },
+        screen: {
+            width: 412,
+            height: 915,
+            availWidth: 412,
+            availHeight: 915,
+            colorDepth: 24,
+            pixelDepth: 24,
+            orientation: 'portrait-primary',
+            angle: 0,
+        },
+        extraHeaders: {
+            'accept-language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
+            'sec-ch-ua': `"Not_A Brand";v="99", "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`,
+            'sec-ch-ua-mobile': '?1',
+            'sec-ch-ua-platform': '"Android"',
+        },
+        emulateTouch: true,
+        locale: 'ja-JP',
+        timezone: 'Asia/Tokyo',
+        platform: 'Linux armv8l',
+        vendor: 'Google Inc.',
+        maxTouchPoints: 5,
+        hardwareConcurrency: 8,
+        deviceMemory: 8,
+        connection: {
+            downlink: 10,
+            effectiveType: '4g',
+            rtt: 100,
+            saveData: false,
+        },
+        plugins: [],
+        pdfViewerEnabled: true,
+        userAgentData: {
+            brands: CHROME_BRANDS,
+            fullVersionList: CHROME_FULL_VERSION_LIST,
+            mobile: true,
+            platform: 'Android',
+            platformVersion: '14.0.0',
+            architecture: '',
+            bitness: '',
+            model: 'SM-S918B',
+            wow64: false,
+            fullVersion: CHROME_FULL_VERSION,
+        },
     },
 }
 
@@ -283,9 +372,9 @@ async function applyBrowserProfile(
     await page.setBypassCSP(true).catch(() => null)
 
     await page.evaluateOnNewDocument(
-        (fingerprint) => {
+        (fingerprint: any) => {
             try {
-                const isMobile = fingerprint.deviceProfile === 'mobile_ios_safari_portrait'
+                const isMobile = fingerprint.isMobile
                 const defineGetter = (target: object, property: string, value: unknown) => {
                     Object.defineProperty(target, property, {
                         configurable: true,
@@ -467,11 +556,11 @@ async function applyBrowserProfile(
                                     dispatchEvent: () => false,
                                 })
                             }
-                            return originalQuery(parameters)
+                            return originalQuery(parameters as PermissionDescriptor)
                         },
                     })
                 }
-                if (fingerprint.deviceProfile === 'desktop_chrome') {
+                if (fingerprint.chromeLike) {
                     const chromeObject = {
                         app: {
                             InstallState: {
@@ -510,6 +599,10 @@ async function applyBrowserProfile(
         },
         {
             deviceProfile: profile.deviceProfile,
+            engine: profile.engine,
+            isMobile: profile.isMobile,
+            hasTouch: profile.hasTouch,
+            chromeLike: profile.chromeLike,
             platform: profile.platform,
             vendor: profile.vendor,
             maxTouchPoints: profile.maxTouchPoints,
@@ -529,7 +622,7 @@ async function applyBrowserProfile(
 function buildBrowserRequestHeaders(
     deviceProfile: DeviceProfile = 'desktop_chrome',
     overrides: BrowserProfileOverrides = {},
-) {
+): Record<string, string> {
     const profile = resolveBrowserProfile(deviceProfile, overrides)
     return {
         'user-agent': profile.userAgent,

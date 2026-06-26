@@ -360,6 +360,156 @@ test('SpiderPools marks linked manual crawler task completed after crawl handlin
     }
 })
 
+test('SpiderPools defaults Website/Fanclub browser requests to Samsung Android mobile profile', () => {
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-mobile-profile', new EventEmitter())
+
+    const request = (pools as any).resolveBrowserRequest(
+        undefined,
+        new URL('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/227'),
+        Platform.Website,
+    )
+
+    expect(request).toMatchObject({
+        device_profile: 'mobile_android_chrome_samsung_large',
+        session_profile: 'mobile_android_chrome_samsung_large:nanabunnonijyuuni-mobile.com',
+    })
+})
+
+test('SpiderPools rejects desktop browser profile for mobile-required Fanclub hosts', () => {
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-mobile-profile-reject', new EventEmitter())
+
+    expect(() =>
+        (pools as any).resolveBrowserRequest(
+            { device_profile: 'desktop_chrome' },
+            new URL('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/227'),
+            Platform.Website,
+        ),
+    ).toThrow('must use a mobile device profile')
+})
+
+test('SpiderPools completes partial-success crawler tasks and emits finished results', async () => {
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const originalCheckExist = DB.Article.checkExist
+    const originalTrySave = DB.Article.trySave
+    const statusUpdates: any[] = []
+    const finishedEvents: any[] = []
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+    ;(DB.Article as any).checkExist = async () => undefined
+    ;(DB.Article as any).trySave = async () => ({ id: 227 })
+
+    try {
+        const emitter = new EventEmitter()
+        emitter.on(`spider:${TaskScheduler.TaskEvent.FINISHED}`, (payload) => finishedEvents.push(payload))
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-partial-success', emitter)
+        ;(pools as any).spiders.set('x-timeline', {
+            crawl: async (url: string) => {
+                if (url.includes('fail_member')) {
+                    throw new Error('Profile format may have changed')
+                }
+                return [
+                    {
+                        a_id: '2034851104853524704',
+                        u_id: 'ok_member',
+                        username: 'ok member',
+                        created_at: 1773981283,
+                        url: 'https://x.com/ok_member/status/2034851104853524704',
+                        type: 'tweet',
+                        has_media: false,
+                        media: [],
+                        platform: Platform.X,
+                    },
+                ]
+            },
+        })
+
+        await (pools as any).onTaskReceived({
+            taskId: 'manual-partial',
+            task: {
+                id: 'manual-partial',
+                status: TaskScheduler.TaskStatus.PENDING,
+                data: {
+                    name: 'crawler-partial',
+                    websites: ['https://x.com/ok_member', 'https://x.com/fail_member'],
+                    cfg_crawler: {
+                        engine: 'unit-test' as any,
+                    },
+                },
+                meta: {
+                    task_queue_id: 130,
+                },
+            },
+        })
+
+        expect(statusUpdates.at(-1)).toMatchObject({
+            id: 130,
+            status: DB.TaskQueue.STATUS.Completed,
+        })
+        expect(statusUpdates.at(-1)?.meta?.result_summary).toContain('1 article(s)')
+        expect(statusUpdates.at(-1)?.meta?.result_summary).toContain('1 warning(s)')
+        expect(statusUpdates.at(-1)?.meta?.last_error).toContain('fail_member')
+        expect(finishedEvents).toHaveLength(1)
+        expect(finishedEvents[0]?.result).toEqual([
+            {
+                task_type: 'article',
+                url: 'https://x.com/ok_member',
+                data: [227],
+            },
+        ])
+    } finally {
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+        ;(DB.Article as any).checkExist = originalCheckExist
+        ;(DB.Article as any).trySave = originalTrySave
+    }
+})
+
+test('SpiderPools cooldown skips same auth-risk target without retrying immediately', async () => {
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const statusUpdates: any[] = []
+    ;(DB.TaskQueue as any).updateStatus = async (id: number, status: string, meta?: unknown) => {
+        statusUpdates.push({ id, status, meta })
+    }
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-risk-cooldown', new EventEmitter())
+        let crawlCalls = 0
+        ;(pools as any).spiders.set('x-timeline', {
+            crawl: async () => {
+                crawlCalls += 1
+                throw new Error('You need to login first, check your cookies')
+            },
+        })
+        const task = {
+            id: 'manual-cooldown',
+            status: TaskScheduler.TaskStatus.PENDING,
+            data: {
+                name: 'crawler-cooldown',
+                websites: ['https://x.com/auth_member'],
+                cfg_crawler: {
+                    engine: 'unit-test' as any,
+                    session_profile: 'x-main',
+                },
+            },
+            meta: {
+                task_queue_id: 131,
+            },
+        }
+
+        await (pools as any).onTaskReceived({ taskId: 'manual-cooldown-1', task })
+        await (pools as any).onTaskReceived({ taskId: 'manual-cooldown-2', task })
+
+        expect(crawlCalls).toBe(1)
+        expect(statusUpdates.at(-1)).toMatchObject({
+            id: 131,
+            status: DB.TaskQueue.STATUS.Completed,
+        })
+        expect(statusUpdates.at(-1)?.meta?.result_summary).toContain('1 skipped')
+    } finally {
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+    }
+})
+
 test('SpiderPools marks linked manual crawler task cancelled when targets are missing', async () => {
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
     const statusUpdates: any[] = []

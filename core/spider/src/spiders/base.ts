@@ -110,6 +110,11 @@ abstract class BaseSpider {
                 max?: number
             }
             block_resource_types?: Array<string>
+            /**
+             * Optional callback to check whether an article id is already persisted. Spiders can use
+             * this to skip expensive per-item hydration for already-known content, cutting load.
+             */
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
         },
     ): Promise<TaskTypeResult<T, Platform>> {
         this.log = this.log?.child({ trace_id })
@@ -143,6 +148,7 @@ abstract class BaseSpider {
                 max?: number
             }
             block_resource_types?: Array<string>
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
         },
     ): Promise<TaskTypeResult<T, Platform>>
 

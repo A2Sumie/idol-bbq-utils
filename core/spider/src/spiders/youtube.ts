@@ -7,6 +7,13 @@ import { JSONPath } from 'jsonpath-plus'
 import { getCookieString, HTTPClient } from '@/utils'
 import dayjs, { type ManipulateType } from 'dayjs'
 
+const DEFAULT_YOUTUBE_HYDRATE_LIMIT = 8
+const MAX_YOUTUBE_HYDRATE_LIMIT = 20
+const DEFAULT_YOUTUBE_HYDRATE_CONCURRENCY = 2
+const MAX_YOUTUBE_HYDRATE_CONCURRENCY = 4
+const YOUTUBE_LIST_TIMEOUT_MS = 15000
+const YOUTUBE_DETAIL_TIMEOUT_MS = 10000
+
 enum ArticleTypeEnum {
     /**
      * https://www.youtube.com/@username/videos
@@ -32,6 +39,13 @@ class YoutubeSpider extends BaseSpider {
             task_type: T
             crawl_engine: CrawlEngine
             sub_task_type?: Array<string>
+            hydrate_limit?: number
+            hydrate_concurrency?: number
+            hydrate_interval_time?: {
+                min?: number
+                max?: number
+            }
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
             cookieString?: string
         },
     ): Promise<TaskTypeResult<T, Platform.YouTube>> {
@@ -49,7 +63,12 @@ class YoutubeSpider extends BaseSpider {
 
         if (task_type === 'article') {
             this.log?.info('Trying to grab videos and shorts.')
-            const res = await YoutubeApiJsonParser.grabArticles(page, _url)
+            const res = await YoutubeApiJsonParser.grabArticles(page, _url, {
+                hydrate_limit: config.hydrate_limit,
+                hydrate_concurrency: config.hydrate_concurrency,
+                hydrate_interval_time: config.hydrate_interval_time,
+                isArticleKnown: config.isArticleKnown,
+            })
 
             return res as TaskTypeResult<T, Platform.YouTube>
         }
@@ -72,6 +91,16 @@ namespace YoutubeApiJsonParser {
         title: string | null
         description: string | null
         thumbnail: string | null
+    }
+
+    interface GrabArticlesOptions {
+        hydrate_limit?: number
+        hydrate_concurrency?: number
+        hydrate_interval_time?: {
+            min?: number
+            max?: number
+        }
+        isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
     }
 
     const LOCALE_QUERY = 'hl=en&persist_hl=1&gl=US'
@@ -191,7 +220,7 @@ namespace YoutubeApiJsonParser {
         if (parts.length === 2 && parts[0] === parts[1]) {
             return parts[0]
         }
-        return parts.join('\n\n')
+        return parts.join('\n\n') || null
     }
 
     function mediaParser(url: string | null): Array<GenericMediaInfo> {
@@ -388,7 +417,7 @@ namespace YoutubeApiJsonParser {
         const items = JSONPath({
             path: '$..shortsLockupViewModel',
             json,
-        })
+        }) as Array<any>
         return items
             .map((item: any) => shortsParserItem(item, channelMeta))
             .filter((item): item is YoutubeArticle => Boolean(item))
@@ -410,8 +439,41 @@ namespace YoutubeApiJsonParser {
         }
     }
 
+    function clampPositiveInteger(value: number | undefined, fallback: number, max: number): number {
+        if (!Number.isFinite(value) || !value) {
+            return fallback
+        }
+        return Math.max(0, Math.min(Math.floor(value), max))
+    }
+
+    function resolveInterval(interval?: { min?: number; max?: number }): number {
+        const min = Math.max(0, Number(interval?.min || 0))
+        const max = Math.max(min, Number(interval?.max || min))
+        if (max === min) {
+            return min
+        }
+        return Math.floor(Math.random() * (max - min + 1)) + min
+    }
+
+    async function delay(ms: number) {
+        if (ms <= 0) {
+            return
+        }
+        await new Promise((resolve) => setTimeout(resolve, ms))
+    }
+
+    function dedupeArticles(articles: Array<YoutubeArticle>): Array<YoutubeArticle> {
+        const dedup = new Map<string, YoutubeArticle>()
+        for (const article of articles) {
+            dedup.set(article.a_id, article)
+        }
+        return Array.from(dedup.values())
+    }
+
     async function hydrateArticle(article: YoutubeArticle, headers: Record<string, string>): Promise<YoutubeArticle> {
-        const webpage = await HTTPClient.download_webpage(addLocaleQuery(article.url), headers)
+        const webpage = await HTTPClient.download_webpage(addLocaleQuery(article.url), headers, {
+            timeout: YOUTUBE_DETAIL_TIMEOUT_MS,
+        })
         const detail = detailParser(await webpage.text())
         const media = detail.thumbnail ? mediaParser(detail.thumbnail) : article.media
         return {
@@ -427,7 +489,11 @@ namespace YoutubeApiJsonParser {
      * @param url https://www.youtube.com/@username
      * @description grab videos and shorts from html
      */
-    export async function grabArticles(page: Page, url: string): Promise<Array<YoutubeArticle>> {
+    export async function grabArticles(
+        page: Page,
+        url: string,
+        options: GrabArticlesOptions = {},
+    ): Promise<Array<YoutubeArticle>> {
         const cookies = await page.browserContext().cookies()
         const headers = {
             'accept-language': 'en-US,en;q=0.9',
@@ -435,8 +501,8 @@ namespace YoutubeApiJsonParser {
         }
         const fallbackHandle = stripHandlePrefix(url.split('/').pop() || '')
         const [videosPage, shortsPage] = await Promise.all([
-            HTTPClient.download_webpage(`${url}/videos?${LOCALE_QUERY}`, headers),
-            HTTPClient.download_webpage(`${url}/shorts?${LOCALE_QUERY}`, headers),
+            HTTPClient.download_webpage(`${url}/videos?${LOCALE_QUERY}`, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
+            HTTPClient.download_webpage(`${url}/shorts?${LOCALE_QUERY}`, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
         ])
         const [videosText, shortsText] = await Promise.all([videosPage.text(), shortsPage.text()])
         const videosJson = extractAssignedObject<any>(videosText, 'ytInitialData')
@@ -446,16 +512,59 @@ namespace YoutubeApiJsonParser {
         }
 
         const channelMeta = channelMetaParser(videosJson || shortsJson, fallbackHandle)
-        const baseArticles = [...videosParser(videosJson, channelMeta), ...shortsParser(shortsJson, channelMeta)]
-
-        const articles = (await Promise.allSettled(baseArticles.map((article) => hydrateArticle(article, headers))))
-            .map((result, index) => (result.status === 'fulfilled' ? result.value : baseArticles[index]))
-
-        const dedup = new Map<string, YoutubeArticle>()
-        for (const article of articles) {
-            dedup.set(article.a_id, article)
+        const baseArticles = dedupeArticles([...videosParser(videosJson, channelMeta), ...shortsParser(shortsJson, channelMeta)]).sort(
+            (a, b) => b.created_at - a.created_at,
+        )
+        const hydrateLimit = clampPositiveInteger(
+            options.hydrate_limit,
+            DEFAULT_YOUTUBE_HYDRATE_LIMIT,
+            MAX_YOUTUBE_HYDRATE_LIMIT,
+        )
+        const hydrateConcurrency = Math.max(
+            1,
+            clampPositiveInteger(
+                options.hydrate_concurrency,
+                DEFAULT_YOUTUBE_HYDRATE_CONCURRENCY,
+                MAX_YOUTUBE_HYDRATE_CONCURRENCY,
+            ),
+        )
+        const knownIds = new Set<string>()
+        if (options.isArticleKnown) {
+            await Promise.all(
+                baseArticles.map(async (article) => {
+                    try {
+                        if (await options.isArticleKnown?.(article.a_id)) {
+                            knownIds.add(article.a_id)
+                        }
+                    } catch {
+                        // A lookup failure should not make the crawler miss upstream content; fall back to normal hydrate.
+                    }
+                }),
+            )
         }
-        return Array.from(dedup.values()).sort((a, b) => b.created_at - a.created_at)
+
+        const articlesById = new Map(baseArticles.map((article) => [article.a_id, article]))
+        const hydrateQueue = baseArticles
+            .filter((article) => !knownIds.has(article.a_id))
+            .slice(0, hydrateLimit)
+        for (let index = 0; index < hydrateQueue.length; index += hydrateConcurrency) {
+            const chunk = hydrateQueue.slice(index, index + hydrateConcurrency)
+            const hydrated = await Promise.allSettled(chunk.map((article) => hydrateArticle(article, headers)))
+            for (let chunkIndex = 0; chunkIndex < hydrated.length; chunkIndex++) {
+                const result = hydrated[chunkIndex]
+                const fallback = chunk[chunkIndex]
+                if (result?.status === 'fulfilled') {
+                    articlesById.set(result.value.a_id, result.value)
+                } else if (fallback) {
+                    articlesById.set(fallback.a_id, fallback)
+                }
+            }
+            if (index + hydrateConcurrency < hydrateQueue.length) {
+                await delay(resolveInterval(options.hydrate_interval_time))
+            }
+        }
+
+        return Array.from(articlesById.values()).sort((a, b) => b.created_at - a.created_at)
     }
 }
 

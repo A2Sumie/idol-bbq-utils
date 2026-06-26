@@ -22,6 +22,34 @@ describe('resolveBrowserProfile', () => {
         expect(profile.plugins.length).toBeGreaterThan(0)
     })
 
+    test('uses large Samsung Android Chrome mobile profile for mobile-only crawls', () => {
+        const profile = resolveBrowserProfile('mobile_android_chrome_samsung_large')
+
+        expect(profile.deviceProfile).toBe('mobile_android_chrome_samsung_large')
+        expect(profile.engine).toBe('chromium')
+        expect(profile.isMobile).toBe(true)
+        expect(profile.hasTouch).toBe(true)
+        expect(profile.chromeLike).toBe(true)
+        expect(profile.viewport).toMatchObject({
+            width: 412,
+            height: 915,
+            deviceScaleFactor: 3.5,
+            hasTouch: true,
+            isMobile: true,
+        })
+        expect(profile.userAgent).toContain('Android 14; SM-S918B')
+        expect(profile.userAgent).toContain('Chrome/142.')
+        expect(profile.platform).toBe('Linux armv8l')
+        expect(profile.extraHeaders?.['sec-ch-ua-mobile']).toBe('?1')
+        expect(profile.extraHeaders?.['sec-ch-ua-platform']).toBe('"Android"')
+        expect(profile.userAgentData).toMatchObject({
+            mobile: true,
+            platform: 'Android',
+            model: 'SM-S918B',
+        })
+        expect(profile.maxTouchPoints).toBeGreaterThan(0)
+    })
+
     test('builds browser-style request headers for api-assisted crawls', () => {
         const headers = buildBrowserRequestHeaders('desktop_chrome', {
             extraHeaders: {

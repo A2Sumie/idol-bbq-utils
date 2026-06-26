@@ -6,6 +6,8 @@ import { Page } from 'puppeteer-core'
 import { JSONPath } from 'jsonpath-plus'
 import { getCookieString, HTTPClient, SimpleExpiringCache } from '@/utils'
 
+const TIKTOK_HTTP_TIMEOUT_MS = 15000
+
 enum ArticleTypeEnum {
     /**
      * basic page: https://www.tiktok.com/api/post/item_list/
@@ -142,7 +144,7 @@ namespace TiktokApiJsonParser {
 
     async function loadUniversalData(url: string, page?: Page, cookieString?: string): Promise<string> {
         const headers = buildHeaders(url, cookieString)
-        const webpage = await HTTPClient.download_webpage(url, headers)
+        const webpage = await HTTPClient.download_webpage(url, headers, { timeout: TIKTOK_HTTP_TIMEOUT_MS })
         const text = await webpage.text()
         const content = extractUniversalData(text)
         if (content) {
@@ -352,6 +354,7 @@ namespace TiktokApiJsonParser {
         const res = await HTTPClient.download_webpage(
             `${_API_BASE_URL}?${query.toString()}`,
             buildHeaders(url, cookieString),
+            { timeout: TIKTOK_HTTP_TIMEOUT_MS },
         )
         const json = await res.json()
         return postsParser(json)

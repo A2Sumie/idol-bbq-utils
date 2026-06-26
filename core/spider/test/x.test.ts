@@ -290,6 +290,40 @@ test('X follows browser parser fails fast on login pages', async () => {
     expect(listeners.has('response')).toBeFalse()
 })
 
+test('X browser fallback keeps the active browser profile viewport by default', async () => {
+    const listeners = new Map<string, (data: any) => void>()
+    let setViewportCalls = 0
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(eventName, handler)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            if (listeners.get(eventName) === handler) {
+                listeners.delete(eventName)
+            }
+        },
+        setViewport: async () => {
+            setViewportCalls += 1
+        },
+        goto: async () => {
+            listeners.get('response')?.({
+                url: () => 'https://x.com/i/api/graphql/UserTweets',
+                status: () => 500,
+                request: () => ({
+                    method: () => 'GET',
+                }),
+            })
+        },
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+    } as any
+
+    await expect(X.XApiJsonParser.grabTweets(page, 'https://x.com/X')).rejects.toThrow()
+
+    expect(setViewportCalls).toBe(0)
+})
+
 test('X parser keeps video variants without bitrate', async () => {
     const result = buildXTimelineTweetResult('301', 'video_member', 'video post https://t.co/media')
     result.legacy.entities.media = [
