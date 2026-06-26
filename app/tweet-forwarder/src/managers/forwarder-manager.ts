@@ -89,6 +89,15 @@ type SummaryCardQueueItem = {
     cardSourceMediaFiles: Array<RenderResult['originalMediaFiles'][number]>
     originalMediaFiles: Array<RenderResult['originalMediaFiles'][number]>
     digestTags: Array<string>
+    mediaAlreadyVisible: boolean
+    visibleCarriers: Array<SummaryCardVisibleCarrier>
+}
+type SummaryCardVisibleCarrier = {
+    kind: 'native' | 'realtime_media' | 'manual' | 'summary_single_native'
+    textContext: boolean
+    visibleAt: number
+    taskKind?: string
+    reason?: string
 }
 type SummaryCardQueue = {
     routeKey: string
@@ -1049,6 +1058,8 @@ class ForwarderPools extends BaseCompatibleModel {
                         : [],
                     originalMediaFiles: Array.isArray(payload.originalMediaFiles) ? payload.originalMediaFiles : [],
                     digestTags: Array.isArray(payload.digestTags) ? payload.digestTags : [],
+                    mediaAlreadyVisible: payload.mediaAlreadyVisible === true,
+                    visibleCarriers: this.normalizeSummaryCardVisibleCarriers(payload.visibleCarriers),
                 })
             }
 
@@ -1190,13 +1201,43 @@ class ForwarderPools extends BaseCompatibleModel {
             current.mediaRealtimeText === persisted.mediaRealtimeText &&
             arePlatformTokenListsEqual(
                 current.mediaRealtimeDropSummaryPlatforms,
-                (persisted as any).mediaRealtimeDropSummaryPlatforms,
+                (persisted as any).mediaRealtimeDropSummaryPlatforms || [],
             ) &&
             current.flushOnThreshold === persisted.flushOnThreshold &&
             current.flushDelaySeconds === persisted.flushDelaySeconds &&
             current.windowAlignment === persisted.windowAlignment &&
+            current.singleItemBehavior === ((persisted as any).singleItemBehavior || 'native_if_uncovered') &&
             current.mediaDuplicateLimit === persisted.mediaDuplicateLimit
         )
+    }
+
+    private normalizeSummaryCardVisibleCarriers(raw: unknown): SummaryCardVisibleCarrier[] {
+        if (!Array.isArray(raw)) {
+            return []
+        }
+
+        const carriers: SummaryCardVisibleCarrier[] = []
+        for (const item of raw) {
+            if (!item || typeof item !== 'object') {
+                continue
+            }
+            const kind = String((item as any).kind || '')
+            if (!['native', 'realtime_media', 'manual', 'summary_single_native'].includes(kind)) {
+                continue
+            }
+            carriers.push({
+                kind: kind as SummaryCardVisibleCarrier['kind'],
+                textContext: (item as any).textContext === true,
+                visibleAt: Math.max(0, Math.floor(Number((item as any).visibleAt || 0))),
+                ...(String((item as any).taskKind || '').trim()
+                    ? { taskKind: String((item as any).taskKind).trim() }
+                    : {}),
+                ...(String((item as any).reason || '').trim()
+                    ? { reason: String((item as any).reason).trim() }
+                    : {}),
+            })
+        }
+        return carriers
     }
 
     private stripSummaryCardRuntimeConfig(runtime_config?: ForwardTargetPlatformCommonConfig) {
@@ -2380,7 +2421,12 @@ class ForwarderPools extends BaseCompatibleModel {
                         if (!options?.forceSend) {
                             const priorVisibleArticle = await DB.OutboundMessage.findLatestVisibleCompletion({
                                 target_id: target.id,
-                                task_kinds: ['article', 'manual_article', 'summary_realtime_media'],
+                                task_kinds: [
+                                    'article',
+                                    'manual_article',
+                                    'summary_realtime_media',
+                                    'summary_single_native',
+                                ],
                                 article_key: articleKey(article),
                             }).catch((error) => {
                                 log?.warn(
@@ -2896,6 +2942,8 @@ class ForwarderPools extends BaseCompatibleModel {
                 cardSourceMediaFiles: item.cardSourceMediaFiles,
                 originalMediaFiles: item.originalMediaFiles,
                 digestTags: item.digestTags,
+                mediaAlreadyVisible: item.mediaAlreadyVisible,
+                visibleCarriers: item.visibleCarriers,
                 runtime_config: queue.runtime_config || null,
                 summaryConfig: queue.config,
             },
@@ -2949,6 +2997,8 @@ class ForwarderPools extends BaseCompatibleModel {
             cardSourceMediaFiles: [...renderResult.originalMediaFiles],
             originalMediaFiles: summaryConfig.includeOriginalMedia ? [...renderResult.originalMediaFiles] : [],
             digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
+            mediaAlreadyVisible: false,
+            visibleCarriers: [],
         }
         if (existingQueue && item.digestTags.length > 0) {
             this.applySummaryCardActiveDigestTags(existingQueue, item.digestTags)
@@ -2960,6 +3010,13 @@ class ForwarderPools extends BaseCompatibleModel {
             (await this.canSendSummaryCardNow(queueKey, summaryConfig, now, target.id))
         ) {
             if (summaryConfig.sendFirstNative) {
+                item.visibleCarriers.push({
+                    kind: 'native',
+                    textContext: true,
+                    visibleAt: now,
+                    taskKind: 'article',
+                    reason: 'idle_first_native',
+                })
                 this.markSummaryCardVisibleSent(queueKey, target.id, now)
                 log?.debug(`Sending idle-first summary-card item ${article.a_id} natively for ${target.id}.`)
                 return false
@@ -2985,6 +3042,16 @@ class ForwarderPools extends BaseCompatibleModel {
                 summaryConfig,
                 renderResult,
             )
+            if (realtimeMediaResult.visibleMediaSent) {
+                item.mediaAlreadyVisible = true
+                item.visibleCarriers.push({
+                    kind: 'realtime_media',
+                    textContext: summaryConfig.mediaRealtimeText !== 'none',
+                    visibleAt: now,
+                    taskKind: 'summary_realtime_media',
+                    reason: realtimeMediaResult.skippedDuplicate ? 'already_visible' : 'sent',
+                })
+            }
             if (this.shouldDropSummaryCardAfterRealtimeMedia(article, summaryConfig)) {
                 if (realtimeMediaResult.hadMedia && !realtimeMediaResult.handled) {
                     log?.warn(
@@ -3093,7 +3160,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const memoryTargetLastSentAt = this.summaryCardTargetLastSentAt.get(targetId) || 0
         const latestVisibleOutbound = await DB.OutboundMessage.findLatestVisibleCompletion({
             target_id: targetId,
-            task_kinds: ['summary_card', 'article'],
+            task_kinds: ['summary_card', 'summary_single_native', 'article'],
         }).catch((error) => {
             this.log?.warn(
                 `Failed to read durable summary-card cooldown for ${targetId}: ${
@@ -3289,7 +3356,11 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private buildMediaVisibilityTextNotice(policy: ResolvedMediaVisibilityPolicy) {
         void policy
-        return '[图略]'
+        return '[图已发过]'
+    }
+
+    private buildSummarySingleNativeMediaAlreadyVisibleNotice(item: SummaryCardQueueItem) {
+        return item.mediaAlreadyVisible ? '[图已发过]' : ''
     }
 
     private shouldUseSummaryCardForArticle(article: ArticleWithId) {
@@ -3822,6 +3893,7 @@ class ForwarderPools extends BaseCompatibleModel {
             config.threshold,
             config.flushDelaySeconds,
             config.windowAlignment,
+            `single-${config.singleItemBehavior}`,
             config.flushOnThreshold ? 'threshold' : 'interval',
             config.mediaRealtime ? `media-${config.mediaRealtimeText}` : 'text',
             config.includeOriginalMedia ? 'with-original' : 'card-only',
@@ -3875,6 +3947,330 @@ class ForwarderPools extends BaseCompatibleModel {
         }
     }
 
+    private summaryCardItemHasVisibleTextCarrier(item: SummaryCardQueueItem) {
+        return item.visibleCarriers.some((carrier) => carrier.textContext)
+    }
+
+    private async findSummaryCardSingleTextCarrier(queue: SummaryCardQueue, item: SummaryCardQueueItem) {
+        if (this.summaryCardItemHasVisibleTextCarrier(item)) {
+            return { kind: 'queue_payload' }
+        }
+
+        const latestVisibleOutbound = await DB.OutboundMessage.findLatestVisibleCompletion({
+            target_id: queue.target.id,
+            task_kinds: ['article', 'manual_article', 'summary_single_native'],
+            article_key: articleKey(item.article),
+        }).catch((error) => {
+            this.log?.warn(
+                `Failed to read single summary-card visible carrier for ${item.article.a_id} to ${queue.target.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            return null
+        })
+        if (latestVisibleOutbound) {
+            return {
+                kind: latestVisibleOutbound.task_kind || 'outbound',
+                status: latestVisibleOutbound.status,
+                idempotency_key: latestVisibleOutbound.idempotency_key,
+            }
+        }
+        return null
+    }
+
+    private buildSummaryCardSingleNativeText(
+        item: SummaryCardQueueItem,
+        options: { includeTranslations?: boolean } = {},
+    ) {
+        const article = options.includeTranslations ? cloneDeep(item.article) : stripArticleTranslations(item.article)
+        const renderedText = this.renderService.renderText(article, { render_type: 'text-compact' }).trim()
+        const fallbackText =
+            formatArticleHeaderLine(article as any).trim() ||
+            extractArticleHeadline(article as any, 100).trim() ||
+            item.article.url ||
+            item.article.a_id ||
+            ''
+        return uniquePreserveOrder([
+            renderedText || fallbackText,
+            this.buildSummarySingleNativeMediaAlreadyVisibleNotice(item),
+        ]).join('\n\n')
+    }
+
+    private buildSummarySingleNativeOutboundData(
+        queue: SummaryCardQueue,
+        item: SummaryCardQueueItem,
+        reason: 'threshold' | 'interval' | 'shutdown',
+        text: string,
+        mediaFiles: Array<RenderedMediaFile>,
+        extra?: Record<string, unknown>,
+    ) {
+        const currentArticleKey = articleKey(item.article)
+        const syntheticKey = `${queue.routeKey}:${currentArticleKey}:single-native`
+        const outboundIdempotencyKey = syntheticOutboundKey(queue.target.id, 'summary_single_native', syntheticKey)
+        const outboundPayloadHash = payloadHash({
+            routeKey: queue.routeKey,
+            targetId: queue.target.id,
+            taskKind: 'summary_single_native',
+            text,
+            articleKeys: [currentArticleKey],
+            media: mediaFiles,
+            extra: {
+                reason,
+                windowId: queue.windowId || null,
+                single_item_behavior: queue.config.singleItemBehavior,
+                ...extra,
+            },
+        })
+        return {
+            currentArticleKey,
+            syntheticKey,
+            outboundIdempotencyKey,
+            outboundPayloadHash,
+        }
+    }
+
+    private async markSummaryCardSingleItemSkipped(
+        queue: SummaryCardQueue,
+        item: SummaryCardQueueItem,
+        reason: 'single_item_covered' | 'single_item_drop',
+        details: Record<string, unknown>,
+        flushReason: 'threshold' | 'interval' | 'shutdown',
+    ) {
+        const text = this.buildSummaryCardSingleNativeText(item)
+        const outboundData = this.buildSummarySingleNativeOutboundData(queue, item, flushReason, text, [], {
+            skipped: reason,
+            details,
+        })
+        try {
+            const outbound = await DB.OutboundMessage.claim({
+                idempotency_key: outboundData.outboundIdempotencyKey,
+                route_key: queue.routeKey,
+                target_id: queue.target.id,
+                target_platform: queue.target.NAME,
+                task_kind: 'summary_single_native',
+                article_key: outboundData.currentArticleKey,
+                synthetic_key: outboundData.syntheticKey,
+                payload_hash: outboundData.outboundPayloadHash,
+            })
+            if (outbound.claimed) {
+                await DB.OutboundMessage.markSkipped(outboundData.outboundIdempotencyKey, reason, details)
+            }
+        } catch (error) {
+            this.log?.warn(
+                `Failed to mark single summary-card skip for ${item.article.a_id} to ${queue.target.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+        }
+        if (queue.windowId) {
+            await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
+                payload_hash: outboundData.outboundPayloadHash,
+            }).catch(() => undefined)
+        }
+    }
+
+    private async sendSummaryCardSingleNative(
+        queue: SummaryCardQueue,
+        item: SummaryCardQueueItem,
+        reason: 'threshold' | 'interval' | 'shutdown',
+    ) {
+        const hasTranslatedContent =
+            queue.config.translatedCard && (await this.prepareSummaryCardTranslations(queue, [item]))
+        let text = this.buildSummaryCardSingleNativeText(item, {
+            includeTranslations: Boolean(hasTranslatedContent),
+        })
+        const sourceMediaFiles = item.mediaAlreadyVisible ? [] : [...item.cardSourceMediaFiles]
+        let mediaFiles = sourceMediaFiles
+        let visibilityForRelease: MediaVisibilityResult | null = null
+        if (sourceMediaFiles.length > 0) {
+            const visibility = await this.applyTargetMediaVisibility(
+                item.article,
+                queue.target,
+                queue.runtime_config,
+                sourceMediaFiles,
+            )
+            visibilityForRelease = visibility
+            mediaFiles = this.filterMediaFilesByVisibility(sourceMediaFiles, visibility)
+            if (visibility.policy && visibility.hiddenHashes.size > 0) {
+                text = uniquePreserveOrder([text, this.buildMediaVisibilityTextNotice(visibility.policy)]).join(
+                    '\n\n',
+                )
+            }
+        }
+
+        const outboundData = this.buildSummarySingleNativeOutboundData(queue, item, reason, text, mediaFiles, {
+            media_already_visible: item.mediaAlreadyVisible,
+            source_media_count: sourceMediaFiles.length,
+            visible_media_count: mediaFiles.length,
+        })
+        const now = Math.floor(Date.now() / 1000)
+
+        try {
+            const outbound = await DB.OutboundMessage.claim({
+                idempotency_key: outboundData.outboundIdempotencyKey,
+                route_key: queue.routeKey,
+                target_id: queue.target.id,
+                target_platform: queue.target.NAME,
+                task_kind: 'summary_single_native',
+                article_key: outboundData.currentArticleKey,
+                synthetic_key: outboundData.syntheticKey,
+                payload_hash: outboundData.outboundPayloadHash,
+            })
+            if (!outbound.claimed) {
+                this.log?.debug(
+                    `Single summary-card native outbound ${outboundData.outboundIdempotencyKey} already ${outbound.record.status}; skipping visible send`,
+                )
+                await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
+                if (isOutboundSuppressedCompletionStatus(outbound.record.status)) {
+                    if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
+                        this.markSummaryCardVisibleSent(
+                            this.getSummaryCardQueueKey(queue.routeKey, queue.target.id, queue.runtime_config, queue.config),
+                            queue.target.id,
+                            now,
+                        )
+                    }
+                    if (queue.windowId) {
+                        await DB.AggregationWindow.updateStatus(
+                            queue.windowId,
+                            isOutboundVisibleCompletionStatus(outbound.record.status)
+                                ? DB.AggregationWindow.STATUS.Completed
+                                : DB.AggregationWindow.STATUS.Cancelled,
+                            { payload_hash: outboundData.outboundPayloadHash },
+                        ).catch(() => undefined)
+                    }
+                    return true
+                }
+                return false
+            }
+
+            await DB.OutboundMessage.markSending(outboundData.outboundIdempotencyKey)
+            const sendResult = await queue.target.send(text, {
+                media: mediaFiles,
+                contentMedia: mediaFiles,
+                timestamp: item.article.created_at,
+                runtime_config: queue.runtime_config,
+                article: cloneDeep(stripArticleTranslations(item.article)),
+                forceSend: true,
+                bypassMediaBatch: true,
+                outboundKey: outboundData.outboundIdempotencyKey,
+            })
+            if (sendResult.status === 'queued') {
+                await DB.OutboundMessage.markQueued(outboundData.outboundIdempotencyKey, sendResult)
+                await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'queued',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return false
+            }
+            if (sendResult.status === 'blocked') {
+                await DB.OutboundMessage.markSkipped(outboundData.outboundIdempotencyKey, sendResult.reason, sendResult)
+                await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
+                if (queue.windowId) {
+                    await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
+                        payload_hash: outboundData.outboundPayloadHash,
+                    }).catch(() => undefined)
+                }
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'blocked',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return true
+            }
+            if (sendResult.status === 'dry_run') {
+                await DB.OutboundMessage.markDryRun(outboundData.outboundIdempotencyKey, sendResult)
+                await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'ok',
+                    last_send_status: 'dry_run',
+                    details: sendResult,
+                }).catch(() => undefined)
+                return false
+            }
+            const providerResult = getForwarderProviderResult(sendResult)
+            await DB.OutboundMessage.markSent(outboundData.outboundIdempotencyKey, summarizeProviderResult(providerResult))
+            await DB.TargetHealth.mark({
+                target_id: queue.target.id,
+                provider: queue.target.NAME,
+                status: 'ok',
+                last_send_status: 'sent',
+                last_provider_code: providerCode(providerResult),
+                details: summarizeProviderResult(providerResult),
+            })
+            if (queue.windowId) {
+                await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Completed, {
+                    payload_hash: outboundData.outboundPayloadHash,
+                }).catch(() => undefined)
+            }
+            this.markSummaryCardVisibleSent(
+                this.getSummaryCardQueueKey(queue.routeKey, queue.target.id, queue.runtime_config, queue.config),
+                queue.target.id,
+                now,
+            )
+            visibilityForRelease = null
+            this.log?.info(`Sent single summary-card item natively (${reason}) to ${queue.target.id}: ${item.article.a_id}`)
+            return true
+        } catch (error) {
+            this.log?.error(`Failed to send single summary-card item to ${queue.target.id}: ${error}`)
+            if (error instanceof PartialForwarderSendError) {
+                await DB.OutboundMessage.markPartial(
+                    outboundData.outboundIdempotencyKey,
+                    summarizeProviderResult(error.partialResults),
+                    error,
+                ).catch(() => undefined)
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'degraded',
+                    last_send_status: 'partial',
+                    last_provider_code: providerCode(error.partialResults),
+                    disabled_reason: error.message,
+                    details: summarizeProviderResult(error.partialResults),
+                }).catch(() => undefined)
+                if (queue.windowId) {
+                    await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Completed, {
+                        payload_hash: outboundData.outboundPayloadHash,
+                    }).catch(() => undefined)
+                }
+                this.markSummaryCardVisibleSent(
+                    this.getSummaryCardQueueKey(queue.routeKey, queue.target.id, queue.runtime_config, queue.config),
+                    queue.target.id,
+                    now,
+                )
+                visibilityForRelease = null
+                return true
+            }
+            await DB.OutboundMessage.markFailed(outboundData.outboundIdempotencyKey, error).catch(() => undefined)
+            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
+            await DB.TargetHealth.mark({
+                target_id: queue.target.id,
+                provider: queue.target.NAME,
+                status: 'error',
+                last_send_status: 'failed',
+                disabled_reason: error instanceof Error ? error.message : String(error),
+                details: {
+                    route_key: queue.routeKey,
+                    task_kind: 'summary_single_native',
+                    article_key: outboundData.currentArticleKey,
+                },
+            }).catch(() => undefined)
+            if (queue.windowId) {
+                await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Open, {
+                    payload_hash: outboundData.outboundPayloadHash,
+                }).catch(() => undefined)
+            }
+            return false
+        }
+    }
+
     private async flushSummaryCardQueue(queueKey: string, reason: 'threshold' | 'interval' | 'shutdown') {
         const queue = this.summaryCardQueues.get(queueKey)
         if (!queue || queue.items.size === 0) {
@@ -3918,6 +4314,47 @@ class ForwarderPools extends BaseCompatibleModel {
                         }`,
                     )
                 })
+            }
+            return
+        }
+
+        if (claimedItems.length === 1 && queue.config.singleItemBehavior !== 'summary_card') {
+            const item = claimedItems[0]!
+            if (queue.config.singleItemBehavior === 'drop') {
+                await this.markSummaryCardSingleItemSkipped(
+                    queue,
+                    item,
+                    'single_item_drop',
+                    {
+                        single_item_behavior: queue.config.singleItemBehavior,
+                    },
+                    reason,
+                )
+                return
+            }
+
+            const carrier = await this.findSummaryCardSingleTextCarrier(queue, item)
+            if (carrier) {
+                await this.markSummaryCardSingleItemSkipped(
+                    queue,
+                    item,
+                    'single_item_covered',
+                    {
+                        carrier,
+                        visible_carriers: item.visibleCarriers,
+                    },
+                    reason,
+                )
+                return
+            }
+
+            const ok = await this.sendSummaryCardSingleNative(queue, item, reason)
+            if (!ok) {
+                await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)
+                this.summaryCardQueues.set(queueKey, queue)
+                this.log?.warn(
+                    `Retained single summary-card queue for ${queue.target.id} after non-terminal ${reason} flush failure`,
+                )
             }
             return
         }
@@ -3984,8 +4421,8 @@ class ForwarderPools extends BaseCompatibleModel {
         const totalArticles = allItems.length
         const title =
             hasStorm && groups.length === 1
-                ? `话题聚合 ${groups[0]?.label || ''}`.trim()
-                : `聚合 ${this.formatSummaryCardRangeForQueue(
+                ? `话题更新 ${groups[0]?.label || ''}`.trim()
+                : `更新合并 ${this.formatSummaryCardRangeForQueue(
                       queue,
                       allItems.map((item) => item.article),
                   )}`
@@ -4728,7 +5165,9 @@ class ForwarderPools extends BaseCompatibleModel {
             { spaced: true },
         )
         const itemLine = this.buildSummaryCardSendTextDigestItems(items)
-        return [`聚合 ${range || fallbackTitle.replace(/^聚合\s*/, '')}`.trim(), itemLine].filter(Boolean).join('\n')
+        return [`更新合并 ${range || fallbackTitle.replace(/^(?:聚合|更新合并)\s*/, '')}`.trim(), itemLine]
+            .filter(Boolean)
+            .join('\n')
     }
 
     private async prepareSummaryCardTranslations(queue: SummaryCardQueue, items: SummaryCardQueueItem[]) {
@@ -4814,7 +5253,7 @@ class ForwarderPools extends BaseCompatibleModel {
         )
 
         return [
-            `【聚合】${this.formatSummaryCardRangeForQueue(
+            `【更新合并】${this.formatSummaryCardRangeForQueue(
                 queue,
                 allItems.map((item) => item.article),
                 { spaced: true },
@@ -4836,7 +5275,7 @@ class ForwarderPools extends BaseCompatibleModel {
             platform: sourceArticle?.platform || Platform.X,
             a_id: `summary-card-${now}`,
             u_id: 'message_pack',
-            username: '聚合',
+            username: '更新合并',
             created_at: now,
             content: `${title}\n\n${content}`,
             url: sourceArticle?.url || '',
@@ -4894,7 +5333,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 )
                 itemMetas.push({
                     index: itemIndex + 1,
-                    text: omittedMedia ? [itemText, '[图略]'].filter(Boolean).join('\n') : itemText,
+                    text: omittedMedia ? [itemText, '[图未列全]'].filter(Boolean).join('\n') : itemText,
                     avatar: this.buildSummaryCardAvatar(item.article),
                     media,
                     mediaLabel: media.length > 0 ? `#${itemIndex + 1} 图集` : undefined,
@@ -5338,7 +5777,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 lines.push(`另有 ${omitted} 条更新已合并`)
             }
             return [
-                `【话题聚合】${tags.join(' ')} / ${items.length} 条`,
+                `【话题更新】${tags.join(' ')} / ${items.length} 条`,
                 `范围: ${this.formatSummaryCardTimeRangeForQueue(
                     queue,
                     items.map((item) => item.article),
@@ -5366,7 +5805,7 @@ class ForwarderPools extends BaseCompatibleModel {
             lines.push(`另有 ${omitted} 条更新已合并`)
         }
         return [
-            `【聚合】${this.formatSummaryCardRangeForQueue(
+            `【更新合并】${this.formatSummaryCardRangeForQueue(
                 queue,
                 items.map((item) => item.article),
                 { spaced: true },

@@ -167,6 +167,19 @@ function addSummaryCardDiagnostics(
             route_key,
         })
     }
+
+    if (
+        policy.media_realtime &&
+        policy.media_realtime_text === 'none' &&
+        policy.single_item_behavior !== 'native_if_uncovered'
+    ) {
+        diagnostics.push({
+            severity: 'warn',
+            code: 'summary_card_single_item_context_risk',
+            message: `${targetLabel} can leave single-item realtime media without text context; use single_item_behavior: native_if_uncovered unless this target is intentionally image-only`,
+            route_key,
+        })
+    }
 }
 
 function buildRouteGraph(config: AppConfig) {

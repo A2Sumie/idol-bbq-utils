@@ -212,6 +212,11 @@ interface ForwardTargetPlatformCommonConfig {
               align_to_hour?: boolean
               align_to_interval?: boolean
               /**
+               * How to close a summary-card window that contains only one item.
+               * native_if_uncovered suppresses the window only when a prior visible send already carries enough reader context.
+               */
+              single_item_behavior?: 'native_if_uncovered' | 'summary_card' | 'drop'
+              /**
                * Defaults to 2 when realtime media or original media is enabled.
                */
               media_duplicate_limit?: number

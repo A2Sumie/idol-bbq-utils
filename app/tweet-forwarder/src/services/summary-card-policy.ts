@@ -1,6 +1,7 @@
 import type { ForwardTargetPlatformCommonConfig } from '@/types'
 
 type SummaryCardWindowAlignment = 'none' | 'hour' | 'interval'
+type SummaryCardSingleItemBehavior = 'native_if_uncovered' | 'summary_card' | 'drop'
 
 type ResolvedSummaryCardConfig = {
     intervalSeconds: number
@@ -15,6 +16,7 @@ type ResolvedSummaryCardConfig = {
     flushOnThreshold: boolean
     flushDelaySeconds: number
     windowAlignment: SummaryCardWindowAlignment
+    singleItemBehavior: SummaryCardSingleItemBehavior
     mediaDuplicateLimit: number | null
     translatedCard: {
         badgeLabel: string
@@ -36,6 +38,7 @@ type SummaryCardRoutePolicy = {
     flush_on_threshold: boolean
     flush_delay_seconds: number
     window_alignment: SummaryCardWindowAlignment
+    single_item_behavior: SummaryCardSingleItemBehavior
     media_duplicate_limit: number | null
     translated_card: {
         enabled: true
@@ -48,6 +51,7 @@ const DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS = 30 * 60
 const DEFAULT_SUMMARY_CARD_THRESHOLD = 8
 const DEFAULT_SUMMARY_CARD_MAX_ITEMS = 14
 const DEFAULT_TRANSLATED_SUMMARY_CARD_BADGE_LABEL = '译文'
+const DEFAULT_SUMMARY_CARD_SINGLE_ITEM_BEHAVIOR: SummaryCardSingleItemBehavior = 'native_if_uncovered'
 
 function normalizeTranslatedBadgeLabel(value: unknown) {
     const label = String(value || DEFAULT_TRANSLATED_SUMMARY_CARD_BADGE_LABEL).trim()
@@ -85,6 +89,17 @@ function normalizePlatformTokens(raw: unknown) {
                 .filter(Boolean),
         ),
     )
+}
+
+function resolveSummaryCardSingleItemBehavior(raw: unknown): SummaryCardSingleItemBehavior {
+    const normalized = String(raw || '')
+        .trim()
+        .toLocaleLowerCase()
+        .replace(/[-\s]+/g, '_')
+    if (normalized === 'summary_card' || normalized === 'drop' || normalized === 'native_if_uncovered') {
+        return normalized
+    }
+    return DEFAULT_SUMMARY_CARD_SINGLE_ITEM_BEHAVIOR
 }
 
 function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): ResolvedSummaryCardConfig | null {
@@ -142,6 +157,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         flushOnThreshold: (objectConfig as any).flush_on_threshold !== false,
         flushDelaySeconds: Math.max(0, Math.floor(Number((objectConfig as any).flush_delay_seconds || 0))),
         windowAlignment,
+        singleItemBehavior: resolveSummaryCardSingleItemBehavior((objectConfig as any).single_item_behavior),
         mediaDuplicateLimit: duplicateLimit > 0 ? duplicateLimit : null,
         translatedCard,
     }
@@ -162,6 +178,7 @@ function toSummaryCardRoutePolicy(config: ResolvedSummaryCardConfig): SummaryCar
         flush_on_threshold: config.flushOnThreshold,
         flush_delay_seconds: config.flushDelaySeconds,
         window_alignment: config.windowAlignment,
+        single_item_behavior: config.singleItemBehavior,
         media_duplicate_limit: config.mediaDuplicateLimit,
         translated_card: config.translatedCard
             ? {
@@ -184,5 +201,6 @@ export {
     toSummaryCardRoutePolicy,
     type ResolvedSummaryCardConfig,
     type SummaryCardRoutePolicy,
+    type SummaryCardSingleItemBehavior,
     type SummaryCardWindowAlignment,
 }

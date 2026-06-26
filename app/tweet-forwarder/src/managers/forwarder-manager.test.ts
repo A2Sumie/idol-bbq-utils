@@ -466,6 +466,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         flushOnThreshold: true,
         flushDelaySeconds: 0,
         windowAlignment: 'none',
+        singleItemBehavior: 'native_if_uncovered',
         mediaDuplicateLimit: null,
         translatedCard: null,
     })
@@ -485,6 +486,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
                 flush_on_threshold: false,
                 flush_delay_seconds: 300,
                 align_to_interval: true,
+                single_item_behavior: 'drop',
                 media_duplicate_limit: 2,
                 translated_card: {
                     enabled: true,
@@ -506,6 +508,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         flushOnThreshold: false,
         flushDelaySeconds: 300,
         windowAlignment: 'interval',
+        singleItemBehavior: 'drop',
         mediaDuplicateLimit: 2,
         translatedCard: {
             badgeLabel: '译文',
@@ -3058,6 +3061,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
                 threshold: 2,
                 interval_seconds: 1800,
                 include_original_media: false,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card',
@@ -3153,11 +3157,11 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent).toHaveLength(2)
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
-    expect(target.sent[0]?.texts[0]).toContain('聚合')
+    expect(target.sent[0]?.texts[0]).toContain('更新合并')
     expect(target.sent[0]?.texts[0]).toContain('1. member1 x发推')
     expect(target.sent[0]?.texts[0]).toContain('2. member2 x发推')
     expect(target.sent[0]?.texts[0]).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
-    expect(packedArticles[0]?.content).toContain('【聚合】2 条')
+    expect(packedArticles[0]?.content).toContain('【更新合并】2 条')
     expect(packedArticles[0]?.content).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
     expect(packedArticles[0]?.content).toContain('summary content 1')
     expect(packedArticles[0]?.content).toContain('summary content 2')
@@ -3184,7 +3188,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
             alt: 'summary-2',
         },
     ])
-    expect(packedArticles[1]?.content).toContain('【聚合】1 条')
+    expect(packedArticles[1]?.content).toContain('【更新合并】1 条')
     expect(packedArticles[1]?.content).toContain('summary content 3')
     expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('summary content 3')
     expect(packedArticles[1]?.extra?.data?.groups).toHaveLength(1)
@@ -3353,7 +3357,7 @@ test('summary-card send text keeps Bilibili card body digest', () => {
         '聚合 fallback',
     )
 
-    expect(text).toContain('聚合')
+    expect(text).toContain('更新合并')
     expect(text).toContain('1. member1 x发推')
 })
 
@@ -3514,6 +3518,7 @@ test('sendArticles does not flush a fresh summary-card queue from stale last sen
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-stale-last-send',
@@ -3605,6 +3610,7 @@ test('ForwarderPools drop does not visibly send a fresh summary-card queue', asy
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-drop-no-send',
@@ -3688,6 +3694,7 @@ test('flushSummaryCardQueue cancels durable windows when no queued items are cla
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-no-claimable-items',
@@ -3879,6 +3886,7 @@ test('flushSummaryCardQueue treats blocked summary-card outbound as terminally s
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-blocked-terminal',
@@ -4002,6 +4010,7 @@ test('flushSummaryCardQueue keeps summary-card windows retryable after transient
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-transient-failure',
@@ -4097,6 +4106,229 @@ test('flushSummaryCardQueue keeps summary-card windows retryable after transient
     expect(sentOutbound?.status).toBe('sent')
 })
 
+test('single-item summary-card windows fall back to compact native when uncovered', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-single-native-default',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content || '',
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: '/tmp/single-native-default.jpg',
+                    sourceArticleId: article.a_id,
+                },
+            ],
+            mediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: '/tmp/single-native-default.jpg',
+                    sourceArticleId: article.a_id,
+                },
+            ],
+        }),
+        renderText: (article: any) => `${article.u_id}: ${article.content || ''}`,
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-single-native-default',
+        [
+            {
+                id: 722,
+                a_id: 'summary-single-native-default',
+                platform: Platform.X,
+                username: 'single native',
+                u_id: 'single_native',
+                content: 'single uncovered text',
+                url: 'https://x.com/single_native/status/722',
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: 'https://example.com/single-native.jpg' }],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    const queueKey = Array.from((pools as any).summaryCardQueues.keys())[0]
+    const queue = (pools as any).summaryCardQueues.get(queueKey)
+    await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const outbounds = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values())
+    const fallbackOutbound = outbounds.find((record: any) => record.task_kind === 'summary_single_native')
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('single uncovered text')
+    expect(target.sent[0]?.texts[0]).not.toContain('聚合')
+    expect(target.sent[0]?.texts[0]).not.toContain('更新合并 1 条')
+    expect(target.sent[0]?.props?.media).toEqual([
+        { media_type: 'photo', path: '/tmp/single-native-default.jpg', sourceArticleId: 'summary-single-native-default' },
+    ])
+    expect(fallbackOutbound?.status).toBe('sent')
+    expect(windows.get(queue.windowId)?.status).toBe('completed')
+    expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
+})
+
+test('single-item summary-card windows suppress when realtime media already carried text context', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'basic',
+            },
+        } as any,
+        'target-summary-card-single-covered-default',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content || '',
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: '/tmp/single-covered-default.jpg',
+                    sourceArticleId: article.a_id,
+                    sourceUrl: 'https://example.com/single-covered.jpg',
+                },
+            ],
+            mediaFiles: [
+                {
+                    media_type: 'photo',
+                    path: '/tmp/single-covered-default.jpg',
+                    sourceArticleId: article.a_id,
+                    sourceUrl: 'https://example.com/single-covered.jpg',
+                },
+            ],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-single-covered-default',
+        [
+            {
+                id: 723,
+                a_id: 'summary-single-covered-default',
+                platform: Platform.X,
+                username: 'single covered',
+                u_id: 'single_covered',
+                content: 'single covered text',
+                url: 'https://x.com/single_covered/status/723',
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: 'https://example.com/single-covered.jpg' }],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('single covered text')
+    const queueKey = Array.from((pools as any).summaryCardQueues.keys())[0]
+    const queue = (pools as any).summaryCardQueues.get(queueKey)
+    await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const outbounds = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values())
+    const fallbackOutbound = outbounds.find((record: any) => record.task_kind === 'summary_single_native')
+    expect(target.sent).toHaveLength(1)
+    expect(fallbackOutbound?.status).toBe('skipped')
+    expect(fallbackOutbound?.provider_message_ids?.reason).toBe('single_item_covered')
+    expect(windows.get(queue.windowId)?.status).toBe('cancelled')
+    expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
+})
+
 test('summary-card outbound key suppresses the same article set across reopened windows', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'
@@ -4136,6 +4368,7 @@ test('summary-card outbound key suppresses the same article set across reopened 
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-reopened-window-stable-key',
@@ -5263,6 +5496,7 @@ test('sendArticles renders a translated companion summary card with stable forwa
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
                 translated_card: {
                     enabled: true,
                     badge_label: '译文',
@@ -5583,6 +5817,7 @@ test('sendArticles fills missing translations before rendering translated summar
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
                 translated_card: {
                     enabled: true,
                     badge_label: '译文',
@@ -6202,6 +6437,7 @@ test('sendArticles prompts summary-card translation with chronological chain ord
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
                 translated_card: {
                     enabled: true,
                     badge_label: '译文',
@@ -6365,6 +6601,7 @@ test('sendArticles suppresses empty translated summary companion when processor 
                 interval_seconds: 1800,
                 include_original_media: false,
                 send_first_immediately: false,
+                single_item_behavior: 'summary_card',
                 translated_card: {
                     enabled: true,
                     badge_label: '译文',
@@ -6480,6 +6717,7 @@ test('sendArticles promotes queued summary-card hashtag items after a storm acti
                 threshold: 8,
                 interval_seconds: 1800,
                 include_original_media: false,
+                single_item_behavior: 'summary_card',
             },
             tag_digest_threshold: 3,
             tag_digest_min_authors: 2,
@@ -6853,6 +7091,7 @@ test('sendArticles keeps summary-card fallback compact when card rendering fails
                 threshold: 8,
                 interval_seconds: 1800,
                 include_original_media: false,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-media-only',
@@ -6949,7 +7188,7 @@ test('sendArticles keeps summary-card fallback compact when card rendering fails
     }
 
     expect(target.sent).toHaveLength(1)
-    expect(target.sent[0]?.texts[0]).toContain('聚合 1 条 /')
+    expect(target.sent[0]?.texts[0]).toContain('更新合并 1 条 /')
     expect(target.sent[0]?.texts[0]).toContain('1. media_member x发推')
     expect(target.sent[0]?.texts[0]).not.toContain('图集: 1 张')
     expect(target.sent[0]?.texts[0]).not.toBe(packedArticles[0]?.content?.split('\n')[0])
@@ -7462,6 +7701,7 @@ test('summary-card realtime media can include basic text for Bilibili video targ
                 flush_on_threshold: false,
                 align_to_interval: true,
                 flush_delay_seconds: 300,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-realtime-media-basic',
@@ -7783,6 +8023,7 @@ test('summary-card realtime media metadata text stays one line without body or U
                 flush_on_threshold: false,
                 align_to_interval: true,
                 flush_delay_seconds: 300,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-realtime-media-metadata',
@@ -8988,7 +9229,7 @@ test('target media visibility text-collapses media after the second visible occu
     expect(target.sent[2]?.props?.contentMedia).toEqual([])
     expect(target.sent[2]?.props?.cardMedia).toEqual([])
     expect(target.sent[2]?.texts[0]).toContain('high realtime text 932')
-    expect(target.sent[2]?.texts[0]).toContain('[图略]')
+    expect(target.sent[2]?.texts[0]).toContain('[图已发过]')
     expect(target.sent[2]?.texts[0]).not.toContain('重复媒体已文字缩略')
     expect(target.sent[2]?.texts[0]).not.toContain('24小时')
 })
@@ -9031,6 +9272,7 @@ test('summary-card aligned windows wait for the configured five-minute delay', a
                 flush_on_threshold: false,
                 align_to_interval: true,
                 flush_delay_seconds: 300,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-delayed-window',
@@ -9107,7 +9349,7 @@ test('summary-card aligned windows wait for the configured five-minute delay', a
 
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toMatch(/\d{4}～\d{4}/)
-    expect(packedArticles[0]?.content).toMatch(/【聚合】1 条 \/ \d{4}～\d{4}/)
+    expect(packedArticles[0]?.content).toMatch(/【更新合并】1 条 \/ \d{4}～\d{4}/)
 })
 
 test('sendArticles starts a new summary-card window instead of appending to a due queue', async () => {
@@ -9147,6 +9389,7 @@ test('sendArticles starts a new summary-card window instead of appending to a du
                 send_first_immediately: false,
                 flush_on_threshold: false,
                 flush_delay_seconds: 300,
+                single_item_behavior: 'summary_card',
             },
         } as any,
         'target-summary-card-due-window-rollover',
@@ -10083,7 +10326,7 @@ test('idle-first translated native companion is suppressed for text-only media v
     expect(target.sent[0]?.props?.cardMedia).toHaveLength(2)
     expect(target.sent[1]?.props?.cardMedia).toEqual([])
     expect(target.sent[1]?.props?.contentMedia).toEqual([])
-    expect(target.sent[1]?.texts[0]).toContain('[图略]')
+    expect(target.sent[1]?.texts[0]).toContain('[图已发过]')
     expect(target.sent[1]?.texts[0]).not.toContain('重复媒体已文字缩略')
     expect(
         renderProcessCalls.filter((call) => call.config?.card_features?.includes('translated-corner-badge')),
@@ -10382,9 +10625,9 @@ test('summary-card media duplicate budget keeps one in-card representative per c
         const itemTexts = packedArticle?.extra?.data?.groups.flatMap((group: any) =>
             group.items.map((item: any) => item.text),
         )
-        expect(itemTexts[0]).not.toContain('[图略]')
-        expect(itemTexts[1]).toContain('[图略]')
-        expect(itemTexts[2]).toContain('[图略]')
+        expect(itemTexts[0]).not.toContain('[图未列全]')
+        expect(itemTexts[1]).toContain('[图未列全]')
+        expect(itemTexts[2]).toContain('[图未列全]')
     }
     const originalItemTexts = packedArticles[0]?.extra?.data?.groups.flatMap((group: any) =>
         group.items.map((item: any) => item.text),
