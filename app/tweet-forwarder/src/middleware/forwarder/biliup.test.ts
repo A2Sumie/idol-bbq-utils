@@ -140,6 +140,28 @@ test('completeBiliupUploadCandidateTags formats official YouTube long video meta
     expect(calls).toHaveLength(1)
     expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
     expect(calls[0]?.text).toContain(originalTitle)
+    const officialGenerationInput = JSON.parse(calls[0]?.text || '{}')
+    expect(officialGenerationInput.title_candidates).toContainEqual(
+        expect.objectContaining({
+            source: 'translation_first_line',
+            text: translationTitle,
+            confidence: 'high',
+        }),
+    )
+    expect(officialGenerationInput.title_candidates).toContainEqual(
+        expect.objectContaining({
+            source: 'original_first_line',
+            text: originalTitle,
+            confidence: 'high',
+        }),
+    )
+    expect(officialGenerationInput.evidence).toMatchObject({
+        platform: 'YouTube',
+        source_url: 'https://www.youtube.com/watch?v=X6J9TphDexM',
+        deterministic_title: `【22/7 北原実咲】${translationTitle}`,
+        translation_first_line: translationTitle,
+        original_first_line: originalTitle,
+    })
     expect(candidate?.title).toBe(`【22/7 北原実咲】${generatedTitle} | ${originalTitle}`)
     expect(candidate?.title).not.toContain('[YT]')
     expect(candidate?.config.tags).toHaveLength(10)
@@ -323,6 +345,20 @@ test('completeBiliupUploadCandidateTags replaces title payload and appends origi
 
     expect(calls).toHaveLength(1)
     expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
+    const generatedInput = JSON.parse(calls[0]?.text || '{}')
+    expect(generatedInput.title_candidates).toContainEqual(
+        expect.objectContaining({
+            source: 'detected_member_facts',
+            text: '北原実咲',
+            confidence: 'high',
+        }),
+    )
+    expect(generatedInput.evidence).toMatchObject({
+        platform: 'Twitter',
+        source_tag: 'X',
+        source_url: 'https://x.com/kitahara_misaki/status/1',
+        original_first_line: '今日は配信ありがとうございました',
+    })
     expect(candidate?.title).toBe('【22/7 北原実咲】[X] 直播后的感谢 | 今日は配信ありがとうございました')
     expect(candidate?.title).not.toContain('26.06.13 今日は')
     expect(candidate?.config.tags).toHaveLength(10)

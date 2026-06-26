@@ -245,6 +245,8 @@ beforeEach(() => {
                     (record: any) =>
                         (!options.route_key || record.route_key === options.route_key) &&
                         record.target_id === options.target_id &&
+                        (!options.article_key || record.article_key === options.article_key) &&
+                        (!options.synthetic_key || record.synthetic_key === options.synthetic_key) &&
                         (taskKinds.size === 0 || taskKinds.has(record.task_kind)) &&
                         visibleStatuses.has(record.status),
                 )
@@ -3695,6 +3697,102 @@ test('flushSummaryCardQueue cancels durable windows when no queued items are cla
     expect(windows.get(queue.windowId)?.payload_hash).toBe('no-claimable-items')
 })
 
+test('flushSummaryCardQueue cancels stale durable windows during runtime without sending', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-runtime-stale-window',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-runtime-stale-window',
+        [
+            {
+                id: 719,
+                a_id: 'summary-runtime-stale-window',
+                platform: Platform.X,
+                username: 'stale summary',
+                u_id: 'stale_summary',
+                content: 'runtime stale summary-card should not send',
+                url: 'https://x.com/stale_summary/status/719',
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    const queueKey = Array.from((pools as any).summaryCardQueues.keys())[0]
+    const queue = (pools as any).summaryCardQueues.get(queueKey)
+    const windows = (DB.AggregationWindow as any).__windows as Map<number, any>
+    const staleEnd = Math.floor(Date.now() / 1000) - 3 * 3600 - 1
+    queue.windowEnd = staleEnd
+    const window = windows.get(queue.windowId)
+    window.window_end = staleEnd
+
+    await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+
+    expect(target.sent).toHaveLength(0)
+    expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
+    expect(windows.get(queue.windowId)?.status).toBe('cancelled')
+    expect(windows.get(queue.windowId)?.payload_hash).toBe('stale-window')
+})
+
 test('flushSummaryCardQueue treats blocked summary-card outbound as terminally suppressed', async () => {
     class BlockingSummaryForwarder extends Forwarder {
         NAME = 'recording'
@@ -3950,6 +4048,117 @@ test('flushSummaryCardQueue keeps summary-card windows retryable after transient
     expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
     expect(windows.get(queue.windowId)?.status).toBe('completed')
     expect(sentOutbound?.status).toBe('sent')
+})
+
+test('summary-card outbound key suppresses the same article set across reopened windows', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        calls: Array<{ text: string; props: any }> = []
+
+        public override async send(text: string, props?: any): Promise<any> {
+            this.calls.push({ text, props })
+            return { status: 'sent', providerResult: { ok: true } }
+        }
+
+        protected async realSend(): Promise<any> {
+            return { ok: true }
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+            },
+        } as any,
+        'target-summary-card-reopened-window-stable-key',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            if (article.id < 0) {
+                return {
+                    text: article.content,
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [{ media_type: 'photo', path: `/tmp/${article.a_id}.png` }],
+                    originalMediaFiles: [],
+                    mediaFiles: [{ media_type: 'photo', path: `/tmp/${article.a_id}.png` }],
+                }
+            }
+            return {
+                text: article.content,
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [],
+                mediaFiles: [],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const now = Math.floor(Date.now() / 1000)
+    const article = {
+        id: 721,
+        a_id: 'summary-reopened-window-same-set',
+        platform: Platform.X,
+        username: 'window member',
+        u_id: 'window_member',
+        content: 'same summary-card set should not resend after reopen',
+        url: 'https://x.com/window_member/status/721',
+        type: 'tweet',
+        created_at: now,
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+
+    for (const windowShift of [0, 1]) {
+        await (pools as any).sendArticles(
+            undefined,
+            `summary-reopened-window-${windowShift}`,
+            [article],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+        const queueKey = Array.from((pools as any).summaryCardQueues.keys())[0]
+        const queue = (pools as any).summaryCardQueues.get(queueKey)
+        queue.windowId += windowShift
+        await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+    }
+
+    const outboundRecords = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values()).filter(
+        (record: any) => record.task_kind === 'summary_card' && record.target_id === target.id,
+    )
+    expect(target.calls).toHaveLength(1)
+    expect(outboundRecords).toHaveLength(1)
+    expect(outboundRecords[0]?.status).toBe('sent')
+    expect(outboundRecords[0]?.segment_results?.diagnostic).toBe('suppressed_payload_drift')
 })
 
 test('summary-card queues are shared across routes for the same target', async () => {
@@ -6948,6 +7157,114 @@ test('summary-card realtime media visibility skips repeats without dropping new 
     expect(target.sent[1]?.props?.media?.map((file: any) => file.path)).toEqual(['/tmp/realtime-fresh-901.jpg'])
     expect(target.sent.every((send) => (send.props?.media || []).length > 0)).toBeTrue()
     expect(getSummaryCardQueueForTarget(pools, target.id)?.items.size).toBe(3)
+})
+
+test('summary-card realtime media suppresses same article when rendered media identity drifts', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 7200,
+                include_original_media: false,
+                send_first_immediately: false,
+                media_realtime: true,
+                media_realtime_text: 'none',
+                flush_on_threshold: false,
+            },
+        } as any,
+        'target-summary-card-realtime-media-stable-key',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    let renderCount = 0
+    ;(pools as any).renderService = {
+        process: async (article: any) => {
+            renderCount += 1
+            const file = {
+                media_type: 'photo',
+                path: `/tmp/realtime-drift-${renderCount}.jpg`,
+                sourceArticleId: article.a_id,
+                sourceUrl: `https://example.com/realtime-drift-${renderCount}.jpg`,
+                content_hash: `realtime-drift-hash-${renderCount}`,
+            }
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: [],
+                originalMediaFiles: [file],
+                mediaFiles: [file],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    const article = {
+        id: 910,
+        a_id: 'summary-realtime-media-drift-same-article',
+        platform: Platform.YouTube,
+        username: 'video member',
+        u_id: 'video_member',
+        content: 'summary realtime media same article should not duplicate',
+        url: 'https://youtube.com/watch?v=summary-realtime-media-drift-same-article',
+        type: 'video',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: true,
+        media: [{ type: 'photo', url: 'https://example.com/realtime-drift-source.jpg' }],
+        extra: null,
+        u_avatar: null,
+    } as any
+
+    for (let index = 0; index < 2; index += 1) {
+        await (pools as any).sendArticles(
+            undefined,
+            `summary-realtime-media-drift-${index}`,
+            [article],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text-card' } as any,
+        )
+    }
+
+    const outboundRecords = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values()).filter(
+        (record: any) => record.task_kind === 'summary_realtime_media' && record.target_id === target.id,
+    )
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.props?.media?.[0]?.path).toBe('/tmp/realtime-drift-1.jpg')
+    expect(outboundRecords).toHaveLength(1)
+    expect(outboundRecords[0]?.status).toBe('sent')
+    expect(outboundRecords[0]?.article_key).toBe(`${Platform.YouTube}:summary-realtime-media-drift-same-article`)
+    expect(outboundRecords[0]?.synthetic_key).not.toContain('realtime-drift-hash')
+    expect(outboundRecords[0]?.segment_results?.diagnostic).toBe('suppressed_payload_drift')
 })
 
 test('summary-card realtime media visibility releases reservations after failed sends', async () => {

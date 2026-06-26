@@ -1005,26 +1005,102 @@ function completeTagsWithFallback(tags: Array<string>, targetCount = DEFAULT_BIL
     return uniqueBiliupTags([...tags, ...BILIUP_FALLBACK_TOPIC_TAGS], Math.min(MAX_BILIUP_TAG_COUNT, targetCount))
 }
 
+function buildBiliupTitleCandidates(
+    article: Pick<Article, 'content' | 'platform' | 'username' | 'u_id' | 'a_id' | 'created_at' | 'url' | 'type'> & {
+        translation?: string | null
+    },
+    texts: string[],
+    candidate: BiliupUploadCandidate,
+) {
+    const blocks = collectTextBlocks(article, texts)
+    const firstOriginalLine = firstNonEmptyLine(article.content)
+    const firstTranslationLine = firstNonEmptyLine(article.translation)
+    const memberNames = resolveDetectedBiliupMemberFacts(article, texts)
+        .map((fact) => normalizeBiliupUploadTag(fact.names?.ja || ''))
+        .filter(Boolean)
+    const fallbackDisplayName = resolveFallbackDisplayName(article)
+
+    return [
+        {
+            source: 'deterministic_title',
+            text: candidate.title,
+            confidence: 'high',
+            role: 'current_upload_title',
+        },
+        {
+            source: 'translation_first_line',
+            text: firstTranslationLine,
+            confidence: firstTranslationLine ? 'high' : 'none',
+            role: 'translated_reference',
+        },
+        {
+            source: 'original_first_line',
+            text: firstOriginalLine,
+            confidence: firstOriginalLine ? 'high' : 'none',
+            role: 'original_reference',
+        },
+        {
+            source: 'detected_member_facts',
+            text: memberNames.join(' '),
+            confidence: memberNames.length > 0 ? 'high' : 'none',
+            role: 'member_reference',
+        },
+        {
+            source: 'fallback_display_name',
+            text: fallbackDisplayName,
+            confidence: fallbackDisplayName ? 'medium' : 'none',
+            role: 'account_reference',
+        },
+        {
+            source: 'text_blocks',
+            text: blocks.join('\n\n'),
+            confidence: blocks.length > 0 ? 'medium' : 'none',
+            role: 'body_reference',
+        },
+    ].filter((item) => item.text)
+}
+
 function buildBiliupTagGenerationInput(
-    article: Pick<Article, 'platform' | 'username' | 'u_id' | 'a_id' | 'content' | 'url' | 'type'> & {
+    article: Pick<Article, 'platform' | 'username' | 'u_id' | 'a_id' | 'content' | 'url' | 'type' | 'created_at'> & {
         translation?: string | null
     },
     texts: string[],
     candidate: BiliupUploadCandidate,
     targetCount: number,
 ) {
+    const platform = Platform[article.platform] || String(article.platform)
+    const dateTime = formatDateTimeParts(article.created_at, candidate.config.metadata_timezone)
+    const textBlocks = collectTextBlocks(article, texts)
     const context = {
         title: candidate.title,
         description: candidate.description,
         source_url: candidate.sourceUrl,
-        platform: Platform[article.platform] || String(article.platform),
+        platform,
+        source_tag: resolveBiliupSourceTag(article),
         type: article.type || '',
         user_id: article.u_id || '',
         username: article.username || '',
         article_id: article.a_id || '',
         current_tags: candidate.config.tags,
         target_count: targetCount,
-        text: collectTextBlocks(article, texts).join('\n\n'),
+        text: textBlocks.join('\n\n'),
+        title_candidates: buildBiliupTitleCandidates(article, texts, candidate),
+        evidence: {
+            platform,
+            source_tag: resolveBiliupSourceTag(article),
+            type: article.type || '',
+            source_url: candidate.sourceUrl,
+            article_id: article.a_id || '',
+            username: article.username || '',
+            user_id: article.u_id || '',
+            created_at: article.created_at || 0,
+            date: dateTime.date,
+            time: dateTime.time,
+            deterministic_title: candidate.title,
+            original_first_line: firstNonEmptyLine(article.content),
+            translation_first_line: firstNonEmptyLine(article.translation),
+            text_blocks: textBlocks,
+        },
     }
     return JSON.stringify(context, null, 2)
 }
@@ -1240,6 +1316,7 @@ async function completeBiliupUploadCandidateTags(
                 `固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"],"title_zh":"中文标题或空字符串"}。`,
                 '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
                 '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
+                '输入JSON中的title_candidates和evidence是标题依据；优先使用source=translation_first_line/original_first_line/detected_member_facts的高置信事实。',
                 'title_zh应为4到32个中文字符，基于原文事实，不夸张、不偏颇、不脑补；信息不足则返回空字符串。',
                 'title_zh会放在固定账号/来源前缀之后，并与原标题用分隔符组合；不要重复账号名、平台名、日期、原标题或搬运属性词。',
             ].join('\n')

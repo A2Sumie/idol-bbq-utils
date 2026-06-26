@@ -2716,6 +2716,14 @@ class ForwarderPools extends BaseCompatibleModel {
                 window_end: windowStart + config.intervalSeconds,
             })
             if (window.status === DB.AggregationWindow.STATUS.Open) {
+                if (this.isSummaryCardWindowStale(window, config, Math.floor(Date.now() / 1000))) {
+                    await DB.AggregationWindow.updateStatus(window.id, DB.AggregationWindow.STATUS.Cancelled, {
+                        payload_hash: 'stale-window',
+                    }).catch(() => undefined)
+                    lastWindow = window
+                    idempotencyKey = `${baseIdempotencyKey}:reopen:${window.id}:${firstQueuedAt}:${attempt + 1}`
+                    continue
+                }
                 return window
             }
 
@@ -3277,12 +3285,36 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const mediaIdentities = this.buildRenderedMediaIdentityList(mediaFilesWithTargetExtras)
-        const syntheticKey = `${routeKeyValue}:${articleKey(article)}:${hashValue(mediaIdentities)}`
+        const currentArticleKey = articleKey(article)
+        const syntheticKey = `${routeKeyValue}:${currentArticleKey}`
         const outboundIdempotencyKey = syntheticOutboundKey(target.id, 'summary_realtime_media', syntheticKey)
         const targetExtraMediaFiles = mediaFilesWithTargetExtras.filter(
             (file) => !mediaFiles.some((mediaFile) => mediaFile.path === file.path),
         )
         const text = this.buildSummaryCardRealtimeMediaText(article, renderResult, config)
+        const latestVisibleOutbound = await DB.OutboundMessage.findLatestVisibleCompletion({
+            target_id: target.id,
+            task_kinds: ['summary_realtime_media'],
+            article_key: currentArticleKey,
+        }).catch((error) => {
+            log?.warn(
+                `Failed to read summary realtime media visible completion for ${article.a_id} to ${target.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            return null
+        })
+        if (latestVisibleOutbound && latestVisibleOutbound.idempotency_key !== outboundIdempotencyKey) {
+            log?.debug(
+                `Skipping summary realtime media for ${article.a_id} to ${target.id}: article already visibly completed as ${latestVisibleOutbound.status}`,
+            )
+            return {
+                hadMedia: true,
+                handled: true,
+                visibleMediaSent: true,
+                skippedDuplicate: true,
+            }
+        }
         const visibility = await this.applyTargetMediaVisibility(article, target, runtime_config, mediaFiles)
         const visibleMediaFiles = [...visibility.visibleFiles, ...targetExtraMediaFiles]
         if (visibility.policy?.duplicateBehavior === 'skip' && visibleMediaFiles.length === 0) {
@@ -3291,9 +3323,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 targetId: target.id,
                 taskKind: 'summary_realtime_media',
                 text,
-                articleKeys: [articleKey(article)],
+                articleKeys: [currentArticleKey],
                 media: [],
-                extra: { skipped: 'media_visibility_duplicate' },
+                extra: { skipped: 'media_visibility_duplicate', mediaIdentitiesHash: hashValue(mediaIdentities) },
             })
             const outbound = await DB.OutboundMessage.claim({
                 idempotency_key: outboundIdempotencyKey,
@@ -3301,7 +3333,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 target_id: target.id,
                 target_platform: target.NAME,
                 task_kind: 'summary_realtime_media',
-                article_key: articleKey(article),
+                article_key: currentArticleKey,
                 synthetic_key: syntheticKey,
                 payload_hash: outboundPayloadHash,
             })
@@ -3335,8 +3367,9 @@ class ForwarderPools extends BaseCompatibleModel {
             targetId: target.id,
             taskKind: 'summary_realtime_media',
             text,
-            articleKeys: [articleKey(article)],
+            articleKeys: [currentArticleKey],
             media: visibleMediaFiles,
+            extra: { mediaIdentitiesHash: hashValue(mediaIdentities) },
         })
 
         try {
@@ -3346,7 +3379,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 target_id: target.id,
                 target_platform: target.NAME,
                 task_kind: 'summary_realtime_media',
-                article_key: articleKey(article),
+                article_key: currentArticleKey,
                 synthetic_key: syntheticKey,
                 payload_hash: outboundPayloadHash,
             })
@@ -3609,6 +3642,19 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
         this.summaryCardQueues.delete(queueKey)
+        const now = Math.floor(Date.now() / 1000)
+        if (queue.windowId && this.isSummaryCardWindowStale({ window_end: queue.windowEnd }, queue.config, now)) {
+            await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
+                payload_hash: 'stale-window',
+            }).catch((error) => {
+                this.log?.warn(
+                    `Failed to cancel stale summary-card window ${queue.windowId} for ${queue.target.id}: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                )
+            })
+            return
+        }
         const claimedItems: SummaryCardQueueItem[] = []
         for (const item of orderBy(
             Array.from(queue.items.values()),
@@ -3751,7 +3797,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const hasRenderedCard = cardMediaFiles.length > 0
         const sendText = this.buildSummaryCardSendText(queue, allItems, title)
         const articleKeys = allItems.map((item) => articleKey(item.article)).sort((a, b) => a.localeCompare(b))
-        const syntheticKey = `${queue.routeKey}:${queue.windowId || 'immediate'}:${articleKeys.join('|')}`
+        const syntheticKey = `${queue.routeKey}:${articleKeys.join('|')}`
         const outboundIdempotencyKey = syntheticOutboundKey(queue.target.id, 'summary_card', syntheticKey)
         const outboundPayloadHash = payloadHash({
             routeKey: queue.routeKey,

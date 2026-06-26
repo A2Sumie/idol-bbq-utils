@@ -1229,11 +1229,15 @@ namespace DB {
             route_key?: string
             target_id: string
             task_kinds?: Array<string>
+            article_key?: string | null
+            synthetic_key?: string | null
         }): Promise<DBOutboundMessage | null> {
             return await prisma.outbound_messages.findFirst({
                 where: {
                     route_key: options.route_key || undefined,
                     target_id: options.target_id,
+                    article_key: options.article_key || undefined,
+                    synthetic_key: options.synthetic_key || undefined,
                     task_kind:
                         options.task_kinds && options.task_kinds.length > 0
                             ? {
