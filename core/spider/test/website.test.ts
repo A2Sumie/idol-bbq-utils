@@ -3,8 +3,10 @@ import dayjs from 'dayjs'
 import {
     buildPhotoAlbumArticle,
     buildWebsiteArticle,
+    isWebsiteAuthGateSnapshot,
     NanabunnonijyuuniWebsiteSpider,
     resolveWebsiteCrawlOptions,
+    resolveWebsiteFeedResourceBlocking,
     splitPhotoAlbumPayloadByDate,
     type FeedConfig,
 } from '../src/spiders/website'
@@ -86,6 +88,49 @@ describe('resolveWebsiteCrawlOptions', () => {
             },
             blockResourceTypes: ['font', 'image', 'media'],
         })
+    })
+})
+
+describe('resolveWebsiteFeedResourceBlocking', () => {
+    test('keeps low-value resource blocking for text/detail feeds', () => {
+        expect(resolveWebsiteFeedResourceBlocking('official-news', ['font', 'image', 'media'])).toEqual(['font', 'image', 'media'])
+        expect(resolveWebsiteFeedResourceBlocking('official-blog', ['font', 'image', 'media'])).toEqual(['font', 'image', 'media'])
+        expect(resolveWebsiteFeedResourceBlocking('live-report', ['font', 'image', 'media'])).toEqual(['font', 'image', 'media'])
+        expect(resolveWebsiteFeedResourceBlocking('ticket', ['font', 'image', 'media'])).toEqual(['font', 'image', 'media'])
+    })
+
+    test('narrows media-heavy FC content feeds to font blocking only', () => {
+        expect(resolveWebsiteFeedResourceBlocking('radio', ['font', 'image', 'media'])).toEqual(['font'])
+        expect(resolveWebsiteFeedResourceBlocking('movie', ['font', 'image', 'media'])).toEqual(['font'])
+        expect(resolveWebsiteFeedResourceBlocking('photo', ['font', 'image', 'media'])).toEqual(['font'])
+    })
+})
+
+describe('isWebsiteAuthGateSnapshot', () => {
+    test('detects FC detail pages replaced by the login gate', () => {
+        expect(
+            isWebsiteAuthGateSnapshot({
+                documentTitle: 'ログイン | 22/7ファンクラブ',
+                bodyText: '22/7ファンクラブ ログイン または 新規会員登録',
+                hasLoginForm: true,
+                hasLoginButton: true,
+                hasRegistrationLink: true,
+                hasDetailContent: false,
+            }),
+        ).toBe(true)
+    })
+
+    test('does not treat normal detail content as auth even when text mentions login', () => {
+        expect(
+            isWebsiteAuthGateSnapshot({
+                documentTitle: 'NEWS | 22/7(ナナブンノニジュウニ)',
+                bodyText: 'LINE MUSIC にログインしてキャンペーンに参加してください。',
+                hasLoginForm: false,
+                hasLoginButton: false,
+                hasRegistrationLink: false,
+                hasDetailContent: true,
+            }),
+        ).toBe(false)
     })
 })
 

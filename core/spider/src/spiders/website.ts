@@ -45,6 +45,17 @@ interface WebsiteDetailPayload {
     extraData?: Record<string, any>
 }
 
+interface WebsiteAuthGateSnapshot {
+    url?: string | null
+    documentTitle?: string | null
+    bodyText?: string | null
+    hasLoginForm?: boolean
+    hasPasswordInput?: boolean
+    hasLoginButton?: boolean
+    hasRegistrationLink?: boolean
+    hasDetailContent?: boolean
+}
+
 interface WebsiteListPageResult {
     items: Array<WebsiteListItem>
     nextUrl?: string | null
@@ -248,7 +259,7 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function resolveFeedResourceBlocking(feed: FeedKind, blockResourceTypes: Array<string>) {
+export function resolveWebsiteFeedResourceBlocking(feed: FeedKind, blockResourceTypes: Array<string>) {
     if (feed === 'radio' || feed === 'movie' || feed === 'photo') {
         return blockResourceTypes.filter((type) => type === 'font')
     }
@@ -256,20 +267,73 @@ function resolveFeedResourceBlocking(feed: FeedKind, blockResourceTypes: Array<s
     return blockResourceTypes
 }
 
-function buildFallbackDetailPayload(listItem: WebsiteListItem, reason: string): WebsiteDetailPayload {
-    return {
-        title: listItem.title || '',
-        dateText: listItem.dateText || '',
-        bodyText: listItem.summary || '',
-        bodyHtml: '',
-        member: listItem.member || null,
-        media: [],
-        uAvatar: listItem.uAvatar || null,
-        extraData: {
-            detail_fallback: true,
-            detail_fallback_reason: reason,
-        },
+function formatSafeWebsiteUrl(url: string) {
+    const parsed = tryParseWebsiteUrl(url)
+    if (!parsed) {
+        return url.slice(0, 160)
     }
+    const queryKeys = Array.from(parsed.searchParams.keys()).sort()
+    return `${parsed.origin}${parsed.pathname}${queryKeys.length > 0 ? `?${queryKeys.map((key) => `${key}=...`).join('&')}` : ''}`
+}
+
+export function isWebsiteAuthGateSnapshot(snapshot: WebsiteAuthGateSnapshot) {
+    if (snapshot.hasDetailContent) {
+        return false
+    }
+
+    const title = cleanText(snapshot.documentTitle).toLowerCase()
+    const body = cleanText(snapshot.bodyText).toLowerCase()
+    const loginTitle = /^ログイン\s*\|/.test(title) || /^login\s*\|/.test(title)
+    const loginBody = /(ログイン|login)/i.test(body) && /(新規会員登録|会員登録|password|パスワード|メールアドレス)/i.test(body)
+    const loginControls = Boolean(snapshot.hasLoginForm || snapshot.hasPasswordInput || snapshot.hasLoginButton)
+    const registrationGate = Boolean(snapshot.hasLoginButton && snapshot.hasRegistrationLink)
+
+    return Boolean(loginTitle || (loginBody && loginControls) || registrationGate)
+}
+
+async function detectWebsiteAuthGate(page: Page, detailSelector: string) {
+    const snapshot = (await page.evaluate((selector) => {
+        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const controls = Array.from(document.querySelectorAll('a, button, input[type="button"], input[type="submit"]'))
+        const controlTexts = controls.map((node) => clean(node.textContent || (node as HTMLInputElement).value)).filter(Boolean)
+        return {
+            url: location.href,
+            documentTitle: document.title,
+            bodyText: clean(document.body?.innerText || document.body?.textContent).slice(0, 1200),
+            hasLoginForm: Boolean(document.querySelector('form[action*="/login"]')),
+            hasPasswordInput: Boolean(document.querySelector('input[type="password"]')),
+            hasLoginButton: controlTexts.some((text) => /^(ログイン|login)$/i.test(text)),
+            hasRegistrationLink: controls.some((node) => {
+                const text = clean(node.textContent || (node as HTMLInputElement).value)
+                const href = (node as HTMLAnchorElement).href || ''
+                return /新規会員登録|会員登録/i.test(text) || /\/page\/about/.test(href)
+            }),
+            hasDetailContent: Boolean(document.querySelector(selector)),
+        }
+    }, detailSelector)) as WebsiteAuthGateSnapshot
+
+    return isWebsiteAuthGateSnapshot(snapshot) ? snapshot : null
+}
+
+function assertRequiredWebsiteDetail(hasDetail: boolean, authGate: WebsiteAuthGateSnapshot | null, feed: FeedKind, url: string, selectorLabel: string) {
+    if (hasDetail) {
+        return
+    }
+    if (authGate) {
+        throw new Error(
+            `Website auth required for ${feed} detail ${formatSafeWebsiteUrl(url)}: login page shown; refresh browser session/cookies`,
+        )
+    }
+    throw new Error(`Website ${feed} detail missing ${selectorLabel}; format may have changed`)
+}
+
+async function waitForRequiredDetailSelector(page: Page, feed: FeedKind, url: string, detailSelector: string, timeout = 15000) {
+    await waitForOptionalSelector(page, `${detailSelector}, form[action*="/login"], input[type="password"]`, timeout)
+    const [hasDetail, authGate] = await Promise.all([
+        page.$(detailSelector).then(Boolean).catch(() => false),
+        detectWebsiteAuthGate(page, detailSelector),
+    ])
+    assertRequiredWebsiteDetail(hasDetail, authGate, feed, url, detailSelector)
 }
 
 async function waitForOptionalSelector(page: Page, selector: string, timeout: number) {
@@ -1038,11 +1102,14 @@ async function extractLiveReportList(page: Page, url: string): Promise<WebsiteLi
     }, url)
 }
 
-async function extractNewsDetail(page: Page, url: string): Promise<WebsiteDetailPayload> {
+async function extractNewsDetail(page: Page, url: string, feed: FeedKind): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('#infoDetailTitle, #infoDetail, #infoCaption, .section-article .article__title, .section-article .article-content', {
-        timeout: 15000,
-    })
+    await waitForRequiredDetailSelector(
+        page,
+        feed,
+        url,
+        '#infoDetailTitle, #infoDetail, #infoCaption, .section-article .article__title, .section-article .article-content',
+    )
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const cleanMultiline = (value?: string | null) =>
@@ -1094,7 +1161,7 @@ async function extractNewsDetail(page: Page, url: string): Promise<WebsiteDetail
 
 async function extractBlogDetail(page: Page, url: string): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.blog_detail__title, .blog_detail__main', { timeout: 15000 })
+    await waitForRequiredDetailSelector(page, 'official-blog', url, '.blog_detail__title, .blog_detail__main')
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const cleanMultiline = (value?: string | null) =>
@@ -1144,7 +1211,7 @@ async function extractBlogDetail(page: Page, url: string): Promise<WebsiteDetail
 
 async function extractTicketDetail(page: Page, url: string): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.article__title, .article-content', { timeout: 15000 })
+    await waitForRequiredDetailSelector(page, 'ticket', url, '.article__title, .article-content')
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const cleanMultiline = (value?: string | null) =>
@@ -1203,11 +1270,8 @@ async function extractTicketDetail(page: Page, url: string): Promise<WebsiteDeta
 
 async function extractRadioDetail(page: Page, url: string, listItem: WebsiteListItem): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    const hasDetail = await waitForOptionalSelector(page, '.radio__title, #modal-radio, #modal-movie', 15000)
-    if (!hasDetail) {
-        return buildFallbackDetailPayload(listItem, 'radio-detail-selector-timeout')
-    }
-    return page.evaluate((currentUrl) => {
+    await waitForRequiredDetailSelector(page, 'radio', url, '.radio__title, #modal-radio, #modal-movie')
+    const detail = await page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
@@ -1308,15 +1372,16 @@ async function extractRadioDetail(page: Page, url: string, listItem: WebsiteList
             },
         }
     }, url)
+    if (!Array.isArray(detail.extraData?.streams) || detail.extraData.streams.length === 0) {
+        throw new Error(`Website radio detail missing video stream for ${formatSafeWebsiteUrl(url)}; format may have changed`)
+    }
+    return detail
 }
 
 async function extractMovieDetail(page: Page, url: string, listItem: WebsiteListItem): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    const hasDetail = await waitForOptionalSelector(page, '.movie__title, .movie-player video', 15000)
-    if (!hasDetail) {
-        return buildFallbackDetailPayload(listItem, 'movie-detail-selector-timeout')
-    }
-    return page.evaluate((currentUrl) => {
+    await waitForRequiredDetailSelector(page, 'movie', url, '.movie__title, .movie-player video')
+    const detail = await page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
@@ -1403,11 +1468,15 @@ async function extractMovieDetail(page: Page, url: string, listItem: WebsiteList
             },
         }
     }, url)
+    if (!Array.isArray(detail.extraData?.streams) || detail.extraData.streams.length === 0) {
+        throw new Error(`Website movie detail missing video stream for ${formatSafeWebsiteUrl(url)}; format may have changed`)
+    }
+    return detail
 }
 
 async function extractLiveReportDetail(page: Page, url: string): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await page.waitForSelector('.regular-concert-content, .headline__text, .special .regular-concert', { timeout: 15000 })
+    await waitForRequiredDetailSelector(page, 'live-report', url, '.regular-concert-content, .headline__text, .special .regular-concert')
     return page.evaluate((currentUrl) => {
         const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         const cleanMultiline = (value?: string | null) =>
@@ -1600,7 +1669,7 @@ function extractDetailPayload(page: Page, feedConfig: FeedConfig, url: string, l
     switch (feedConfig.feed) {
         case 'official-news':
         case 'fc-news':
-            return extractNewsDetail(page, url)
+            return extractNewsDetail(page, url, feedConfig.feed)
         case 'official-blog':
             return extractBlogDetail(page, url)
         case 'ticket':
@@ -1711,7 +1780,7 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
         const crawlOptions = resolveWebsiteCrawlOptions(config)
         const effectiveCrawlOptions = {
             ...crawlOptions,
-            blockResourceTypes: resolveFeedResourceBlocking(feedConfig.feed, crawlOptions.blockResourceTypes),
+            blockResourceTypes: resolveWebsiteFeedResourceBlocking(feedConfig.feed, crawlOptions.blockResourceTypes),
         }
         await configureWebsiteResourceBlocking(page, effectiveCrawlOptions.blockResourceTypes)
 
