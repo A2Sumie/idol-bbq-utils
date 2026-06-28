@@ -29,6 +29,13 @@ interface BrowserRuntimeSession {
     userDataDir: string
 }
 
+/**
+ * How many times {@link BrowserSessionPool.createPage} relaunches a browser when opening a page
+ * fails because the pooled browser is dead (e.g. Chrome crashed or was OOM-killed). One relaunch is
+ * enough to recover from a stale handle without risking an infinite crash loop.
+ */
+const CREATE_PAGE_MAX_ATTEMPTS = 2
+
 function sanitizeSessionId(value?: string) {
     return (value || 'default').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'default'
 }
@@ -58,16 +65,43 @@ export class BrowserSessionPool {
             request.browser_mode || ((process.env.BROWSER_MODE as BrowserMode | undefined) ?? defaultBrowserMode)
         const sessionId = sanitizeSessionId(request.session_profile || request.device_profile || 'default')
         const sessionKey = `${sessionId}:${browserMode}`
-        const session = await this.getOrCreateSession(sessionKey, sessionId, browserMode, resolvedProfile)
-        const page = await session.browser.newPage()
-        await applyBrowserProfile(page, resolvedProfile.deviceProfile, {
-            userAgent: resolvedProfile.userAgent,
-            viewport: resolvedProfile.viewport,
-            extraHeaders: resolvedProfile.extraHeaders,
-            locale: resolvedProfile.locale,
-            timezone: resolvedProfile.timezone,
-        })
-        return page
+
+        let lastError: unknown
+        for (let attempt = 1; attempt <= CREATE_PAGE_MAX_ATTEMPTS; attempt += 1) {
+            const session = await this.getOrCreateSession(sessionKey, sessionId, browserMode, resolvedProfile)
+            let page: Page
+            try {
+                page = await session.browser.newPage()
+            } catch (error) {
+                // The pooled browser is most likely dead/disconnected (Chrome crashed or was killed).
+                // Evict the dead handle so the next attempt relaunches a fresh browser instead of
+                // repeatedly failing with "Protocol error: Connection closed." on every reuse.
+                lastError = error
+                await this.evictSession(sessionKey, session)
+                this.log?.warn(
+                    `Browser session ${sessionId} (${browserMode}) could not open a page on attempt ${attempt}/${CREATE_PAGE_MAX_ATTEMPTS}; recreating: ${error}`,
+                )
+                continue
+            }
+
+            try {
+                await applyBrowserProfile(page, resolvedProfile.deviceProfile, {
+                    userAgent: resolvedProfile.userAgent,
+                    viewport: resolvedProfile.viewport,
+                    extraHeaders: resolvedProfile.extraHeaders,
+                    locale: resolvedProfile.locale,
+                    timezone: resolvedProfile.timezone,
+                })
+            } catch (error) {
+                // The browser opened a page but profile setup failed. The browser itself is still
+                // usable, so close just this page and surface the error rather than evicting the pool.
+                await page.close().catch(() => null)
+                throw error
+            }
+            return page
+        }
+
+        throw lastError instanceof Error ? lastError : new Error(`Failed to create browser page: ${String(lastError)}`)
     }
 
     async closeAll() {
@@ -91,7 +125,13 @@ export class BrowserSessionPool {
     ) {
         const existing = this.sessions.get(sessionKey)
         if (existing) {
-            return existing
+            if (this.isSessionAlive(existing)) {
+                return existing
+            }
+            // A previously cached browser is no longer connected; drop it before relaunching so we
+            // never hand back a dead handle that would fail on the next newPage() call.
+            this.log?.warn(`Browser session ${sessionId} (${browserMode}) is no longer connected; recreating`)
+            await this.evictSession(sessionKey, existing)
         }
 
         const userDataDir = path.join(this.browserRoot, sessionId)
@@ -103,9 +143,35 @@ export class BrowserSessionPool {
             sessionId,
             userDataDir,
         }
+        // Self-heal the pool: if this browser crashes or disconnects later, remove it from the cache
+        // so the next request transparently relaunches a fresh browser. The identity check avoids
+        // evicting a replacement session that may already have taken this key.
+        browser.once('disconnected', () => {
+            if (this.sessions.get(sessionKey) === runtimeSession) {
+                this.sessions.delete(sessionKey)
+                this.log?.warn(`Browser session ${sessionId} (${browserMode}) disconnected; evicted from pool`)
+            }
+        })
         this.sessions.set(sessionKey, runtimeSession)
         this.log?.info(`Browser session ready: ${sessionId} (${browserMode})`)
         return runtimeSession
+    }
+
+    private isSessionAlive(session: BrowserRuntimeSession): boolean {
+        try {
+            return session.browser.connected
+        } catch {
+            return false
+        }
+    }
+
+    private async evictSession(sessionKey: string, session: BrowserRuntimeSession) {
+        if (this.sessions.get(sessionKey) === session) {
+            this.sessions.delete(sessionKey)
+        }
+        // Best-effort teardown of the (likely dead) browser to release its resources. Closing a
+        // browser whose connection is already gone can reject, so failures are intentionally ignored.
+        await session.browser.close().catch(() => null)
     }
 
     private async launchBrowser(
