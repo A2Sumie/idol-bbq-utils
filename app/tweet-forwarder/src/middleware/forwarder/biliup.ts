@@ -26,6 +26,7 @@ const MAX_BILIUP_TAG_CHARS = 20
 const MAX_BILIUP_TITLE_CHARS = 80
 const DEFAULT_BILIUP_TITLE_MIN_CHARS = 4
 const DEFAULT_BILIUP_TITLE_MAX_CHARS = 32
+const BILIUP_ORIGINAL_TITLE_LABEL = '原标题:'
 const BILIUP_COMMON_TAGS = ['22/7', '秋元康', '偶像', '声优偶像', '七分之二十二']
 const BILIUP_FALLBACK_TOPIC_TAGS = ['ナナニジ', '日本偶像', '声优', '日系偶像', '偶像团体', '二次元偶像']
 const BILIUP_FORBIDDEN_TITLE_TERMS = [
@@ -917,6 +918,30 @@ function resolveDescriptionBody(
     return stripLeadingYoutubeTitleAnnouncements(body, extractOriginalBiliupTitleLine(article), context.summary) || body
 }
 
+function prependOriginalBiliupTitle(description: string, originalTitle: string) {
+    const originalNormalized = normalizeBiliupMainTitleText(originalTitle, '')
+    if (!originalNormalized) {
+        return cleanupTemplateOutput(description)
+    }
+
+    const compactOriginal = compactComparableText(originalNormalized)
+    const lines = cleanupTemplateOutput(description)
+        .split('\n')
+        .filter((line) => !line.trim().startsWith(BILIUP_ORIGINAL_TITLE_LABEL))
+    while (lines[0] !== undefined && !lines[0]!.trim()) {
+        lines.shift()
+    }
+    if (compactOriginal && compactComparableText(lines[0] || '') === compactOriginal) {
+        lines.shift()
+        while (lines[0] !== undefined && !lines[0]!.trim()) {
+            lines.shift()
+        }
+    }
+
+    const body = cleanupTemplateOutput(lines.join('\n'))
+    return cleanupTemplateOutput([`${BILIUP_ORIGINAL_TITLE_LABEL} ${originalNormalized}`, body].filter(Boolean).join('\n\n'))
+}
+
 function deriveDescription(
     article: Pick<Article, 'content' | 'platform' | 'username' | 'u_id' | 'a_id' | 'created_at' | 'url' | 'type'> & {
         translation?: string | null
@@ -926,8 +951,9 @@ function deriveDescription(
     template?: string,
 ) {
     const context = buildTemplateContext(article, texts, timeZone)
+    const originalTitle = isYoutubeLongVideo(article) ? extractOriginalBiliupTitleLine(article) : ''
     if (template) {
-        return cleanupTemplateOutput(renderTemplate(template, context))
+        return prependOriginalBiliupTitle(renderTemplate(template, context), originalTitle)
     }
 
     const body = resolveDescriptionBody(article, context)
@@ -939,7 +965,7 @@ function deriveDescription(
         `发布时间: ${context.datetime}`,
         context.url ? `原链接: ${context.url}` : '',
     ]
-    return cleanupTemplateOutput(sections.filter(Boolean).join('\n'))
+    return prependOriginalBiliupTitle(sections.filter(Boolean).join('\n'), originalTitle)
 }
 
 function sanitizeFileStem(value: string, fallback: string) {
@@ -1298,71 +1324,16 @@ function normalizeGeneratedBiliupTitle(
     return strippedTitle
 }
 
-function appendOriginalPayloadToGeneratedTitle(generatedTitle: string, originalTitle: string) {
-    const originalPayload = normalizeBiliupMainTitleText(originalTitle, '')
-    if (!originalPayload) {
-        return generatedTitle
-    }
-
-    const compactGenerated = compactComparableText(generatedTitle)
-    const compactOriginal = compactComparableText(originalPayload)
-    if (!compactOriginal || compactGenerated.includes(compactOriginal) || compactOriginal.includes(compactGenerated)) {
-        return generatedTitle
-    }
-    return `${generatedTitle} | ${originalPayload}`
-}
-
-function buildGeneratedBiliupTitlePayload(generatedTitle: string, originalTitle: string, maxChars: number) {
-    const combined = appendOriginalPayloadToGeneratedTitle(generatedTitle, originalTitle)
-    if (Array.from(combined).length <= maxChars) {
-        return combined
-    }
-
-    const originalPayload = normalizeBiliupMainTitleText(originalTitle, '')
-    if (!originalPayload || combined === generatedTitle) {
-        return truncateText(generatedTitle, maxChars)
-    }
-
-    const separator = ' | '
-    const originalChars = Array.from(originalPayload)
-    const minOriginalLength = Math.min(originalChars.length, 24)
-    const generatedLimit = Math.max(4, maxChars - Array.from(separator).length - minOriginalLength)
-    const fittedGenerated = truncateText(generatedTitle, generatedLimit)
-    const originalLimit = maxChars - Array.from(fittedGenerated).length - Array.from(separator).length
-    if (originalLimit >= 4) {
-        return `${fittedGenerated}${separator}${truncateText(originalPayload, originalLimit)}`
-    }
-    return truncateText(combined, maxChars)
+function buildGeneratedBiliupTitlePayload(generatedTitle: string, maxChars: number) {
+    return truncateText(generatedTitle, maxChars)
 }
 
 function replaceBiliupTitlePayloadWithGeneratedChinese(
     candidate: BiliupUploadCandidate,
     titleZh: string | undefined,
-    originalTitle?: string,
+    _originalTitle?: string,
     bounds?: { minChars?: number; maxChars?: number },
 ) {
-    // Preserve the source title as a description-level reference anchor whenever the generated Chinese title
-    // replaces it and the original would otherwise be lost (truncated or dropped from the bounded title).
-    // Skip when the original is already fully visible in the title or description so we never duplicate it.
-    function appendOriginalTitleReferenceToDescription(target: BiliupUploadCandidate, original?: string) {
-        const originalNormalized = normalizeBiliupMainTitleText(original, '')
-        if (!originalNormalized) {
-            return
-        }
-        const compactOriginal = compactComparableText(originalNormalized)
-        if (!compactOriginal) {
-            return
-        }
-        const compactTitle = compactComparableText(target.title)
-        const compactDescription = compactComparableText(target.description)
-        if (compactTitle.includes(compactOriginal) || compactDescription.includes(compactOriginal)) {
-            return
-        }
-        target.description = cleanupTemplateOutput(
-            [target.description, `原标题: ${originalNormalized}`].filter(Boolean).join('\n'),
-        )
-    }
-
     const currentTitle = normalizeBiliupMainTitleText(candidate.title, candidate.title)
     const generatedTitle = normalizeGeneratedBiliupTitle(titleZh, currentTitle, bounds)
     if (!generatedTitle) {
@@ -1371,11 +1342,8 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(
 
     const structuredMatch = currentTitle.match(/^(【[^】]+】(?:\[[^\]]+\])?\s*)(.+)$/)
     const fixedPrefix = structuredMatch?.[1] || ''
-    const currentPayload = structuredMatch?.[2] || currentTitle
-    const originalPayload = normalizeBiliupMainTitleText(originalTitle, '') || currentPayload
     if (!fixedPrefix) {
-        candidate.title = buildGeneratedBiliupTitlePayload(generatedTitle, originalPayload, MAX_BILIUP_TITLE_CHARS)
-        appendOriginalTitleReferenceToDescription(candidate, originalTitle)
+        candidate.title = buildGeneratedBiliupTitlePayload(generatedTitle, MAX_BILIUP_TITLE_CHARS)
         return true
     }
 
@@ -1383,8 +1351,7 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(
     if (availableTitleLength < 4) {
         return false
     }
-    candidate.title = `${fixedPrefix}${buildGeneratedBiliupTitlePayload(generatedTitle, originalPayload, availableTitleLength)}`
-    appendOriginalTitleReferenceToDescription(candidate, originalTitle)
+    candidate.title = `${fixedPrefix}${buildGeneratedBiliupTitlePayload(generatedTitle, availableTitleLength)}`
     return true
 }
 
@@ -1433,7 +1400,7 @@ function buildBiliupMetadataGenerationPrompt(
             '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
             '输入JSON中的title_candidates和evidence是标题依据；优先使用source=translation_first_line/original_first_line/detected_member_facts的高置信事实。',
             `title_zh应为${titleMinChars}到${titleMaxChars}个中文字符，基于原文事实，不夸张、不偏颇、不脑补；信息不足则返回空字符串。`,
-            'title_zh会放在固定账号/来源前缀之后，并与原标题用分隔符组合；不要重复账号名、平台名、日期、原标题或搬运属性词。',
+            'title_zh会放在固定账号/来源前缀之后作为主标题；原标题会单独放进简介，不要重复账号名、平台名、日期、原标题或搬运属性词。',
         ].join('\n')
     )
 }

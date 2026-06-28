@@ -129,7 +129,8 @@ test('completeBiliupUploadCandidateTags formats official YouTube long video meta
         expect(candidate).toBeTruthy()
         expect(candidate?.title).toBe(`【22/7 北原実咲】${translationTitle}`)
         expect(candidate?.title).not.toContain('[YT]')
-        expect(candidate?.description.split('\n')[0]).toBe('22/7三期生定期公演「ナナニジライブ2026」Final 确定举办！')
+        expect(candidate?.description.split('\n')[0]).toBe(`原标题: ${originalTitle}`)
+        expect(candidate?.description).toContain('22/7三期生定期公演「ナナニジライブ2026」Final 确定举办！')
         expect(candidate?.description).toContain('来源平台: YouTube视频')
 
         await completeBiliupUploadCandidateTags(article, [], candidate!)
@@ -162,7 +163,7 @@ test('completeBiliupUploadCandidateTags formats official YouTube long video meta
         translation_first_line: translationTitle,
         original_first_line: originalTitle,
     })
-    expect(candidate?.title).toBe(`【22/7 北原実咲】${generatedTitle} | ${originalTitle}`)
+    expect(candidate?.title).toBe(`【22/7 北原実咲】${generatedTitle}`)
     expect(candidate?.title).not.toContain('[YT]')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
@@ -274,7 +275,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     expect(candidate?.config.tags).not.toContain('TikTok')
 })
 
-test('completeBiliupUploadCandidateTags replaces title payload and appends original text', async () => {
+test('completeBiliupUploadCandidateTags replaces title payload without appending original text', async () => {
     const originalCreate = (processorRegistry as any).create
     const calls: Array<{ provider: string; text: string }> = []
     ;(processorRegistry as any).create = async (provider: string) => ({
@@ -359,7 +360,7 @@ test('completeBiliupUploadCandidateTags replaces title payload and appends origi
         source_url: 'https://x.com/kitahara_misaki/status/1',
         original_first_line: '今日は配信ありがとうございました',
     })
-    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 直播后的感谢 | 今日は配信ありがとうございました')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 直播后的感谢')
     expect(candidate?.title).not.toContain('26.06.13 今日は')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
