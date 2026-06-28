@@ -830,6 +830,16 @@ function isYoutubeLongVideo(article: Pick<Article, 'platform' | 'type'>) {
     return article.platform === Platform.YouTube && article.type !== 'shorts'
 }
 
+/**
+ * Video sources that carry a genuine creator-authored title (YouTube videos and Shorts).
+ * For these we keep the original title as a leading `原标题:` line in the description rather than
+ * cramming it into the generated Chinese title. Social captions (X/Instagram/TikTok) and website
+ * articles are excluded: their first line is body/caption text, not a real title.
+ */
+function hasOriginalVideoTitle(article: Pick<Article, 'platform'>) {
+    return article.platform === Platform.YouTube
+}
+
 function resolveDefaultTitleTemplate(article: Pick<Article, 'platform' | 'type'>) {
     if (isYoutubeLongVideo(article)) {
         return '【{{account_title}}】{{upload_summary}}'
@@ -912,7 +922,7 @@ function resolveDescriptionBody(
     context: TemplateContext,
 ) {
     const body = context.body_or_summary
-    if (!isYoutubeLongVideo(article)) {
+    if (!hasOriginalVideoTitle(article)) {
         return body
     }
     return stripLeadingYoutubeTitleAnnouncements(body, extractOriginalBiliupTitleLine(article), context.summary) || body
@@ -951,7 +961,7 @@ function deriveDescription(
     template?: string,
 ) {
     const context = buildTemplateContext(article, texts, timeZone)
-    const originalTitle = isYoutubeLongVideo(article) ? extractOriginalBiliupTitleLine(article) : ''
+    const originalTitle = hasOriginalVideoTitle(article) ? extractOriginalBiliupTitleLine(article) : ''
     if (template) {
         return prependOriginalBiliupTitle(renderTemplate(template, context), originalTitle)
     }

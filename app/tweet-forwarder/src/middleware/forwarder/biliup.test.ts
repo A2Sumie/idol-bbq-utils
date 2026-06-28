@@ -47,6 +47,36 @@ test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', (
     expect(candidate?.config.tags).not.toContain('长视频')
 })
 
+test('buildBiliupUploadCandidate keeps YouTube Shorts original title at description top', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.YouTube,
+            type: 'shorts',
+            u_id: '22_7_channel',
+            username: '22/7 official',
+            a_id: 'yt-short-abc',
+            content: 'ショート動画の原題\n\nショートの説明文',
+            translation: '短视频中文标题\n\n短视频说明',
+            created_at: 1710900000,
+            url: 'https://www.youtube.com/shorts/yt-short-abc',
+        } as any,
+        [],
+        [
+            { media_type: 'video_thumbnail', path: '/tmp/short-cover.jpg' },
+            { media_type: 'video', path: '/tmp/short-video.mp4' },
+        ],
+        {
+            enabled: true,
+        },
+    )
+
+    expect(candidate).toBeTruthy()
+    expect(candidate?.title).toBe('【22/7】[YT] 短视频中文标题')
+    expect(candidate?.description.split('\n')[0]).toBe('原标题: ショート動画の原題')
+    expect(candidate?.description).toContain('短视频说明')
+    expect(candidate?.description).not.toContain('\nショート動画の原題\n')
+})
+
 test('buildBiliupUploadCandidate prefers stored translations for YouTube upload titles', () => {
     const candidate = buildBiliupUploadCandidate(
         {
