@@ -152,6 +152,23 @@ namespace DB {
             })
         }
 
+        export async function findByUrl(url: string): Promise<ArticleWithId | undefined> {
+            const trimmed = String(url || '').trim()
+            if (!trimmed) {
+                return undefined
+            }
+            for (const { platform, delegate } of getDelegates()) {
+                const found = await delegate.findFirst({
+                    where: { url: trimmed },
+                    orderBy: { created_at: 'desc' },
+                })
+                if (found) {
+                    return { ...found, platform } as unknown as ArticleWithId
+                }
+            }
+            return undefined
+        }
+
         export async function getSingleArticle(id: number, platform: Platform) {
             const delegate = getDelegate(platform)
             const article = await delegate.findUnique({

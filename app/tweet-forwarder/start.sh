@@ -173,6 +173,19 @@ recover_sqlite_db_if_needed() {
         printf 'corrupt_copy=%s\n' "$recovery_corrupt_base"
         printf 'build_commit=%s\n' "${IDOL_BBQ_BUILD_COMMIT:-unknown}"
     } > "$recovery_corrupt_base.manifest"
+
+    # Emit a one-time marker so the app can reconcile external send state (e.g. read the
+    # Bilibili submission list) after a restore that may have lost recent sent markers.
+    recovery_marker="${IDOL_BBQ_DB_RECOVERY_MARKER:-/tmp/tweet-forwarder/db-recovered.json}"
+    mkdir -p "$(dirname "$recovery_marker")"
+    {
+        printf '{'
+        printf '"recovered_at":"%s",' "$recovery_timestamp"
+        printf '"source_backup":"%s",' "$recovery_latest_backup"
+        printf '"corrupt_copy":"%s"' "$recovery_corrupt_base"
+        printf '}\n'
+    } > "$recovery_marker"
+
     echo "Restored SQLite database from backup: $recovery_latest_backup" >&2
 }
 

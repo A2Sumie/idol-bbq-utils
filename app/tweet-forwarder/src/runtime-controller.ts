@@ -18,6 +18,7 @@ import {
 import { startMediaCacheCleanupJob, type MediaCacheCleanupJob } from './services/media-cache-service'
 import { buildRouteGraph } from './services/route-graph-service'
 import { buildRuntimeManifest } from './services/runtime-manifest-service'
+import { reconcileBilibiliSubmissionsAfterDbRecovery } from './services/bilibili-recovery-reconciliation-service'
 
 interface RuntimeSnapshot {
     mode: RuntimeMode
@@ -95,6 +96,13 @@ export class RuntimeController {
             this.log.warn('Runtime mode api-only: media cache cleanup and all dispatch/send workers are disabled')
         }
         const config = parseConfigOrThrow(this.configPath)
+        if (this.runtimeMode === 'online') {
+            await reconcileBilibiliSubmissionsAfterDbRecovery(config, this.log).catch((error) => {
+                this.log.warn(
+                    `Bilibili recovery reconciliation failed: ${error instanceof Error ? error.message : String(error)}`,
+                )
+            })
+        }
         this.runtime = await this.createRuntime(config)
         this.startedAt = Date.now()
         this.lastReloadedAt = this.startedAt
