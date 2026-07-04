@@ -44,15 +44,13 @@ trap cleanup EXIT
 trap terminate INT TERM
 
 sqlite_quick_check() {
-    db_path="$1"
-python3 - "$db_path" <<'PY'
+    quick_check_db_path="$1"
+python3 - "$quick_check_db_path" <<'PY'
 import sqlite3
 import sys
-from urllib.request import pathname2url
 
 db_path = sys.argv[1]
-db_uri = "file:" + pathname2url(db_path) + "?mode=ro"
-connection = sqlite3.connect(db_uri, uri=True)
+connection = sqlite3.connect(db_path)
 try:
     result = connection.execute("PRAGMA quick_check").fetchone()
 finally:
@@ -64,9 +62,9 @@ PY
 }
 
 sqlite_backup() {
-    source_path="$1"
-    backup_path="$2"
-    python3 - "$source_path" "$backup_path" <<'PY'
+    backup_source_path="$1"
+    backup_target_path="$2"
+    python3 - "$backup_source_path" "$backup_target_path" <<'PY'
 import sqlite3
 import sys
 from urllib.request import pathname2url
@@ -89,8 +87,8 @@ resolve_sqlite_db_path() {
     database_url="${DATABASE_URL:-file:/app/data.db}"
     case "$database_url" in
         file:*)
-            db_path="${database_url#file:}"
-            db_path="${db_path%%\?*}"
+            resolved_db_path="${database_url#file:}"
+            resolved_db_path="${resolved_db_path%%\?*}"
             ;;
         *)
             echo "Unsupported DATABASE_URL for migration backup: $database_url" >&2
@@ -98,27 +96,27 @@ resolve_sqlite_db_path() {
             ;;
     esac
 
-    if [ -z "$db_path" ]; then
+    if [ -z "$resolved_db_path" ]; then
         echo "DATABASE_URL does not contain a SQLite file path." >&2
         exit 65
     fi
-    printf '%s\n' "$db_path"
+    printf '%s\n' "$resolved_db_path"
 }
 
 prepare_migration_backup() {
-    db_path="$1"
-    if [ -d "$db_path" ]; then
-        echo "Database path is a directory, refusing migration: $db_path" >&2
+    migration_db_path="$1"
+    if [ -d "$migration_db_path" ]; then
+        echo "Database path is a directory, refusing migration: $migration_db_path" >&2
         exit 65
     fi
 
-    if [ ! -f "$db_path" ]; then
+    if [ ! -f "$migration_db_path" ]; then
         if [ "${IDOL_BBQ_REQUIRE_EXISTING_DB_FOR_MIGRATION:-1}" = "1" ]; then
-            echo "Database file is missing, refusing migration: $db_path" >&2
+            echo "Database file is missing, refusing migration: $migration_db_path" >&2
             echo "Set IDOL_BBQ_REQUIRE_EXISTING_DB_FOR_MIGRATION=0 only for a deliberate first-run database." >&2
             exit 65
         fi
-        echo "Database file is missing; migration backup skipped by explicit first-run override: $db_path" >&2
+        echo "Database file is missing; migration backup skipped by explicit first-run override: $migration_db_path" >&2
         return
     fi
 
@@ -136,24 +134,24 @@ prepare_migration_backup() {
         exit 75
     fi
 
-    sqlite_quick_check "$db_path"
+    sqlite_quick_check "$migration_db_path"
 
     timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
     build_commit="${IDOL_BBQ_BUILD_COMMIT:-unknown}"
     backup_base="$backup_dir/refactor.db.$timestamp.$build_commit"
     echo "Creating migration backup: $backup_base"
-    sqlite_backup "$db_path" "$backup_base"
+    sqlite_backup "$migration_db_path" "$backup_base"
     sqlite_quick_check "$backup_base"
     for suffix in -wal -shm; do
-        if [ -f "$db_path$suffix" ]; then
-            cp -p "$db_path$suffix" "$backup_base$suffix"
+        if [ -f "$migration_db_path$suffix" ]; then
+            cp -p "$migration_db_path$suffix" "$backup_base$suffix"
         fi
     done
 
     {
         printf 'created_at=%s\n' "$timestamp"
         printf 'build_commit=%s\n' "$build_commit"
-        printf 'database_path=%s\n' "$db_path"
+        printf 'database_path=%s\n' "$migration_db_path"
         printf 'database_url=%s\n' "${DATABASE_URL:-file:/app/data.db}"
         printf 'backup_method=%s\n' "sqlite_backup_api"
         printf 'migration_head=%s\n' "$(find /app/prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort | tail -1)"
