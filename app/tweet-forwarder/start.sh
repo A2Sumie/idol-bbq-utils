@@ -83,6 +83,99 @@ finally:
 PY
 }
 
+find_latest_healthy_sqlite_backup() {
+    healthy_backup_dir="$1"
+    python3 - "$healthy_backup_dir" <<'PY'
+import sqlite3
+import sys
+from pathlib import Path
+
+backup_dir = Path(sys.argv[1])
+if not backup_dir.is_dir():
+    raise SystemExit(1)
+
+candidates = [
+    path for path in backup_dir.iterdir()
+    if path.is_file()
+    and path.name.startswith('refactor.db.')
+    and not path.name.endswith(('.manifest', '-wal', '-shm'))
+]
+candidates.sort(key=lambda path: (path.stat().st_mtime, path.name), reverse=True)
+
+for path in candidates:
+    try:
+        connection = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+        try:
+            result = connection.execute('PRAGMA quick_check').fetchone()
+        finally:
+            connection.close()
+    except Exception:
+        continue
+    if result and result[0] == 'ok':
+        print(path)
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}
+
+recover_sqlite_db_if_needed() {
+    recovery_db_path="$1"
+    recovery_backup_dir="$2"
+
+    if [ ! -f "$recovery_db_path" ]; then
+        return 0
+    fi
+
+    if sqlite_quick_check "$recovery_db_path"; then
+        return 0
+    fi
+    recovery_check_status=$?
+
+    if [ "${IDOL_BBQ_AUTO_RESTORE_DB_BACKUP:-1}" != "1" ]; then
+        echo "SQLite quick_check failed and automatic backup restore is disabled: $recovery_db_path" >&2
+        return "$recovery_check_status"
+    fi
+
+    echo "SQLite quick_check failed for $recovery_db_path; attempting automatic restore from backups." >&2
+    recovery_latest_backup="$(find_latest_healthy_sqlite_backup "$recovery_backup_dir")" || {
+        echo "No healthy SQLite backup found in $recovery_backup_dir; refusing startup." >&2
+        return "$recovery_check_status"
+    }
+
+    recovery_dir="${IDOL_BBQ_DB_RECOVERY_DIR:-/app/backups/db-recovery}"
+    mkdir -p "$recovery_dir"
+    recovery_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    recovery_corrupt_base="$recovery_dir/refactor.db.$recovery_timestamp.corrupt"
+
+    cp -p "$recovery_db_path" "$recovery_corrupt_base"
+    for suffix in -wal -shm; do
+        if [ -f "$recovery_db_path$suffix" ]; then
+            cp -p "$recovery_db_path$suffix" "$recovery_corrupt_base$suffix"
+            rm -f "$recovery_db_path$suffix"
+        fi
+    done
+
+    cp "$recovery_latest_backup" "$recovery_db_path"
+    for suffix in -wal -shm; do
+        if [ -f "$recovery_latest_backup$suffix" ]; then
+            cp "$recovery_latest_backup$suffix" "$recovery_db_path$suffix"
+        else
+            rm -f "$recovery_db_path$suffix"
+        fi
+    done
+
+    sqlite_quick_check "$recovery_db_path"
+    {
+        printf 'recovered_at=%s\n' "$recovery_timestamp"
+        printf 'database_path=%s\n' "$recovery_db_path"
+        printf 'source_backup=%s\n' "$recovery_latest_backup"
+        printf 'corrupt_copy=%s\n' "$recovery_corrupt_base"
+        printf 'build_commit=%s\n' "${IDOL_BBQ_BUILD_COMMIT:-unknown}"
+    } > "$recovery_corrupt_base.manifest"
+    echo "Restored SQLite database from backup: $recovery_latest_backup" >&2
+}
+
 resolve_sqlite_db_path() {
     database_url="${DATABASE_URL:-file:/app/data.db}"
     case "$database_url" in
@@ -267,12 +360,17 @@ if [ "$run_migrations" = "1" ]; then
         exit 65
     fi
     db_path="$(resolve_sqlite_db_path)"
+    migration_backup_dir="${IDOL_BBQ_DB_BACKUP_DIR:-/app/backups/db-migrations}"
+    recover_sqlite_db_if_needed "$db_path" "$migration_backup_dir"
     prepare_migration_backup "$db_path"
     echo "Migrating database..."
     # Use the installed prisma CLI
     bunx prisma migrate deploy
     if [ -f "$db_path" ]; then
-        sqlite_quick_check "$db_path"
+        if ! sqlite_quick_check "$db_path"; then
+            recover_sqlite_db_if_needed "$db_path" "$migration_backup_dir"
+            sqlite_quick_check "$db_path"
+        fi
     fi
     release_migration_lock
 else
