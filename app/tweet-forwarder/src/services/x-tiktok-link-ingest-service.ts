@@ -219,7 +219,7 @@ async function enqueueMissingTikTokLinksFromXArticle(article: Article, options: 
         const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
         const payload = {
             crawler: crawlerName,
-            websites: [resolved.profileUrl],
+            websites: [resolved.videoId ? resolved.resolvedUrl : resolved.profileUrl],
             reason: `x tiktok link ${article.a_id || article.id || ''}`.trim().slice(0, 200),
         }
         const task = await DB.TaskQueue.add(taskType, payload, now, {

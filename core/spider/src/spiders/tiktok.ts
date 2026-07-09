@@ -17,7 +17,7 @@ enum ArticleTypeEnum {
 
 class TiktokSpider extends BaseSpider {
     // extends from XBaseSpider regex
-    static _VALID_URL = /^(https:\/\/)?(www\.)?tiktok\.com\/@(?<id>[A-Za-z0-9._]+)\/?(?:\?.*)?$/i
+    static _VALID_URL = /^(https:\/\/)?(www\.)?tiktok\.com\/@(?<id>[A-Za-z0-9._]+)(?:\/video\/(?<videoId>\d+)\/?)?(?:\?.*)?$/i
     static _PLATFORM = Platform.TikTok
     BASE_URL: string = 'https://www.tiktok.com/'
     NAME: string = 'Tiktok Generic Spider'
@@ -49,14 +49,17 @@ class TiktokSpider extends BaseSpider {
             device_id = TiktokApiJsonParser.randomDeviceId().toString()
             this.cache.set('device_id', device_id, this.expire)
         }
-        const { id } = result
+        const { id, videoId } = result
         const _url = `${this.BASE_URL}@${id}`
+        const videoUrl = videoId ? `${_url}/video/${videoId}/` : null
         const cookieString =
             config.cookieString || (page ? getCookieString(await page.browserContext().cookies()) : undefined)
         const { task_type } = config
         if (task_type === 'article') {
-            this.log?.info('Trying to grab posts.')
-            const res = await TiktokApiJsonParser.grabPosts(_url, random_hex7, Number(device_id), page, cookieString)
+            this.log?.info(videoUrl ? 'Trying to grab video.' : 'Trying to grab posts.')
+            const res = videoUrl
+                ? await TiktokApiJsonParser.grabVideo(videoUrl, page, cookieString)
+                : await TiktokApiJsonParser.grabPosts(_url, random_hex7, Number(device_id), page, cookieString)
             return res as TaskTypeResult<T, Platform.TikTok>
         }
 
@@ -238,6 +241,36 @@ namespace TiktokApiJsonParser {
         return items.map(postParser).filter((item: GenericArticle<Platform.TikTok>) => item.a_id && item.u_id)
     }
 
+    function normalizeHandle(value?: string | null) {
+        return String(value || '')
+            .trim()
+            .replace(/^@+/, '')
+            .toLowerCase()
+    }
+
+    function findUserInfoForHandle(json: any, handle: string) {
+        const target = normalizeHandle(handle)
+        const candidates = JSONPath({
+            path: '$..userInfo',
+            json,
+            resultType: 'value',
+        }) as Array<any>
+        return (
+            candidates.find((candidate) => normalizeHandle(candidate?.user?.uniqueId || candidate?.user?.username) === target) ||
+            null
+        )
+    }
+
+    function universalScope(json: any) {
+        return json?.__DEFAULT_SCOPE__ || json
+    }
+
+    export function videoParser(json: any): Array<GenericArticle<Platform.TikTok>> {
+        const scope = universalScope(json)
+        const item = scope?.['webapp.video-detail']?.itemInfo?.itemStruct || json?.itemInfo?.itemStruct || json?.itemStruct
+        return item ? postsParser({ itemList: [item] }) : []
+    }
+
     export function followsParser(json: any): GenericFollows {
         if (!json) {
             throw new Error('Profile format may have changed')
@@ -343,12 +376,15 @@ namespace TiktokApiJsonParser {
          */
         // ref: https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py
         const content = await loadUniversalData(url, page, cookieString)
-        const sec_uid = JSONPath({
-            path: "$..['webapp.user-detail'].userInfo.user.secUid",
-            json: JSON.parse(content),
-            resultType: 'value',
-        })
-        const query_obj = _build_web_query(sec_uid[0], Date.now(), device_id, random_hex7)
+        const universalData = JSON.parse(content)
+        const handle = url.match(/\/\@([^/?]+)/)?.[1] || ''
+        const userInfo = findUserInfoForHandle(universalData, handle)
+        const pagePosts = postsParser({ itemList: userInfo?.itemList || [] })
+        const secUid = userInfo?.user?.secUid
+        if (!secUid) {
+            return pagePosts
+        }
+        const query_obj = _build_web_query(secUid, Date.now(), device_id, random_hex7)
         // @ts-ignore
         const query = new URLSearchParams(query_obj)
         const res = await HTTPClient.download_webpage(
@@ -358,6 +394,15 @@ namespace TiktokApiJsonParser {
         )
         const json = await res.json()
         return postsParser(json)
+    }
+
+    export async function grabVideo(
+        url: string,
+        page?: Page,
+        cookieString?: string,
+    ): Promise<Array<GenericArticle<Platform.TikTok>>> {
+        const content = await loadUniversalData(url, page, cookieString)
+        return videoParser(JSON.parse(content))
     }
 
     export async function grabFollowsNumber(

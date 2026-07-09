@@ -90,7 +90,7 @@ test('enqueueMissingTikTokLinksFromXArticle queues missing TikTok profile crawl 
             type: DB.TaskQueue.TYPE.ScheduledCrawlerRun,
             payload: {
                 crawler: 'Tiktok抓取',
-                websites: ['https://www.tiktok.com/@tabesugiyaseruzo'],
+                websites: ['https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085'],
                 reason: 'x tiktok link 2068685300046700614',
             },
             executeAt: 1782048000,

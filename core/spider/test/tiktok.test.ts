@@ -31,7 +31,9 @@ test('TikTok Spider URL Validation supports dotted handles', async () => {
         const match = spider._match_valid_url(url, TiktokSpider)
         expect(match?.groups?.id).toBe('nananiji.official')
     }
-    expect(spiderRegistry.findByUrl('https://www.tiktok.com/@nananiji.official/video/123')).toBeNull()
+    const videoMatch = plugin?.create()._match_valid_url('https://www.tiktok.com/@nananiji.official/video/123', TiktokSpider)
+    expect(videoMatch?.groups?.id).toBe('nananiji.official')
+    expect(videoMatch?.groups?.videoId).toBe('123')
 })
 
 test('TikTok Spider URL Extraction', () => {
@@ -156,6 +158,37 @@ test('TikTok API JSON Parser normalizes structured media urls', () => {
             { type: 'video_thumbnail', url: 'https://example.com/cover.jpg&format=webp' },
             { type: 'video', url: 'https://example.com/video-high.mp4' },
         ],
+    })
+})
+
+test('TikTok API JSON Parser extracts single video detail pages', () => {
+    const posts = TiktokApiJsonParser.videoParser({
+        __DEFAULT_SCOPE__: {
+            'webapp.video-detail': {
+                itemInfo: {
+                    itemStruct: {
+                        id: '7660143895505947924',
+                        createTime: 1783516238,
+                        desc: 'Single video page',
+                        author: {
+                            uniqueId: '227official',
+                            nickname: '22/7',
+                        },
+                        video: {
+                            cover: 'https://example.com/cover.jpg',
+                            playAddr: 'https://example.com/video.mp4',
+                        },
+                    },
+                },
+            },
+        },
+    })
+
+    expect(posts).toHaveLength(1)
+    expect(posts[0]).toMatchObject({
+        a_id: '7660143895505947924',
+        u_id: '227official',
+        url: 'https://www.tiktok.com/@227official/video/7660143895505947924/',
     })
 })
 
