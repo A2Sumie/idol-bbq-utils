@@ -1,6 +1,7 @@
 import type { BrowserMode, DeviceProfile, ProfileViewport } from '@idol-bbq-utils/spider'
 import type { CrawlEngine, TaskType } from '@idol-bbq-utils/spider/types'
 import type { CommonCfgConfig } from './common'
+import type { BiliupVideoUploadConfig } from './forwarder'
 import type { Processor } from './processor'
 
 interface AggregationConfig {
@@ -32,6 +33,23 @@ interface XYouTubeLinkIngestConfig {
     crawler?: string
 }
 
+interface InstagramLiveArchiveConfig {
+    enabled?: boolean
+    root_dir?: string
+    ffmpeg_path?: string
+    extension?: 'mp4' | 'mkv' | 'ts'
+    max_duration_seconds?: number
+    min_publish_duration_seconds?: number
+    stop_at?: string
+}
+
+interface InstagramLivePublishConfig {
+    enabled?: boolean
+    sessdata?: string
+    bili_jct?: string
+    video_upload?: BiliupVideoUploadConfig
+}
+
 interface LiveRelayTargetConfig {
     enabled?: boolean
     player_id?: string
@@ -44,6 +62,10 @@ interface LiveRelayTargetConfig {
     sync_interval_seconds?: number
     post_live_grace_seconds?: number
     stop_offline?: boolean
+    relay_enabled?: boolean
+    only?: boolean
+    archive?: InstagramLiveArchiveConfig
+    publish?: InstagramLivePublishConfig
 }
 
 interface LiveRelayConfig extends LiveRelayTargetConfig {
@@ -234,6 +256,8 @@ export type {
     CrawlerConfig,
     AggregationConfig,
     CrawlerPostProcessorConfig,
+    InstagramLiveArchiveConfig,
+    InstagramLivePublishConfig,
     LiveRelayConfig,
     LiveRelayTargetConfig,
 }

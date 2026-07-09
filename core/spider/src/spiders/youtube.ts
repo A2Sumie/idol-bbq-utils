@@ -91,6 +91,8 @@ namespace YoutubeApiJsonParser {
         title: string | null
         description: string | null
         thumbnail: string | null
+        is_premiere_pending: boolean
+        scheduled_start_at: number | null
     }
 
     interface GrabArticlesOptions {
@@ -218,7 +220,7 @@ namespace YoutubeApiJsonParser {
             return null
         }
         if (parts.length === 2 && parts[0] === parts[1]) {
-            return parts[0]
+            return parts[0] || null
         }
         return parts.join('\n\n') || null
     }
@@ -231,6 +233,33 @@ namespace YoutubeApiJsonParser {
             type: 'video_thumbnail',
             url,
         }]
+    }
+
+    function isPremierePlaceholderTitle(value?: string | null) {
+        const normalized = String(value || '')
+            .trim()
+            .replace(/[.。…!！\s]+$/g, '')
+        return /^(coming soon|premiere|premiering soon|upcoming)$/i.test(normalized)
+    }
+
+    function buildPremiereExtra(detail: Pick<YoutubeDetail, 'is_premiere_pending' | 'scheduled_start_at'>): any {
+        if (!detail.is_premiere_pending && !detail.scheduled_start_at) {
+            return null
+        }
+        return {
+            data: {
+                premiere: {
+                    pending: detail.is_premiere_pending,
+                    scheduled_start_at: detail.scheduled_start_at,
+                    resolved_at: detail.is_premiere_pending ? null : dayjs().unix(),
+                },
+            },
+        }
+    }
+
+    function isPremierePendingArticle(article: YoutubeArticle) {
+        const extra = article.extra?.data as any
+        return Boolean(extra?.premiere?.pending) || isPremierePlaceholderTitle(article.content?.split('\n')[0])
     }
 
     function firstString(values: Array<unknown>): string {
@@ -430,12 +459,23 @@ namespace YoutubeApiJsonParser {
         const thumbnail = pickLargestThumbnail(microformat?.thumbnail?.thumbnails)
             || pickLargestThumbnail(videoDetails?.thumbnail?.thumbnails)
         const publishedAt = microformat?.publishDate || microformat?.uploadDate
-        const created_at = publishedAt ? dayjs(publishedAt).unix() : 0
+        const liveDetails = microformat?.liveBroadcastDetails || initialPlayerResponse?.playabilityStatus?.liveStreamability?.liveStreamabilityRenderer
+        const scheduledStartText = liveDetails?.startTimestamp || liveDetails?.offlineSlate?.liveStreamOfflineSlateRenderer?.scheduledStartTime
+        const scheduled_start_at = scheduledStartText ? dayjs(scheduledStartText).unix() || null : null
+        const title = videoDetails?.title || textParser(microformat?.title)
+        const playabilityStatus = String(initialPlayerResponse?.playabilityStatus?.status || '')
+        const isUpcoming = Boolean(videoDetails?.isUpcoming)
+            || playabilityStatus === 'LIVE_STREAM_OFFLINE'
+            || Boolean(initialPlayerResponse?.playabilityStatus?.liveStreamability)
+        const is_premiere_pending = Boolean(isUpcoming || isPremierePlaceholderTitle(title))
+        const created_at = scheduled_start_at || (publishedAt ? dayjs(publishedAt).unix() : 0)
         return {
             created_at,
-            title: videoDetails?.title || textParser(microformat?.title),
+            title,
             description: videoDetails?.shortDescription || textParser(microformat?.description),
             thumbnail,
+            is_premiere_pending,
+            scheduled_start_at,
         }
     }
 
@@ -476,12 +516,14 @@ namespace YoutubeApiJsonParser {
         })
         const detail = detailParser(await webpage.text())
         const media = detail.thumbnail ? mediaParser(detail.thumbnail) : article.media
+        const premiereExtra = buildPremiereExtra(detail)
         return {
             ...article,
             created_at: detail.created_at || article.created_at,
             content: buildContent(detail.title, detail.description) || article.content,
             has_media: Boolean(media && media.length > 0),
             media,
+            extra: (premiereExtra || article.extra) as YoutubeArticle['extra'],
         }
     }
 
@@ -533,7 +575,7 @@ namespace YoutubeApiJsonParser {
             await Promise.all(
                 baseArticles.map(async (article) => {
                     try {
-                        if (await options.isArticleKnown?.(article.a_id)) {
+                        if ((await options.isArticleKnown?.(article.a_id)) && !isPremierePendingArticle(article)) {
                             knownIds.add(article.a_id)
                         }
                     } catch {

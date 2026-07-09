@@ -1,7 +1,7 @@
 import dayjs from 'dayjs'
 import { test, expect } from 'bun:test'
 import { spiderRegistry } from '../src'
-import { YoutubeApiJsonParser, YoutubeSpider } from '../src/spiders/youtube'
+import { ArticleTypeEnum, YoutubeApiJsonParser, YoutubeSpider } from '../src/spiders/youtube'
 import { HTTPClient } from '../src/utils'
 
 const channelHeaderFixture = {
@@ -198,7 +198,7 @@ test('YouTube videos parser extracts channel videos', () => {
     const videos = YoutubeApiJsonParser.videosParser(videosFixture, channelMeta)
 
     expect(videos).toHaveLength(1)
-    expect(videos[0]?.type).toBe('video')
+    expect(videos[0]?.type).toBe(ArticleTypeEnum.VIDEO)
     expect(videos[0]?.u_id).toBe('anime-english-club')
     expect(videos[0]?.username).toBe('Anime English Club')
     expect(videos[0]?.url).toBe('https://www.youtube.com/watch?v=bBRUMp_WNUU')
@@ -213,7 +213,7 @@ test('YouTube videos parser extracts current lockup view model videos', () => {
     const videos = YoutubeApiJsonParser.videosParser(lockupVideosFixture, channelMeta)
 
     expect(videos).toHaveLength(1)
-    expect(videos[0]?.type).toBe('video')
+    expect(videos[0]?.type).toBe(ArticleTypeEnum.VIDEO)
     expect(videos[0]?.a_id).toBe('X6J9TphDexM')
     expect(videos[0]?.u_id).toBe('227SMEJ')
     expect(videos[0]?.username).toBe('22/7 OFFICIAL YouTube CHANNEL')
@@ -231,7 +231,7 @@ test('YouTube shorts parser extracts channel shorts', () => {
     const shorts = YoutubeApiJsonParser.shortsParser(shortsFixture, channelMeta)
 
     expect(shorts).toHaveLength(1)
-    expect(shorts[0]?.type).toBe('shorts')
+    expect(shorts[0]?.type).toBe(ArticleTypeEnum.SHORTS)
     expect(shorts[0]?.url).toBe('https://www.youtube.com/shorts/NYnbjoDltqA')
     expect(shorts[0]?.content).toBe('Behind the scenes short')
     expect(shorts[0]?.media?.[0]?.type).toBe('video_thumbnail')
@@ -298,6 +298,80 @@ test('YouTube grabArticles bounds detail hydration to the newest configured limi
         expect(detailRequests).toHaveLength(1)
         expect(articles).toHaveLength(2)
         expect(articles.some((article) => article.content?.startsWith('Hydrated '))).toBeTrue()
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
+test('YouTube detail parser marks upcoming premieres and scheduled start', () => {
+    const detailHtml = `<script>var ytInitialPlayerResponse = ${JSON.stringify({
+        playabilityStatus: {
+            status: 'LIVE_STREAM_OFFLINE',
+        },
+        videoDetails: {
+            title: 'Coming Soon...',
+            isUpcoming: true,
+            shortDescription: '',
+            thumbnail: {
+                thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere/maxresdefault.jpg', width: 1280 }],
+            },
+        },
+        microformat: {
+            playerMicroformatRenderer: {
+                liveBroadcastDetails: {
+                    startTimestamp: '2026-07-08T11:55:00Z',
+                },
+            },
+        },
+    })};</script>`
+
+    const detail = YoutubeApiJsonParser.detailParser(detailHtml)
+
+    expect(detail.is_premiere_pending).toBeTrue()
+    expect(detail.scheduled_start_at).toBe(dayjs('2026-07-08T11:55:00Z').unix())
+    expect(detail.created_at).toBe(dayjs('2026-07-08T11:55:00Z').unix())
+})
+
+test('YouTube grabArticles rehydrates known premiere placeholders', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const requestedUrls: Array<string> = []
+    const premiereVideos = {
+        header: officialChannelHeaderFixture,
+        richGridRenderer: {
+            contents: [{
+                richItemRenderer: {
+                    content: {
+                        videoRenderer: {
+                            videoId: 'premiere-known',
+                            title: { runs: [{ text: 'Coming Soon...' }] },
+                            publishedTimeText: { simpleText: 'Upcoming' },
+                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-known/hqdefault.jpg', width: 480 }] },
+                        },
+                    },
+                },
+            }],
+        },
+    }
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        requestedUrls.push(url)
+        if (url.includes('/videos?')) {
+            return new Response(buildYoutubeInitialData(premiereVideos))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData({ header: officialChannelHeaderFixture }))
+        }
+        return new Response(buildYoutubeDetailHtml('premiere-known'))
+    }
+
+    try {
+        const articles = await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', {
+            hydrate_limit: 8,
+            hydrate_concurrency: 1,
+            isArticleKnown: (a_id) => a_id === 'premiere-known',
+        })
+
+        expect(requestedUrls.some((url) => url.includes('/watch?') && url.includes('premiere-known'))).toBeTrue()
+        expect(articles.find((article) => article.a_id === 'premiere-known')?.content).toContain('Hydrated premiere-known')
     } finally {
         ;(HTTPClient as any).download_webpage = originalDownload
     }

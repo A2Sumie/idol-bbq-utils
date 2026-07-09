@@ -123,6 +123,50 @@ function lookupConnectionValues<T>(map: Record<string, T> | undefined, keys: Arr
     return undefined
 }
 
+function articleExtraData(value: unknown) {
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value)
+            return parsed && typeof parsed === 'object' ? ((parsed as any).data || parsed) : null
+        } catch {
+            return null
+        }
+    }
+    return value && typeof value === 'object' ? ((value as any).data || value) : null
+}
+
+function premiereResolvedExtra(existing: any, next: Article, resolvedAt: number) {
+    const existingPremiere = articleExtraData(existing?.extra)?.premiere || {}
+    const nextData = articleExtraData(next.extra) || {}
+    return {
+        data: {
+            ...nextData,
+            premiere: {
+                ...existingPremiere,
+                pending: false,
+                scheduled_start_at: existingPremiere.scheduled_start_at || (nextData as any)?.premiere?.scheduled_start_at || null,
+                resolved_at: resolvedAt,
+            },
+        },
+    }
+}
+
+function isPremierePendingArticleLike(article: Pick<Article, 'platform' | 'content' | 'extra'>) {
+    if (article.platform !== Platform.YouTube) {
+        return false
+    }
+    const extra = articleExtraData(article.extra)
+    return Boolean(extra?.premiere?.pending) || /^coming soon/i.test(String(article.content || '').trim())
+}
+
+function shouldRefreshPremiereArticle(existing: any, next: Article) {
+    return isPremierePendingArticleLike({
+        platform: next.platform,
+        content: existing?.content || null,
+        extra: existing?.extra || null,
+    }) && !isPremierePendingArticleLike(next)
+}
+
 function resolveExistingArticleReusePolicy(cfg_crawler: Crawler['cfg_crawler'] | undefined) {
     const raw = cfg_crawler?.reuse_existing_for_immediate_forward
     const enabled = raw === true || (typeof raw === 'object' && raw?.enabled === true)
@@ -1888,37 +1932,40 @@ class SpiderPools extends BaseCompatibleModel {
             detail_interval_time,
             block_resource_types,
         } = cfg_crawler || {}
-        const articles = await pRetry(
-            () =>
-                spider.crawl(url.href, page, ctx.taskId, {
-                    task_type: 'article',
-                    crawl_engine: engine,
-                    sub_task_type,
-                    hydrate_users,
-                    hydrate_limit,
-                    hydrate_concurrency,
-                    hydrate_interval_time,
-                    cookieString,
-                    requestHeaders,
-                    max_list_pages,
-                    max_detail_count,
-                    detail_interval_time,
-                    block_resource_types,
-                    isArticleKnown: platform
-                        ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
-                        : undefined,
-                }),
-            {
-                retries: RETRY_LIMIT,
-                shouldRetry: (error) => shouldRetryCrawlError(error),
-                onFailedAttempt: (error) => {
-                    const classification = classifyCrawlError(error)
-                    ctx.log?.error(
-                        `[${url.href}] Crawl article failed (${classification}), there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
-                    )
+        const liveRelayOnly = Boolean((cfg_crawler?.live_relay as any)?.only)
+        const articles = liveRelayOnly
+            ? ([] as Array<Article>)
+            : await pRetry(
+                () =>
+                    spider.crawl(url.href, page, ctx.taskId, {
+                        task_type: 'article',
+                        crawl_engine: engine,
+                        sub_task_type,
+                        hydrate_users,
+                        hydrate_limit,
+                        hydrate_concurrency,
+                        hydrate_interval_time,
+                        cookieString,
+                        requestHeaders,
+                        max_list_pages,
+                        max_detail_count,
+                        detail_interval_time,
+                        block_resource_types,
+                        isArticleKnown: platform
+                            ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
+                            : undefined,
+                    }),
+                {
+                    retries: RETRY_LIMIT,
+                    shouldRetry: (error) => shouldRetryCrawlError(error),
+                    onFailedAttempt: (error) => {
+                        const classification = classifyCrawlError(error)
+                        ctx.log?.error(
+                            `[${url.href}] Crawl article failed (${classification}), there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
+                        )
+                    },
                 },
-            },
-        )
+            )
         await this.maybeSyncInstagramLiveRelay(ctx, url, page, cookieString, requestHeaders)
         const existingArticleReusePolicy = resolveExistingArticleReusePolicy(cfg_crawler)
         let new_articles: Array<Article> = []
@@ -1929,6 +1976,19 @@ class SpiderPools extends BaseCompatibleModel {
             const isExist = await DB.Article.checkExist(article)
             if (!isExist) {
                 new_articles.push(article)
+                continue
+            }
+            if (shouldRefreshPremiereArticle(isExist, article)) {
+                const resolvedAt = Math.floor(Date.now() / 1000)
+                const updated = await DB.Article.update(isExist.id, article.platform, {
+                    ...article,
+                    created_at: article.created_at || resolvedAt,
+                    extra: premiereResolvedExtra(isExist, article, resolvedAt) as any,
+                    translation: null,
+                    translated_by: null,
+                } as Partial<Article>)
+                dispatch_article_ids.push((updated as any).id || isExist.id)
+                ctx.log?.info(`[${url.href}] Refreshed premiere placeholder article ${article.a_id} with public YouTube metadata.`)
                 continue
             }
             if (

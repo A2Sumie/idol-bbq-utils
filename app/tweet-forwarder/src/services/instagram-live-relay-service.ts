@@ -1,10 +1,15 @@
 import fs from 'fs'
 import path from 'path'
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { createHash } from 'crypto'
 import type { Logger } from '@idol-bbq-utils/log'
 import { Instagram } from '@idol-bbq-utils/spider'
+import { Platform } from '@idol-bbq-utils/spider/types'
 import type { Page } from 'puppeteer-core'
+import type { Article } from '@/db'
+import { buildBiliupUploadCandidate, completeBiliupUploadCandidateTags, runBiliupUpload, type BiliupUploadCandidate } from '@/middleware/forwarder/biliup'
 import { ensureDirectoryExists } from '@/utils/directories'
-import type { CrawlerConfig, LiveRelayConfig, LiveRelayTargetConfig } from '@/types/crawler'
+import type { CrawlerConfig, InstagramLiveArchiveConfig, InstagramLivePublishConfig, LiveRelayConfig, LiveRelayTargetConfig } from '@/types/crawler'
 
 const DEFAULT_LIVE_PLAYER_URL = 'https://tv.n2nj.moe'
 const DEFAULT_LIVE_PLAYER_PLAYER_ID = 'relay'
@@ -14,6 +19,9 @@ const DEFAULT_POST_LIVE_GRACE_SECONDS = 6 * 60 * 60
 const STREAM_CAPTURE_TIMEOUT_MS = 15000
 const MANIFEST_FETCH_TIMEOUT_MS = 15000
 const LIVE_PLAYER_API_TIMEOUT_MS = 15000
+const DEFAULT_INSTAGRAM_ARCHIVE_EXTENSION = 'mkv'
+const DEFAULT_INSTAGRAM_ARCHIVE_MIN_PUBLISH_DURATION_SECONDS = 60
+const DEFAULT_INSTAGRAM_ARCHIVE_MAX_DURATION_SECONDS = 4 * 60 * 60
 const INSTAGRAM_ORIGIN = 'https://www.instagram.com'
 const LIVE_WEB_INFO_PATH = '/api/v1/live/web_info/'
 const N2NJ_REQUEST_USER_AGENT = 'N2NJ-Stream-Bot/1.0'
@@ -75,6 +83,23 @@ interface EchoPackage {
     }>
 }
 
+interface ResolvedInstagramLiveArchiveConfig {
+    enabled: true
+    root_dir: string
+    ffmpeg_path: string
+    extension: 'mp4' | 'mkv' | 'ts'
+    max_duration_seconds: number
+    min_publish_duration_seconds: number
+    stop_at_epoch?: number
+}
+
+interface ResolvedInstagramLivePublishConfig {
+    enabled: true
+    sessdata?: string
+    bili_jct?: string
+    video_upload: NonNullable<InstagramLivePublishConfig['video_upload']>
+}
+
 interface LiveRelayResolution extends LiveRelayTargetConfig {
     live_player_url: string
     player_id: string
@@ -86,6 +111,26 @@ interface LiveRelayResolution extends LiveRelayTargetConfig {
     sync_interval_seconds: number
     post_live_grace_seconds: number
     stop_offline: boolean
+    relay_enabled: boolean
+    archive?: ResolvedInstagramLiveArchiveConfig
+    publish?: ResolvedInstagramLivePublishConfig
+}
+
+interface InstagramLiveArchiveState {
+    active: boolean
+    broadcastId: string | null
+    mediaPath: string | null
+    manifestPath: string | null
+    diagnosticsPath?: string | null
+    stderrLogPath?: string | null
+    stdoutLogPath?: string | null
+    startedAt: string | null
+    completedAt?: string | null
+    durationSeconds?: number | null
+    sizeBytes?: number | null
+    publishedAt?: string | null
+    publishResult?: unknown
+    lastError?: string | null
 }
 
 interface InstagramLiveCacheEntry {
@@ -100,6 +145,7 @@ interface InstagramLiveCacheEntry {
     avatarUrl: string | null
     lastLiveAt?: string | null
     package: EchoPackage | null
+    archive?: InstagramLiveArchiveState | null
     lastError?: string | null
     syncedAt?: string | null
     relay?: {
@@ -109,6 +155,27 @@ interface InstagramLiveCacheEntry {
         status?: number
         body?: unknown
     }
+}
+
+interface InstagramLiveRecordingSession {
+    handle: string
+    broadcastId: string | null
+    liveUrl: string
+    profileUrl: string
+    displayName: string
+    avatarUrl: string | null
+    startedAt: string
+    mediaPath: string
+    manifestPath: string
+    diagnosticsPath: string
+    stderrLogPath: string
+    stdoutLogPath: string
+    stream: EchoStreamRecord
+    process: ChildProcessWithoutNullStreams
+    stderr: string[]
+    stdout: string[]
+    archiveConfig: ResolvedInstagramLiveArchiveConfig
+    publishConfig?: ResolvedInstagramLivePublishConfig
 }
 
 interface SyncInstagramLiveOptions {
@@ -132,6 +199,81 @@ function normalizeBaseUrl(url?: string) {
 function resolveNonNegativeSeconds(value: unknown, fallback: number) {
     const numeric = Number(value ?? fallback)
     return Number.isFinite(numeric) && numeric >= 0 ? numeric : fallback
+}
+
+function resolvePositiveSeconds(value: unknown, fallback: number) {
+    const numeric = Number(value ?? fallback)
+    return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback
+}
+
+function normalizeArchiveExtension(value: unknown) {
+    const normalized = String(value || DEFAULT_INSTAGRAM_ARCHIVE_EXTENSION).replace(/^\./, '').toLowerCase()
+    return normalized === 'mkv' || normalized === 'ts' || normalized === 'mp4'
+        ? normalized
+        : DEFAULT_INSTAGRAM_ARCHIVE_EXTENSION
+}
+
+function resolveArchiveStopAtEpoch(value: unknown) {
+    const raw = String(value || '').trim()
+    if (!raw) {
+        return undefined
+    }
+    const parsed = Date.parse(raw)
+    if (Number.isFinite(parsed)) {
+        return Math.floor(parsed / 1000)
+    }
+    const match = raw.match(/^(\d{1,2}):(\d{2})$/)
+    if (!match) {
+        return undefined
+    }
+    const now = new Date()
+    const localDate = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(now)
+    const parsedJst = Date.parse(`${localDate}T${match[1]!.padStart(2, '0')}:${match[2]}:00+09:00`)
+    return Number.isFinite(parsedJst) ? Math.floor(parsedJst / 1000) : undefined
+}
+
+function resolveInstagramArchiveConfig(
+    handleConfig?: Pick<LiveRelayTargetConfig, 'archive'>,
+    liveRelay?: Pick<LiveRelayTargetConfig, 'archive'>,
+): ResolvedInstagramLiveArchiveConfig | undefined {
+    const raw = handleConfig?.archive ?? liveRelay?.archive
+    const enabled = raw?.enabled ?? false
+    if (!enabled) {
+        return undefined
+    }
+    return {
+        enabled: true,
+        root_dir: path.resolve(String(raw?.root_dir || process.env.INSTAGRAM_LIVE_ARCHIVE_ROOT || path.join(process.cwd(), 'archive', 'instagram-live'))),
+        ffmpeg_path: String(raw?.ffmpeg_path || process.env.FFMPEG_PATH || 'ffmpeg'),
+        extension: normalizeArchiveExtension(raw?.extension),
+        max_duration_seconds: resolvePositiveSeconds(raw?.max_duration_seconds, DEFAULT_INSTAGRAM_ARCHIVE_MAX_DURATION_SECONDS),
+        min_publish_duration_seconds: resolveNonNegativeSeconds(
+            raw?.min_publish_duration_seconds,
+            DEFAULT_INSTAGRAM_ARCHIVE_MIN_PUBLISH_DURATION_SECONDS,
+        ),
+        stop_at_epoch: resolveArchiveStopAtEpoch(raw?.stop_at),
+    }
+}
+
+function resolveInstagramPublishConfig(
+    handleConfig?: Pick<LiveRelayTargetConfig, 'publish'>,
+    liveRelay?: Pick<LiveRelayTargetConfig, 'publish'>,
+): ResolvedInstagramLivePublishConfig | undefined {
+    const raw = handleConfig?.publish ?? liveRelay?.publish
+    if (!raw?.enabled || !raw.video_upload?.enabled) {
+        return undefined
+    }
+    return {
+        enabled: true,
+        sessdata: raw.sessdata,
+        bili_jct: raw.bili_jct,
+        video_upload: raw.video_upload,
+    }
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = LIVE_PLAYER_API_TIMEOUT_MS) {
@@ -338,9 +480,66 @@ function applyN2njRequestIdentity(headers: Headers) {
     }
 }
 
+function extractInstagramAppIdFromHtml(html: string) {
+    return html.match(/"APP_ID"\s*:\s*"(\d+)"/)?.[1] || '936619743392459'
+}
+
+function sanitizeFileSegment(value: string, fallback: string) {
+    const normalized = String(value || '')
+        .replace(/[<>:"/\\|?*\u0000-\u001F]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    return (normalized || fallback).slice(0, 80)
+}
+
+function formatDateParts(timestampMs: number) {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Tokyo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+    })
+        .formatToParts(new Date(timestampMs))
+        .reduce<Record<string, string>>((acc, part) => {
+            if (part.type !== 'literal') {
+                acc[part.type] = part.value
+            }
+            return acc
+        }, {})
+    return {
+        date: `${parts.year}-${parts.month}-${parts.day}`,
+        shortDate: `${String(parts.year || '').slice(-2)}.${parts.month}.${parts.day}`,
+        time: `${parts.hour}${parts.minute}`,
+    }
+}
+
+function safeJsonParse<T>(value: string): T | null {
+    try {
+        return JSON.parse(value) as T
+    } catch {
+        return null
+    }
+}
+
+function streamHeaderArgs(headers: Record<string, string>) {
+    const lines = Object.entries(headers)
+        .filter(([, value]) => String(value || '').trim())
+        .map(([key, value]) => `${key}: ${value}`)
+    return lines.length > 0 ? ['-headers', `${lines.join('\r\n')}\r\n`] : []
+}
+
+function archiveIdFor(mediaPath: string, startedAt: string) {
+    return createHash('sha1').update(`instagram-live\n${mediaPath}\n${startedAt}`).digest('hex')
+}
+
 class InstagramLiveRelayService {
     private readonly cacheDir: string
     private readonly log?: Logger
+    private readonly recordingSessions = new Map<string, InstagramLiveRecordingSession>()
+    private readonly publishedArchives = new Set<string>()
 
     constructor(cacheRoot: string, log?: Logger) {
         this.cacheDir = path.join(cacheRoot, 'instagram-live')
@@ -373,12 +572,18 @@ class InstagramLiveRelayService {
                 avatarUrl: status.u_avatar,
                 lastLiveAt: status.is_live ? now : previousLastLiveAt,
                 package: previousCache?.package || null,
+                archive: previousCache?.archive || null,
                 syncedAt: previousCache?.syncedAt || null,
                 relay: previousCache?.relay,
                 lastError: null,
             }
 
             if (!status.is_live || !status.live_url) {
+                const finishedArchive = await this.finishRecordingIfNeeded(options.handle, previousCache, scopedLog)
+                if (finishedArchive) {
+                    nextCache.archive = finishedArchive
+                }
+
                 const postLivePackage = await this.refreshPostLivePackage(previousCache, relayConfig, scopedLog)
                 if (postLivePackage) {
                     nextCache.package = postLivePackage
@@ -388,7 +593,7 @@ class InstagramLiveRelayService {
                         || !previousCache?.syncedAt
                         || Date.now() - new Date(previousCache.syncedAt).getTime() >= relayConfig.sync_interval_seconds * 1000
 
-                    if (shouldSyncPostLive) {
+                    if (shouldSyncPostLive && relayConfig.relay_enabled) {
                         const relayResponse = await this.syncRelay(relayConfig, postLivePackage, {
                             title: relayConfig.player_name || `【IG Live】${status.username || previousCache?.displayName || options.handle}`,
                             coverUrl: status.u_avatar || previousCache?.avatarUrl || undefined,
@@ -408,7 +613,7 @@ class InstagramLiveRelayService {
                     return nextCache
                 }
 
-                if (relayConfig.stop_offline && previousCache?.relay?.active) {
+                if (relayConfig.relay_enabled && relayConfig.stop_offline && previousCache?.relay?.active) {
                     const relayResponse = await this.stopRelay(relayConfig)
                     nextCache.relay = {
                         baseUrl: relayConfig.live_player_url,
@@ -449,13 +654,28 @@ class InstagramLiveRelayService {
                 return nextCache
             }
 
+            const recordingState = this.ensureRecording({
+                handle: options.handle,
+                profileUrl: options.profileUrl,
+                liveUrl: status.live_url,
+                broadcastId: status.live_broadcast_id,
+                displayName: status.username || options.handle,
+                avatarUrl: status.u_avatar,
+                package: packageToSync,
+                relayConfig,
+                log: scopedLog,
+            })
+            if (recordingState) {
+                nextCache.archive = recordingState
+            }
+
             const shouldSync =
                 shouldCapture
                 || !previousCache?.relay?.active
                 || !previousCache?.syncedAt
                 || Date.now() - new Date(previousCache.syncedAt).getTime() >= relayConfig.sync_interval_seconds * 1000
 
-            if (shouldSync) {
+            if (shouldSync && relayConfig.relay_enabled) {
                 const relayResponse = await this.syncRelay(relayConfig, packageToSync, {
                     title: relayConfig.player_name || `【IG Live】${status.username || options.handle}`,
                     coverUrl: status.u_avatar,
@@ -486,6 +706,7 @@ class InstagramLiveRelayService {
                 avatarUrl: previousCache?.avatarUrl || null,
                 lastLiveAt: previousLastLiveAt,
                 package: previousCache?.package || null,
+                archive: previousCache?.archive || null,
                 syncedAt: previousCache?.syncedAt || null,
                 relay: previousCache?.relay,
                 lastError: error instanceof Error ? error.message : String(error),
@@ -509,9 +730,13 @@ class InstagramLiveRelayService {
             return null
         }
 
+        const archiveConfig = resolveInstagramArchiveConfig(handleConfig, liveRelay)
+        const publishConfig = resolveInstagramPublishConfig(handleConfig, liveRelay)
         const merged: LiveRelayResolution = {
             ...liveRelay,
             ...handleConfig,
+            archive: archiveConfig,
+            publish: publishConfig,
             live_player_url: normalizeBaseUrl(handleConfig?.live_player_url || liveRelay.live_player_url || process.env.LIVE_PLAYER_URL),
             player_id: handleConfig?.player_id || liveRelay.player_id || process.env.LIVE_PLAYER_PLAYER_ID || DEFAULT_LIVE_PLAYER_PLAYER_ID,
             player_name: handleConfig?.player_name || liveRelay.player_name || `【Relay】${handle}`,
@@ -550,6 +775,7 @@ class InstagramLiveRelayService {
                 ),
             ),
             stop_offline: Boolean(handleConfig?.stop_offline ?? liveRelay.stop_offline),
+            relay_enabled: Boolean(handleConfig?.relay_enabled ?? liveRelay.relay_enabled ?? true),
         }
 
         return merged
@@ -574,6 +800,370 @@ class InstagramLiveRelayService {
     private getCacheFile(handle: string) {
         const safeHandle = handle.replace(/[^A-Za-z0-9._-]/g, '_')
         return path.join(this.cacheDir, `${safeHandle}.json`)
+    }
+
+    private getRecordingKey(handle: string, broadcastId?: string | null) {
+        return `${handle}:${broadcastId || 'live'}`
+    }
+
+    private selectArchiveStream(pkg: EchoPackage) {
+        return pkg.streams.find((stream) => stream.type === 'HLS' && !stream.mediaInfo.encrypted) || pkg.streams.find((stream) => !stream.mediaInfo.encrypted) || null
+    }
+
+    private buildArchivePaths(options: {
+        handle: string
+        displayName: string
+        broadcastId: string | null
+        archiveConfig: ResolvedInstagramLiveArchiveConfig
+    }) {
+        const now = formatDateParts(Date.now())
+        const safeHandle = sanitizeFileSegment(options.handle, 'instagram')
+        const safeName = sanitizeFileSegment(options.displayName, safeHandle)
+        const dir = path.join(options.archiveConfig.root_dir, now.date, safeHandle)
+        ensureDirectoryExists(dir)
+        const idSuffix = options.broadcastId ? `-${sanitizeFileSegment(options.broadcastId, 'live').slice(0, 24)}` : ''
+        const stem = sanitizeFileSegment(`${now.time}-${safeName}${idSuffix}`, `${now.time}-${safeHandle}`)
+        return {
+            dir,
+            mediaPath: path.join(dir, `${stem}.${options.archiveConfig.extension}`),
+            manifestPath: path.join(dir, `${stem}.archive.json`),
+            diagnosticsPath: path.join(dir, `${stem}.diagnostics.jsonl`),
+            stderrLogPath: path.join(dir, `${stem}.ffmpeg.stderr.log`),
+            stdoutLogPath: path.join(dir, `${stem}.ffmpeg.stdout.log`),
+        }
+    }
+
+    private ensureRecording(options: {
+        handle: string
+        profileUrl: string
+        liveUrl: string
+        broadcastId: string | null
+        displayName: string
+        avatarUrl: string | null
+        package: EchoPackage
+        relayConfig: LiveRelayResolution
+        log?: Logger
+    }): InstagramLiveArchiveState | null {
+        const archiveConfig = options.relayConfig.archive
+        if (!archiveConfig) {
+            return null
+        }
+        const stream = this.selectArchiveStream(options.package)
+        if (!stream) {
+            return {
+                active: false,
+                broadcastId: options.broadcastId,
+                mediaPath: null,
+                manifestPath: null,
+                startedAt: null,
+                lastError: 'No unencrypted Instagram live stream was available for archiving.',
+            }
+        }
+        const key = this.getRecordingKey(options.handle, options.broadcastId)
+        const existing = this.recordingSessions.get(key)
+        if (existing) {
+            return {
+                active: true,
+                broadcastId: existing.broadcastId,
+                mediaPath: existing.mediaPath,
+                manifestPath: existing.manifestPath,
+                diagnosticsPath: existing.diagnosticsPath,
+                stderrLogPath: existing.stderrLogPath,
+                stdoutLogPath: existing.stdoutLogPath,
+                startedAt: existing.startedAt,
+            }
+        }
+
+        const paths = this.buildArchivePaths({
+            handle: options.handle,
+            displayName: options.displayName,
+            broadcastId: options.broadcastId,
+            archiveConfig,
+        })
+        const startedAt = new Date().toISOString()
+        const stopAtLimit = archiveConfig.stop_at_epoch
+            ? Math.max(1, archiveConfig.stop_at_epoch - Math.floor(Date.now() / 1000))
+            : archiveConfig.max_duration_seconds
+        const captureDurationSeconds = Math.min(archiveConfig.max_duration_seconds, stopAtLimit)
+        const args = [
+            '-y',
+            ...streamHeaderArgs(stream.headers),
+            '-i',
+            stream.source,
+            '-t',
+            String(captureDurationSeconds),
+            '-map',
+            '0',
+            '-c',
+            'copy',
+        ]
+        if (archiveConfig.extension === 'mp4') {
+            args.push('-movflags', '+faststart')
+        }
+        args.push(paths.mediaPath)
+        const child = spawn(archiveConfig.ffmpeg_path, args, {
+            env: {
+                ...process.env,
+            },
+        })
+        const session: InstagramLiveRecordingSession = {
+            handle: options.handle,
+            broadcastId: options.broadcastId,
+            liveUrl: options.liveUrl,
+            profileUrl: options.profileUrl,
+            displayName: options.displayName,
+            avatarUrl: options.avatarUrl,
+            startedAt,
+            mediaPath: paths.mediaPath,
+            manifestPath: paths.manifestPath,
+            diagnosticsPath: paths.diagnosticsPath,
+            stderrLogPath: paths.stderrLogPath,
+            stdoutLogPath: paths.stdoutLogPath,
+            stream,
+            process: child,
+            stderr: [],
+            stdout: [],
+            archiveConfig,
+            publishConfig: options.relayConfig.publish,
+        }
+        this.recordingSessions.set(key, session)
+        this.appendArchiveDiagnostic(session, 'recorder_started', {
+            handle: options.handle,
+            broadcastId: options.broadcastId,
+            liveUrl: options.liveUrl,
+            mediaPath: paths.mediaPath,
+            manifestPath: paths.manifestPath,
+            streamType: stream.type,
+            streamSourceHash: createHash('sha256').update(stream.source).digest('hex').slice(0, 16),
+            variants: stream.mediaInfo.variants_count,
+            encrypted: stream.mediaInfo.encrypted,
+            captureDurationSeconds,
+            stopAtEpoch: archiveConfig.stop_at_epoch || null,
+        })
+        child.stdout.on('data', (chunk) => {
+            const text = chunk.toString()
+            session.stdout.push(text)
+            fs.appendFileSync(session.stdoutLogPath, text, 'utf8')
+        })
+        child.stderr.on('data', (chunk) => {
+            const text = chunk.toString()
+            session.stderr.push(text)
+            fs.appendFileSync(session.stderrLogPath, text, 'utf8')
+        })
+        child.on('close', () => {
+            this.finalizeRecordingSession(key, session, options.log).catch((error) => {
+                options.log?.warn(`Instagram live archive finalize failed for ${options.handle}: ${error}`)
+            })
+        })
+        child.on('error', (error) => {
+            options.log?.warn(`Instagram live archive recorder failed for ${options.handle}: ${error}`)
+        })
+        options.log?.info(`Instagram live archive recorder started for ${options.handle}: ${paths.mediaPath}`)
+        return {
+            active: true,
+            broadcastId: options.broadcastId,
+            mediaPath: paths.mediaPath,
+            manifestPath: paths.manifestPath,
+            diagnosticsPath: paths.diagnosticsPath,
+            stderrLogPath: paths.stderrLogPath,
+            stdoutLogPath: paths.stdoutLogPath,
+            startedAt,
+        }
+    }
+
+    private async finishRecordingIfNeeded(
+        handle: string,
+        previousCache: InstagramLiveCacheEntry | null,
+        log?: Logger,
+    ): Promise<InstagramLiveArchiveState | null> {
+        const candidates = Array.from(this.recordingSessions.entries()).filter(([key]) => key.startsWith(`${handle}:`))
+        if (candidates.length === 0) {
+            return previousCache?.archive || null
+        }
+        const [, session] = candidates[0]!
+        if (!session.process.killed) {
+            session.process.kill('SIGINT')
+        }
+        return {
+            active: true,
+            broadcastId: session.broadcastId,
+            mediaPath: session.mediaPath,
+            manifestPath: session.manifestPath,
+            diagnosticsPath: session.diagnosticsPath,
+            stderrLogPath: session.stderrLogPath,
+            stdoutLogPath: session.stdoutLogPath,
+            startedAt: session.startedAt,
+        }
+    }
+
+    private probeDurationSeconds(filePath: string) {
+        try {
+            const output = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath], {
+                encoding: 'utf8',
+            })
+            const duration = Number(output.trim())
+            return Number.isFinite(duration) && duration > 0 ? duration : null
+        } catch {
+            return null
+        }
+    }
+
+    private appendArchiveDiagnostic(session: InstagramLiveRecordingSession, event: string, payload: Record<string, unknown>) {
+        fs.appendFileSync(
+            session.diagnosticsPath,
+            `${JSON.stringify({ ts: new Date().toISOString(), event, ...payload })}\n`,
+            'utf8',
+        )
+    }
+
+    private writeArchiveManifest(session: InstagramLiveRecordingSession, state: InstagramLiveArchiveState) {
+        const stats = fs.existsSync(session.mediaPath) ? fs.statSync(session.mediaPath) : null
+        const title = `IG Live ${session.displayName} ${formatDateParts(Date.parse(session.startedAt)).shortDate}`
+        const manifest = {
+            version: 1,
+            visible: true,
+            id: archiveIdFor(session.mediaPath, session.startedAt),
+            kind: 'relay-session',
+            title,
+            fileName: path.basename(session.mediaPath),
+            fileExtension: path.extname(session.mediaPath).toLowerCase(),
+            localPath: session.mediaPath,
+            mediaPath: session.mediaPath,
+            containerPath: path.dirname(session.mediaPath),
+            manifestPath: session.manifestPath,
+            diagnosticsPath: session.diagnosticsPath,
+            stderrLogPath: session.stderrLogPath,
+            stdoutLogPath: session.stdoutLogPath,
+            sizeBytes: stats?.size || 0,
+            modifiedAt: stats?.mtime.toISOString() || new Date().toISOString(),
+            createdAt: stats?.birthtime.toISOString() || session.startedAt,
+            category: 'instagram-live',
+            rootLabel: 'Instagram Live',
+            session: {
+                pid: session.handle,
+                name: `IG Live | ${session.displayName}`,
+                reason: 'instagram-live-archive',
+                archived_at: state.completedAt || new Date().toISOString(),
+                session_started_at: session.startedAt,
+                source: session.stream.source,
+                page_url: session.liveUrl || session.profileUrl,
+            },
+        }
+        fs.writeFileSync(session.manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
+    }
+
+    private buildArchiveArticle(session: InstagramLiveRecordingSession, durationSeconds: number | null): Article {
+        const date = formatDateParts(Date.parse(session.startedAt))
+        const durationLine = durationSeconds ? `录制时长约 ${Math.round(durationSeconds / 60)} 分钟` : 'Instagram Live 存档'
+        return {
+            platform: Platform.Instagram,
+            a_id: `ig-live-${session.handle}-${Date.parse(session.startedAt)}`,
+            u_id: session.handle,
+            username: session.displayName,
+            created_at: Math.floor(Date.parse(session.startedAt) / 1000),
+            content: `Instagram Live ${session.displayName} ${date.shortDate}\n${durationLine}`,
+            url: session.liveUrl || session.profileUrl,
+            type: 'story' as any,
+            ref: null,
+            has_media: true,
+            media: [{ type: 'video', url: session.mediaPath }],
+            extra: {
+                data: {
+                    kind: 'instagram_live_archive',
+                    broadcast_id: session.broadcastId,
+                    archive_path: session.mediaPath,
+                    manifest_path: session.manifestPath,
+                },
+            } as any,
+            u_avatar: session.avatarUrl,
+        }
+    }
+
+    private async publishArchiveIfEnabled(session: InstagramLiveRecordingSession, durationSeconds: number | null, log?: Logger) {
+        if (!session.publishConfig || durationSeconds === null || durationSeconds < session.archiveConfig.min_publish_duration_seconds) {
+            return null
+        }
+        const publishKey = `${session.mediaPath}:${session.startedAt}`
+        if (this.publishedArchives.has(publishKey)) {
+            return null
+        }
+        this.publishedArchives.add(publishKey)
+        const article = this.buildArchiveArticle(session, durationSeconds)
+        const candidate = buildBiliupUploadCandidate(
+            article,
+            [article.content || ''],
+            [{ media_type: 'video', path: session.mediaPath }],
+            session.publishConfig.video_upload,
+        ) as BiliupUploadCandidate | null
+        if (!candidate) {
+            return null
+        }
+        await completeBiliupUploadCandidateTags(article, [article.content || ''], candidate, log)
+        const result = await runBiliupUpload(
+            article,
+            candidate,
+            {
+                sessdata: session.publishConfig.sessdata,
+                bili_jct: session.publishConfig.bili_jct,
+            },
+            log,
+        )
+        return result
+    }
+
+    private async finalizeRecordingSession(key: string, session: InstagramLiveRecordingSession, log?: Logger) {
+        this.recordingSessions.delete(key)
+        const exists = fs.existsSync(session.mediaPath)
+        const stats = exists ? fs.statSync(session.mediaPath) : null
+        const durationSeconds = exists ? this.probeDurationSeconds(session.mediaPath) : null
+        const completedAt = new Date().toISOString()
+        const state: InstagramLiveArchiveState = {
+            active: false,
+            broadcastId: session.broadcastId,
+            mediaPath: session.mediaPath,
+            manifestPath: session.manifestPath,
+            startedAt: session.startedAt,
+            completedAt,
+            durationSeconds,
+            sizeBytes: stats?.size || 0,
+            lastError: exists && stats && stats.size > 0 ? null : 'Instagram live archive did not produce a media file.',
+        }
+        this.appendArchiveDiagnostic(session, 'recorder_finished', {
+            mediaPath: session.mediaPath,
+            manifestPath: session.manifestPath,
+            exists,
+            sizeBytes: stats?.size || 0,
+            durationSeconds,
+            stderrBytes: session.stderr.join('').length,
+            stdoutBytes: session.stdout.join('').length,
+            lastError: state.lastError || null,
+        })
+        this.writeArchiveManifest(session, state)
+        try {
+            const publishResult = await this.publishArchiveIfEnabled(session, durationSeconds, log)
+            if (publishResult) {
+                state.publishedAt = new Date().toISOString()
+                state.publishResult = publishResult
+                this.appendArchiveDiagnostic(session, 'publish_finished', {
+                    publishedAt: state.publishedAt,
+                    stdoutBytes: String((publishResult as any).stdout || '').length,
+                })
+                this.writeArchiveManifest(session, state)
+            }
+        } catch (error) {
+            state.lastError = `publish failed: ${error instanceof Error ? error.message : String(error)}`
+            this.appendArchiveDiagnostic(session, 'publish_failed', {
+                error: error instanceof Error ? error.message : String(error),
+            })
+            this.writeArchiveManifest(session, state)
+            log?.warn(`Instagram live archive publish failed for ${session.handle}: ${error}`)
+        }
+        const cache = this.readCache(session.handle)
+        if (cache) {
+            cache.archive = state
+            this.writeCache(session.handle, cache)
+        }
+        log?.info(`Instagram live archive finalized for ${session.handle}: ${session.mediaPath}`)
     }
 
     private async captureEchoPackage({
@@ -758,13 +1348,16 @@ class InstagramLiveRelayService {
             waitUntil: 'domcontentloaded',
             timeout: 30000,
         })
+        const html = await page.content().catch(() => '')
+        const appId = extractInstagramAppIdFromHtml(html)
 
-        const result = await page.evaluate(async (targetUserId) => {
+        const result = await page.evaluate(async (targetUserId, igAppId) => {
             const response = await fetch(`/api/v1/live/web_info/?target_user_id=${encodeURIComponent(targetUserId)}`, {
                 credentials: 'include',
                 headers: {
                     accept: '*/*',
                     'x-requested-with': 'XMLHttpRequest',
+                    'x-ig-app-id': igAppId,
                 },
             })
             return {
@@ -772,7 +1365,7 @@ class InstagramLiveRelayService {
                 status: response.status,
                 text: await response.text(),
             }
-        }, userId)
+        }, userId, appId)
 
         if (!result.ok) {
             throw new Error(`HTTP ${result.status}: ${result.text}`)
