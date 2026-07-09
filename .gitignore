@@ -176,3 +176,6 @@ private/
 # Deployment temporary files
 *.backup
 remote_config.yml
+
+# Instagram/TikTok live recordings
+archive/

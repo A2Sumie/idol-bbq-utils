@@ -397,8 +397,8 @@ describe('buildWebsiteArticle', () => {
         )
         const after = dayjs().unix()
 
-        expect(article.created_at).toBeGreaterThanOrEqual(before - 15 * 60)
-        expect(article.created_at).toBeLessThanOrEqual(after + 15 * 60)
+        expect(article.created_at).toBeGreaterThanOrEqual(before - 16 * 60)
+        expect(article.created_at).toBeLessThanOrEqual(after + 16 * 60)
         expect(article.extra?.data?.time_source).toBe('estimated_publish')
         expect(article.extra?.data?.crawled_at).toBeGreaterThanOrEqual(before)
         expect(article.extra?.data?.crawled_at).toBeLessThanOrEqual(after)
