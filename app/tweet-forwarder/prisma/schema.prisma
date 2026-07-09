@@ -285,3 +285,36 @@ model target_health {
   checked_at         Int
   updated_at         Int
 }
+
+model video_pairings {
+  id                 Int     @id @default(autoincrement())
+  pairing_key        String  @unique
+  target_id          String
+  status             String  @default("pending")
+  source_article_key String
+  source_article_id  Int?
+  source_platform    String
+  source_a_id        String
+  source_u_id        String?
+  source_username    String?
+  source_created_at  Int
+  join_platform      String
+  target_article_key String?
+  target_article_id  Int?
+  target_video_id    String?
+  target_profile_url String?
+  target_u_id        String?
+  target_username    String?
+  teaser_media       Json?
+  merge_result       Json?
+  expires_at         Int
+  created_at         Int
+  updated_at         Int
+  finished_at        Int?
+
+  @@unique([target_id, source_article_key], map: "video_pairings_target_id_source_article_key_key")
+  @@index([status, expires_at])
+  @@index([target_id, join_platform, status])
+  @@index([target_video_id])
+  @@index([target_article_key])
+}

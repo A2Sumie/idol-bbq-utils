@@ -244,6 +244,14 @@ interface ForwardTargetPlatformCommonConfig {
               max_visible?: number
               duplicate_behavior?: 'skip' | 'text_only'
           }
+    video_pairing?:
+        | boolean
+        | {
+              enabled?: boolean
+              join_platforms?: Array<'tiktok' | 'instagram' | 'tt' | 'ig' | 'ins'>
+              window_seconds?: number
+              on_expiry?: 'drop'
+          }
     /**
      * Forwarding-time content fingerprint dedup. Independent switch (default off). When enabled, an article
      * whose rendered text + media identity fingerprint already sent to this target is skipped before the

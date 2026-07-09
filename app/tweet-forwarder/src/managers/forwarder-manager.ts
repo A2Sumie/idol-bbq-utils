@@ -52,6 +52,7 @@ import {
     targetRouteKey,
 } from '@/services/outbound-message-service'
 import { resolveSummaryCardConfig, type ResolvedSummaryCardConfig } from '@/services/summary-card-policy'
+import { isBilibiliVideoPairingHeldResult } from '@/services/video-pairing-service'
 import { isNonLiveOutboundSendMode } from '@/services/outbound-send-mode'
 import { pRetry } from '@idol-bbq-utils/utils'
 import { RETRY_LIMIT } from '@/config'
@@ -1232,9 +1233,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 ...(String((item as any).taskKind || '').trim()
                     ? { taskKind: String((item as any).taskKind).trim() }
                     : {}),
-                ...(String((item as any).reason || '').trim()
-                    ? { reason: String((item as any).reason).trim() }
-                    : {}),
+                ...(String((item as any).reason || '').trim() ? { reason: String((item as any).reason).trim() } : {}),
             })
         }
         return carriers
@@ -2128,10 +2127,16 @@ class ForwarderPools extends BaseCompatibleModel {
                             target.id,
                         )
 
+                        const premiereResolvedAt = Number(
+                            ((article.extra as any)?.data || (article.extra as any))?.premiere?.resolved_at || 0,
+                        )
                         if (!options?.forceSend) {
                             const TWO_HOURS_SECONDS = 3600 * 2
                             const now = dayjs().unix()
-                            if (now - article.created_at > TWO_HOURS_SECONDS) {
+                            if (
+                                now - article.created_at > TWO_HOURS_SECONDS &&
+                                (!premiereResolvedAt || now - premiereResolvedAt > TWO_HOURS_SECONDS)
+                            ) {
                                 const claimed = await this.claimArticleChain(article, platform, target.id)
                                 await this.markArticleOutboundSkipped(
                                     log,
@@ -2273,8 +2278,12 @@ class ForwarderPools extends BaseCompatibleModel {
                             runtime_config,
                         )
 
+                        const premiereResolvedForceKey =
+                            premiereResolvedAt && !options?.forceSend
+                                ? `premiere-resolved-${article.a_id}-${premiereResolvedAt}`
+                                : undefined
                         const outboundIdempotencyKey = articleOutboundKey(target.id, article, {
-                            forceKey: options?.forceSend ? taskId : undefined,
+                            forceKey: options?.forceSend ? taskId : premiereResolvedForceKey,
                         })
 
                         let claimed = true
@@ -2436,10 +2445,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 )
                                 return null
                             })
-                            if (
-                                priorVisibleArticle &&
-                                priorVisibleArticle.idempotency_key !== outboundIdempotencyKey
-                            ) {
+                            if (priorVisibleArticle && priorVisibleArticle.idempotency_key !== outboundIdempotencyKey) {
                                 log?.debug(
                                     `Skipping article ${article.a_id} for ${target.id}: already visibly delivered as ${priorVisibleArticle.status} (${priorVisibleArticle.task_kind})`,
                                 )
@@ -2632,6 +2638,20 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
                         const providerResult = getForwarderProviderResult(sendResult)
                         const providerSummary = summarizeProviderResult(providerResult)
+                        if (isBilibiliVideoPairingHeldResult(providerResult)) {
+                            await DB.OutboundMessage.markSkipped(
+                                outboundIdempotencyKey,
+                                'bilibili_video_pairing_held',
+                                providerSummary,
+                            )
+                            if (claimed && !options?.forceSend) {
+                                await this.releaseArticleChain(article, platform, target.id)
+                            }
+                            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
+                            error_for_all = false
+                            hadNonErrorOutcome = true
+                            return
+                        }
                         await DB.OutboundMessage.markSent(outboundIdempotencyKey, providerSummary)
                         await this.markMediaBatchArticlesSent(target, sendResult, providerSummary)
                         await DB.TargetHealth.mark({
@@ -2722,9 +2742,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             let currentArticle: ArticleWithId | null = cloned_article
                             while (currentArticle && typeof currentArticle === 'object') {
                                 const nodePlatform =
-                                    currentArticle === cloned_article
-                                        ? platform
-                                        : (currentArticle.platform ?? platform)
+                                    currentArticle === cloned_article ? platform : (currentArticle.platform ?? platform)
                                 await DB.ForwardBy.save(currentArticle.id, nodePlatform, target.id, 'article')
                                 currentArticle = currentArticle.ref as ArticleWithId | null
                             }
@@ -3761,6 +3779,20 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
             }
             const providerResult = getForwarderProviderResult(sendResult)
+            if (isBilibiliVideoPairingHeldResult(providerResult)) {
+                await DB.OutboundMessage.markSkipped(
+                    outboundIdempotencyKey,
+                    'bilibili_video_pairing_held',
+                    summarizeProviderResult(providerResult),
+                )
+                await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
+                return {
+                    hadMedia: true,
+                    handled: true,
+                    visibleMediaSent: false,
+                    skippedDuplicate: false,
+                }
+            }
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
             await DB.TargetHealth.mark({
                 target_id: target.id,
@@ -4092,9 +4124,7 @@ class ForwarderPools extends BaseCompatibleModel {
             visibilityForRelease = visibility
             mediaFiles = this.filterMediaFilesByVisibility(sourceMediaFiles, visibility)
             if (visibility.policy && visibility.hiddenHashes.size > 0) {
-                text = uniquePreserveOrder([text, this.buildMediaVisibilityTextNotice(visibility.policy)]).join(
-                    '\n\n',
-                )
+                text = uniquePreserveOrder([text, this.buildMediaVisibilityTextNotice(visibility.policy)]).join('\n\n')
             }
         }
 
@@ -4124,7 +4154,12 @@ class ForwarderPools extends BaseCompatibleModel {
                 if (isOutboundSuppressedCompletionStatus(outbound.record.status)) {
                     if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
                         this.markSummaryCardVisibleSent(
-                            this.getSummaryCardQueueKey(queue.routeKey, queue.target.id, queue.runtime_config, queue.config),
+                            this.getSummaryCardQueueKey(
+                                queue.routeKey,
+                                queue.target.id,
+                                queue.runtime_config,
+                                queue.config,
+                            ),
                             queue.target.id,
                             now,
                         )
@@ -4196,7 +4231,10 @@ class ForwarderPools extends BaseCompatibleModel {
                 return false
             }
             const providerResult = getForwarderProviderResult(sendResult)
-            await DB.OutboundMessage.markSent(outboundData.outboundIdempotencyKey, summarizeProviderResult(providerResult))
+            await DB.OutboundMessage.markSent(
+                outboundData.outboundIdempotencyKey,
+                summarizeProviderResult(providerResult),
+            )
             await DB.TargetHealth.mark({
                 target_id: queue.target.id,
                 provider: queue.target.NAME,
@@ -4216,7 +4254,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 now,
             )
             visibilityForRelease = null
-            this.log?.info(`Sent single summary-card item natively (${reason}) to ${queue.target.id}: ${item.article.a_id}`)
+            this.log?.info(
+                `Sent single summary-card item natively (${reason}) to ${queue.target.id}: ${item.article.a_id}`,
+            )
             return true
         } catch (error) {
             this.log?.error(`Failed to send single summary-card item to ${queue.target.id}: ${error}`)

@@ -22,6 +22,15 @@ import {
     type ShortVideoDedupCandidate,
     type VideoFingerprintCandidate,
 } from '@/services/media-cache-service'
+import {
+    BILIBILI_VIDEO_PAIRING_HELD_MODE,
+    BILIBILI_VIDEO_PAIRING_MERGED_MODE,
+    deserializeTeaserMedia,
+    findBilibiliPendingPairingForMainVideo,
+    holdBilibiliVideoPairingTeaser,
+    markExpiredVideoPairings,
+    resolveVideoPairingConfig,
+} from '@/services/video-pairing-service'
 
 const BILI_VIDEO_UPLOAD_HASH_NAMESPACE = 'bilibili-video-upload'
 
@@ -51,7 +60,7 @@ type BiliCreateDynamicResponse = {
     }
 }
 
-type BiliVideoUploadResult = 'uploaded' | 'duplicate'
+type BiliVideoUploadResult = 'uploaded' | 'duplicate' | 'held' | 'merged'
 type BiliVideoUploadHashRecord = {
     hash: string
     path: string
@@ -114,9 +123,13 @@ class BiliForwarder extends Forwarder {
                 {
                     ok: true,
                     mode:
-                        videoUploadResult === true || videoUploadResult === 'uploaded'
-                            ? 'biliup'
-                            : `biliup_${videoUploadResult}`,
+                        videoUploadResult === 'held'
+                            ? BILIBILI_VIDEO_PAIRING_HELD_MODE
+                            : videoUploadResult === 'merged'
+                              ? BILIBILI_VIDEO_PAIRING_MERGED_MODE
+                              : videoUploadResult === 'duplicate'
+                                ? 'biliup_duplicate'
+                                : 'biliup',
                 },
             ]
         }
@@ -289,11 +302,74 @@ class BiliForwarder extends Forwarder {
         return error instanceof Error ? error.message : String(error)
     }
 
-    private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | false> {
+    private async tryHoldTeaserForPairing(
+        props: SendProps | undefined,
+        pairingConfig: NonNullable<ReturnType<typeof resolveVideoPairingConfig>>,
+    ): Promise<BiliVideoUploadResult | false> {
+        if (!props?.article || props.forceSend) {
+            return false
+        }
         const media = this.resolveVideoUploadMedia(props)
-        const videoUploadConfig =
-            ((this.getEffectiveConfig(props?.runtime_config) as any).video_upload as typeof this.video_upload) ||
-            this.video_upload
+        const held = await holdBilibiliVideoPairingTeaser({
+            targetId: this.id,
+            article: props.article,
+            media,
+            config: pairingConfig,
+            log: this.log,
+        })
+        return held.held ? 'held' : false
+    }
+
+    private async resolvePairedTeaserMedia(
+        props: SendProps | undefined,
+        pairingConfig: NonNullable<ReturnType<typeof resolveVideoPairingConfig>>,
+    ) {
+        if (!props?.article || props.forceSend) {
+            return null
+        }
+        const pairing = await findBilibiliPendingPairingForMainVideo({
+            targetId: this.id,
+            article: props.article,
+            config: pairingConfig,
+        })
+        if (!pairing) {
+            return null
+        }
+        const media = deserializeTeaserMedia(pairing)
+        if (media.length === 0) {
+            this.log?.warn(
+                `Dropping stale video pairing ${pairing.source_article_key}: no teaser media file is still available`,
+            )
+            await DB.VideoPairing.markStatus(pairing.id, DB.VideoPairing.STATUS.Dropped, {
+                reason: 'missing_teaser_media',
+            }).catch(() => undefined)
+            return null
+        }
+        this.log?.info(
+            `Merging Bilibili video ${props.article.a_id} with held teaser ${pairing.source_article_key} (${media.length} part(s))`,
+        )
+        return { pairing, media }
+    }
+
+    private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | false> {
+        const effectiveConfig = this.getEffectiveConfig(props?.runtime_config) as any
+        const pairingConfig = resolveVideoPairingConfig(effectiveConfig)
+        if (pairingConfig) {
+            await markExpiredVideoPairings(this.log).catch((error) =>
+                this.log?.warn(`Video pairing expiry sweep failed: ${this.formatError(error)}`),
+            )
+            const held = await this.tryHoldTeaserForPairing(props, pairingConfig)
+            if (held) {
+                return held
+            }
+        }
+
+        let media = this.resolveVideoUploadMedia(props)
+        const pairedTeaserMedia = pairingConfig ? await this.resolvePairedTeaserMedia(props, pairingConfig) : null
+        if (pairedTeaserMedia && pairedTeaserMedia.media.length > 0) {
+            media = [...media, ...pairedTeaserMedia.media]
+        }
+        const videoUploadConfig = (effectiveConfig.video_upload as typeof this.video_upload) || this.video_upload
         const candidate = buildBiliupUploadCandidate(props?.article, texts, media, videoUploadConfig)
         if (!candidate) {
             return false
@@ -312,6 +388,13 @@ class BiliForwarder extends Forwarder {
                 this.log?.warn(
                     `Skipping duplicate Bilibili video upload for ${props?.article?.a_id || 'unknown'}: ${detail} as ${duplicate.existing?.a_id || 'previous article'}`,
                 )
+                if (pairedTeaserMedia?.pairing) {
+                    await DB.VideoPairing.markStatus(pairedTeaserMedia.pairing.id, DB.VideoPairing.STATUS.Dropped, {
+                        reason: 'main_video_duplicate',
+                        duplicate_kind: duplicate.kind,
+                        existing_a_id: duplicate.existing?.a_id || null,
+                    }).catch(() => undefined)
+                }
                 return 'duplicate'
             }
         } catch (error) {
@@ -333,6 +416,25 @@ class BiliForwarder extends Forwarder {
                     )
                 },
             )
+            if (pairedTeaserMedia?.pairing) {
+                await DB.VideoPairing.markMerged(pairedTeaserMedia.pairing.id, {
+                    target_article_key: props?.article
+                        ? `${String(props.article.platform)}:${props.article.a_id}`
+                        : null,
+                    target_article_id: (props?.article as any)?.id || null,
+                    target_video_id: props?.article?.a_id || null,
+                    merge_result: {
+                        mode: BILIBILI_VIDEO_PAIRING_MERGED_MODE,
+                        parts: candidate.videoPaths.length,
+                        source_article_key: pairedTeaserMedia.pairing.source_article_key,
+                    },
+                }).catch((error) => {
+                    this.log?.error(
+                        `Failed to mark Bilibili video pairing merged for ${props?.article?.a_id}: ${error}`,
+                    )
+                })
+                return 'merged'
+            }
             return 'uploaded'
         } catch (error) {
             const message = this.formatError(error)

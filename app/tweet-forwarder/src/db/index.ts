@@ -30,6 +30,7 @@ type DBContentFingerprint = Prisma.article_content_fingerprintsGetPayload<{}>
 type DBAggregationWindow = Prisma.aggregation_windowsGetPayload<{}>
 type DBAggregationItem = Prisma.aggregation_itemsGetPayload<{}>
 type DBTargetHealth = Prisma.target_healthGetPayload<{}>
+type DBVideoPairing = Prisma.video_pairingsGetPayload<{}>
 
 interface TaskQueueListFilters {
     status?: string
@@ -760,10 +761,7 @@ namespace DB {
             })
         }
 
-        export async function list(
-            limit = 50,
-            filters?: string | TaskQueueListFilters,
-        ): Promise<Array<DBTaskQueue>> {
+        export async function list(limit = 50, filters?: string | TaskQueueListFilters): Promise<Array<DBTaskQueue>> {
             return await prisma.task_queue.findMany({
                 where: buildListWhere(filters),
                 orderBy: {
@@ -976,7 +974,8 @@ namespace DB {
         }): Promise<{ allowed: boolean; record: DBContentFingerprint }> {
             const now = Math.floor(Number(options.now || Date.now() / 1000))
             const windowSeconds = Math.max(0, Math.floor(Number(options.windowSeconds || 0)))
-            const platform = options.platform === undefined || options.platform === null ? null : String(options.platform)
+            const platform =
+                options.platform === undefined || options.platform === null ? null : String(options.platform)
             const existing = await prisma.article_content_fingerprints.findUnique({
                 where: {
                     scope_target_id_fingerprint: {
@@ -989,7 +988,8 @@ namespace DB {
             if (existing) {
                 const active =
                     existing.status === STATUS.Sent &&
-                    (windowSeconds <= 0 || Number(existing.updated_at || existing.created_at || 0) >= now - windowSeconds)
+                    (windowSeconds <= 0 ||
+                        Number(existing.updated_at || existing.created_at || 0) >= now - windowSeconds)
                 if (active) {
                     return { allowed: false, record: existing }
                 }
@@ -1409,11 +1409,7 @@ namespace DB {
                               }
                             : undefined,
                     status: {
-                        in: [
-                            OUTBOUND_STATUS.Sent,
-                            OUTBOUND_STATUS.Partial,
-                            OUTBOUND_STATUS.FailedAfterPartial,
-                        ],
+                        in: [OUTBOUND_STATUS.Sent, OUTBOUND_STATUS.Partial, OUTBOUND_STATUS.FailedAfterPartial],
                     },
                 },
                 orderBy: [{ finished_at: 'desc' }, { updated_at: 'desc' }, { created_at: 'desc' }],
@@ -1551,6 +1547,229 @@ namespace DB {
         }
     }
 
+    export namespace VideoPairing {
+        export const STATUS = {
+            Pending: 'pending',
+            Merged: 'merged',
+            Dropped: 'dropped',
+            Expired: 'expired',
+        } as const
+
+        export type Status = (typeof STATUS)[keyof typeof STATUS]
+
+        export const TERMINAL_STATUSES = new Set<string>([STATUS.Merged, STATUS.Dropped, STATUS.Expired])
+
+        export function isTerminalStatus(status: string) {
+            return TERMINAL_STATUSES.has(status)
+        }
+
+        interface UpsertPendingInput {
+            pairing_key: string
+            target_id: string
+            source_article_key: string
+            source_article_id?: number | null
+            source_platform: string
+            source_a_id: string
+            source_u_id?: string | null
+            source_username?: string | null
+            source_created_at: number
+            join_platform: string
+            target_video_id?: string | null
+            target_profile_url?: string | null
+            target_u_id?: string | null
+            target_username?: string | null
+            teaser_media?: unknown
+            expires_at: number
+        }
+
+        export async function upsertPending(
+            input: UpsertPendingInput,
+        ): Promise<{ record: DBVideoPairing; created: boolean }> {
+            const now = Math.floor(Date.now() / 1000)
+            const existing = await prisma.video_pairings.findUnique({
+                where: {
+                    target_id_source_article_key: {
+                        target_id: input.target_id,
+                        source_article_key: input.source_article_key,
+                    },
+                },
+            })
+            if (existing) {
+                if (existing.status === STATUS.Pending) {
+                    const refreshed = await prisma.video_pairings.update({
+                        where: { id: existing.id },
+                        data: {
+                            target_video_id: input.target_video_id ?? existing.target_video_id,
+                            target_profile_url: input.target_profile_url ?? existing.target_profile_url,
+                            target_u_id: input.target_u_id ?? existing.target_u_id,
+                            target_username: input.target_username ?? existing.target_username,
+                            teaser_media:
+                                (input.teaser_media as Prisma.InputJsonValue | undefined) ??
+                                (existing.teaser_media === null ? Prisma.JsonNull : undefined),
+                            expires_at: input.expires_at,
+                            updated_at: now,
+                        },
+                    })
+                    return { record: refreshed, created: false }
+                }
+                return { record: existing, created: false }
+            }
+            try {
+                const record = await prisma.video_pairings.create({
+                    data: {
+                        pairing_key: input.pairing_key,
+                        target_id: input.target_id,
+                        status: STATUS.Pending,
+                        source_article_key: input.source_article_key,
+                        source_article_id: input.source_article_id ?? null,
+                        source_platform: input.source_platform,
+                        source_a_id: input.source_a_id,
+                        source_u_id: input.source_u_id ?? null,
+                        source_username: input.source_username ?? null,
+                        source_created_at: input.source_created_at,
+                        join_platform: input.join_platform,
+                        target_video_id: input.target_video_id ?? null,
+                        target_profile_url: input.target_profile_url ?? null,
+                        target_u_id: input.target_u_id ?? null,
+                        target_username: input.target_username ?? null,
+                        teaser_media: (input.teaser_media as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                        expires_at: input.expires_at,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                })
+                return { record, created: true }
+            } catch (error) {
+                if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                    const record = await prisma.video_pairings.findFirstOrThrow({
+                        where: {
+                            target_id: input.target_id,
+                            source_article_key: input.source_article_key,
+                        },
+                    })
+                    return { record, created: false }
+                }
+                throw error
+            }
+        }
+
+        export async function findPendingForMainVideo(options: {
+            target_id: string
+            join_platform: string
+            video_id?: string | null
+            u_id?: string | null
+            username?: string | null
+            now?: number
+        }): Promise<DBVideoPairing | null> {
+            const now = options.now ?? Math.floor(Date.now() / 1000)
+            if (options.video_id) {
+                const exact = await prisma.video_pairings.findFirst({
+                    where: {
+                        target_id: options.target_id,
+                        join_platform: options.join_platform,
+                        status: STATUS.Pending,
+                        target_video_id: options.video_id,
+                        expires_at: { gte: now },
+                    },
+                    orderBy: { created_at: 'desc' },
+                })
+                if (exact) {
+                    return exact
+                }
+            }
+            const authorTokens = [options.u_id, options.username]
+                .map((value) =>
+                    String(value || '')
+                        .trim()
+                        .toLowerCase(),
+                )
+                .filter(Boolean)
+            if (authorTokens.length === 0) {
+                return null
+            }
+            const candidates = await prisma.video_pairings.findMany({
+                where: {
+                    target_id: options.target_id,
+                    join_platform: options.join_platform,
+                    status: STATUS.Pending,
+                    expires_at: { gte: now },
+                },
+                orderBy: { created_at: 'desc' },
+                take: 50,
+            })
+            return (
+                candidates.find((candidate) => {
+                    const candidateTokens = [
+                        candidate.target_u_id,
+                        candidate.target_username,
+                        candidate.target_profile_url,
+                    ]
+                        .map((value) =>
+                            String(value || '')
+                                .trim()
+                                .toLowerCase(),
+                        )
+                        .filter(Boolean)
+                    return authorTokens.some((token) =>
+                        candidateTokens.some((candidateToken) => candidateToken.includes(token)),
+                    )
+                }) || null
+            )
+        }
+
+        export async function markMerged(
+            id: number,
+            data: {
+                target_article_key?: string | null
+                target_article_id?: number | null
+                target_video_id?: string | null
+                merge_result?: unknown
+            } = {},
+        ): Promise<DBVideoPairing> {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.video_pairings.update({
+                where: { id },
+                data: {
+                    status: STATUS.Merged,
+                    target_article_key: data.target_article_key ?? undefined,
+                    target_article_id: data.target_article_id ?? undefined,
+                    target_video_id: data.target_video_id ?? undefined,
+                    merge_result: (data.merge_result as Prisma.InputJsonValue | undefined) ?? undefined,
+                    updated_at: now,
+                    finished_at: now,
+                },
+            })
+        }
+
+        export async function markStatus(id: number, status: Status, meta?: unknown): Promise<DBVideoPairing> {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.video_pairings.update({
+                where: { id },
+                data: {
+                    status,
+                    merge_result: (meta as Prisma.InputJsonValue | undefined) ?? undefined,
+                    updated_at: now,
+                    finished_at: isTerminalStatus(status) ? now : null,
+                },
+            })
+        }
+
+        export async function listExpired(now = Math.floor(Date.now() / 1000)): Promise<Array<DBVideoPairing>> {
+            return await prisma.video_pairings.findMany({
+                where: {
+                    status: STATUS.Pending,
+                    expires_at: { lt: now },
+                },
+                orderBy: { expires_at: 'asc' },
+                take: 100,
+            })
+        }
+
+        export async function get(id: number): Promise<DBVideoPairing | null> {
+            return await prisma.video_pairings.findUnique({ where: { id } })
+        }
+    }
+
     export namespace TargetHealth {
         export async function mark(data: {
             target_id: string
@@ -1608,4 +1827,5 @@ export type {
     DBProcessorRun,
     DBTargetHealth,
     DBTaskQueue,
+    DBVideoPairing,
 }
