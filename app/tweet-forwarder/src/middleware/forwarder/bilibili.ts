@@ -92,6 +92,8 @@ class BiliForwarder extends Forwarder {
     NAME = 'bilibili'
     private bili_jct: string
     private sessdata: string
+    private buvid3: string
+    private buvid4: string
     private media_check_level: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['media_check_level']
     private video_upload: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['video_upload']
     private dynamicDetailValidationRetries = 3
@@ -103,6 +105,8 @@ class BiliForwarder extends Forwarder {
         const {
             bili_jct,
             sessdata,
+            buvid3 = '',
+            buvid4 = '',
             media_check_level = 'none',
             video_upload,
         } = config as ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>
@@ -111,8 +115,26 @@ class BiliForwarder extends Forwarder {
         }
         this.bili_jct = bili_jct
         this.sessdata = sessdata
+        this.buvid3 = buvid3
+        this.buvid4 = buvid4
         this.media_check_level = media_check_level
         this.video_upload = video_upload
+    }
+
+    private buildBiliCookieHeader(): string {
+        const parts = [`SESSDATA=${this.sessdata}`, `bili_jct=${this.bili_jct}`]
+        if (this.buvid3) parts.push(`buvid3=${this.buvid3}`)
+        if (this.buvid4) parts.push(`buvid4=${this.buvid4}`)
+        return parts.join('; ')
+    }
+
+    private get biliApiHeaders() {
+        return {
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            Referer: 'https://t.bilibili.com/',
+            Origin: 'https://t.bilibili.com',
+        }
     }
 
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
@@ -672,7 +694,8 @@ class BiliForwarder extends Forwarder {
         const res = await axios.post('https://api.bilibili.com/x/dynamic/feed/draw/upload_bfs', form, {
             headers: {
                 ...form.getHeaders(),
-                Cookie: `SESSDATA=${this.sessdata}; bili_jct=${this.bili_jct}`,
+                ...this.biliApiHeaders,
+                Cookie: this.buildBiliCookieHeader(),
             },
         })
         this.log?.debug(`Upload photo response: ${JSON.stringify(res.data)}`)
@@ -702,7 +725,8 @@ class BiliForwarder extends Forwarder {
             {
                 headers: {
                     'Content-Type': 'application/json',
-                    Cookie: `SESSDATA=${this.sessdata}; bili_jct=${this.bili_jct}`,
+                    ...this.biliApiHeaders,
+                    Cookie: this.buildBiliCookieHeader(),
                 },
                 params: {
                     csrf: this.bili_jct,
@@ -740,7 +764,8 @@ class BiliForwarder extends Forwarder {
             {
                 headers: {
                     'Content-Type': 'application/json',
-                    Cookie: `SESSDATA=${this.sessdata}; bili_jct=${this.bili_jct}`,
+                    ...this.biliApiHeaders,
+                    Cookie: this.buildBiliCookieHeader(),
                 },
                 params: {
                     csrf: this.bili_jct,

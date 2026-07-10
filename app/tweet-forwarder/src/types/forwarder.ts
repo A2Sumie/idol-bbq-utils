@@ -92,6 +92,8 @@ type PlatformConfigMap = {
     [ForwardTargetPlatformEnum.Bilibili]: {
         bili_jct: string
         sessdata: string
+        buvid3?: string
+        buvid4?: string
         media_check_level?: 'strict' | 'loose' | 'none'
         video_upload?: BiliupVideoUploadConfig
     }
