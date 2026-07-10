@@ -223,7 +223,21 @@ async function main() {
     }
 
     let changed = 0
+    let skipped = 0
     for (const { label, block } of blocks) {
+        if (mode === 'hy3') {
+            const rf = block.cfg_processor?.response_format
+            if (rf === 'json_object' || rf === 'json_schema') {
+                console.log(`  skipped ${label}: response_format=${rf} not supported by hy3-free, keeping v4-pro`)
+                skipped++
+                continue
+            }
+            const maxTokens = block.cfg_processor?.max_tokens
+            if (typeof maxTokens === 'number' && maxTokens < 1024) {
+                block.cfg_processor!.max_tokens = 2048
+                console.log(`  bumped ${label} max_tokens ${maxTokens} -> 2048 (hy3 reasoning needs headroom)`)
+            }
+        }
         if (switchBlock(block, mode)) {
             changed++
             console.log(`  switched ${label} -> ${mode}`)
@@ -231,7 +245,7 @@ async function main() {
     }
 
     if (changed === 0) {
-        console.log('No blocks needed switching.')
+        console.log(`No blocks needed switching. (${skipped} skipped due to json_object incompatibility)`)
         return
     }
 
