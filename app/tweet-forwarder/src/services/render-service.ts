@@ -162,8 +162,35 @@ export class RenderService {
         let textCollapseMode: RenderResult['textCollapseMode'] = 'none'
 
         // Helper: Generate Rendered Image
+        const sanitizeArticleForRender = (cardArticle: Article): Article => {
+            const sanitized = cloneDeep(cardArticle)
+            const ensureMediaArray = (obj: any) => {
+                if (!obj || typeof obj !== 'object') return
+                if (Array.isArray(obj)) {
+                    obj.forEach(ensureMediaArray)
+                    return
+                }
+                if ('media' in obj && !Array.isArray(obj.media) && obj.media !== null) {
+                    obj.media = [obj.media]
+                }
+                if ('media' in obj && obj.media === null) {
+                    delete obj.media
+                }
+                if ('items' in obj && Array.isArray(obj.items)) {
+                    obj.items.forEach(ensureMediaArray)
+                }
+                if ('groups' in obj && Array.isArray(obj.groups)) {
+                    obj.groups.forEach(ensureMediaArray)
+                }
+                if ('ref' in obj && obj.ref && typeof obj.ref === 'object') {
+                    ensureMediaArray(obj.ref)
+                }
+            }
+            ensureMediaArray(sanitized)
+            return sanitized
+        }
         const renderArticleImage = async (cardArticle: Article) => {
-            return await this.ArticleConverter.articleToImg(cardArticle, {
+            return await this.ArticleConverter.articleToImg(sanitizeArticleForRender(cardArticle), {
                 features: this.resolveCardFeatures(config.card_features),
             })
         }
