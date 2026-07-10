@@ -672,7 +672,7 @@ class BiliForwarder extends Forwarder {
         const res = await axios.post('https://api.bilibili.com/x/dynamic/feed/draw/upload_bfs', form, {
             headers: {
                 ...form.getHeaders(),
-                Cookie: `SESSDATA=${this.sessdata}`,
+                Cookie: `SESSDATA=${this.sessdata}; bili_jct=${this.bili_jct}`,
             },
         })
         this.log?.debug(`Upload photo response: ${JSON.stringify(res.data)}`)
@@ -702,7 +702,7 @@ class BiliForwarder extends Forwarder {
             {
                 headers: {
                     'Content-Type': 'application/json',
-                    Cookie: `SESSDATA=${this.sessdata}`,
+                    Cookie: `SESSDATA=${this.sessdata}; bili_jct=${this.bili_jct}`,
                 },
                 params: {
                     csrf: this.bili_jct,
@@ -740,7 +740,7 @@ class BiliForwarder extends Forwarder {
             {
                 headers: {
                     'Content-Type': 'application/json',
-                    Cookie: `SESSDATA=${this.sessdata}`,
+                    Cookie: `SESSDATA=${this.sessdata}; bili_jct=${this.bili_jct}`,
                 },
                 params: {
                     csrf: this.bili_jct,
