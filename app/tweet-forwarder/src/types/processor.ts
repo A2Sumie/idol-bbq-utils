@@ -4,6 +4,7 @@ type ByteDance_LLM = 'doubao-pro-128k'
 type BigModel_LLM = 'glm-4-flash'
 type Google_LLM = 'gemini'
 type Deepseek_LLM = 'deepseek-v3' | 'deepseek-v4-flash' | 'deepseek-v4-pro'
+type Hy3_LLM = 'hy3-free'
 
 type OpenA_Like_LLM = 'Openai'
 
@@ -40,6 +41,11 @@ enum ProcessorProvider {
      * OpenAI-compatible OpenCode Go endpoint for DeepSeek V4 Pro
      */
     DeepSeekV4Pro = 'DeepSeekV4Pro',
+    /**
+     * OpenAI-compatible OpenCode Zen endpoint for HY3 Free (stealth, limited-time free).
+     * Falls back to DeepSeek V4 Pro when the circuit breaker is frozen.
+     */
+    Hy3Free = 'Hy3Free',
     /**
      * Qwen MT model
      */
@@ -79,6 +85,24 @@ interface ProcessorConfig extends CommonCfgConfig {
     schedule_waf_bypass_header?: string
     result_key?: string
     min_confidence?: number
+    /**
+     * Fallback processor config used when the primary provider fails or is
+     * circuit-broken. Only the model-mechanic fields (model_id, base_url,
+     * temperature, extended_payload) are applied; prompt/assets/response_format
+     * are inherited from the primary config so output shape stays identical.
+     */
+    fallback?: ProcessorFallbackConfig
+}
+
+interface ProcessorFallbackConfig {
+    /**
+     * Informational only — the Hy3Free provider always falls back to DeepSeek V4 Pro.
+     */
+    provider?: string
+    model_id?: string
+    base_url?: string
+    temperature?: number
+    extended_payload?: Record<string, any>
 }
 
 interface ProcessorPromptAssetConfig {
@@ -100,4 +124,4 @@ interface Processor {
 }
 
 export { ProcessorProvider }
-export type { Processor, ProcessorConfig, ProcessorPromptAssetConfig }
+export type { Processor, ProcessorConfig, ProcessorPromptAssetConfig, ProcessorFallbackConfig }

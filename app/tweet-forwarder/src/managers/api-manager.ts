@@ -61,6 +61,7 @@ import {
     getKnownModelCapability,
     resolveDefaultModelId,
 } from '@/services/processor-model-capability-service'
+import { getHy3CircuitBreaker } from '@/services/hy3-circuit-breaker-service'
 import {
     CodexMcpDisabledError,
     createCodexMcpClientServiceFromEnv,
@@ -663,6 +664,8 @@ export class APIManager extends BaseCompatibleModel {
         if (req.method === 'GET' && url.pathname === '/api/agent/status') return this.handleAgentStatus()
         if (req.method === 'GET' && url.pathname === '/api/agent/models') return this.handleAgentModels()
         if (req.method === 'POST' && url.pathname === '/api/agent/probe-model') return this.handleAgentModelProbe(req)
+        if (req.method === 'GET' && url.pathname === '/api/agent/hy3/status') return this.handleHy3Status()
+        if (req.method === 'POST' && url.pathname === '/api/agent/hy3/unfreeze') return this.handleHy3Unfreeze()
         if (req.method === 'GET' && url.pathname === '/api/agent/codex/status') return this.handleAgentCodexStatus()
         if (req.method === 'POST' && url.pathname === '/api/agent/codex/run') return this.handleAgentCodexRun(req)
         if (req.method === 'POST' && url.pathname === '/api/agent/codex/reply') return this.handleAgentCodexReply(req)
@@ -1326,6 +1329,8 @@ export class APIManager extends BaseCompatibleModel {
                 status: '/api/agent/status',
                 models: '/api/agent/models',
                 probe_model: '/api/agent/probe-model',
+                hy3_status: '/api/agent/hy3/status',
+                hy3_unfreeze: '/api/agent/hy3/unfreeze',
                 codex_status: '/api/agent/codex/status',
                 codex_run: '/api/agent/codex/run',
                 codex_reply: '/api/agent/codex/reply',
@@ -1439,6 +1444,23 @@ export class APIManager extends BaseCompatibleModel {
                 502,
             )
         }
+    }
+
+    private async handleHy3Status(): Promise<Response> {
+        const breaker = getHy3CircuitBreaker(this.log)
+        return jsonResponse({
+            success: true,
+            ...breaker.getDetailedStatus(),
+        })
+    }
+
+    private async handleHy3Unfreeze(): Promise<Response> {
+        const breaker = getHy3CircuitBreaker(this.log)
+        return jsonResponse({
+            success: true,
+            message: 'HY3 circuit breaker unfrozen.',
+            ...breaker.unfreeze(),
+        })
     }
 
     private async handleAgentCodexStatus(): Promise<Response> {

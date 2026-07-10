@@ -39,6 +39,9 @@ services:
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
+      # HY3-free circuit breaker tuning (defaults: threshold=10, no auto-unfreeze).
+      - HY3_FAILURE_THRESHOLD=${HY3_FAILURE_THRESHOLD:-}
+      - HY3_FREEZE_DURATION_MS=${HY3_FREEZE_DURATION_MS:-}
       # Optional host-side Codex MCP bridge. OpenCode Go is only a DeepSeek API provider;
       # this bridge is the idol-bbq -> MCP -> Codex path.
       - IDOL_BBQ_CODEX_MCP_ENABLED=${IDOL_BBQ_CODEX_MCP_ENABLED:-0}

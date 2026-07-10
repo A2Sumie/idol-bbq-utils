@@ -1,7 +1,8 @@
 import { BaseProcessor } from './base'
 import axios from 'axios'
-import { type ProcessorConfig, ProcessorProvider } from '@/types/processor'
+import { type ProcessorConfig, type ProcessorFallbackConfig, ProcessorProvider } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
+import { getHy3CircuitBreaker } from '@/services/hy3-circuit-breaker-service'
 
 abstract class BaseOpenai extends BaseProcessor {
     public name = 'base openai translator'
@@ -30,6 +31,13 @@ const DEEPSEEK_V4_PRO_DEFAULT_CONFIG: ProcessorConfig = {
             type: 'disabled',
         },
     },
+}
+
+const HY3_FREE_DEFAULT_CONFIG: ProcessorConfig = {
+    name: 'OpenCode-Zen-Hy3-Free',
+    model_id: 'hy3-free',
+    base_url: 'https://opencode.ai/zen/v1/chat/completions',
+    temperature: 1.0,
 }
 
 function mergeProcessorDefaults(defaults: ProcessorConfig, config?: ProcessorConfig): ProcessorConfig {
@@ -97,4 +105,64 @@ class DeepSeekV4ProTranslator extends OpenaiLikeLLMTranslator {
     }
 }
 
-export { DeepSeekV4FlashTranslator, DeepSeekV4ProTranslator, OpenaiLikeLLMTranslator }
+function buildFallbackProcessorConfig(
+    primary: ProcessorConfig,
+    fallback?: ProcessorFallbackConfig,
+): ProcessorConfig {
+    const { fallback: _omit, extended_payload: _primaryPayload, ...primaryShared } = primary
+    const name = `${primary.name || 'hy3'}-fallback-v4pro`
+    if (!fallback) {
+        return { ...primaryShared, name }
+    }
+    return {
+        ...primaryShared,
+        name,
+        model_id: fallback.model_id ?? primaryShared.model_id,
+        base_url: fallback.base_url ?? primaryShared.base_url,
+        temperature: fallback.temperature ?? primaryShared.temperature,
+        extended_payload: fallback.extended_payload,
+    }
+}
+
+class Hy3FreeTranslator extends OpenaiLikeLLMTranslator {
+    static _PROVIDER = ProcessorProvider.Hy3Free
+    private fallbackProcessor: DeepSeekV4ProTranslator
+    private breaker = getHy3CircuitBreaker()
+
+    constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
+        const merged = mergeProcessorDefaults(HY3_FREE_DEFAULT_CONFIG, config)
+        super(api_key, log, merged)
+        this.breaker = getHy3CircuitBreaker(log)
+        const fallbackConfig = buildFallbackProcessorConfig(merged, config?.fallback)
+        this.fallbackProcessor = new DeepSeekV4ProTranslator(api_key, log, fallbackConfig)
+    }
+
+    async init(): Promise<void> {
+        await super.init()
+        await this.fallbackProcessor.init()
+    }
+
+    async drop(...args: any[]): Promise<void> {
+        await Promise.all([super.drop(...args), this.fallbackProcessor.drop(...args)])
+    }
+
+    public async process(text: string): Promise<string> {
+        if (this.breaker.isFrozen()) {
+            this.log?.warn('HY3 frozen — using v4-pro fallback directly')
+            this.breaker.recordFallback()
+            return this.fallbackProcessor.process(text)
+        }
+        try {
+            const result = await super.process(text)
+            this.breaker.recordSuccess()
+            return result
+        } catch (error) {
+            this.breaker.recordFailure(error)
+            this.breaker.recordFallback()
+            this.log?.warn(`HY3 request failed — delegating to v4-pro fallback: ${error instanceof Error ? error.message : String(error)}`)
+            return this.fallbackProcessor.process(text)
+        }
+    }
+}
+
+export { DeepSeekV4FlashTranslator, DeepSeekV4ProTranslator, Hy3FreeTranslator, OpenaiLikeLLMTranslator }

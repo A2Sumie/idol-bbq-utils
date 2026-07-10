@@ -4,7 +4,7 @@ import { GoogleLLMTranslator } from './google'
 import { ByteDanceLLMTranslator } from './bytedance'
 import { BigModelLLMTranslator } from './bigmodel'
 import { DeepSeekLLMTranslator } from './deepseek'
-import { DeepSeekV4FlashTranslator, DeepSeekV4ProTranslator, OpenaiLikeLLMTranslator } from './openai'
+import { DeepSeekV4FlashTranslator, DeepSeekV4ProTranslator, Hy3FreeTranslator, OpenaiLikeLLMTranslator } from './openai'
 import { QwenMTTranslator } from './qwen'
 import { MechanicalProcessor } from './mechanical'
 
@@ -45,6 +45,12 @@ const DeepSeekV4ProPlugin: ProcessorPlugin = {
     create: (apiKey, log, config) => new DeepSeekV4ProTranslator(apiKey, log, config),
 }
 
+const Hy3FreePlugin: ProcessorPlugin = {
+    provider: ProcessorProvider.Hy3Free,
+    aliases: ['Hy3Free', 'hy3-free', 'hy3', 'Hy3'],
+    create: (apiKey, log, config) => new Hy3FreeTranslator(apiKey, log, config),
+}
+
 const QwenMTPlugin: ProcessorPlugin = {
     provider: ProcessorProvider.QwenMT,
     create: (apiKey, log, config) => new QwenMTTranslator(apiKey, log, config),
@@ -63,6 +69,7 @@ const processorRegistry = ProcessorRegistry.getInstance()
     .register(OpenAIPlugin)
     .register(DeepSeekV4FlashPlugin)
     .register(DeepSeekV4ProPlugin)
+    .register(Hy3FreePlugin)
     .register(QwenMTPlugin)
     .register(MechanicalPlugin)
 
@@ -79,6 +86,7 @@ const processors: Array<ProcessorConstructor> = [
     OpenaiLikeLLMTranslator,
     DeepSeekV4FlashTranslator,
     DeepSeekV4ProTranslator,
+    Hy3FreeTranslator,
     QwenMTTranslator,
     MechanicalProcessor,
 ]
