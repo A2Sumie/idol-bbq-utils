@@ -1,4 +1,4 @@
-import { BaseProcessor } from './base'
+import { BaseProcessor, resolveProcessorApiKey } from './base'
 import axios from 'axios'
 import { type ProcessorConfig, type ProcessorFallbackConfig, ProcessorProvider } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
@@ -34,9 +34,9 @@ const DEEPSEEK_V4_PRO_DEFAULT_CONFIG: ProcessorConfig = {
 }
 
 const HY3_FREE_DEFAULT_CONFIG: ProcessorConfig = {
-    name: 'OpenCode-Zen-Hy3-Free',
-    model_id: 'hy3-free',
-    base_url: 'https://opencode.ai/zen/v1/chat/completions',
+    name: 'Tencent-LKEAP-Hunyuan-Hy3',
+    model_id: 'hy3',
+    base_url: 'https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions',
     temperature: 1.0,
 }
 
@@ -110,7 +110,7 @@ function buildFallbackProcessorConfig(
     fallback?: ProcessorFallbackConfig,
 ): ProcessorConfig {
     const { fallback: _omit, extended_payload: _primaryPayload, ...primaryShared } = primary
-    const name = `${primary.name || 'hy3'}-fallback-v4pro`
+    const name = `${primary.name || 'hunyuan'}-fallback-v4pro`
     if (!fallback) {
         return { ...primaryShared, name }
     }
@@ -134,7 +134,8 @@ class Hy3FreeTranslator extends OpenaiLikeLLMTranslator {
         super(api_key, log, merged)
         this.breaker = getHy3CircuitBreaker(log)
         const fallbackConfig = buildFallbackProcessorConfig(merged, config?.fallback)
-        this.fallbackProcessor = new DeepSeekV4ProTranslator(api_key, log, fallbackConfig)
+        const fallbackApiKey = config?.fallback?.api_key ? resolveProcessorApiKey(config.fallback.api_key) : api_key
+        this.fallbackProcessor = new DeepSeekV4ProTranslator(fallbackApiKey, log, fallbackConfig)
     }
 
     async init(): Promise<void> {

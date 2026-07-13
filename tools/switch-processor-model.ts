@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 /**
- * switch-processor-model.ts — toggle idol-bbq processors between HY3-free (Zen)
+ * switch-processor-model.ts — toggle idol-bbq processors between Tencent Hunyuan (hy3)
  * and DeepSeek V4 Pro (Go) without touching source code.
  *
  * Usage:
- *   bun tools/switch-processor-model.ts hy3     # switch all v4-pro processors to hy3-free
+ *   bun tools/switch-processor-model.ts hy3     # switch all v4-pro processors to Tencent Hunyuan (hy3)
  *   bun tools/switch-processor-model.ts v4pro   # switch back to v4-pro (quick revert)
  *   bun tools/switch-processor-model.ts status  # show current mode per processor
  *
@@ -16,7 +16,7 @@
  *   5. On reload failure, restores the backup and exits non-zero.
  *
  * Guard: before switching to hy3, probes /api/agent/models. If the runtime image
- * does not report hy3-free capability, it warns and requires --force.
+ * does not report hy3 capability, it warns and requires --force.
  */
 
 import fs from 'fs'
@@ -25,8 +25,9 @@ import YAML from 'yaml'
 
 const V4PRO_PROVIDER = 'DeepSeekV4Pro'
 const HY3_PROVIDER = 'Hy3Free'
+const HY3_API_KEY_ENV = 'env:TENCENT_HUNYUAN_API_KEY'
 const GO_BASE_URL = 'https://opencode.ai/zen/go/v1/chat/completions'
-const ZEN_BASE_URL = 'https://opencode.ai/zen/v1/chat/completions'
+const HY3_BASE_URL = 'https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions'
 
 const MODES = ['hy3', 'v4pro', 'status'] as const
 type Mode = (typeof MODES)[number]
@@ -89,12 +90,14 @@ function switchBlock(block: ProcessorLikeBlock, mode: 'hy3' | 'v4pro'): boolean 
 
     if (mode === 'hy3') {
         block.provider = HY3_PROVIDER
-        cfg.model_id = 'hy3-free'
-        cfg.base_url = ZEN_BASE_URL
+        block.api_key = HY3_API_KEY_ENV
+        cfg.model_id = 'hy3'
+        cfg.base_url = HY3_BASE_URL
         cfg.temperature = originalTemp
         delete cfg.extended_payload
         cfg.fallback = {
             provider: V4PRO_PROVIDER,
+            api_key: 'env:OPENCODE_GO_API_KEY',
             model_id: 'deepseek-v4-pro',
             base_url: GO_BASE_URL,
             temperature: originalTemp,
@@ -102,8 +105,9 @@ function switchBlock(block: ProcessorLikeBlock, mode: 'hy3' | 'v4pro'): boolean 
         }
     } else {
         block.provider = V4PRO_PROVIDER
-        cfg.model_id = 'deepseek-v4-pro'
+        block.api_key = 'env:OPENCODE_GO_API_KEY'
         delete cfg.base_url
+        cfg.model_id = 'deepseek-v4-pro'
         cfg.temperature = originalTemp
         delete cfg.fallback
         delete cfg.extended_payload
@@ -151,7 +155,7 @@ async function probeRuntimeSupportsHy3(): Promise<{ reachable: boolean; supports
         })
         if (!res.ok) return { reachable: true, supportsHy3: false }
         const data = (await res.json()) as { models?: Array<{ model_id?: string; hy3?: { frozen: boolean } }> }
-        const supportsHy3 = Boolean(data.models?.some((m) => m.model_id === 'hy3-free'))
+        const supportsHy3 = Boolean(data.models?.some((m) => m.model_id === 'hy3' || m.model_id === 'hy3-free'))
         return { reachable: true, supportsHy3 }
     } catch {
         return { reachable: false, supportsHy3: false }
@@ -212,7 +216,7 @@ async function main() {
         const probe = await probeRuntimeSupportsHy3()
         if (probe.reachable && !probe.supportsHy3) {
             console.error(
-                'Runtime is reachable but does not report hy3-free capability.\n' +
+                'Runtime is reachable but does not report hy3 capability.\n' +
                     'Deploy the Hy3Free code first, or use --force to switch config anyway.',
             )
             process.exit(1)
@@ -226,26 +230,22 @@ async function main() {
     let skipped = 0
     for (const { label, block } of blocks) {
         if (mode === 'hy3') {
-            const rf = block.cfg_processor?.response_format
-            if (rf === 'json_object' || rf === 'json_schema') {
-                console.log(`  skipped ${label}: response_format=${rf} not supported by hy3-free, keeping v4-pro`)
-                skipped++
-                continue
-            }
             const maxTokens = block.cfg_processor?.max_tokens
             if (typeof maxTokens === 'number' && maxTokens < 1024) {
                 block.cfg_processor!.max_tokens = 2048
-                console.log(`  bumped ${label} max_tokens ${maxTokens} -> 2048 (hy3 reasoning needs headroom)`)
+                console.log(`  bumped ${label} max_tokens ${maxTokens} -> 2048 (hunyuan output headroom)`)
             }
         }
         if (switchBlock(block, mode)) {
             changed++
             console.log(`  switched ${label} -> ${mode}`)
+        } else {
+            skipped++
         }
     }
 
     if (changed === 0) {
-        console.log(`No blocks needed switching. (${skipped} skipped due to json_object incompatibility)`)
+        console.log(`No blocks needed switching. (${skipped} skipped)`)
         return
     }
 

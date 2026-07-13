@@ -4,7 +4,7 @@ type ByteDance_LLM = 'doubao-pro-128k'
 type BigModel_LLM = 'glm-4-flash'
 type Google_LLM = 'gemini'
 type Deepseek_LLM = 'deepseek-v3' | 'deepseek-v4-flash' | 'deepseek-v4-pro'
-type Hy3_LLM = 'hy3-free'
+type Hy3_LLM = 'hy3-free' | 'hy3'
 
 type OpenA_Like_LLM = 'Openai'
 
@@ -42,8 +42,9 @@ enum ProcessorProvider {
      */
     DeepSeekV4Pro = 'DeepSeekV4Pro',
     /**
-     * OpenAI-compatible OpenCode Zen endpoint for HY3 Free (stealth, limited-time free).
-     * Falls back to DeepSeek V4 Pro when the circuit breaker is frozen.
+     * OpenAI-compatible Tencent Hunyuan (hy3) endpoint, via the LKEAP
+     * subscription-plan chat-completions API. Falls back to DeepSeek V4 Pro
+     * (via the OpenCode Go endpoint) when the circuit breaker is frozen.
      */
     Hy3Free = 'Hy3Free',
     /**
@@ -96,9 +97,10 @@ interface ProcessorConfig extends CommonCfgConfig {
 
 interface ProcessorFallbackConfig {
     /**
-     * Informational only — the Hy3Free provider always falls back to DeepSeek V4 Pro.
+     * Informational only — Hunyuan (Hy3Free) processors fall back to DeepSeek V4 Pro.
      */
     provider?: string
+    api_key?: string
     model_id?: string
     base_url?: string
     temperature?: number

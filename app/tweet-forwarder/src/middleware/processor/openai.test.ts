@@ -167,7 +167,7 @@ test('DeepSeek V4 Flash provider can request JSON object mode without JSON schem
     }
 })
 
-test('Hy3Free provider calls Zen endpoint with model hy3-free on success', async () => {
+test('Hy3Free provider calls Tencent LKEAP endpoint with model hy3 on success', async () => {
     const originalPost = axios.post
     const calls: Array<{ url: string; body: any; options: any }> = []
     ;(axios as any).post = async (url: string, body: any, options: any) => {
@@ -191,9 +191,9 @@ test('Hy3Free provider calls Zen endpoint with model hy3-free on success', async
 
             expect(result).toBe('译文')
             expect(calls).toHaveLength(1)
-            expect(calls[0]?.url).toBe('https://opencode.ai/zen/v1/chat/completions')
+            expect(calls[0]?.url).toBe('https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions')
             expect(calls[0]?.body).toMatchObject({
-                model: 'hy3-free',
+                model: 'hy3',
                 temperature: 1.0,
                 messages: [
                     { role: 'system', content: 'Translate to Simplified Chinese.' },
@@ -213,7 +213,7 @@ test('Hy3Free provider falls back to v4-pro Go endpoint on failure', async () =>
     const calls: Array<{ url: string; body: any; options: any }> = []
     ;(axios as any).post = async (url: string, body: any, options: any) => {
         calls.push({ url, body, options })
-        if (url.includes('/zen/v1/')) {
+        if (url.includes('lkeap.cloud.tencent.com')) {
             throw new Error('hy3 unavailable')
         }
         return { data: { choices: [{ message: { content: 'fallback译文' } }] } }
@@ -235,8 +235,8 @@ test('Hy3Free provider falls back to v4-pro Go endpoint on failure', async () =>
 
             expect(result).toBe('fallback译文')
             expect(calls).toHaveLength(2)
-            expect(calls[0]?.url).toBe('https://opencode.ai/zen/v1/chat/completions')
-            expect(calls[0]?.body.model).toBe('hy3-free')
+            expect(calls[0]?.url).toBe('https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions')
+            expect(calls[0]?.body.model).toBe('hy3')
             expect(calls[1]?.url).toBe('https://opencode.ai/zen/go/v1/chat/completions')
             expect(calls[1]?.body.model).toBe('deepseek-v4-pro')
             expect(calls[1]?.body).toMatchObject({ thinking: { type: 'disabled' } })
@@ -251,12 +251,47 @@ test('Hy3Free provider falls back to v4-pro Go endpoint on failure', async () =>
     }
 })
 
+test('Hy3Free fallback can use a separate api_key from the primary', async () => {
+    const originalPost = axios.post
+    const calls: Array<{ url: string; body: any; options: any }> = []
+    ;(axios as any).post = async (url: string, body: any, options: any) => {
+        calls.push({ url, body, options })
+        if (url.includes('lkeap.cloud.tencent.com')) {
+            throw new Error('hy3 unavailable')
+        }
+        return { data: { choices: [{ message: { content: 'fallback译文' } }] } }
+    }
+
+    try {
+        await withHy3BreakerEnv('10', async () => {
+            const processor = await processorRegistry.create('Hy3Free', 'tencent-key', undefined, {
+                prompt: 'Translate to Simplified Chinese.',
+                fallback: {
+                    provider: 'DeepSeekV4Pro',
+                    api_key: 'go-key',
+                    model_id: 'deepseek-v4-pro',
+                    base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
+                    temperature: 1.0,
+                    extended_payload: { thinking: { type: 'disabled' } },
+                },
+            })
+            const result = await processor.process('こんにちは')
+
+            expect(result).toBe('fallback译文')
+            expect(calls[0]?.options?.headers?.Authorization).toBe('Bearer tencent-key')
+            expect(calls[1]?.options?.headers?.Authorization).toBe('Bearer go-key')
+        })
+    } finally {
+        ;(axios as any).post = originalPost
+    }
+})
+
 test('Hy3Free provider skips hy3 and goes straight to fallback when frozen', async () => {
     const originalPost = axios.post
     const calls: Array<{ url: string; body: any; options: any }> = []
     ;(axios as any).post = async (url: string, body: any, options: any) => {
         calls.push({ url, body, options })
-        if (url.includes('/zen/v1/')) {
+        if (url.includes('lkeap.cloud.tencent.com')) {
             throw new Error('should not be called when frozen')
         }
         return { data: { choices: [{ message: { content: 'frozen-fallback译文' } }] } }
@@ -296,7 +331,7 @@ test('Hy3Free provider preserves prompt and response_format in fallback', async 
     const calls: Array<{ url: string; body: any; options: any }> = []
     ;(axios as any).post = async (url: string, body: any, options: any) => {
         calls.push({ url, body, options })
-        if (url.includes('/zen/v1/')) {
+        if (url.includes('lkeap.cloud.tencent.com')) {
             throw new Error('hy3 unavailable')
         }
         return { data: { choices: [{ message: { content: '{"tags":["22/7"]}' } }] } }

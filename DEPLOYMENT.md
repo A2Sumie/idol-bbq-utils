@@ -183,6 +183,18 @@ To verify changes:
     Add `STRICT_MIGRATIONS=1` when validating readiness for an intentional
     online start; it fails if the production DB fails SQLite `quick_check` or
     has pending, failed, or image/DB-drifted Prisma migrations.
+
+    Runtime-config drift is now gated by default. `STRICT_CONFIG_SHA256=1`
+    (default) fails preflight when the remote mounted `assets/config.yaml`
+    sha256 differs from the local `LOCAL_CONFIG_PATH` (default
+    `assets/config.yaml`), or set `EXPECTED_CONFIG_SHA256` to pin an exact
+    hash. `STRICT_PROCESSOR_ENV=1` (default) fails when any `api_key: env:NAME`
+    referenced by the runtime config is missing from the container environment.
+    Together these refuse the two silent drift classes: a runtime config that no
+    longer matches the intended committed config, and a config that names a
+    provider key (for example `TENCENT_HUNYUAN_API_KEY` for Tencent `hy3`) that
+    the machine does not actually have. Set either to `0` only for a deliberate,
+    documented exception.
 2.  **Stopped state**:
     ```bash
     ssh 3020e 'docker inspect forwarder-new --format "status={{.State.Status}} running={{.State.Running}} restart={{.HostConfig.RestartPolicy.Name}} image={{.Image}}"'

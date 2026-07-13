@@ -73,6 +73,12 @@ HELP
         'stopped deploy outbound send-mode override'
     require_not_contains "$deploy" '-f docker-compose.yaml' \
         'remote checkout compose fallback'
+    require_contains "$deploy" 'require_local_config_hash' \
+        'deploy local config hash guard'
+    require_contains "$deploy" 'runtime config sha256 mismatch: expected' \
+        'deploy remote config sha256 refusal'
+    require_contains "$deploy" 'container processor env keys missing after recreate' \
+        'deploy post-recreate processor env refusal'
 
     require_contains "$preflight" '.HostConfig.Binds' \
         'created-container bind inspection'
@@ -96,6 +102,16 @@ HELP
         'read-only sqlite preflight'
     require_contains "$preflight" 'PRAGMA quick_check' \
         'sqlite quick_check preflight'
+    require_contains "$preflight" 'STRICT_CONFIG_SHA256' \
+        'runtime config sha256 drift gate'
+    require_contains "$preflight" 'config_sha256_match' \
+        'runtime config sha256 comparison output'
+    require_contains "$preflight" 'preflight failed: runtime config sha256 mismatch' \
+        'runtime config sha256 mismatch refusal'
+    require_contains "$preflight" 'STRICT_PROCESSOR_ENV="${STRICT_PROCESSOR_ENV:-1}"' \
+        'processor env gate on by default'
+    require_contains "$preflight" 'STRICT_CONFIG_SHA256="${STRICT_CONFIG_SHA256:-1}"' \
+        'runtime config sha256 gate on by default'
 
     require_contains "$start" 'IDOL_BBQ_RUN_MIGRATIONS' \
         'startup migration feature flag'

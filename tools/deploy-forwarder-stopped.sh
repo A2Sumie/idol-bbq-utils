@@ -10,6 +10,8 @@ DEPLOY_RUNTIME_MODE="${DEPLOY_RUNTIME_MODE:-offline}"
 DEPLOY_OUTBOUND_SEND_MODE="${DEPLOY_OUTBOUND_SEND_MODE:-live}"
 BUILD_DIR_PREFIX="${BUILD_DIR_PREFIX:-/tmp/idol-bbq-utils-build}"
 SKIP_UPSTREAM_CHECK="${SKIP_UPSTREAM_CHECK:-0}"
+LOCAL_CONFIG_PATH="${LOCAL_CONFIG_PATH:-assets/config.yaml}"
+EXPECTED_CONFIG_SHA256="${EXPECTED_CONFIG_SHA256:-}"
 
 if [ -n "${SSH_OPTS:-}" ]; then
     # shellcheck disable=SC2206
@@ -53,9 +55,18 @@ require_pushed_head() {
     fi
 }
 
+require_local_config_hash() {
+    if [ -z "$EXPECTED_CONFIG_SHA256" ]; then
+        if [ ! -f "$LOCAL_CONFIG_PATH" ]; then
+            die "local config not found: $LOCAL_CONFIG_PATH"
+        fi
+        EXPECTED_CONFIG_SHA256="$(shasum -a 256 "$LOCAL_CONFIG_PATH" | awk '{ print $1 }')"
+    fi
+}
+
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO BUILD_DIR DEPLOY_COMMIT IMAGE_NAME COMPOSE_SERVICE CONTAINER_NAME DEPLOY_RUNTIME_MODE DEPLOY_OUTBOUND_SEND_MODE; do
+    for name in REMOTE_REPO BUILD_DIR DEPLOY_COMMIT IMAGE_NAME COMPOSE_SERVICE CONTAINER_NAME DEPLOY_RUNTIME_MODE DEPLOY_OUTBOUND_SEND_MODE EXPECTED_CONFIG_SHA256; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -102,8 +113,12 @@ Environment:
   DEPLOY_OUTBOUND_SEND_MODE=live
   BUILD_DIR_PREFIX=/tmp/idol-bbq-utils-build
   SKIP_UPSTREAM_CHECK=0
+  LOCAL_CONFIG_PATH=assets/config.yaml
+  EXPECTED_CONFIG_SHA256=  # overrides the local config hash when set
 
-This script refuses to run from a dirty local worktree or an unpushed HEAD.
+This script refuses to run from a dirty local worktree, an unpushed HEAD, a
+remote runtime config that differs from the local intended config, or a recreated
+container missing processor env keys declared in the runtime config.
 It never builds from the remote tracked worktree.
 HELP
         return
@@ -112,6 +127,7 @@ HELP
     git rev-parse --is-inside-work-tree >/dev/null || die "must run inside a git worktree"
     require_clean_local_worktree
     require_pushed_head
+    require_local_config_hash
 
     local commit short build_dir
     commit="$(git rev-parse HEAD)"
@@ -119,6 +135,7 @@ HELP
     build_dir="${BUILD_DIR_PREFIX}-${short}"
 
     printf 'deploy_commit=%s\n' "$commit"
+    printf 'expected_config_sha256=%s\n' "$EXPECTED_CONFIG_SHA256"
     remote_dirty_summary
 
     run ssh "${SSH_ARGS[@]}" "$REMOTE_HOST" "rm -rf $(printf '%q' "$build_dir") && mkdir -p $(printf '%q' "$build_dir")"
@@ -134,6 +151,12 @@ HELP
         ssh_remote <<'REMOTE'
 set -euo pipefail
 repo="${REMOTE_REPO:-$HOME/idol-bbq-utils}"
+config_path="$repo/assets/config.yaml"
+remote_config_sha256="$(sha256sum "$config_path" | awk '{ print $1 }')"
+if [ "$remote_config_sha256" != "$EXPECTED_CONFIG_SHA256" ]; then
+    printf 'runtime config sha256 mismatch: expected=%s actual=%s path=%s\n' "$EXPECTED_CONFIG_SHA256" "$remote_config_sha256" "$config_path" >&2
+    exit 1
+fi
 cd "$BUILD_DIR"
 printf '%s\n' "$DEPLOY_COMMIT" > .codex-build-commit
 build_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -165,10 +188,38 @@ status="$(docker inspect "$CONTAINER_NAME" --format 'status={{.State.Status}} ru
 stop_timeout="$(docker inspect "$CONTAINER_NAME" --format '{{.Config.StopTimeout}}')"
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
 outbound_send_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_OUTBOUND_SEND_MODE" { print $2; found=1 } END { if (!found) print "" }')"
+container_env_tmp="$(mktemp)"
+docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' > "$container_env_tmp"
+processor_env_status="$(python3 - "$config_path" "$container_env_tmp" <<'PY'
+import sys
+import yaml
+
+config_path, env_path = sys.argv[1:3]
+with open(config_path, "r", encoding="utf-8") as handle:
+    config = yaml.safe_load(handle) or {}
+env = {}
+with open(env_path, "r", encoding="utf-8") as handle:
+    for line in handle:
+        key, _, value = line.rstrip("\n").partition("=")
+        if key:
+            env[key] = value
+required = []
+for processor in config.get("processors") or []:
+    api_key = str(processor.get("api_key") or "").strip()
+    if api_key.startswith("env:"):
+        name = api_key[len("env:"):].strip()
+        if name:
+            required.append(name)
+missing = [name for name in sorted(set(required)) if not env.get(name)]
+print("missing:" + ",".join(missing) if missing else "ok")
+PY
+)"
+rm -f "$container_env_tmp"
 printf '%s\n' "$status"
 printf 'stop_timeout=%s\n' "$stop_timeout"
 printf 'runtime_mode=%s\n' "$runtime_mode"
 printf 'outbound_send_mode=%s\n' "$outbound_send_mode"
+printf 'processor_env_status=%s\n' "$processor_env_status"
 case "$status" in
     *'running=false'*'restart=no'*)
         ;;
@@ -183,6 +234,10 @@ if [ "$runtime_mode" != "$DEPLOY_RUNTIME_MODE" ]; then
 fi
 if [ "$outbound_send_mode" != "$DEPLOY_OUTBOUND_SEND_MODE" ]; then
     printf 'container outbound send mode mismatch after recreate: expected=%s actual=%s\n' "$DEPLOY_OUTBOUND_SEND_MODE" "$outbound_send_mode" >&2
+    exit 1
+fi
+if [ "$processor_env_status" != "ok" ]; then
+    printf 'container processor env keys missing after recreate: %s\n' "$processor_env_status" >&2
     exit 1
 fi
 printf 'commit=%s\n' "$DEPLOY_COMMIT"

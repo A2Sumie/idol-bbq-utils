@@ -13,7 +13,15 @@ EXPECTED_RESTART_POLICY="${EXPECTED_RESTART_POLICY:-no}"
 EXPECTED_STOP_TIMEOUT_SECONDS="${EXPECTED_STOP_TIMEOUT_SECONDS:-90}"
 STRICT_MIGRATIONS="${STRICT_MIGRATIONS:-0}"
 STRICT_COMMIT="${STRICT_COMMIT:-0}"
-STRICT_PROCESSOR_ENV="${STRICT_PROCESSOR_ENV:-0}"
+STRICT_CONFIG_SHA256="${STRICT_CONFIG_SHA256:-1}"
+STRICT_PROCESSOR_ENV="${STRICT_PROCESSOR_ENV:-1}"
+LOCAL_CONFIG_PATH="${LOCAL_CONFIG_PATH:-assets/config.yaml}"
+EXPECTED_CONFIG_SHA256="${EXPECTED_CONFIG_SHA256:-}"
+
+die() {
+    printf 'forwarder-preflight: %s\n' "$*" >&2
+    exit 1
+}
 
 if [ -n "${SSH_OPTS:-}" ]; then
     # shellcheck disable=SC2206
@@ -24,7 +32,7 @@ fi
 
 remote_env_prefix() {
     local name value
-    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE EXPECTED_OUTBOUND_SEND_MODE EXPECTED_RUNNING EXPECTED_RESTART_POLICY EXPECTED_STOP_TIMEOUT_SECONDS STRICT_MIGRATIONS STRICT_COMMIT STRICT_PROCESSOR_ENV; do
+    for name in REMOTE_REPO IMAGE_NAME CONTAINER_NAME EXPECTED_COMMIT EXPECTED_RUNTIME_MODE EXPECTED_OUTBOUND_SEND_MODE EXPECTED_RUNNING EXPECTED_RESTART_POLICY EXPECTED_STOP_TIMEOUT_SECONDS STRICT_MIGRATIONS STRICT_COMMIT STRICT_CONFIG_SHA256 STRICT_PROCESSOR_ENV EXPECTED_CONFIG_SHA256; do
         value="${!name:-}"
         if [ -n "$value" ]; then
             printf '%s=%q ' "$name" "$value"
@@ -54,9 +62,19 @@ Environment:
   EXPECTED_STOP_TIMEOUT_SECONDS=90
   STRICT_MIGRATIONS=0      # set 1 to fail when DB migrations are pending/failed
   STRICT_COMMIT=0         # set 1 to fail when image commit != expected commit
-  STRICT_PROCESSOR_ENV=0   # set 1 to fail when env: processor keys are absent from the container
+  STRICT_CONFIG_SHA256=1   # fail when remote mounted config differs from local/expected config
+  STRICT_PROCESSOR_ENV=1   # fail when env: processor keys are absent from the container
+  LOCAL_CONFIG_PATH=assets/config.yaml
+  EXPECTED_CONFIG_SHA256=  # overrides the local config hash when set
 HELP
         return
+    fi
+
+    if [ -z "$EXPECTED_CONFIG_SHA256" ]; then
+        if [ ! -f "$LOCAL_CONFIG_PATH" ]; then
+            die "local config not found: $LOCAL_CONFIG_PATH"
+        fi
+        EXPECTED_CONFIG_SHA256="$(shasum -a 256 "$LOCAL_CONFIG_PATH" | awk '{ print $1 }')"
     fi
 
     local env_prefix
@@ -65,6 +83,10 @@ HELP
 set -euo pipefail
 repo="${REMOTE_REPO:-$HOME/idol-bbq-utils}"
 config_path="$repo/assets/config.yaml"
+remote_config_sha256=""
+if [ -f "$config_path" ]; then
+    remote_config_sha256="$(sha256sum "$config_path" | awk '{ print $1 }')"
+fi
 
 container_status="$(docker inspect "$CONTAINER_NAME" --format '{{.State.Status}}')"
 container_running="$(docker inspect "$CONTAINER_NAME" --format '{{.State.Running}}')"
@@ -294,6 +316,13 @@ printf 'image_created=%s\n' "$image_created_label"
 printf 'build_commit_file=%s\n' "$build_commit_file"
 printf 'mount_config_yaml_exists=%s\n' "$(mount_exists /app/config.yaml)"
 printf 'mount_config_yaml_source=%s\n' "$mount_config_yaml"
+printf 'expected_config_sha256=%s\n' "${EXPECTED_CONFIG_SHA256:-}"
+printf 'remote_config_sha256=%s\n' "$remote_config_sha256"
+if [ -n "${EXPECTED_CONFIG_SHA256:-}" ] && [ "$remote_config_sha256" = "$EXPECTED_CONFIG_SHA256" ]; then
+    printf 'config_sha256_match=true\n'
+else
+    printf 'config_sha256_match=false\n'
+fi
 printf 'mount_data_db_exists=%s\n' "$(mount_exists /app/data.db)"
 printf 'mount_data_db_source=%s\n' "$mount_data_db"
 printf 'mount_app_backups_exists=%s\n' "$(mount_exists /app/backups)"
@@ -367,6 +396,10 @@ if [ "$STRICT_MIGRATIONS" = "1" ] && { [ -z "$backup_host_dir" ] || [ ! -d "$bac
 fi
 if [ "$STRICT_COMMIT" = "1" ] && { [ -z "${EXPECTED_COMMIT:-}" ] || [ "$image_build_commit" != "$EXPECTED_COMMIT" ] || [ "$build_commit_file" != "$EXPECTED_COMMIT" ]; }; then
     printf 'preflight failed: image commit does not match expected commit\n' >&2
+    exit 1
+fi
+if [ "$STRICT_CONFIG_SHA256" = "1" ] && { [ -z "${EXPECTED_CONFIG_SHA256:-}" ] || [ "$remote_config_sha256" != "$EXPECTED_CONFIG_SHA256" ]; }; then
+    printf 'preflight failed: runtime config sha256 mismatch\n' >&2
     exit 1
 fi
 if [ "$STRICT_PROCESSOR_ENV" = "1" ] && [ "$processor_env_status" != "ok" ]; then

@@ -4,6 +4,7 @@ import { getHy3CircuitBreaker } from '@/services/hy3-circuit-breaker-service'
 
 const OPENCODE_GO_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/go/v1/chat/completions'
 const OPENCODE_ZEN_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/v1/chat/completions'
+const TENCENT_LKEAP_CHAT_COMPLETIONS_URL = 'https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions'
 
 interface ProcessorModelCapability {
     provider_id: string
@@ -79,10 +80,31 @@ const OPENCODE_GO_MODEL_CAPABILITIES: Record<string, ProcessorModelCapability> =
             requires_reasoning_content_on_assistant_messages: true,
         },
     },
+    'hy3': {
+        provider_id: 'tencent-lkeap',
+        model_id: 'hy3',
+        display_name: 'Tencent Hunyuan (hy3, LKEAP subscription)',
+        api: 'openai-completions',
+        input: ['text'],
+        reasoning: false,
+        context_window: 256_000,
+        max_output_tokens: 16_384,
+        cost_per_million: {
+            input: 0,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+        },
+        compat: {
+            max_tokens_field: 'max_tokens',
+            thinking_format: 'none',
+            requires_reasoning_content_on_assistant_messages: false,
+        },
+    },
     'hy3-free': {
         provider_id: 'opencode-zen',
         model_id: 'hy3-free',
-        display_name: 'HY3 Free (stealth)',
+        display_name: 'HY3 Free (stealth, legacy)',
         api: 'openai-completions',
         input: ['text'],
         reasoning: false,
@@ -144,7 +166,7 @@ function resolveDefaultModelId(provider: string, config?: ProcessorConfig) {
         normalized === 'hy3' ||
         normalized === 'hy3free'
     ) {
-        return 'hy3-free'
+        return 'hy3'
     }
     return config?.model_id || provider
 }
@@ -173,7 +195,7 @@ function buildProcessorModelCapability(processor: Processor) {
     const modelId = resolveDefaultModelId(processor.provider, cfg)
     const normalizedModelId = normalizeModelId(modelId)
     const known = OPENCODE_GO_MODEL_CAPABILITIES[normalizedModelId]
-    const isHy3 = normalizedModelId === 'hy3-free'
+    const isHy3 = normalizedModelId === 'hy3' || normalizedModelId === 'hy3-free'
 
     return {
         processor_id: processor.id,
@@ -206,6 +228,7 @@ function getKnownModelCapability(modelId?: string | null) {
 export {
     OPENCODE_GO_CHAT_COMPLETIONS_URL,
     OPENCODE_ZEN_CHAT_COMPLETIONS_URL,
+    TENCENT_LKEAP_CHAT_COMPLETIONS_URL,
     buildProcessorModelCapabilities,
     getKnownModelCapability,
     resolveDefaultModelId,
