@@ -9,6 +9,7 @@ import type { Page } from 'puppeteer-core'
 import type { Article } from '@/db'
 import { buildBiliupUploadCandidate, completeBiliupUploadCandidateTags, runBiliupUpload, type BiliupUploadCandidate } from '@/middleware/forwarder/biliup'
 import { ensureDirectoryExists } from '@/utils/directories'
+import { CACHE_DIR_ROOT } from '@/config'
 import type { CrawlerConfig, InstagramLiveArchiveConfig, InstagramLivePublishConfig, LiveRelayConfig, LiveRelayTargetConfig } from '@/types/crawler'
 
 const DEFAULT_LIVE_PLAYER_URL = 'https://tv.n2nj.moe'
@@ -540,6 +541,45 @@ class InstagramLiveRelayService {
     private readonly log?: Logger
     private readonly recordingSessions = new Map<string, InstagramLiveRecordingSession>()
     private readonly publishedArchives = new Set<string>()
+    private publishedArchivesLoaded = false
+
+    private get publishedArchivesPath() {
+        return path.join(CACHE_DIR_ROOT, 'instagram-live-published.json')
+    }
+
+    private loadPublishedArchives() {
+        if (this.publishedArchivesLoaded) {
+            return
+        }
+        this.publishedArchivesLoaded = true
+        try {
+            if (fs.existsSync(this.publishedArchivesPath)) {
+                const parsed = JSON.parse(fs.readFileSync(this.publishedArchivesPath, 'utf8'))
+                for (const key of Array.isArray(parsed?.published) ? parsed.published : []) {
+                    if (typeof key === 'string') {
+                        this.publishedArchives.add(key)
+                    }
+                }
+            }
+        } catch {
+            // A corrupt ledger must not block publishing; it only risks a duplicate upload.
+        }
+    }
+
+    private persistPublishedArchives() {
+        try {
+            ensureDirectoryExists(path.dirname(this.publishedArchivesPath))
+            fs.writeFileSync(this.publishedArchivesPath, JSON.stringify({ published: [...this.publishedArchives] }, null, 2), 'utf8')
+        } catch {
+            // Non-fatal: the in-memory set still dedupes this process.
+        }
+    }
+
+    private archivePublishKey(session: Pick<InstagramLiveRecordingSession, 'broadcastId' | 'mediaPath' | 'startedAt'>) {
+        // Dedup by broadcast: a mid-live recorder restart produces a new mediaPath/startedAt for the same
+        // broadcast and must not publish a second partial video.
+        return session.broadcastId ? `broadcast:${session.broadcastId}` : `${session.mediaPath}:${session.startedAt}`
+    }
 
     constructor(cacheRoot: string, log?: Logger) {
         this.cacheDir = path.join(cacheRoot, 'instagram-live')
@@ -576,6 +616,11 @@ class InstagramLiveRelayService {
                 syncedAt: previousCache?.syncedAt || null,
                 relay: previousCache?.relay,
                 lastError: null,
+            }
+
+            const recoveredArchive = await this.recoverStaleActiveArchive(options.handle, previousCache, relayConfig, scopedLog)
+            if (recoveredArchive) {
+                nextCache.archive = recoveredArchive
             }
 
             if (!status.is_live || !status.live_url) {
@@ -996,6 +1041,59 @@ class InstagramLiveRelayService {
         }
     }
 
+    private async recoverStaleActiveArchive(
+        handle: string,
+        previousCache: InstagramLiveCacheEntry | null,
+        relayConfig: LiveRelayResolution,
+        log?: Logger,
+    ): Promise<InstagramLiveArchiveState | null> {
+        const stale = previousCache?.archive
+        if (!stale?.active) {
+            return null
+        }
+        // A live in-memory session owns this archive; only recover after a process restart orphaned it.
+        const hasLiveSession = Array.from(this.recordingSessions.keys()).some((key) => key.startsWith(`${handle}:`))
+        if (hasLiveSession) {
+            return null
+        }
+        const mediaPath = stale.mediaPath
+        const exists = mediaPath ? fs.existsSync(mediaPath) : false
+        const durationSeconds = exists && mediaPath ? this.probeDurationSeconds(mediaPath) : null
+        const state: InstagramLiveArchiveState = {
+            ...stale,
+            active: false,
+            completedAt: stale.completedAt || new Date().toISOString(),
+            durationSeconds,
+            lastError: 'Recorder lost to a process restart; archive finalized from disk state.',
+        }
+        log?.warn(`Recovering stale Instagram live archive for ${handle}: ${mediaPath || 'no media path'}`)
+        if (exists && mediaPath && relayConfig.publish) {
+            const pseudoSession = {
+                handle,
+                broadcastId: stale.broadcastId ?? null,
+                liveUrl: previousCache?.liveUrl || '',
+                profileUrl: previousCache?.profileUrl || '',
+                displayName: previousCache?.displayName || handle,
+                avatarUrl: previousCache?.avatarUrl || null,
+                startedAt: stale.startedAt || new Date().toISOString(),
+                mediaPath,
+                publishConfig: relayConfig.publish,
+                archiveConfig: relayConfig.archive,
+            } as unknown as InstagramLiveRecordingSession
+            try {
+                const publishResult = await this.publishArchiveIfEnabled(pseudoSession, durationSeconds, log)
+                if (publishResult) {
+                    state.publishedAt = new Date().toISOString()
+                    state.publishResult = publishResult
+                }
+            } catch (error) {
+                state.lastError = `publish failed after stale recovery: ${error instanceof Error ? error.message : String(error)}`
+                log?.warn(`Instagram live stale archive publish failed for ${handle}: ${error}`)
+            }
+        }
+        return state
+    }
+
     private probeDurationSeconds(filePath: string) {
         try {
             const output = execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', filePath], {
@@ -1083,11 +1181,11 @@ class InstagramLiveRelayService {
         if (!session.publishConfig || durationSeconds === null || durationSeconds < session.archiveConfig.min_publish_duration_seconds) {
             return null
         }
-        const publishKey = `${session.mediaPath}:${session.startedAt}`
+        this.loadPublishedArchives()
+        const publishKey = this.archivePublishKey(session)
         if (this.publishedArchives.has(publishKey)) {
             return null
         }
-        this.publishedArchives.add(publishKey)
         const article = this.buildArchiveArticle(session, durationSeconds)
         const candidate = buildBiliupUploadCandidate(
             article,
@@ -1108,6 +1206,10 @@ class InstagramLiveRelayService {
             },
             log,
         )
+        // Mark published only after a confirmed upload so a failed attempt stays retryable; persist so a
+        // process restart cannot re-publish the same broadcast.
+        this.publishedArchives.add(publishKey)
+        this.persistPublishedArchives()
         return result
     }
 
