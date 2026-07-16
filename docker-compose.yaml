@@ -56,8 +56,9 @@ services:
       - IDOL_BBQ_CODEX_MCP_ENABLED=${IDOL_BBQ_CODEX_MCP_ENABLED:-0}
       - IDOL_BBQ_CODEX_MCP_BRIDGE_URL=${IDOL_BBQ_CODEX_MCP_BRIDGE_URL:-}
       - IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN=${IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN:-}
-      # Extra Chrome CLI flags (space-separated), e.g. GPU tuning for the host driver stack.
-      - BROWSER_EXTRA_ARGS=${BROWSER_EXTRA_ARGS:-}
+      # Extra Chrome CLI flags (space-separated). Default: real Mesa GL (llvmpipe via ANGLE Vulkan
+      # fallback) instead of the SwiftShader headless marker device; RADV is too old for Chrome 142.
+      - BROWSER_EXTRA_ARGS=${BROWSER_EXTRA_ARGS:---use-gl=angle --use-angle=vulkan --enable-features=Vulkan --ignore-gpu-blocklist}
       # Optional live-player schedule webhook sink for extracted time-event candidates.
       - LIVE_PLAYER_SCHEDULE_WEBHOOK_URL=${LIVE_PLAYER_SCHEDULE_WEBHOOK_URL:-}
       - LIVE_PLAYER_SCHEDULE_WEBHOOK_API_KEY=${LIVE_PLAYER_SCHEDULE_WEBHOOK_API_KEY:-}
