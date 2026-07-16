@@ -1192,6 +1192,10 @@ namespace DB {
             })
         }
 
+        export function isTerminalFailed(record: Pick<DBOutboundMessage, 'status' | 'attempt_count'>) {
+            return isOutboundFailedStatus(record.status) && (record.attempt_count || 0) >= FAILED_RETRY_LIMIT
+        }
+
         export async function claim(
             data: {
                 idempotency_key: string

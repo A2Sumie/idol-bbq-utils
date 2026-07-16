@@ -2498,6 +2498,16 @@ class ForwarderPools extends BaseCompatibleModel {
                             )
                             if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
                                 await DB.ForwardBy.save(article.id, platform, target.id, 'article')
+                            } else if (DB.OutboundMessage.isTerminalFailed(outbound.record)) {
+                                // The provider rejected this message past the retry limit. Mark the article as
+                                // handled for this target so every crawl cycle stops re-rendering and
+                                // re-dispatching it forever; an operator can still forceSend via the API.
+                                log?.warn(
+                                    `Outbound ${outboundIdempotencyKey} for ${article.a_id} to ${target.id} is terminally failed after ${outbound.record.attempt_count} attempts; suppressing further dispatch`,
+                                )
+                                await DB.ForwardBy.save(article.id, platform, target.id, 'article').catch(
+                                    () => undefined,
+                                )
                             } else if (claimed && !options?.forceSend) {
                                 await this.releaseArticleChain(article, platform, target.id)
                             }
