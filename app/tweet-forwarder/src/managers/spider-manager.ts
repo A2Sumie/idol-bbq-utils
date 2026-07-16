@@ -323,6 +323,11 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
     if (/\b(econnreset|socket hang up|network|fetch failed|temporarily unavailable|bad gateway|service unavailable)\b/.test(message)) {
         return 'transient'
     }
+    if (/browser hydration missing/.test(message)) {
+        // TikTok serves the hydration shell inconsistently under risk control; the same account flips
+        // between success and "hydration missing" across runs, so treat it as retryable, not a parser break.
+        return 'transient'
+    }
     if (/\b(format may have changed|cannot find|missing initial data|parse|parser|unexpected token)\b/.test(message)) {
         return 'parser'
     }
