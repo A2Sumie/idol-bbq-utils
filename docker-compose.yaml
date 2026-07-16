@@ -16,9 +16,13 @@ services:
     # 直接使用主机的网络，完美解决访问主机 127.0.0.1 的问题
     network_mode: 'host'
     # Pass the host GPU through so Chrome renders with the real AMD driver (WebGL fingerprint
-    # matches the machine instead of SwiftShader).
+    # matches the machine instead of SwiftShader). The container user also needs the host
+    # video/render groups to open the DRI nodes.
     devices:
       - '/dev/dri:/dev/dri'
+    group_add:
+      - '44'
+      - '105'
     # Default to no restart/offline so a plain compose up cannot activate production.
     restart: '${IDOL_BBQ_RESTART_POLICY:-no}'
     # Runtime shutdown waits up to 30s for active schedulers before forced teardown.
