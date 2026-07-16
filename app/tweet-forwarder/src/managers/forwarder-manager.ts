@@ -52,7 +52,12 @@ import {
     targetRouteKey,
 } from '@/services/outbound-message-service'
 import { resolveSummaryCardConfig, type ResolvedSummaryCardConfig } from '@/services/summary-card-policy'
-import { isBilibiliVideoPairingHeldResult } from '@/services/video-pairing-service'
+import {
+    isBilibiliVideoPairingHeldResult,
+    isXTiktokTeaserArticle,
+    resolveXTiktokTeaserMode,
+    transformXTiktokTeaserMediaToSingleImage,
+} from '@/services/video-pairing-service'
 import { isNonLiveOutboundSendMode } from '@/services/outbound-send-mode'
 import { pRetry } from '@idol-bbq-utils/utils'
 import { RETRY_LIMIT } from '@/config'
@@ -2402,6 +2407,35 @@ class ForwarderPools extends BaseCompatibleModel {
                             error_for_all = false
                             hadNonErrorOutcome = true
                             return
+                        }
+
+                        const xTiktokTeaserMode = resolveXTiktokTeaserMode(runtime_config as any)
+                        if (
+                            (xTiktokTeaserMode === 'image' || xTiktokTeaserMode === 'suppress') &&
+                            isXTiktokTeaserArticle(article)
+                        ) {
+                            if (xTiktokTeaserMode === 'suppress') {
+                                await this.markArticleOutboundSkipped(
+                                    log,
+                                    article,
+                                    target,
+                                    routeKeyForTarget,
+                                    'x_tiktok_teaser_suppressed',
+                                    { skipped: 'x_tiktok_teaser_suppressed' },
+                                    targetRenderResult,
+                                )
+                                await this.claimArticleChain(article, platform, target.id)
+                                await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(
+                                    () => undefined,
+                                )
+                                log?.info(`Suppressed X TikTok teaser ${article.a_id} for ${target.id}`)
+                                error_for_all = false
+                                hadNonErrorOutcome = true
+                                return
+                            }
+                            mediaFiles = transformXTiktokTeaserMediaToSingleImage(mediaFiles)
+                            contentMediaFiles = transformXTiktokTeaserMediaToSingleImage(contentMediaFiles)
+                            log?.info(`X TikTok teaser ${article.a_id} downgraded to a single cover image for ${target.id}`)
                         }
 
                         const translatedCompanionCard = suppressTranslations

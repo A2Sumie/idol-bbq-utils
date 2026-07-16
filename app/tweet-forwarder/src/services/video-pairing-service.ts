@@ -334,6 +334,45 @@ async function markExpiredVideoPairings(log?: MinimalLog) {
     return expired.length
 }
 
+function isXTiktokTeaserArticle(article?: Pick<Article, 'platform' | 'content' | 'media'> | null) {
+    if (!article || article.platform !== Platform.X) {
+        return false
+    }
+    const hasTikTokLink = new RegExp(TIKTOK_URL_RE.source, 'i').test(article.content || '')
+    if (!hasTikTokLink) {
+        return false
+    }
+    return (article.media || []).some((item: any) => item?.type === 'video')
+}
+
+type XTiktokTeaserMode = 'video' | 'image' | 'suppress' | undefined
+
+function resolveXTiktokTeaserMode(config: { x_tiktok_teaser_mode?: string } | null | undefined): XTiktokTeaserMode {
+    const raw = config?.x_tiktok_teaser_mode
+    return raw === 'image' || raw === 'suppress' || raw === 'video' ? raw : undefined
+}
+
+function transformXTiktokTeaserMediaToSingleImage<T extends { media_type?: string }>(files: Array<T>): Array<T> {
+    // Drop videos and keep a single cover image, re-typed as photo so providers accept it as a picture.
+    let imageKept = false
+    const out: Array<T> = []
+    for (const file of files) {
+        if (file.media_type === 'video') {
+            continue
+        }
+        if (file.media_type === 'video_thumbnail') {
+            if (imageKept) {
+                continue
+            }
+            imageKept = true
+            out.push({ ...file, media_type: 'photo' })
+            continue
+        }
+        out.push(file)
+    }
+    return out
+}
+
 export {
     BILIBILI_VIDEO_PAIRING_HELD_MODE,
     BILIBILI_VIDEO_PAIRING_MERGED_MODE,
@@ -341,7 +380,10 @@ export {
     findBilibiliPendingPairingForMainVideo,
     holdBilibiliVideoPairingTeaser,
     isBilibiliVideoPairingHeldResult,
+    isXTiktokTeaserArticle,
     markExpiredVideoPairings,
     resolveVideoPairingConfig,
+    resolveXTiktokTeaserMode,
+    transformXTiktokTeaserMediaToSingleImage,
     type ResolvedVideoPairingConfig,
 }

@@ -28,6 +28,7 @@ import {
     deserializeTeaserMedia,
     findBilibiliPendingPairingForMainVideo,
     holdBilibiliVideoPairingTeaser,
+    isXTiktokTeaserArticle,
     markExpiredVideoPairings,
     resolveVideoPairingConfig,
 } from '@/services/video-pairing-service'
@@ -375,6 +376,12 @@ class BiliForwarder extends Forwarder {
 
     private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | false> {
         const effectiveConfig = this.getEffectiveConfig(props?.runtime_config) as any
+        if (effectiveConfig.x_tiktok_teaser_mode === 'image' && isXTiktokTeaserArticle(props?.article)) {
+            this.log?.info(
+                `X TikTok teaser ${props?.article?.a_id} posts as a cover-image dynamic instead of a video upload for ${this.id}`,
+            )
+            return false
+        }
         const pairingConfig = resolveVideoPairingConfig(effectiveConfig)
         if (pairingConfig) {
             await markExpiredVideoPairings(this.log).catch((error) =>

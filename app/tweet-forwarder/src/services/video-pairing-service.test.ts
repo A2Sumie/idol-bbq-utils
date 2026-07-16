@@ -8,8 +8,46 @@ import {
     BILIBILI_VIDEO_PAIRING_HELD_MODE,
     holdBilibiliVideoPairingTeaser,
     isBilibiliVideoPairingHeldResult,
+    isXTiktokTeaserArticle,
     resolveVideoPairingConfig,
+    resolveXTiktokTeaserMode,
+    transformXTiktokTeaserMediaToSingleImage,
 } from './video-pairing-service'
+
+test('isXTiktokTeaserArticle requires X platform, a TikTok link, and video media', () => {
+    const teaser = {
+        platform: Platform.X,
+        content: '短版先看 https://vt.tiktok.com/ZS12345/ 完整版在TikTok',
+        media: [{ type: 'video' }, { type: 'video_thumbnail' }],
+    }
+    expect(isXTiktokTeaserArticle(teaser as any)).toBe(true)
+    expect(isXTiktokTeaserArticle({ ...teaser, platform: Platform.Instagram } as any)).toBe(false)
+    expect(isXTiktokTeaserArticle({ ...teaser, content: 'no link here' } as any)).toBe(false)
+    expect(isXTiktokTeaserArticle({ ...teaser, media: [{ type: 'photo' }] } as any)).toBe(false)
+    expect(isXTiktokTeaserArticle(null)).toBe(false)
+})
+
+test('resolveXTiktokTeaserMode only accepts known modes', () => {
+    expect(resolveXTiktokTeaserMode({ x_tiktok_teaser_mode: 'image' })).toBe('image')
+    expect(resolveXTiktokTeaserMode({ x_tiktok_teaser_mode: 'suppress' })).toBe('suppress')
+    expect(resolveXTiktokTeaserMode({ x_tiktok_teaser_mode: 'video' })).toBe('video')
+    expect(resolveXTiktokTeaserMode({ x_tiktok_teaser_mode: 'bogus' } as any)).toBeUndefined()
+    expect(resolveXTiktokTeaserMode(null)).toBeUndefined()
+})
+
+test('transformXTiktokTeaserMediaToSingleImage drops videos and keeps one photo-typed cover', () => {
+    const files = [
+        { media_type: 'video', path: '/tmp/a.mp4' },
+        { media_type: 'video_thumbnail', path: '/tmp/a.jpg' },
+        { media_type: 'video_thumbnail', path: '/tmp/b.jpg' },
+        { media_type: 'photo', path: '/tmp/card.png' },
+    ]
+    const out = transformXTiktokTeaserMediaToSingleImage(files)
+    expect(out).toEqual([
+        { media_type: 'photo', path: '/tmp/a.jpg' },
+        { media_type: 'photo', path: '/tmp/card.png' },
+    ])
+})
 
 test('resolveVideoPairingConfig defaults expiry to drop', () => {
     expect(

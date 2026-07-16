@@ -255,6 +255,12 @@ interface ForwardTargetPlatformCommonConfig {
               on_expiry?: 'drop'
           }
     /**
+     * How this target handles X posts that embed a TikTok link with a teaser video.
+     * 'video' (default) keeps the current behavior (video upload / pairing). 'image' drops the
+     * video and sends a single cover image instead. 'suppress' skips the teaser entirely.
+     */
+    x_tiktok_teaser_mode?: 'video' | 'image' | 'suppress'
+    /**
      * Forwarding-time content fingerprint dedup. Independent switch (default off). When enabled, an article
      * whose rendered text + media identity fingerprint already sent to this target is skipped before the
      * provider send. Useful for high-noise groups where the same content reappears under different article ids
