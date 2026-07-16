@@ -9,6 +9,7 @@ import type {
     CrawlEngine,
 } from '@/types'
 import { BaseSpider, waitForResponse } from './base'
+import { HTTPClient } from '../utils/http'
 import { Page } from 'puppeteer-core'
 
 import { JSONPath } from 'jsonpath-plus'
@@ -160,7 +161,19 @@ class InstagramSpider extends BaseSpider {
             const articles: Array<GenericArticle<Platform.Instagram>> = []
             if (wantPosts) {
                 this.log?.info('Trying to grab posts.')
-                articles.push(...(await InsApiJsonParser.grabPosts(page, _url)))
+                try {
+                    articles.push(...(await InsApiJsonParser.grabPosts(page, _url)))
+                } catch (error) {
+                    if (!config.cookieString) {
+                        throw error
+                    }
+                    // GraphQL is the first endpoint Instagram throttles; the mobile private API usually
+                    // keeps working on the same session, so fall back to it before giving up.
+                    this.log?.warn(
+                        `Browser posts crawl failed for ${id} (${error instanceof Error ? error.message : String(error)}); falling back to private API`,
+                    )
+                    articles.push(...(await InsApiJsonParser.grabPostsPrivateApi(id, config.cookieString)))
+                }
             }
             if (wantStories) {
                 this.log?.info(`Trying to grab stories.`)
@@ -502,6 +515,49 @@ namespace InsApiJsonParser {
             item.username = fallbackUsername(username, item.username, item.u_id)
         }
         return res
+    }
+
+    const INSTAGRAM_PRIVATE_API_BASE = 'https://i.instagram.com/api/v1'
+    const INSTAGRAM_PRIVATE_API_APP_ID = '936619743392459'
+    const INSTAGRAM_PRIVATE_API_UA =
+        'Instagram 269.0.0.18.75 Android (33/13; 420dpi; 1080x2400; Google; Pixel 7; panther; panther; en_US)'
+    const INSTAGRAM_PRIVATE_API_TIMEOUT_MS = 15000
+
+    /**
+     * Fallback posts crawl over the mobile private API. Uses the same session cookies; feed items share
+     * the GraphQL node shape, so they map through the regular postParser.
+     */
+    export async function grabPostsPrivateApi(
+        handle: string,
+        cookieString: string,
+    ): Promise<Array<GenericArticle<Platform.Instagram>>> {
+        const headers = {
+            'x-ig-app-id': INSTAGRAM_PRIVATE_API_APP_ID,
+            'user-agent': INSTAGRAM_PRIVATE_API_UA,
+            cookie: cookieString,
+        }
+        const profileResponse = await HTTPClient.download_webpage(
+            `${INSTAGRAM_PRIVATE_API_BASE}/users/web_profile_info/?username=${encodeURIComponent(handle)}`,
+            headers,
+            { timeout: INSTAGRAM_PRIVATE_API_TIMEOUT_MS },
+        )
+        const profileJson = await profileResponse.json()
+        const user = profileJson?.data?.user
+        const userId = user?.id || user?.pk
+        if (!userId) {
+            throw new Error('Instagram private API profile format may have changed')
+        }
+        const crawledProfile = profileContextFromUser(user)
+        const feedResponse = await HTTPClient.download_webpage(
+            `${INSTAGRAM_PRIVATE_API_BASE}/feed/user/${userId}/?count=12`,
+            headers,
+            { timeout: INSTAGRAM_PRIVATE_API_TIMEOUT_MS },
+        )
+        const feedJson = await feedResponse.json()
+        const items = Array.isArray(feedJson?.items) ? feedJson.items : []
+        return items
+            .map((item: any) => postParser({ node: item }, crawledProfile))
+            .filter((article) => Boolean(article.a_id))
     }
 
     /**

@@ -462,7 +462,7 @@ async function applyBrowserProfile(
                 defineGetter(navigator, 'language', fingerprint.locale)
                 defineGetter(navigator, 'languages', [fingerprint.locale, 'ja', 'en-US'])
                 defineGetter(navigator, 'maxTouchPoints', fingerprint.maxTouchPoints)
-                defineGetter(navigator, 'webdriver', undefined)
+                defineGetter(navigator, 'webdriver', false)
                 defineGetter(navigator, 'platform', fingerprint.platform)
                 defineGetter(navigator, 'vendor', fingerprint.vendor)
                 defineGetter(navigator, 'hardwareConcurrency', fingerprint.hardwareConcurrency)

@@ -527,3 +527,100 @@ test('Instagram article crawl defaults to posts and best-effort stories', async 
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
     }
 })
+
+test('Instagram grabPostsPrivateApi maps private feed items through postParser', async () => {
+    const { HTTPClient } = await import('../src/utils/http')
+    const originalDownload = HTTPClient.download_webpage
+    const calls: Array<string> = []
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        calls.push(url)
+        if (url.includes('web_profile_info')) {
+            return new Response(
+                JSON.stringify({
+                    data: {
+                        user: {
+                            id: '7787134927',
+                            username: 'sallyamaki',
+                            full_name: 'Sally Amaki',
+                            profile_pic_url: 'https://example.com/avatar.jpg',
+                        },
+                    },
+                }),
+            )
+        }
+        return new Response(
+            JSON.stringify({
+                status: 'ok',
+                items: [
+                    {
+                        code: 'DDRidLLSPYm',
+                        taken_at: 1733567823,
+                        caption: { text: 'hello world' },
+                        image_versions2: { candidates: [{ url: 'https://example.com/1.jpg', width: 1080 }] },
+                        user: { username: 'sallyamaki', full_name: 'Sally Amaki' },
+                    },
+                ],
+            }),
+        )
+    }
+
+    try {
+        const posts = await InsApiJsonParser.grabPostsPrivateApi('sallyamaki', 'sessionid=abc')
+        expect(calls[0]).toContain('web_profile_info/?username=sallyamaki')
+        expect(calls[1]).toContain('/feed/user/7787134927/')
+        expect(posts).toHaveLength(1)
+        expect(posts[0]?.a_id).toBe('DDRidLLSPYm')
+        expect(posts[0]?.content).toBe('hello world')
+        expect(posts[0]?.media?.[0]?.type).toBe('photo')
+        expect(posts[0]?.u_id).toBe('sallyamaki')
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
+test('Instagram article crawl falls back to private API when browser posts fail', async () => {
+    const originalGrabPosts = InsApiJsonParser.grabPosts
+    const originalGrabStories = InsApiJsonParser.grabStories
+    const originalPrivateApi = InsApiJsonParser.grabPostsPrivateApi
+    ;(InsApiJsonParser as any).grabPosts = async () => {
+        throw new Error('Error: redirect (302) to https://www.instagram.com/ - likely rate limit or challenge')
+    }
+    ;(InsApiJsonParser as any).grabStories = async () => []
+    ;(InsApiJsonParser as any).grabPostsPrivateApi = async (handle: string, cookieString: string) => {
+        expect(handle).toBe('instagram')
+        expect(cookieString).toBe('sessionid=abc')
+        return [
+            {
+                platform: 2,
+                a_id: 'FALLBACK1',
+                u_id: 'instagram',
+                username: 'Instagram',
+                created_at: 1773845200,
+                content: 'fallback post',
+                url: 'https://www.instagram.com/p/FALLBACK1/',
+                type: 'post',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ]
+    }
+
+    try {
+        const spider = new InstagramSpider()
+        const articles = await spider.crawl('https://www.instagram.com/instagram/', {} as any, 'ig-fallback', {
+            task_type: 'article',
+            crawl_engine: 'browser',
+            cookieString: 'sessionid=abc',
+        })
+
+        expect(articles).toHaveLength(1)
+        expect(articles[0]?.a_id).toBe('FALLBACK1')
+    } finally {
+        ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
+        ;(InsApiJsonParser as any).grabStories = originalGrabStories
+        ;(InsApiJsonParser as any).grabPostsPrivateApi = originalPrivateApi
+    }
+})
