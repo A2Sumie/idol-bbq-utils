@@ -161,19 +161,21 @@ class InstagramSpider extends BaseSpider {
             const articles: Array<GenericArticle<Platform.Instagram>> = []
             if (wantPosts) {
                 this.log?.info('Trying to grab posts.')
-                try {
-                    articles.push(...(await InsApiJsonParser.grabPosts(page, _url)))
-                } catch (error) {
-                    if (!config.cookieString) {
-                        throw error
+                // The mobile private API is the low-footprint primary path (2 light requests, same traffic
+                // shape as the real app). The full browser page + GraphQL XHR costs ~30 requests per
+                // profile and is the first thing Instagram throttles, so it is the fallback.
+                const grabViaBrowser = () => InsApiJsonParser.grabPosts(page, _url)
+                const grabViaApi = async () => {
+                    try {
+                        return await InsApiJsonParser.grabPostsPrivateApi(id, config.cookieString as string)
+                    } catch (apiError) {
+                        this.log?.warn(
+                            `Private API posts crawl failed for ${id} (${apiError instanceof Error ? apiError.message : String(apiError)}); falling back to browser GraphQL`,
+                        )
+                        return await grabViaBrowser()
                     }
-                    // GraphQL is the first endpoint Instagram throttles; the mobile private API usually
-                    // keeps working on the same session, so fall back to it before giving up.
-                    this.log?.warn(
-                        `Browser posts crawl failed for ${id} (${error instanceof Error ? error.message : String(error)}); falling back to private API`,
-                    )
-                    articles.push(...(await InsApiJsonParser.grabPostsPrivateApi(id, config.cookieString)))
                 }
+                articles.push(...(await (config.cookieString ? grabViaApi() : grabViaBrowser())))
             }
             if (wantStories) {
                 this.log?.info(`Trying to grab stories.`)

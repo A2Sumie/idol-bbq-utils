@@ -578,12 +578,14 @@ test('Instagram grabPostsPrivateApi maps private feed items through postParser',
     }
 })
 
-test('Instagram article crawl falls back to private API when browser posts fail', async () => {
+test('Instagram article crawl prefers private API and skips the browser posts path', async () => {
     const originalGrabPosts = InsApiJsonParser.grabPosts
     const originalGrabStories = InsApiJsonParser.grabStories
     const originalPrivateApi = InsApiJsonParser.grabPostsPrivateApi
+    let browserCalled = false
     ;(InsApiJsonParser as any).grabPosts = async () => {
-        throw new Error('Error: redirect (302) to https://www.instagram.com/ - likely rate limit or challenge')
+        browserCalled = true
+        throw new Error('browser must not be called when the private API succeeds')
     }
     ;(InsApiJsonParser as any).grabStories = async () => []
     ;(InsApiJsonParser as any).grabPostsPrivateApi = async (handle: string, cookieString: string) => {
@@ -592,12 +594,12 @@ test('Instagram article crawl falls back to private API when browser posts fail'
         return [
             {
                 platform: 2,
-                a_id: 'FALLBACK1',
+                a_id: 'APIPRIME1',
                 u_id: 'instagram',
                 username: 'Instagram',
                 created_at: 1773845200,
-                content: 'fallback post',
-                url: 'https://www.instagram.com/p/FALLBACK1/',
+                content: 'api post',
+                url: 'https://www.instagram.com/p/APIPRIME1/',
                 type: 'post',
                 ref: null,
                 has_media: false,
@@ -610,14 +612,58 @@ test('Instagram article crawl falls back to private API when browser posts fail'
 
     try {
         const spider = new InstagramSpider()
-        const articles = await spider.crawl('https://www.instagram.com/instagram/', {} as any, 'ig-fallback', {
+        const articles = await spider.crawl('https://www.instagram.com/instagram/', {} as any, 'ig-api-primary', {
             task_type: 'article',
             crawl_engine: 'browser',
             cookieString: 'sessionid=abc',
         })
 
         expect(articles).toHaveLength(1)
-        expect(articles[0]?.a_id).toBe('FALLBACK1')
+        expect(articles[0]?.a_id).toBe('APIPRIME1')
+        expect(browserCalled).toBe(false)
+    } finally {
+        ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
+        ;(InsApiJsonParser as any).grabStories = originalGrabStories
+        ;(InsApiJsonParser as any).grabPostsPrivateApi = originalPrivateApi
+    }
+})
+
+test('Instagram article crawl falls back to browser posts when the private API fails', async () => {
+    const originalGrabPosts = InsApiJsonParser.grabPosts
+    const originalGrabStories = InsApiJsonParser.grabStories
+    const originalPrivateApi = InsApiJsonParser.grabPostsPrivateApi
+    ;(InsApiJsonParser as any).grabPosts = async () => [
+        {
+            platform: 2,
+            a_id: 'BROWSER1',
+            u_id: 'instagram',
+            username: 'Instagram',
+            created_at: 1773845200,
+            content: 'browser post',
+            url: 'https://www.instagram.com/p/BROWSER1/',
+            type: 'post',
+            ref: null,
+            has_media: false,
+            media: [],
+            extra: null,
+            u_avatar: null,
+        },
+    ]
+    ;(InsApiJsonParser as any).grabStories = async () => []
+    ;(InsApiJsonParser as any).grabPostsPrivateApi = async () => {
+        throw new Error('HTTP 429')
+    }
+
+    try {
+        const spider = new InstagramSpider()
+        const articles = await spider.crawl('https://www.instagram.com/instagram/', {} as any, 'ig-api-fallback', {
+            task_type: 'article',
+            crawl_engine: 'browser',
+            cookieString: 'sessionid=abc',
+        })
+
+        expect(articles).toHaveLength(1)
+        expect(articles[0]?.a_id).toBe('BROWSER1')
     } finally {
         ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
