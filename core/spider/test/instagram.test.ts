@@ -530,9 +530,9 @@ test('Instagram article crawl defaults to posts and best-effort stories', async 
 
 test('Instagram grabPostsPrivateApi maps private feed items through postParser', async () => {
     const { HTTPClient } = await import('../src/utils/http')
-    const originalDownload = HTTPClient.download_webpage
+    const originalDownload = HTTPClient.download_webpage_curl
     const calls: Array<string> = []
-    ;(HTTPClient as any).download_webpage = async (url: string) => {
+    ;(HTTPClient as any).download_webpage_curl = async (url: string) => {
         calls.push(url)
         if (url.includes('web_profile_info')) {
             return new Response(
@@ -574,7 +574,7 @@ test('Instagram grabPostsPrivateApi maps private feed items through postParser',
         expect(posts[0]?.media?.[0]?.type).toBe('photo')
         expect(posts[0]?.u_id).toBe('sallyamaki')
     } finally {
-        ;(HTTPClient as any).download_webpage = originalDownload
+        ;(HTTPClient as any).download_webpage_curl = originalDownload
     }
 })
 

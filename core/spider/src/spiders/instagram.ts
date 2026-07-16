@@ -538,7 +538,9 @@ namespace InsApiJsonParser {
             'user-agent': INSTAGRAM_PRIVATE_API_UA,
             cookie: cookieString,
         }
-        const profileResponse = await HTTPClient.download_webpage(
+        // Instagram 429s runtime-fetch TLS fingerprints on the private API while allowing curl-like
+        // clients, so this path must use the curl transport.
+        const profileResponse = await HTTPClient.download_webpage_curl(
             `${INSTAGRAM_PRIVATE_API_BASE}/users/web_profile_info/?username=${encodeURIComponent(handle)}`,
             headers,
             { timeout: INSTAGRAM_PRIVATE_API_TIMEOUT_MS },
@@ -550,7 +552,7 @@ namespace InsApiJsonParser {
             throw new Error('Instagram private API profile format may have changed')
         }
         const crawledProfile = profileContextFromUser(user)
-        const feedResponse = await HTTPClient.download_webpage(
+        const feedResponse = await HTTPClient.download_webpage_curl(
             `${INSTAGRAM_PRIVATE_API_BASE}/feed/user/${userId}/?count=12`,
             headers,
             { timeout: INSTAGRAM_PRIVATE_API_TIMEOUT_MS },

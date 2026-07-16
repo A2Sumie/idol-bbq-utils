@@ -73,6 +73,63 @@ namespace HTTPClient {
         }
         return response
     }
+
+    /**
+     * GET via the system curl binary. Some platforms (Instagram, TikTok) fingerprint and 429 the
+     * TLS/HTTP2 stack of runtime fetch implementations while leaving curl-like clients alone; use
+     * this transport for those endpoints.
+     */
+    export async function download_webpage_curl(
+        url: string,
+        headers: Record<string, string> = {},
+        options: DownloadWebpageOptions = {},
+    ): Promise<Response> {
+        const timeout = Math.max(1, options.timeout ?? DEFAULT_FETCH_TIMEOUT_MS)
+        const throwOnError = options.throwOnError ?? true
+        const args = [
+            '-sS',
+            '--max-time',
+            String(Math.ceil(timeout / 1000)),
+            '-o',
+            '-',
+            '-w',
+            '\n%{http_code}',
+        ]
+        for (const [name, value] of Object.entries(headers)) {
+            args.push('-H', `${name}: ${value}`)
+        }
+        args.push(url)
+        let stdout: string
+        try {
+            const { execFile } = await import('child_process')
+            stdout = await new Promise<string>((resolve, reject) => {
+                execFile(
+                    'curl',
+                    args,
+                    { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: timeout + 5000 },
+                    (error, stdout) => {
+                        if (error) {
+                            reject(error)
+                            return
+                        }
+                        resolve(String(stdout))
+                    },
+                )
+            })
+        } catch (error) {
+            if (error && typeof error === 'object' && (error as { killed?: boolean }).killed) {
+                throw new HttpTimeoutError(url, timeout)
+            }
+            throw error
+        }
+        const statusMatch = stdout.match(/\n(\d{3})\s*$/)
+        const status = statusMatch ? Number(statusMatch[1]) : 0
+        const body = statusMatch ? stdout.slice(0, statusMatch.index) : stdout
+        if (throwOnError && (status >= 400 || status === 0)) {
+            throw new HttpStatusError(status || 0, url)
+        }
+        return new Response(body, { status: status || 599 })
+    }
 }
 
 const UserAgent = {
