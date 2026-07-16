@@ -2285,6 +2285,10 @@ namespace XApiJsonParser {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
             if (url.includes('UserTweets') && response.request().method() === 'GET') {
+                if (response.status() >= 300 && response.status() < 400) {
+                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    return
+                }
                 if (response.status() >= 400) {
                     fail(new Error(`Error: ${response.status()}`))
                     return
@@ -2338,6 +2342,10 @@ namespace XApiJsonParser {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
             if (url.includes('UserTweetsAndReplies') && response.request().method() === 'GET') {
+                if (response.status() >= 300 && response.status() < 400) {
+                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    return
+                }
                 if (response.status() >= 400) {
                     fail(new Error(`Error: ${response.status()}`))
                     return
@@ -2379,6 +2387,10 @@ namespace XApiJsonParser {
         const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
             const url = response.url()
             if (url.includes('UserByScreenName') && response.request().method() === 'GET') {
+                if (response.status() >= 300 && response.status() < 400) {
+                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    return
+                }
                 if (response.status() >= 400) {
                     fail(new Error(`Error: ${response.status()}`))
                     return

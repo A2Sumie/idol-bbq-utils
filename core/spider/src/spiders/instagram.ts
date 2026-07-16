@@ -525,6 +525,12 @@ namespace InsApiJsonParser {
             if (friendlyName !== PROFILE_POSTS_KEY) {
                 return
             }
+            if (response.status() >= 300 && response.status() < 400) {
+                // A redirected GraphQL response has no readable body in Puppeteer and almost always means the
+                // session was bounced to a login/checkpoint page; fail as auth instead of a body-read crash.
+                fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                return
+            }
             if (response.status() >= 400) {
                 fail(new Error(`Error: ${response.status()}`))
                 return
@@ -617,6 +623,10 @@ namespace InsApiJsonParser {
             const request = response.request()
             const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
             if (friendlyName !== PROFILE_USER_KEY) {
+                return
+            }
+            if (response.status() >= 300 && response.status() < 400) {
+                fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
                 return
             }
             if (response.status() >= 400) {
