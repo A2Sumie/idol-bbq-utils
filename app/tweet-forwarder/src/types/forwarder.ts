@@ -261,6 +261,11 @@ interface ForwardTargetPlatformCommonConfig {
      */
     x_tiktok_teaser_mode?: 'video' | 'image' | 'suppress'
     /**
+     * When true, the root article's translation is also sent immediately as a text-only message
+     * (no original text, no card), ahead of the normal card send. Intended for B站 and 图透群.
+     */
+    translation_passthrough?: boolean
+    /**
      * Forwarding-time content fingerprint dedup. Independent switch (default off). When enabled, an article
      * whose rendered text + media identity fingerprint already sent to this target is skipped before the
      * provider send. Useful for high-noise groups where the same content reappears under different article ids

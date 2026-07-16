@@ -1611,6 +1611,140 @@ test('sendArticles does not poison outbound state when ForwardBy claim loses a r
     expect((DB.OutboundMessage as any).__records.get(outboundKey)).toBeUndefined()
 })
 
+test('sendArticles sends a text-only translation passthrough before the main send when enabled', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const sends: Array<{ texts: string[]; props: any }> = []
+    const target = {
+        id: 'target-passthrough',
+        NAME: 'recording',
+        getEffectiveConfig: (runtimeConfig?: any) => runtimeConfig || {},
+        check_blocked: async () => false,
+        send: async (texts: string[] | string, props?: any) => {
+            sends.push({ texts: Array.isArray(texts) ? texts : [texts], props })
+            return { status: 'sent' }
+        },
+    }
+    const article = {
+        id: 213,
+        a_id: 'passthrough-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        content: '原文です',
+        translation: '这是译文',
+    }
+
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'main card payload',
+            mediaFiles: [],
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'passthrough-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: { translation_passthrough: true },
+            },
+        ],
+        {
+            render_type: 'text',
+        } as any,
+    )
+
+    expect(sends).toHaveLength(2)
+    expect(sends[0]?.texts).toEqual(['这是译文'])
+    expect(sends[0]?.props?.media).toEqual([])
+    expect(sends[0]?.props?.outboundKey).toContain('translation_passthrough')
+    expect(sends[1]?.texts).toEqual(['main card payload'])
+})
+
+test('sendArticles skips translation passthrough when there is no translation', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const sends: Array<{ texts: string[]; props: any }> = []
+    const target = {
+        id: 'target-passthrough-empty',
+        NAME: 'recording',
+        getEffectiveConfig: (runtimeConfig?: any) => runtimeConfig || {},
+        check_blocked: async () => false,
+        send: async (texts: string[] | string, props?: any) => {
+            sends.push({ texts: Array.isArray(texts) ? texts : [texts], props })
+            return { status: 'sent' }
+        },
+    }
+    const article = {
+        id: 214,
+        a_id: 'passthrough-empty-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        content: '原文です',
+    }
+
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'main card payload',
+            mediaFiles: [],
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'passthrough-empty-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: { translation_passthrough: true },
+            },
+        ],
+        {
+            render_type: 'text',
+        } as any,
+    )
+
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.texts).toEqual(['main card payload'])
+})
+
 test('sendArticles stops after render when forwarder pool starts shutting down', async () => {
     const pools = new ForwarderPools(
         {

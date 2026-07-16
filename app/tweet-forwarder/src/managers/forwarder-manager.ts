@@ -2438,6 +2438,10 @@ class ForwarderPools extends BaseCompatibleModel {
                             log?.info(`X TikTok teaser ${article.a_id} downgraded to a single cover image for ${target.id}`)
                         }
 
+                        if (!options?.forceSend) {
+                            await this.sendTranslationPassthrough(log, article, target, routeKeyForTarget, runtime_config)
+                        }
+
                         const translatedCompanionCard = suppressTranslations
                             ? null
                             : await this.buildTranslatedNativeCompanionCard(
@@ -2827,6 +2831,83 @@ class ForwarderPools extends BaseCompatibleModel {
             if (forceSendError) {
                 throw forceSendError
             }
+        }
+    }
+
+    /**
+     * Fast text-only passthrough of the root article's translation (no original, no card, ref chain omitted).
+     * Enabled per target via `translation_passthrough`; the main card send is unaffected because this uses
+     * its own task_kind and idempotency key.
+     */
+    private async sendTranslationPassthrough(
+        log: Logger | undefined,
+        article: ArticleWithId,
+        target: BaseForwarder,
+        routeKeyForTarget: string,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ) {
+        if (!(runtime_config as any)?.translation_passthrough) {
+            return
+        }
+        const translation = String(article.translation || '').trim()
+        if (!translation) {
+            return
+        }
+        const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article))
+        const outbound = await DB.OutboundMessage.claim({
+            idempotency_key: passthroughKey,
+            route_key: routeKeyForTarget,
+            target_id: target.id,
+            target_platform: target.NAME,
+            task_kind: 'translation_passthrough',
+            article_key: articleKey(article),
+            payload_hash: payloadHash({
+                routeKey: routeKeyForTarget,
+                targetId: target.id,
+                taskKind: 'translation_passthrough',
+                text: translation,
+                articleKeys: [articleKey(article)],
+                media: [],
+            }),
+        }).catch((error) => {
+            log?.warn(
+                `Translation passthrough claim failed for ${article.a_id} to ${target.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            return null
+        })
+        if (!outbound?.claimed) {
+            return
+        }
+        try {
+            await DB.OutboundMessage.markSending(passthroughKey)
+            const sendResult = await target.send(translation, {
+                media: [],
+                cardMedia: [],
+                contentMedia: [],
+                timestamp: article.created_at,
+                runtime_config,
+                article: cloneDeep(article),
+                forceSend: true,
+                outboundKey: passthroughKey,
+            })
+            if (sendResult.status === 'sent') {
+                await DB.OutboundMessage.markSent(passthroughKey, getForwarderProviderResult(sendResult))
+                log?.info(`Sent translation passthrough for ${article.a_id} to ${target.id}`)
+            } else {
+                await DB.OutboundMessage.markFailed(
+                    passthroughKey,
+                    new Error(`translation passthrough not sent: ${sendResult.status}`),
+                )
+            }
+        } catch (error) {
+            await DB.OutboundMessage.markFailed(passthroughKey, error).catch(() => undefined)
+            log?.warn(
+                `Translation passthrough failed for ${article.a_id} to ${target.id}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
         }
     }
 
