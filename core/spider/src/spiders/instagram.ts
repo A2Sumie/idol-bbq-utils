@@ -526,9 +526,15 @@ namespace InsApiJsonParser {
                 return
             }
             if (response.status() >= 300 && response.status() < 400) {
-                // A redirected GraphQL response has no readable body in Puppeteer and almost always means the
-                // session was bounced to a login/checkpoint page; fail as auth instead of a body-read crash.
-                fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                // A redirected GraphQL response has no readable body in Puppeteer. Instagram answers with a
+                // 302 both for login bounces (expired session) and for rate-limit/challenge throttling;
+                // only the Location header tells them apart.
+                const location = response.headers()['location'] || ''
+                if (/login/i.test(location)) {
+                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                } else {
+                    fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                }
                 return
             }
             if (response.status() >= 400) {
@@ -626,7 +632,15 @@ namespace InsApiJsonParser {
                 return
             }
             if (response.status() >= 300 && response.status() < 400) {
-                fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                // A redirected GraphQL response has no readable body in Puppeteer. Instagram answers with a
+                // 302 both for login bounces (expired session) and for rate-limit/challenge throttling;
+                // only the Location header tells them apart.
+                const location = response.headers()['location'] || ''
+                if (/login/i.test(location)) {
+                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                } else {
+                    fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                }
                 return
             }
             if (response.status() >= 400) {

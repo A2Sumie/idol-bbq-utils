@@ -2286,7 +2286,12 @@ namespace XApiJsonParser {
             const url = response.url()
             if (url.includes('UserTweets') && response.request().method() === 'GET') {
                 if (response.status() >= 300 && response.status() < 400) {
-                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    const location = response.headers()['location'] || ''
+                    if (/login/i.test(location)) {
+                        fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    } else {
+                        fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                    }
                     return
                 }
                 if (response.status() >= 400) {
@@ -2343,7 +2348,12 @@ namespace XApiJsonParser {
             const url = response.url()
             if (url.includes('UserTweetsAndReplies') && response.request().method() === 'GET') {
                 if (response.status() >= 300 && response.status() < 400) {
-                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    const location = response.headers()['location'] || ''
+                    if (/login/i.test(location)) {
+                        fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    } else {
+                        fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                    }
                     return
                 }
                 if (response.status() >= 400) {
@@ -2388,7 +2398,12 @@ namespace XApiJsonParser {
             const url = response.url()
             if (url.includes('UserByScreenName') && response.request().method() === 'GET') {
                 if (response.status() >= 300 && response.status() < 400) {
-                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    const location = response.headers()['location'] || ''
+                    if (/login/i.test(location)) {
+                        fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    } else {
+                        fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                    }
                     return
                 }
                 if (response.status() >= 400) {
