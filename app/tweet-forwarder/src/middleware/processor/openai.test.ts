@@ -181,6 +181,7 @@ test('Hy3Free provider calls Tencent LKEAP endpoint with model hy3 on success', 
                 prompt: 'Translate to Simplified Chinese.',
                 fallback: {
                     provider: 'DeepSeekV4Pro',
+                    api_key: 'test-fallback-key',
                     model_id: 'deepseek-v4-pro',
                     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
                     temperature: 1.0,
@@ -225,6 +226,7 @@ test('Hy3Free provider falls back to v4-pro Go endpoint on failure', async () =>
                 prompt: 'Translate to Simplified Chinese.',
                 fallback: {
                     provider: 'DeepSeekV4Pro',
+                    api_key: 'test-fallback-key',
                     model_id: 'deepseek-v4-pro',
                     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
                     temperature: 1.0,
@@ -244,7 +246,7 @@ test('Hy3Free provider falls back to v4-pro Go endpoint on failure', async () =>
                 { role: 'system', content: 'Translate to Simplified Chinese.' },
                 { role: 'user', content: 'こんにちは' },
             ])
-            expect(calls[1]?.options?.headers?.Authorization).toBe('Bearer test-key')
+            expect(calls[1]?.options?.headers?.Authorization).toBe('Bearer test-fallback-key')
         })
     } finally {
         ;(axios as any).post = originalPost
@@ -268,6 +270,7 @@ test('Hy3Free fallback can use a separate api_key from the primary', async () =>
                 prompt: 'Translate to Simplified Chinese.',
                 fallback: {
                     provider: 'DeepSeekV4Pro',
+                    api_key: 'test-fallback-key',
                     api_key: 'go-key',
                     model_id: 'deepseek-v4-pro',
                     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
@@ -299,8 +302,8 @@ test('Hy3Free provider skips hy3 and goes straight to fallback when frozen', asy
 
     try {
         await withHy3BreakerEnv('2', async () => {
-            const { getHy3CircuitBreaker } = await import('@/services/hy3-circuit-breaker-service')
-            const breaker = getHy3CircuitBreaker()
+            const { getHy3CircuitBreaker, resolveHy3BreakerKey } = await import('@/services/hy3-circuit-breaker-service')
+            const breaker = getHy3CircuitBreaker(undefined, resolveHy3BreakerKey({}))
             breaker.recordFailure(new Error('pre-freeze-1'))
             breaker.recordFailure(new Error('pre-freeze-2'))
             expect(breaker.isFrozen()).toBe(true)
@@ -309,6 +312,7 @@ test('Hy3Free provider skips hy3 and goes straight to fallback when frozen', asy
                 prompt: 'Translate to Simplified Chinese.',
                 fallback: {
                     provider: 'DeepSeekV4Pro',
+                    api_key: 'test-fallback-key',
                     model_id: 'deepseek-v4-pro',
                     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
                     extended_payload: { thinking: { type: 'disabled' } },
@@ -345,6 +349,7 @@ test('Hy3Free provider preserves prompt and response_format in fallback', async 
                 max_tokens: 160,
                 fallback: {
                     provider: 'DeepSeekV4Pro',
+                    api_key: 'test-fallback-key',
                     model_id: 'deepseek-v4-pro',
                     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
                     extended_payload: { thinking: { type: 'disabled' } },

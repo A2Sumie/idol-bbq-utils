@@ -1,6 +1,6 @@
 import type { AppConfig, Processor, ProcessorConfig } from '@/types'
 import { ProcessorProvider } from '@/types/processor'
-import { getHy3CircuitBreaker } from '@/services/hy3-circuit-breaker-service'
+import { getHy3CircuitBreaker, resolveHy3BreakerKey } from '@/services/hy3-circuit-breaker-service'
 
 const OPENCODE_GO_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/go/v1/chat/completions'
 const OPENCODE_ZEN_CHAT_COMPLETIONS_URL = 'https://opencode.ai/zen/v1/chat/completions'
@@ -209,8 +209,8 @@ function buildProcessorModelCapability(processor: Processor) {
         ...(isHy3
             ? {
                   hy3: {
-                      frozen: getHy3CircuitBreaker().isFrozen(),
-                      breaker: getHy3CircuitBreaker().getDetailedStatus(),
+                      frozen: getHy3CircuitBreaker(undefined, resolveHy3BreakerKey(cfg || {})).isFrozen(),
+                      breaker: getHy3CircuitBreaker(undefined, resolveHy3BreakerKey(cfg || {})).getDetailedStatus(),
                   },
               }
             : {}),

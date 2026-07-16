@@ -31,11 +31,29 @@ function resolveThreshold(): number {
 
 function resolveFreezeDurationMs(): number | null {
     const raw = Number(process.env.HY3_FREEZE_DURATION_MS)
-    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : null
+    // Default to a 30 minute half-open window; a frozen breaker with no auto-recovery converts a transient
+    // hy3 outage into a permanent paid-fallback diversion until someone calls the unfreeze API.
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30 * 60 * 1000
 }
 
-function resolveStatePath(): string {
-    return process.env.HY3_BREAKER_STATE_PATH || path.join(CACHE_DIR_ROOT, 'hy3-breaker.json')
+function resolveStatePath(stateKey?: string): string {
+    const envPath = process.env.HY3_BREAKER_STATE_PATH
+    if (stateKey) {
+        const safeKey = stateKey.replace(/[^a-zA-Z0-9_-]+/g, '_')
+        if (envPath) {
+            const ext = path.extname(envPath) || '.json'
+            return `${envPath.slice(0, envPath.length - ext.length)}-${safeKey}${ext}`
+        }
+        return path.join(CACHE_DIR_ROOT, `hy3-breaker-${safeKey}.json`)
+    }
+    return envPath || path.join(CACHE_DIR_ROOT, 'hy3-breaker.json')
+}
+
+// Must match HY3_FREE_DEFAULT_CONFIG.name in middleware/processor/openai.ts.
+const HY3_DEFAULT_PROCESSOR_NAME = 'Tencent-LKEAP-Hunyuan-Hy3'
+
+function resolveHy3BreakerKey(config?: { name?: string }): string {
+    return config?.name || HY3_DEFAULT_PROCESSOR_NAME
 }
 
 class Hy3CircuitBreaker {
@@ -46,9 +64,9 @@ class Hy3CircuitBreaker {
     private loaded = false
     log?: Logger
 
-    constructor(log?: Logger) {
+    constructor(log?: Logger, stateKey?: string) {
         this.log = log?.child({ label: 'Hy3Breaker', subservice: 'circuit-breaker' })
-        this.statePath = resolveStatePath()
+        this.statePath = resolveStatePath(stateKey)
         this.threshold = resolveThreshold()
         this.freezeDurationMs = resolveFreezeDurationMs()
     }
@@ -176,17 +194,25 @@ export interface Hy3BreakerStatus extends Hy3BreakerState {
     state_path: string
 }
 
-let singleton: Hy3CircuitBreaker | null = null
+const breakers = new Map<string, Hy3CircuitBreaker>()
 
-function getHy3CircuitBreaker(log?: Logger): Hy3CircuitBreaker {
-    if (!singleton) {
-        singleton = new Hy3CircuitBreaker(log)
+function getHy3CircuitBreaker(log?: Logger, key?: string): Hy3CircuitBreaker {
+    const breakerKey = key || 'default'
+    let breaker = breakers.get(breakerKey)
+    if (!breaker) {
+        breaker = new Hy3CircuitBreaker(log, breakerKey === 'default' ? undefined : breakerKey)
+        breakers.set(breakerKey, breaker)
     }
-    return singleton
+    return breaker
+}
+
+function getAllHy3CircuitBreakers(log?: Logger): Map<string, Hy3CircuitBreaker> {
+    getHy3CircuitBreaker(log)
+    return breakers
 }
 
 function resetHy3CircuitBreakerForTest(): void {
-    singleton = null
+    breakers.clear()
 }
 
-export { Hy3CircuitBreaker, getHy3CircuitBreaker, resetHy3CircuitBreakerForTest }
+export { Hy3CircuitBreaker, getAllHy3CircuitBreakers, getHy3CircuitBreaker, resetHy3CircuitBreakerForTest, resolveHy3BreakerKey }

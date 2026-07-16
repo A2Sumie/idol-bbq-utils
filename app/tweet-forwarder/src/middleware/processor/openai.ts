@@ -2,7 +2,7 @@ import { BaseProcessor, resolveProcessorApiKey } from './base'
 import axios from 'axios'
 import { type ProcessorConfig, type ProcessorFallbackConfig, ProcessorProvider } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
-import { getHy3CircuitBreaker } from '@/services/hy3-circuit-breaker-service'
+import { getHy3CircuitBreaker, resolveHy3BreakerKey, type Hy3CircuitBreaker } from '@/services/hy3-circuit-breaker-service'
 
 abstract class BaseOpenai extends BaseProcessor {
     public name = 'base openai translator'
@@ -82,7 +82,7 @@ class OpenaiLikeLLMTranslator extends BaseOpenai {
                 headers: {
                     Authorization: `Bearer ${this.api_key}`,
                 },
-                timeout: this.config?.request_timeout_ms,
+                timeout: this.config?.request_timeout_ms ?? 30_000,
             },
         )
         return res.data.choices[0].message.content as string
@@ -112,13 +112,21 @@ function buildFallbackProcessorConfig(
     const { fallback: _omit, extended_payload: _primaryPayload, ...primaryShared } = primary
     const name = `${primary.name || 'hunyuan'}-fallback-v4pro`
     if (!fallback) {
-        return { ...primaryShared, name }
+        // Never default to the primary model/endpoint: that would re-POST the same request that just failed
+        // and call it a "fallback". Fall back to the v4-pro defaults instead.
+        return {
+            ...primaryShared,
+            name,
+            model_id: DEEPSEEK_V4_PRO_DEFAULT_CONFIG.model_id,
+            base_url: DEEPSEEK_V4_PRO_DEFAULT_CONFIG.base_url,
+            temperature: DEEPSEEK_V4_PRO_DEFAULT_CONFIG.temperature,
+        }
     }
     return {
         ...primaryShared,
         name,
-        model_id: fallback.model_id ?? primaryShared.model_id,
-        base_url: fallback.base_url ?? primaryShared.base_url,
+        model_id: fallback.model_id ?? DEEPSEEK_V4_PRO_DEFAULT_CONFIG.model_id,
+        base_url: fallback.base_url ?? DEEPSEEK_V4_PRO_DEFAULT_CONFIG.base_url,
         temperature: fallback.temperature ?? primaryShared.temperature,
         extended_payload: fallback.extended_payload,
     }
@@ -127,14 +135,20 @@ function buildFallbackProcessorConfig(
 class Hy3FreeTranslator extends OpenaiLikeLLMTranslator {
     static _PROVIDER = ProcessorProvider.Hy3Free
     private fallbackProcessor: DeepSeekV4ProTranslator
-    private breaker = getHy3CircuitBreaker()
+    private breaker: Hy3CircuitBreaker
 
     constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
         const merged = mergeProcessorDefaults(HY3_FREE_DEFAULT_CONFIG, config)
         super(api_key, log, merged)
-        this.breaker = getHy3CircuitBreaker(log)
+        this.breaker = getHy3CircuitBreaker(log, resolveHy3BreakerKey(merged))
         const fallbackConfig = buildFallbackProcessorConfig(merged, config?.fallback)
-        const fallbackApiKey = config?.fallback?.api_key ? resolveProcessorApiKey(config.fallback.api_key) : api_key
+        if (!config?.fallback?.api_key) {
+            throw new Error(
+                `Hy3Free processor "${merged.name}" requires cfg_processor.fallback.api_key: without a dedicated ` +
+                    `fallback key the breaker would route failures back to the same endpoint that just failed.`,
+            )
+        }
+        const fallbackApiKey = resolveProcessorApiKey(config.fallback.api_key)
         this.fallbackProcessor = new DeepSeekV4ProTranslator(fallbackApiKey, log, fallbackConfig)
     }
 

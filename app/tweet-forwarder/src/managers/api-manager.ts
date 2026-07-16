@@ -61,7 +61,7 @@ import {
     getKnownModelCapability,
     resolveDefaultModelId,
 } from '@/services/processor-model-capability-service'
-import { getHy3CircuitBreaker } from '@/services/hy3-circuit-breaker-service'
+import { getAllHy3CircuitBreakers } from '@/services/hy3-circuit-breaker-service'
 import {
     CodexMcpDisabledError,
     createCodexMcpClientServiceFromEnv,
@@ -1447,19 +1447,27 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async handleHy3Status(): Promise<Response> {
-        const breaker = getHy3CircuitBreaker(this.log)
+        const breakers = getAllHy3CircuitBreakers(this.log)
+        const statuses: Record<string, unknown> = {}
+        for (const [key, breaker] of breakers) {
+            statuses[key] = breaker.getDetailedStatus()
+        }
         return jsonResponse({
             success: true,
-            ...breaker.getDetailedStatus(),
+            breakers: statuses,
         })
     }
 
     private async handleHy3Unfreeze(): Promise<Response> {
-        const breaker = getHy3CircuitBreaker(this.log)
+        const breakers = getAllHy3CircuitBreakers(this.log)
+        const unfrozen: Record<string, unknown> = {}
+        for (const [key, breaker] of breakers) {
+            unfrozen[key] = breaker.unfreeze()
+        }
         return jsonResponse({
             success: true,
-            message: 'HY3 circuit breaker unfrozen.',
-            ...breaker.unfreeze(),
+            message: 'HY3 circuit breakers unfrozen.',
+            breakers: unfrozen,
         })
     }
 
