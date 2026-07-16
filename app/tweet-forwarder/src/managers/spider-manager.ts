@@ -160,11 +160,19 @@ function isPremierePendingArticleLike(article: Pick<Article, 'platform' | 'conte
 }
 
 function shouldRefreshPremiereArticle(existing: any, next: Article) {
-    return isPremierePendingArticleLike({
-        platform: next.platform,
-        content: existing?.content || null,
-        extra: existing?.extra || null,
-    }) && !isPremierePendingArticleLike(next)
+    if (
+        !isPremierePendingArticleLike({
+            platform: next.platform,
+            content: existing?.content || null,
+            extra: existing?.extra || null,
+        })
+    ) {
+        return false
+    }
+    // Only trust an explicit hydrated premiere marker: list-page articles carry `extra: null`, and treating
+    // "no marker" as resolved would falsely resolve real-titled pending premieres on the next crawl.
+    const nextPremiere = articleExtraData(next.extra)?.premiere
+    return Boolean(nextPremiere) && !nextPremiere.pending
 }
 
 function resolveExistingArticleReusePolicy(cfg_crawler: Crawler['cfg_crawler'] | undefined) {
@@ -1954,6 +1962,20 @@ class SpiderPools extends BaseCompatibleModel {
                         isArticleKnown: platform
                             ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
                             : undefined,
+                        isStoredPremierePending:
+                            platform === Platform.YouTube
+                                ? async (a_id: string) => {
+                                      const existing = await DB.Article.getByArticleCode(a_id, platform)
+                                      if (!existing) {
+                                          return false
+                                      }
+                                      return isPremierePendingArticleLike({
+                                          platform,
+                                          content: (existing as any)?.content || null,
+                                          extra: (existing as any)?.extra || null,
+                                      })
+                                  }
+                                : undefined,
                     }),
                 {
                     retries: RETRY_LIMIT,
@@ -1970,6 +1992,7 @@ class SpiderPools extends BaseCompatibleModel {
         const existingArticleReusePolicy = resolveExistingArticleReusePolicy(cfg_crawler)
         let new_articles: Array<Article> = []
         let dispatch_article_ids: Array<number> = []
+        const premiere_dispatch_ids: Array<number> = []
         let saved_articles_count = 0
         const now = Math.floor(Date.now() / 1000)
         for (const article of articles) {
@@ -1987,7 +2010,7 @@ class SpiderPools extends BaseCompatibleModel {
                     translation: null,
                     translated_by: null,
                 } as Partial<Article>)
-                dispatch_article_ids.push((updated as any).id || isExist.id)
+                premiere_dispatch_ids.push((updated as any).id || isExist.id)
                 ctx.log?.info(`[${url.href}] Refreshed premiere placeholder article ${article.a_id} with public YouTube metadata.`)
                 continue
             }
@@ -1999,15 +2022,24 @@ class SpiderPools extends BaseCompatibleModel {
             }
         }
         if (new_articles.length === 0) {
+            const dedupedPremiereIds = Array.from(new Set(premiere_dispatch_ids))
             if (dispatch_article_ids.length > 0) {
-                const dedupedDispatchIds = Array.from(new Set(dispatch_article_ids)).slice(
-                    0,
-                    existingArticleReusePolicy?.maxItems || 0,
-                )
+                // Premiere-resolution dispatches are driven by stored state, not the reuse policy; they must
+                // not be capped by (or require) `reuse_existing_for_immediate_forward`.
+                const dedupedDispatchIds = [
+                    ...dedupedPremiereIds,
+                    ...Array.from(new Set(dispatch_article_ids)).slice(0, existingArticleReusePolicy?.maxItems || 0),
+                ]
                 ctx.log?.info(
                     `[${url.href}] No new articles found, explicitly reusing ${dedupedDispatchIds.length} existing article ids for immediate forward (${existingArticleReusePolicy?.reason}).`,
                 )
                 return dedupedDispatchIds
+            }
+            if (dedupedPremiereIds.length > 0) {
+                ctx.log?.info(
+                    `[${url.href}] No new articles found, dispatching ${dedupedPremiereIds.length} premiere-resolved article ids for immediate forward.`,
+                )
+                return dedupedPremiereIds
             }
             ctx.log?.info(`[${url.href}] No new articles found.`)
             return []
@@ -2036,7 +2068,7 @@ class SpiderPools extends BaseCompatibleModel {
             }
         }
         ctx.log?.info(`[${url.href}] ${saved_articles_count} articles saved.`)
-        return Array.from(new Set(dispatch_article_ids))
+        return Array.from(new Set([...premiere_dispatch_ids, ...dispatch_article_ids]))
     }
 
     private async maybeSyncInstagramLiveRelay(

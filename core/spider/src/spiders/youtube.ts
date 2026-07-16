@@ -46,6 +46,7 @@ class YoutubeSpider extends BaseSpider {
                 max?: number
             }
             isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
+            isStoredPremierePending?: (a_id: string) => Promise<boolean> | boolean
             cookieString?: string
         },
     ): Promise<TaskTypeResult<T, Platform.YouTube>> {
@@ -68,6 +69,7 @@ class YoutubeSpider extends BaseSpider {
                 hydrate_concurrency: config.hydrate_concurrency,
                 hydrate_interval_time: config.hydrate_interval_time,
                 isArticleKnown: config.isArticleKnown,
+                isStoredPremierePending: config.isStoredPremierePending,
             })
 
             return res as TaskTypeResult<T, Platform.YouTube>
@@ -103,6 +105,7 @@ namespace YoutubeApiJsonParser {
             max?: number
         }
         isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
+        isStoredPremierePending?: (a_id: string) => Promise<boolean> | boolean
     }
 
     const LOCALE_QUERY = 'hl=en&persist_hl=1&gl=US'
@@ -510,13 +513,30 @@ namespace YoutubeApiJsonParser {
         return Array.from(dedup.values())
     }
 
-    async function hydrateArticle(article: YoutubeArticle, headers: Record<string, string>): Promise<YoutubeArticle> {
+    async function hydrateArticle(
+        article: YoutubeArticle,
+        headers: Record<string, string>,
+        options: { markPremiereResolved?: boolean } = {},
+    ): Promise<YoutubeArticle> {
         const webpage = await HTTPClient.download_webpage(addLocaleQuery(article.url), headers, {
             timeout: YOUTUBE_DETAIL_TIMEOUT_MS,
         })
         const detail = detailParser(await webpage.text())
         const media = detail.thumbnail ? mediaParser(detail.thumbnail) : article.media
-        const premiereExtra = buildPremiereExtra(detail)
+        let premiereExtra = buildPremiereExtra(detail)
+        if (!premiereExtra && options.markPremiereResolved) {
+            // A stored-pending premiere whose detail page no longer reports upcoming/scheduled state has
+            // resolved; emit an explicit marker so the refresh gate can trust this over list-page shape.
+            premiereExtra = {
+                data: {
+                    premiere: {
+                        pending: false,
+                        scheduled_start_at: detail.scheduled_start_at,
+                        resolved_at: dayjs().unix(),
+                    },
+                },
+            }
+        }
         return {
             ...article,
             created_at: detail.created_at || article.created_at,
@@ -571,11 +591,21 @@ namespace YoutubeApiJsonParser {
             ),
         )
         const knownIds = new Set<string>()
+        const storedPendingPremiereIds = new Set<string>()
         if (options.isArticleKnown) {
             await Promise.all(
                 baseArticles.map(async (article) => {
                     try {
-                        if ((await options.isArticleKnown?.(article.a_id)) && !isPremierePendingArticle(article)) {
+                        if (!(await options.isArticleKnown?.(article.a_id))) {
+                            return
+                        }
+                        // Resolution of a premiere can only be proven from the detail page, so a stored-pending
+                        // article must be re-hydrated even though it is already known.
+                        if (await options.isStoredPremierePending?.(article.a_id)) {
+                            storedPendingPremiereIds.add(article.a_id)
+                            return
+                        }
+                        if (!isPremierePendingArticle(article)) {
                             knownIds.add(article.a_id)
                         }
                     } catch {
@@ -591,7 +621,11 @@ namespace YoutubeApiJsonParser {
             .slice(0, hydrateLimit)
         for (let index = 0; index < hydrateQueue.length; index += hydrateConcurrency) {
             const chunk = hydrateQueue.slice(index, index + hydrateConcurrency)
-            const hydrated = await Promise.allSettled(chunk.map((article) => hydrateArticle(article, headers)))
+            const hydrated = await Promise.allSettled(
+                chunk.map((article) =>
+                    hydrateArticle(article, headers, { markPremiereResolved: storedPendingPremiereIds.has(article.a_id) }),
+                ),
+            )
             for (let chunkIndex = 0; chunkIndex < hydrated.length; chunkIndex++) {
                 const result = hydrated[chunkIndex]
                 const fallback = chunk[chunkIndex]

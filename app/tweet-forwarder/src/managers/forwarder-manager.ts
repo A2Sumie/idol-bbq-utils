@@ -2290,9 +2290,17 @@ class ForwarderPools extends BaseCompatibleModel {
                         if (!options?.forceSend) {
                             claimed = await this.claimArticleChain(article, platform, target.id)
                             if (!claimed) {
-                                log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
-                                hadNonErrorOutcome = true
-                                return
+                                if (premiereResolvedForceKey) {
+                                    // The placeholder send already marked ForwardBy; the resolved video must
+                                    // still go out under its own idempotency key.
+                                    log?.info(
+                                        `Article ${article.a_id} already claimed for target ${target.id}, proceeding for premiere-resolved send`,
+                                    )
+                                } else {
+                                    log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
+                                    hadNonErrorOutcome = true
+                                    return
+                                }
                             }
                             if (this.shouldStopForShutdown(log, `sendArticles after claim ${target.id}`)) {
                                 await this.releaseArticleChain(article, platform, target.id)
@@ -2427,7 +2435,9 @@ class ForwarderPools extends BaseCompatibleModel {
                         // (e.g. an earlier `article`/`manual_article` send, or a `summary_realtime_media` media push).
                         // The exact-key OutboundMessage.claim below only catches same-key replays; this closes the
                         // cross-key / cross-task duplicate hole that hurt high-noise targets the most.
-                        if (!options?.forceSend) {
+                        // Exempt premiere-resolved re-sends: the placeholder's visible completion must not
+                        // suppress the resolved video delivery.
+                        if (!options?.forceSend && !premiereResolvedForceKey) {
                             const priorVisibleArticle = await DB.OutboundMessage.findLatestVisibleCompletion({
                                 target_id: target.id,
                                 task_kinds: [

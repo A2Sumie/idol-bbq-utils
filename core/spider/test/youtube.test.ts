@@ -377,6 +377,115 @@ test('YouTube grabArticles rehydrates known premiere placeholders', async () => 
     }
 })
 
+test('YouTube grabArticles rehydrates stored-pending premieres with real titles and marks resolution', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const requestedUrls: Array<string> = []
+    const realTitleVideos = {
+        header: officialChannelHeaderFixture,
+        richGridRenderer: {
+            contents: [{
+                richItemRenderer: {
+                    content: {
+                        videoRenderer: {
+                            videoId: 'premiere-real-title',
+                            title: { runs: [{ text: '【MV】Real Title' }] },
+                            publishedTimeText: { simpleText: 'Upcoming' },
+                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-real-title/hqdefault.jpg', width: 480 }] },
+                        },
+                    },
+                },
+            }],
+        },
+    }
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        requestedUrls.push(url)
+        if (url.includes('/videos?')) {
+            return new Response(buildYoutubeInitialData(realTitleVideos))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData({ header: officialChannelHeaderFixture }))
+        }
+        return new Response(buildYoutubeDetailHtml('premiere-real-title'))
+    }
+
+    try {
+        const articles = await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', {
+            hydrate_limit: 8,
+            hydrate_concurrency: 1,
+            isArticleKnown: () => true,
+            isStoredPremierePending: (a_id) => a_id === 'premiere-real-title',
+        })
+
+        // A real-titled list item must still be re-hydrated when the stored row is pending...
+        expect(requestedUrls.some((url) => url.includes('/watch?') && url.includes('premiere-real-title'))).toBeTrue()
+        const premiere = articles.find((article) => article.a_id === 'premiere-real-title')
+        expect(premiere?.content).toContain('Hydrated premiere-real-title')
+        // ...and a resolved detail page produces an explicit pending:false marker.
+        expect((premiere?.extra as any)?.data?.premiere?.pending).toBe(false)
+        expect((premiere?.extra as any)?.data?.premiere?.resolved_at).toBeGreaterThan(0)
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
+test('YouTube grabArticles keeps stored-pending premieres pending when detail still upcoming', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const realTitleVideos = {
+        header: officialChannelHeaderFixture,
+        richGridRenderer: {
+            contents: [{
+                richItemRenderer: {
+                    content: {
+                        videoRenderer: {
+                            videoId: 'premiere-still-upcoming',
+                            title: { runs: [{ text: '【MV】Still Upcoming' }] },
+                            publishedTimeText: { simpleText: 'Upcoming' },
+                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-still-upcoming/hqdefault.jpg', width: 480 }] },
+                        },
+                    },
+                },
+            }],
+        },
+    }
+    const upcomingDetailHtml = `<script>var ytInitialPlayerResponse = ${JSON.stringify({
+        playabilityStatus: { status: 'LIVE_STREAM_OFFLINE' },
+        videoDetails: {
+            title: '【MV】Still Upcoming',
+            isUpcoming: true,
+            shortDescription: '',
+            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-still-upcoming/maxresdefault.jpg', width: 1280 }] },
+        },
+        microformat: {
+            playerMicroformatRenderer: {
+                liveBroadcastDetails: { startTimestamp: '2026-07-20T11:55:00Z' },
+            },
+        },
+    })};</script>`
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        if (url.includes('/videos?')) {
+            return new Response(buildYoutubeInitialData(realTitleVideos))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData({ header: officialChannelHeaderFixture }))
+        }
+        return new Response(upcomingDetailHtml)
+    }
+
+    try {
+        const articles = await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', {
+            hydrate_limit: 8,
+            hydrate_concurrency: 1,
+            isArticleKnown: () => true,
+            isStoredPremierePending: () => true,
+        })
+
+        const premiere = articles.find((article) => article.a_id === 'premiere-still-upcoming')
+        expect((premiere?.extra as any)?.data?.premiere?.pending).toBe(true)
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
 test('YouTube grabArticles skips detail hydration for already-known articles', async () => {
     const originalDownload = HTTPClient.download_webpage
     const requestedUrls: Array<string> = []

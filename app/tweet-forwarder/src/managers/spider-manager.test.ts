@@ -837,6 +837,131 @@ test('SpiderPools reuses existing article ids for configured non-list crawlers',
     }
 })
 
+test('SpiderPools dispatches premiere-resolved articles without a reuse policy', async () => {
+    const originalCheckExist = DB.Article.checkExist
+    const originalTrySave = DB.Article.trySave
+    const originalUpdate = DB.Article.update
+    const now = Math.floor(Date.now() / 1000)
+
+    ;(DB.Article as any).checkExist = async (article: any) => {
+        if (article.a_id === 'premiere-resolved-1') {
+            return {
+                id: 3333,
+                content: 'Coming soon',
+                extra: { data: { premiere: { pending: true, scheduled_start_at: now - 3600 } } },
+            }
+        }
+        return undefined
+    }
+    ;(DB.Article as any).trySave = async () => undefined
+    ;(DB.Article as any).update = async (id: number) => ({ id })
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', new EventEmitter())
+        const result = await (pools as any).crawlArticle(
+            {
+                taskId: 'spider-test',
+                task: {
+                    id: 'spider-test',
+                    status: 'running',
+                    data: { cfg_crawler: {} },
+                },
+            },
+            {
+                crawl: async () =>
+                    [
+                        {
+                            a_id: 'premiere-resolved-1',
+                            u_id: '227SMEJ',
+                            username: '22/7',
+                            created_at: now - 60,
+                            url: 'https://www.youtube.com/watch?v=premiere-resolved-1',
+                            type: 'video',
+                            has_media: true,
+                            media: [],
+                            platform: Platform.YouTube,
+                            extra: {
+                                data: {
+                                    premiere: { pending: false, scheduled_start_at: now - 3600, resolved_at: now - 60 },
+                                },
+                            },
+                        },
+                    ] as any,
+            } as any,
+            new URL('https://www.youtube.com/@227SMEJ'),
+        )
+
+        expect(result).toEqual([3333])
+    } finally {
+        ;(DB.Article as any).checkExist = originalCheckExist
+        ;(DB.Article as any).trySave = originalTrySave
+        ;(DB.Article as any).update = originalUpdate
+    }
+})
+
+test('SpiderPools does not resolve a pending premiere from list-page shape alone', async () => {
+    const originalCheckExist = DB.Article.checkExist
+    const originalTrySave = DB.Article.trySave
+    const originalUpdate = DB.Article.update
+    const now = Math.floor(Date.now() / 1000)
+    let updateCalled = false
+
+    ;(DB.Article as any).checkExist = async (article: any) => {
+        if (article.a_id === 'premiere-real-title') {
+            return {
+                id: 4444,
+                content: 'Coming soon',
+                extra: { data: { premiere: { pending: true, scheduled_start_at: now + 86400 } } },
+            }
+        }
+        return undefined
+    }
+    ;(DB.Article as any).trySave = async () => undefined
+    ;(DB.Article as any).update = async () => {
+        updateCalled = true
+        return { id: 4444 }
+    }
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', new EventEmitter())
+        const result = await (pools as any).crawlArticle(
+            {
+                taskId: 'spider-test',
+                task: {
+                    id: 'spider-test',
+                    status: 'running',
+                    data: { cfg_crawler: {} },
+                },
+            },
+            {
+                crawl: async () =>
+                    [
+                        {
+                            a_id: 'premiere-real-title',
+                            u_id: '227SMEJ',
+                            username: '22/7',
+                            created_at: 0,
+                            url: 'https://www.youtube.com/watch?v=premiere-real-title',
+                            type: 'video',
+                            has_media: true,
+                            media: [],
+                            platform: Platform.YouTube,
+                            extra: null,
+                        },
+                    ] as any,
+            } as any,
+            new URL('https://www.youtube.com/@227SMEJ'),
+        )
+
+        expect(updateCalled).toBe(false)
+        expect(result).toEqual([])
+    } finally {
+        ;(DB.Article as any).checkExist = originalCheckExist
+        ;(DB.Article as any).trySave = originalTrySave
+        ;(DB.Article as any).update = originalUpdate
+    }
+})
+
 function makeCookieExportPage(cookies: Array<any>) {
     return {
         browserContext: () => ({
