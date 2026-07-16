@@ -181,6 +181,10 @@ export class BrowserSessionPool {
     ) {
         const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH
         const lang = process.env.BROWSER_LANG || 'ja-JP'
+        const extraArgs = (process.env.BROWSER_EXTRA_ARGS || '')
+            .split(/\s+/)
+            .map((arg) => arg.trim())
+            .filter(Boolean)
         const args = [
             process.env.NO_SANDBOX ? '--no-sandbox' : '',
             process.env.NO_SANDBOX ? '--disable-setuid-sandbox' : '',
@@ -195,6 +199,7 @@ export class BrowserSessionPool {
             '--window-position=0,0',
             `--window-size=${profile.windowSize.width},${profile.windowSize.height}`,
             `--lang=${lang}`,
+            ...extraArgs,
         ].filter(Boolean)
 
         return puppeteer.launch({

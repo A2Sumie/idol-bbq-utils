@@ -153,30 +153,32 @@ const CHROME_PDF_PLUGINS: Array<ProfilePlugin> = [
 ]
 
 const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
+    // Honest Linux desktop matching the actual host (3020e): real Chrome on X11, ja-JP locale,
+    // kernel-versioned UA-CH, host CPU count. Consistency beats blending in with a fake Windows set.
     desktop_chrome: {
         deviceProfile: 'desktop_chrome',
         engine: 'chromium',
         isMobile: false,
         hasTouch: false,
         chromeLike: true,
-        userAgent: UserAgent.CHROME,
+        userAgent: UserAgent.LINUX_CHROME,
         viewport: {
-            width: 1440,
-            height: 900,
+            width: 1600,
+            height: 1200,
             deviceScaleFactor: 1,
             hasTouch: false,
             isLandscape: true,
             isMobile: false,
         },
         windowSize: {
-            width: 1440,
-            height: 980,
+            width: 1600,
+            height: 1200,
         },
         screen: {
-            width: 1440,
-            height: 980,
-            availWidth: 1440,
-            availHeight: 940,
+            width: 1600,
+            height: 1200,
+            availWidth: 1600,
+            availHeight: 1160,
             colorDepth: 24,
             pixelDepth: 24,
             orientation: 'landscape-primary',
@@ -186,14 +188,14 @@ const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
             'accept-language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
             'sec-ch-ua': `"Not_A Brand";v="99", "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`,
             'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
+            'sec-ch-ua-platform': '"Linux"',
         },
         locale: 'ja-JP',
         timezone: 'Asia/Tokyo',
-        platform: 'Win32',
+        platform: 'Linux x86_64',
         vendor: 'Google Inc.',
         maxTouchPoints: 0,
-        hardwareConcurrency: 8,
+        hardwareConcurrency: 2,
         deviceMemory: 8,
         connection: {
             downlink: 10,
@@ -207,8 +209,8 @@ const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
             brands: CHROME_BRANDS,
             fullVersionList: CHROME_FULL_VERSION_LIST,
             mobile: false,
-            platform: 'Windows',
-            platformVersion: '10.0.0',
+            platform: 'Linux',
+            platformVersion: '7.0.12',
             architecture: 'x86',
             bitness: '64',
             model: '',
@@ -375,10 +377,31 @@ async function applyBrowserProfile(
         (fingerprint: any) => {
             try {
                 const isMobile = fingerprint.isMobile
+                // Anti-leak: shimmed getters must toString like native accessors. Patch
+                // Function.prototype.toString (itself native-looking) to serve canned native
+                // sources for every shim function we install.
+                const nativeToString = Function.prototype.toString
+                const patchedSources = new Map<object, string>()
+                const patchNativeSource = <T extends object>(fn: T, source: string): T => {
+                    patchedSources.set(fn, source)
+                    return fn
+                }
+                Object.defineProperty(Function.prototype, 'toString', {
+                    configurable: true,
+                    writable: true,
+                    value: patchNativeSource(function toString(this: unknown, ...args: Array<unknown>) {
+                        const patched = patchedSources.get(this as object)
+                        if (patched) {
+                            return patched
+                        }
+                        return nativeToString.apply(this, args as [])
+                    }, 'function toString() { [native code] }'),
+                })
                 const defineGetter = (target: object, property: string, value: unknown) => {
+                    const getter = patchNativeSource(() => value, `function get ${property}() { [native code] }`)
                     Object.defineProperty(target, property, {
                         configurable: true,
-                        get: () => value,
+                        get: getter,
                     })
                 }
                 const createNamedArray = (items: Array<Record<string, unknown>>, proto: object, namedKey: string) => {
@@ -386,12 +409,17 @@ async function applyBrowserProfile(
                     Object.setPrototypeOf(arrayLike, proto)
                     Object.defineProperty(arrayLike, 'item', {
                         configurable: true,
-                        value: (index: number) => arrayLike[index] || null,
+                        value: patchNativeSource(
+                            (index: number) => arrayLike[index] || null,
+                            'function item() { [native code] }',
+                        ),
                     })
                     Object.defineProperty(arrayLike, 'namedItem', {
                         configurable: true,
-                        value: (name: string) =>
-                            arrayLike.find((item) => item[namedKey] === name) || null,
+                        value: patchNativeSource(
+                            (name: string) => arrayLike.find((item) => item[namedKey] === name) || null,
+                            'function namedItem() { [native code] }',
+                        ),
                     })
                     for (const [index, item] of items.entries()) {
                         arrayLike[index] = item
@@ -546,18 +574,21 @@ async function applyBrowserProfile(
                 if (originalQuery) {
                     Object.defineProperty(navigator.permissions, 'query', {
                         configurable: true,
-                        value: (parameters: { name?: string }) => {
-                            if (parameters?.name === 'notifications') {
-                                return Promise.resolve({
-                                    state: Notification.permission,
-                                    onchange: null,
-                                    addEventListener: () => undefined,
-                                    removeEventListener: () => undefined,
-                                    dispatchEvent: () => false,
-                                })
-                            }
-                            return originalQuery(parameters as PermissionDescriptor)
-                        },
+                        value: patchNativeSource(
+                            (parameters: { name?: string }) => {
+                                if (parameters?.name === 'notifications') {
+                                    return Promise.resolve({
+                                        state: Notification.permission,
+                                        onchange: null,
+                                        addEventListener: () => undefined,
+                                        removeEventListener: () => undefined,
+                                        dispatchEvent: () => false,
+                                    })
+                                }
+                                return originalQuery(parameters as PermissionDescriptor)
+                            },
+                            'function query() { [native code] }',
+                        ),
                     })
                 }
                 if (fingerprint.chromeLike) {

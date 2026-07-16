@@ -15,6 +15,10 @@ services:
     container_name: 'forwarder-new'
     # 直接使用主机的网络，完美解决访问主机 127.0.0.1 的问题
     network_mode: 'host'
+    # Pass the host GPU through so Chrome renders with the real AMD driver (WebGL fingerprint
+    # matches the machine instead of SwiftShader).
+    devices:
+      - '/dev/dri:/dev/dri'
     # Default to no restart/offline so a plain compose up cannot activate production.
     restart: '${IDOL_BBQ_RESTART_POLICY:-no}'
     # Runtime shutdown waits up to 30s for active schedulers before forced teardown.
@@ -48,6 +52,8 @@ services:
       - IDOL_BBQ_CODEX_MCP_ENABLED=${IDOL_BBQ_CODEX_MCP_ENABLED:-0}
       - IDOL_BBQ_CODEX_MCP_BRIDGE_URL=${IDOL_BBQ_CODEX_MCP_BRIDGE_URL:-}
       - IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN=${IDOL_BBQ_CODEX_MCP_BRIDGE_TOKEN:-}
+      # Extra Chrome CLI flags (space-separated), e.g. GPU tuning for the host driver stack.
+      - BROWSER_EXTRA_ARGS=${BROWSER_EXTRA_ARGS:-}
       # Optional live-player schedule webhook sink for extracted time-event candidates.
       - LIVE_PLAYER_SCHEDULE_WEBHOOK_URL=${LIVE_PLAYER_SCHEDULE_WEBHOOK_URL:-}
       - LIVE_PLAYER_SCHEDULE_WEBHOOK_API_KEY=${LIVE_PLAYER_SCHEDULE_WEBHOOK_API_KEY:-}
@@ -71,3 +77,6 @@ services:
       - '/tmp/tweet-forwarder/instagram-live:/tmp/tweet-forwarder/instagram-live'
       # 7. 挂载数据库迁移/运行时备份目录
       - './assets/backups:/app/backups'
+      # 8. 挂载宿主机字体（只读），浏览器字体指纹与真实机器一致
+      - '/usr/share/fonts:/usr/share/fonts:ro'
+      - '/var/cache/fontconfig:/var/cache/fontconfig:ro'

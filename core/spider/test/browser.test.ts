@@ -16,9 +16,10 @@ describe('resolveBrowserProfile', () => {
         const profile = resolveBrowserProfile('desktop_chrome')
 
         expect(profile.deviceProfile).toBe('desktop_chrome')
-        expect(profile.platform).toBe('Win32')
+        expect(profile.platform).toBe('Linux x86_64')
         expect(profile.userAgent).toContain('Chrome/142.')
-        expect(profile.extraHeaders?.['sec-ch-ua-platform']).toBe('"Windows"')
+        expect(profile.userAgent).toContain('X11; Linux x86_64')
+        expect(profile.extraHeaders?.['sec-ch-ua-platform']).toBe('"Linux"')
         expect(profile.plugins.length).toBeGreaterThan(0)
     })
 
@@ -59,7 +60,7 @@ describe('resolveBrowserProfile', () => {
 
         expect(headers['user-agent']).toContain('Chrome/142.')
         expect(headers['accept-language']).toContain('ja-JP')
-        expect(headers['sec-ch-ua-platform']).toBe('"Windows"')
+        expect(headers['sec-ch-ua-platform']).toBe('"Linux"')
         expect(headers['x-test-header']).toBe('ok')
     })
 })
