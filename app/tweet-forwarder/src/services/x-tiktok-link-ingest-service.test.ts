@@ -2,13 +2,99 @@ import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import {
+    enqueueMissingWebsiteLinksFromXArticle,
     enqueueMissingYouTubeLinksFromXArticle,
     enqueueMissingTikTokLinksFromXArticle,
     extractTikTokLinksFromText,
+    extractWebsiteLinksFromText,
     extractYouTubeLinksFromText,
     parseYouTubeUrl,
     parseTikTokUrl,
 } from './x-tiktok-link-ingest-service'
+
+test('extractWebsiteLinksFromText keeps allowlisted hosts and drops known platforms', () => {
+    const links = extractWebsiteLinksFromText(
+        '博客更新了 https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038 还有 https://vt.tiktok.com/abc/ 和 https://x.com/foo/status/1 以及 https://note.com/227/n/xyz',
+        ['nanabunnonijyuuni-mobile.com'],
+    )
+    expect(links).toEqual(['https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038'])
+})
+
+test('enqueueMissingWebsiteLinksFromXArticle queues an immediate website crawl', async () => {
+    const originalFindByUrl = DB.Article.findByUrl
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+
+    ;(DB.Article as any).findByUrl = async () => null
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 777, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingWebsiteLinksFromXArticle(
+            {
+                id: 9507,
+                platform: Platform.X,
+                a_id: '2068685300046700999',
+                content: '新博客 https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038',
+            } as any,
+            { now: 1782048000 },
+        )
+
+        expect(queued).toEqual([
+            {
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038',
+                taskQueueId: 777,
+                status: 'pending',
+            },
+        ])
+        expect(adds[0]).toMatchObject({
+            type: DB.TaskQueue.TYPE.ScheduledCrawlerRun,
+            payload: {
+                crawler: '22/7官网Blog抓取 - 高频',
+                websites: ['https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038'],
+                reason: 'x website link 2068685300046700999',
+            },
+            executeAt: 1782048000,
+            meta: {
+                action_type: 'x_website_link_ingest',
+            },
+        })
+    } finally {
+        ;(DB.Article as any).findByUrl = originalFindByUrl
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingWebsiteLinksFromXArticle skips already-known urls', async () => {
+    const originalFindByUrl = DB.Article.findByUrl
+    const originalTaskAdd = DB.TaskQueue.add
+    let added = 0
+
+    ;(DB.Article as any).findByUrl = async () => ({ id: 1 })
+    ;(DB.TaskQueue as any).add = async () => {
+        added += 1
+        return { id: 1, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingWebsiteLinksFromXArticle(
+            {
+                id: 9508,
+                platform: Platform.X,
+                a_id: '2068685300046701000',
+                content: '新博客 https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038',
+            } as any,
+            { now: 1782048000 },
+        )
+        expect(queued).toEqual([])
+        expect(added).toBe(0)
+    } finally {
+        ;(DB.Article as any).findByUrl = originalFindByUrl
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
 
 test('extractTikTokLinksFromText finds TikTok short links without trailing punctuation', () => {
     expect(

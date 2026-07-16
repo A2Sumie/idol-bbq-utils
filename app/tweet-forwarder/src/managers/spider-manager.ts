@@ -2061,10 +2061,17 @@ class SpiderPools extends BaseCompatibleModel {
             const persisted = res || (await DB.Article.checkExist(article))
             if (persisted) {
                 dispatch_article_ids.push(persisted.id)
-                await enqueueMissingExternalMediaLinksFromXArticle(article, {
+                const ingestedLinks = await enqueueMissingExternalMediaLinksFromXArticle(article, {
                     crawlerConfig: cfg_crawler,
                     log: ctx.log,
                 })
+                if ((ingestedLinks?.website?.length || 0) > 0) {
+                    // Website ingest is meant to be near-immediate (linked blog/news should not wait for the
+                    // next schedule tick).
+                    this.pokeSchedules().catch((error) =>
+                        ctx.log?.warn(`Failed to poke schedules after website link ingest: ${error}`),
+                    )
+                }
             }
         }
         ctx.log?.info(`[${url.href}] ${saved_articles_count} articles saved.`)

@@ -312,19 +312,134 @@ async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options:
     return queued
 }
 
+const GENERIC_URL_RE = /https?:\/\/[^\s<>"'，。！？、）)\]}]+/gi
+const KNOWN_PLATFORM_HOSTS = [
+    'x.com',
+    'twitter.com',
+    't.co',
+    'tiktok.com',
+    'youtube.com',
+    'youtu.be',
+    'instagram.com',
+]
+const DEFAULT_WEBSITE_CRAWLER_NAME = '22/7官网Blog抓取 - 高频'
+const DEFAULT_WEBSITE_INGEST_HOSTS = ['nanabunnonijyuuni-mobile.com']
+const MAX_WEBSITE_LINKS_PER_X_ARTICLE = 3
+
+function hostMatches(host: string, rule: string) {
+    const normalized = rule.toLowerCase()
+    return host === normalized || host.endsWith(`.${normalized}`)
+}
+
+function extractWebsiteLinksFromText(text: string | null | undefined, hosts: Array<string>): Array<string> {
+    if (!text) {
+        return []
+    }
+    const out: Array<string> = []
+    for (const match of text.matchAll(GENERIC_URL_RE)) {
+        const cleaned = cleanExternalUrl(match[0])
+        let url: URL
+        try {
+            url = new URL(cleaned)
+        } catch {
+            continue
+        }
+        const host = url.hostname.toLowerCase()
+        if (KNOWN_PLATFORM_HOSTS.some((known) => hostMatches(host, known))) {
+            continue
+        }
+        if (!hosts.some((rule) => hostMatches(host, rule))) {
+            continue
+        }
+        if (!out.includes(cleaned)) {
+            out.push(cleaned)
+        }
+    }
+    return out.slice(0, MAX_WEBSITE_LINKS_PER_X_ARTICLE)
+}
+
+function resolveWebsiteIngestConfig(crawlerConfig?: CrawlerConfig): { crawler: string; hosts: Array<string> } | null {
+    const config = (crawlerConfig as any)?.x_website_link_ingest
+    if (config === false || config?.enabled === false) {
+        return null
+    }
+    const hosts =
+        Array.isArray(config?.hosts) && config.hosts.length > 0
+            ? config.hosts.map((host: unknown) => String(host).trim().toLowerCase()).filter(Boolean)
+            : DEFAULT_WEBSITE_INGEST_HOSTS
+    return {
+        crawler: String(config?.crawler || DEFAULT_WEBSITE_CRAWLER_NAME).trim(),
+        hosts,
+    }
+}
+
+async function enqueueMissingWebsiteLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
+    if (article.platform !== Platform.X && article.platform !== Platform.Twitter) {
+        return []
+    }
+
+    const ingestConfig = resolveWebsiteIngestConfig(options.crawlerConfig)
+    if (!ingestConfig) {
+        return []
+    }
+
+    const links = extractWebsiteLinksFromText(article.content || '', ingestConfig.hosts)
+    if (links.length === 0) {
+        return []
+    }
+
+    const now = options.now || Math.floor(Date.now() / 1000)
+    const queued: Array<{ url: string; taskQueueId: number; status: string }> = []
+    for (const link of links) {
+        const existing = await DB.Article.findByUrl(link).catch(() => null)
+        if (existing) {
+            continue
+        }
+        const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
+        const payload = {
+            crawler: ingestConfig.crawler,
+            websites: [link],
+            reason: `x website link ${article.a_id || article.id || ''}`.trim().slice(0, 200),
+        }
+        const task = await DB.TaskQueue.add(taskType, payload, now, {
+            source_ref: `x-website-link:${article.a_id || article.id || link}`,
+            action_type: 'x_website_link_ingest',
+            idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, {
+                crawler: ingestConfig.crawler,
+                url: link,
+                sourcePlatform: 'x',
+                sourceArticleId: article.a_id || article.id || null,
+            }),
+        })
+        queued.push({ url: link, taskQueueId: task.id, status: task.status })
+    }
+
+    if (queued.length > 0) {
+        options.log?.info?.(
+            `Queued ${queued.length} website ingest task(s) from X article ${article.a_id || article.id || '(unknown)'}`,
+        )
+    }
+    return queued
+}
+
 async function enqueueMissingExternalMediaLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
     const tiktok = await enqueueMissingTikTokLinksFromXArticle(article, options)
     const youtube = await enqueueMissingYouTubeLinksFromXArticle(article, options)
-    return { tiktok, youtube }
+    const website = await enqueueMissingWebsiteLinksFromXArticle(article, options)
+    return { tiktok, youtube, website }
 }
 
 export {
+    DEFAULT_WEBSITE_CRAWLER_NAME,
+    DEFAULT_WEBSITE_INGEST_HOSTS,
     DEFAULT_YOUTUBE_CRAWLER_NAME,
     DEFAULT_TIKTOK_CRAWLER_NAME,
     enqueueMissingExternalMediaLinksFromXArticle,
     enqueueMissingTikTokLinksFromXArticle,
+    enqueueMissingWebsiteLinksFromXArticle,
     enqueueMissingYouTubeLinksFromXArticle,
     extractTikTokLinksFromText,
+    extractWebsiteLinksFromText,
     extractYouTubeLinksFromText,
     parseTikTokUrl,
     parseYouTubeUrl,

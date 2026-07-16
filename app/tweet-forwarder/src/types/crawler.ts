@@ -33,6 +33,12 @@ interface XYouTubeLinkIngestConfig {
     crawler?: string
 }
 
+interface XWebsiteLinkIngestConfig {
+    enabled?: boolean
+    crawler?: string
+    hosts?: Array<string>
+}
+
 interface InstagramLiveArchiveConfig {
     enabled?: boolean
     root_dir?: string
@@ -149,6 +155,7 @@ interface CrawlerConfig extends CommonCfgConfig {
     tiktok_link_ingest_crawler?: string
     x_youtube_link_ingest?: XYouTubeLinkIngestConfig | false
     youtube_link_ingest_crawler?: string
+    x_website_link_ingest?: XWebsiteLinkIngestConfig | false
 
     // Aggregation (Batch Formatting) Configuration
     aggregation?: AggregationConfig
