@@ -383,6 +383,11 @@ if [ "$run_migrations" = "1" ]; then
         if ! sqlite_quick_check "$db_path"; then
             recover_sqlite_db_if_needed "$db_path" "$migration_backup_dir"
             sqlite_quick_check "$db_path"
+            # The restored backup predates the migration; re-apply migrations so the
+            # runtime schema matches the generated Prisma client.
+            echo "Re-running migrations after post-migration backup restore..."
+            bunx prisma migrate deploy
+            sqlite_quick_check "$db_path"
         fi
     fi
     release_migration_lock

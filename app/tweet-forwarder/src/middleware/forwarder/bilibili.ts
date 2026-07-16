@@ -553,7 +553,8 @@ class BiliForwarder extends Forwarder {
                 id: dynamicId,
             },
             headers: {
-                Cookie: `SESSDATA=${this.sessdata}`,
+                ...this.biliApiHeaders,
+                Cookie: this.buildBiliCookieHeader(),
             },
         })
     }

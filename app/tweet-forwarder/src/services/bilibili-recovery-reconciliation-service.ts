@@ -261,30 +261,31 @@ async function reconcileBilibiliSubmissionsAfterDbRecovery(config: AppConfig, lo
         return result
     }
 
-    const bySource = new Map<string, BilibiliArchive>()
+    // Archives are fetched per target account and seeded only for the account that actually hosts them;
+    // cross-seeding every target would suppress legitimate future sends on the other accounts.
     for (const target of targets) {
         const archives = await fetchBilibiliArchives(target.cookieHeader, log)
         result.archives += archives.length
+        const seenSources = new Set<string>()
         for (const archive of archives) {
             const source = normalizeUrl(archive.source)
             if (!source) {
                 result.skippedNoSource += 1
                 continue
             }
-            bySource.set(source, archive)
-        }
-    }
-
-    for (const [source, archive] of bySource) {
-        const article = await DB.Article.findByUrl(source)
-        if (!article) {
-            result.skippedNoArticle += 1
-            continue
-        }
-        result.matched += 1
-        for (const target of targets) {
-            await seedBilibiliSentState(target.id, article, archive)
-            result.seeded += 1
+            if (seenSources.has(source)) {
+                continue
+            }
+            seenSources.add(source)
+            const article = await DB.Article.findByUrl(source)
+            if (!article) {
+                result.skippedNoArticle += 1
+                continue
+            }
+            result.matched += 1
+            if (await seedBilibiliSentState(target.id, article, archive)) {
+                result.seeded += 1
+            }
         }
     }
 
