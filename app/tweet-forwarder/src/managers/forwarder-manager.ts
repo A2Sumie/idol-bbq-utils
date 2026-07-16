@@ -2063,14 +2063,25 @@ class ForwarderPools extends BaseCompatibleModel {
                 continue
             }
 
-            const renderResult = await this.renderService.process(article, {
-                taskId,
-                render_type: cfg_forwarder?.render_type,
-                render_features: cfg_forwarder?.render_features,
-                card_features: cfg_forwarder?.card_features,
-                mediaConfig: cfg_forwarder?.media,
-                deduplication: options?.forceSend ? false : cfg_forwarder?.deduplication,
-            })
+            let renderResult: RenderResult
+            try {
+                renderResult = await this.renderService.process(article, {
+                    taskId,
+                    render_type: cfg_forwarder?.render_type,
+                    render_features: cfg_forwarder?.render_features,
+                    card_features: cfg_forwarder?.card_features,
+                    mediaConfig: cfg_forwarder?.media,
+                    deduplication: options?.forceSend ? false : cfg_forwarder?.deduplication,
+                })
+            } catch (renderProcessError) {
+                // One malformed article must not abort the whole batch; record a visible failure and move on.
+                log?.error(
+                    `Render process failed for article ${article.a_id}, skipping it this cycle: ${
+                        renderProcessError instanceof Error ? renderProcessError.stack || renderProcessError.message : String(renderProcessError)
+                    }`,
+                )
+                continue
+            }
             renderResult.mediaFiles ||= []
             renderResult.cardMediaFiles ||= []
             renderResult.originalMediaFiles ||= []

@@ -170,20 +170,21 @@ export class RenderService {
                     obj.forEach(ensureMediaArray)
                     return
                 }
-                if ('media' in obj && !Array.isArray(obj.media) && obj.media !== null) {
-                    obj.media = [obj.media]
+                if ('media' in obj) {
+                    if (obj.media === null || obj.media === undefined) {
+                        delete obj.media
+                    } else {
+                        if (!Array.isArray(obj.media)) {
+                            obj.media = [obj.media]
+                        }
+                        // Templates read `.type`/`.url` on every element; drop anything that is not an object.
+                        obj.media = obj.media.filter((item: unknown) => Boolean(item) && typeof item === 'object')
+                    }
                 }
-                if ('media' in obj && obj.media === null) {
-                    delete obj.media
-                }
-                if ('items' in obj && Array.isArray(obj.items)) {
-                    obj.items.forEach(ensureMediaArray)
-                }
-                if ('groups' in obj && Array.isArray(obj.groups)) {
-                    obj.groups.forEach(ensureMediaArray)
-                }
-                if ('ref' in obj && obj.ref && typeof obj.ref === 'object') {
-                    ensureMediaArray(obj.ref)
+                for (const key of ['items', 'groups', 'ref', 'extra', 'data']) {
+                    if (key in obj && obj[key] && typeof obj[key] === 'object') {
+                        ensureMediaArray(obj[key])
+                    }
                 }
             }
             ensureMediaArray(sanitized)
@@ -195,7 +196,9 @@ export class RenderService {
             })
         }
         const generateRenderedImage = async () => {
-            const hydratedArticle = this.hydrateArticleMediaForCard(article, maybe_media_files)
+            // Normalize before hydrate: a malformed media field must not crash the hydrate pass, which runs
+            // outside any render-failure retry.
+            const hydratedArticle = this.hydrateArticleMediaForCard(sanitizeArticleForRender(article), maybe_media_files)
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
                 const imgBuffer = await renderArticleImage(hydratedArticle)
@@ -500,6 +503,26 @@ export class RenderService {
                 stripSummaryCardMeta(child)
             }
         }
+        const stripInlineHtmlRemoteImages = (currentArticle: Article | null) => {
+            const rawHtml = (currentArticle?.extra?.data as any)?.raw_html
+            if (typeof rawHtml !== 'string' || !/<img\b/i.test(rawHtml)) {
+                return
+            }
+            const nextHtml = rawHtml.replace(/<img\b[^>]*>/gi, (tag: string) => {
+                const srcMatch = tag.match(/\bsrc=(["']?)([^"'\s>]+)\1/i)
+                if (srcMatch && this.isRemoteCardMediaUrl(srcMatch[2])) {
+                    removed += 1
+                    return ''
+                }
+                return tag
+            })
+            if (nextHtml !== rawHtml && currentArticle?.extra?.data) {
+                currentArticle.extra.data = {
+                    ...(currentArticle.extra.data as any),
+                    raw_html: nextHtml,
+                }
+            }
+        }
         const visit = (currentArticle: Article | null) => {
             if (!currentArticle) {
                 return
@@ -513,6 +536,7 @@ export class RenderService {
                 currentArticle.media = kept as Article['media']
                 currentArticle.has_media = kept.length > 0
             }
+            stripInlineHtmlRemoteImages(currentArticle)
             if (currentArticle.ref && typeof currentArticle.ref === 'object') {
                 visit(currentArticle.ref as Article)
             }
