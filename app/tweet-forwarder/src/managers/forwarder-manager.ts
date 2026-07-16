@@ -111,6 +111,7 @@ type SummaryCardQueue = {
     lastQueuedAt: number
     windowStart?: number
     windowEnd?: number
+    failureGeneration?: number
 }
 type SummaryCardGroup = {
     kind: 'storm' | 'thread'
@@ -4545,7 +4546,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const hasRenderedCard = cardMediaFiles.length > 0
         const sendText = this.buildSummaryCardSendText(queue, allItems, title)
         const articleKeys = allItems.map((item) => articleKey(item.article)).sort((a, b) => a.localeCompare(b))
-        const syntheticKey = `${queue.routeKey}:${articleKeys.join('|')}`
+        const syntheticKey = `${queue.routeKey}:${articleKeys.join('|')}${queue.failureGeneration ? `:g${queue.failureGeneration}` : ''}`
         const outboundIdempotencyKey = syntheticOutboundKey(queue.target.id, 'summary_card', syntheticKey)
         const outboundPayloadHash = payloadHash({
             routeKey: queue.routeKey,
@@ -4580,6 +4581,28 @@ class ForwarderPools extends BaseCompatibleModel {
                 this.log?.debug(
                     `Summary-card outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible send`,
                 )
+                if (DB.OutboundMessage.isTerminalFailed(outbound.record)) {
+                    // The dead record would block every future flush of the same article set; rotate the
+                    // synthetic key so the next flush gets a fresh claim once the provider recovers.
+                    // After a few generations give up visibly instead of churning the queue forever.
+                    const generation = (queue.failureGeneration || 0) + 1
+                    if (generation > 3) {
+                        this.log?.warn(
+                            `Summary-card batch for ${queue.target.id} stayed terminally failed across ${generation - 1} key rotations; cancelling window ${queue.windowId || 'n/a'} and dropping the queue`,
+                        )
+                        if (queue.windowId) {
+                            await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
+                                payload_hash: outboundPayloadHash,
+                            }).catch(() => undefined)
+                        }
+                        return true
+                    }
+                    queue.failureGeneration = generation
+                    this.log?.warn(
+                        `Summary-card outbound for ${queue.target.id} is terminally failed; rotating synthetic key to generation ${generation} for the next flush`,
+                    )
+                    return false
+                }
                 if (isOutboundSuppressedCompletionStatus(outbound.record.status)) {
                     const visibleCompletion = isOutboundVisibleCompletionStatus(outbound.record.status)
                     const terminalStatus = visibleCompletion
