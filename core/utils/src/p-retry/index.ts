@@ -168,7 +168,9 @@ export async function pRetry<T>(input: (attemptCount: number) => PromiseLike<T> 
 
                     if (!(await options.shouldRetry(failedAttemptError))) {
                         operation.stop()
-                        reject(error)
+                        // Throw into the outer catch so cleanUp runs; onFailedAttempt must not fire for an
+                        // attempt that will not be retried ("2 retries left" for a terminal error is a lie).
+                        throw error
                     }
 
                     await options.onFailedAttempt(failedAttemptError)

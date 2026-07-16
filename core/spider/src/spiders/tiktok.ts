@@ -155,7 +155,7 @@ namespace TiktokApiJsonParser {
         }
 
         if (!page) {
-            throw new Error('Cannot find user data')
+            throw new Error('Cannot find user data (fetch blocked, no browser fallback available)')
         }
 
         await page.goto(url, {
@@ -171,7 +171,7 @@ namespace TiktokApiJsonParser {
             return browserContent
         }
 
-        throw new Error('Cannot find user data')
+        throw new Error('Cannot find user data (browser hydration missing)')
     }
 
     function mediaParser(item: any): Array<GenericMediaInfo> {
@@ -259,6 +259,16 @@ namespace TiktokApiJsonParser {
             candidates.find((candidate) => normalizeHandle(candidate?.user?.uniqueId || candidate?.user?.username) === target) ||
             null
         )
+    }
+
+    function itemModuleValues(json: any): Array<any> {
+        const modules = JSONPath({
+            path: '$..ItemModule',
+            json,
+            resultType: 'value',
+        }) as Array<any>
+        const first = modules.find((module) => module && typeof module === 'object' && !Array.isArray(module))
+        return first ? Object.values(first) : []
     }
 
     function universalScope(json: any) {
@@ -379,7 +389,9 @@ namespace TiktokApiJsonParser {
         const universalData = JSON.parse(content)
         const handle = url.match(/\/\@([^/?]+)/)?.[1] || ''
         const userInfo = findUserInfoForHandle(universalData, handle)
-        const pagePosts = postsParser({ itemList: userInfo?.itemList || [] })
+        // The rehydration payload keeps the post list in a sibling ItemModule map when userInfo has none.
+        const fallbackItems = itemModuleValues(universalData)
+        const pagePosts = postsParser({ itemList: userInfo?.itemList || fallbackItems })
         const secUid = userInfo?.user?.secUid
         if (!secUid) {
             return pagePosts
@@ -393,6 +405,11 @@ namespace TiktokApiJsonParser {
             { timeout: TIKTOK_HTTP_TIMEOUT_MS },
         )
         const json = await res.json()
+        if (!Array.isArray(json?.itemList)) {
+            throw new Error(
+                `TikTok creator API returned no itemList (statusCode=${json?.statusCode ?? 'unknown'}); the unsigned API likely rejected the request`,
+            )
+        }
         return postsParser(json)
     }
 

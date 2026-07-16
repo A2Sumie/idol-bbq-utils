@@ -2309,7 +2309,7 @@ namespace XApiJsonParser {
             if (config.viewport) {
                 await page.setViewport(config.viewport)
             }
-            await page.goto(url)
+            await page.goto(url, { waitUntil: 'domcontentloaded' })
             await checkLogin(page)
             await checkSomethingWrong(page)
         } catch (error) {
@@ -2363,7 +2363,7 @@ namespace XApiJsonParser {
         if (config.viewport) {
             await page.setViewport(config.viewport)
         }
-        await page.goto(url)
+        await page.goto(url, { waitUntil: 'domcontentloaded' })
         try {
             await checkLogin(page)
             await checkSomethingWrong(page)
@@ -2406,7 +2406,7 @@ namespace XApiJsonParser {
             }
         })
         try {
-            await page.goto(url)
+            await page.goto(url, { waitUntil: 'domcontentloaded' })
             await checkLogin(page)
             await checkSomethingWrong(page)
         } catch (error) {

@@ -139,6 +139,13 @@ class PartialForwarderSendError extends Error {
     }
 }
 
+class NonRetryableForwarderSendError extends Error {
+    constructor(message: string) {
+        super(message)
+        this.name = 'NonRetryableForwarderSendError'
+    }
+}
+
 abstract class BaseForwarder extends BaseCompatibleModel {
     static _PLATFORM = ForwardTargetPlatformEnum.None
     log?: Logger
@@ -306,7 +313,10 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         return await pRetry(() => this.realSend(normalizedTexts, props), {
             retries: RETRY_LIMIT,
             shouldRetry(error) {
-                return !(error.originalError instanceof PartialForwarderSendError)
+                return (
+                    !(error.originalError instanceof PartialForwarderSendError) &&
+                    !(error.originalError instanceof NonRetryableForwarderSendError)
+                )
             },
             onFailedAttempt(e) {
                 _log?.error(`send texts failed, retrying...: ${e.originalError.message}`)
@@ -722,4 +732,11 @@ abstract class Forwarder extends BaseForwarder {
     }
 }
 
-export { BaseForwarder, Forwarder, OutboundSendDryRunError, PartialForwarderSendError, resolveOutboundSendMode }
+export {
+    BaseForwarder,
+    Forwarder,
+    NonRetryableForwarderSendError,
+    OutboundSendDryRunError,
+    PartialForwarderSendError,
+    resolveOutboundSendMode,
+}

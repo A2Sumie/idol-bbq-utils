@@ -1,6 +1,6 @@
 import axios from 'axios'
 import { chunk } from 'lodash'
-import { Forwarder, PartialForwarderSendError, type SendProps } from './base'
+import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, type SendProps } from './base'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 import {
     normalizeForwarderImageAttachments,
@@ -104,9 +104,13 @@ class QQForwarder extends Forwarder {
             const message = String(
                 data?.message || data?.wording || data?.msg || data?.error || res?.statusText || 'unknown',
             )
-            throw new Error(
-                `QQ OneBot send failed (${context}): status=${status || 'unknown'} retcode=${hasRetcode ? retcodeRaw : 'unknown'} message=${message}`,
-            )
+            const detail = `QQ OneBot send failed (${context}): status=${status || 'unknown'} retcode=${hasRetcode ? retcodeRaw : 'unknown'} message=${message}`
+            // NapCat retcode 200 EventChecker rejections happen before the message is accepted; retrying the
+            // identical payload just spams the API during an outage.
+            if (hasRetcode && Number(retcodeRaw) === 200) {
+                throw new NonRetryableForwarderSendError(detail)
+            }
+            throw new Error(detail)
         }
     }
 
