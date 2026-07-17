@@ -27,6 +27,7 @@ import {
     followsToText,
     formatArticleHeaderLine,
     formatArticleSourceActionAttribution,
+    formatArticleSourceActionLabel,
     formatArticleTimeToken,
     formatArticleUserId,
 } from '@idol-bbq-utils/render'
@@ -2241,7 +2242,14 @@ class ForwarderPools extends BaseCompatibleModel {
 
                             // Fire before summary queueing so passthrough targets (summary_card targets
                             // never reach the direct send below) still get the fast translation text.
-                            await this.sendTranslationPassthrough(log, article, target, routeKeyForTarget, runtime_config)
+                            await this.sendTranslationPassthrough(
+                                log,
+                                article,
+                                target,
+                                routeKeyForTarget,
+                                runtime_config,
+                                renderResult,
+                            )
 
                             const queuedForSummary = await this.maybeQueueSummaryCardArticle(
                                 log,
@@ -2869,9 +2877,13 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     /**
-     * Fast text-only passthrough of the root article's translation (no original, no card, ref chain omitted).
-     * Enabled per target via `translation_passthrough`; the main card send is unaffected because this uses
-     * its own task_kind and idempotency key.
+     * Fast passthrough of the root article's translation (no original text). Layout per user spec:
+     *   @handle displayName
+     *   <translation>
+     *   <clock(date)> <platform action>
+     * Attachments keep the rendered card plus the media the target's visibility/dedup policy
+     * allows; claimed slots are kept on success (so the main send dedups against them) and
+     * released on failure. Enabled per target via `translation_passthrough`.
      */
     private async sendTranslationPassthrough(
         log: Logger | undefined,
@@ -2879,6 +2891,7 @@ class ForwarderPools extends BaseCompatibleModel {
         target: BaseForwarder,
         routeKeyForTarget: string,
         runtime_config?: ForwardTargetPlatformCommonConfig,
+        renderResult?: Pick<RenderResult, 'cardMediaFiles' | 'originalMediaFiles'>,
     ) {
         // runtime_config only carries binding-layer keys; target-level knobs live in cfg_platform,
         // so resolve through the merged effective config.
@@ -2892,9 +2905,46 @@ class ForwarderPools extends BaseCompatibleModel {
         if (!translation) {
             return
         }
-        // Header keeps the author/time/action metadata the normal card carries; body is the
-        // translation only (no original text), per the passthrough design.
-        const passthroughText = [formatArticleHeaderLine(article), translation].filter(Boolean).join('\n')
+        const authorLine = [formatArticleUserId(article), String(article.username || '').trim()]
+            .filter(Boolean)
+            .join(' ')
+        const metaLine = [formatArticleTimeToken(article.created_at), formatArticleSourceActionLabel(article)]
+            .filter(Boolean)
+            .join(' ')
+        const passthroughText = [authorLine, translation, metaLine].filter(Boolean).join('\n')
+
+        // Media visibility (dedup review): attach the rendered card and only the original media the
+        // target policy still allows. Claims stay on success so the main flow hides duplicates.
+        const cardFiles = [...(renderResult?.cardMediaFiles || [])]
+        let visibility: MediaVisibilityResult | null = null
+        let contentFiles: Array<RenderedMediaFile> = []
+        try {
+            visibility = await this.applyTargetMediaVisibility(
+                article,
+                target,
+                runtime_config,
+                renderResult?.originalMediaFiles || [],
+            )
+            contentFiles =
+                visibility.policy?.duplicateBehavior === 'text_only' ? [] : visibility.visibleFiles
+        } catch (visibilityError) {
+            log?.warn(
+                `Translation passthrough media visibility check failed for ${article.a_id} to ${target.id}: ${
+                    visibilityError instanceof Error ? visibilityError.message : String(visibilityError)
+                }`,
+            )
+            visibility = null
+            contentFiles = [...(renderResult?.originalMediaFiles || [])]
+        }
+        const seenPaths = new Set<string>()
+        const mediaFiles = [...cardFiles, ...contentFiles].filter((file) => {
+            if (!file?.path || seenPaths.has(file.path)) {
+                return false
+            }
+            seenPaths.add(file.path)
+            return true
+        })
+
         const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article))
         const outbound = await DB.OutboundMessage.claim({
             idempotency_key: passthroughKey,
@@ -2909,7 +2959,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 taskKind: 'translation_passthrough',
                 text: passthroughText,
                 articleKeys: [articleKey(article)],
-                media: [],
+                media: mediaFiles,
             }),
         }).catch((error) => {
             log?.warn(
@@ -2920,6 +2970,7 @@ class ForwarderPools extends BaseCompatibleModel {
             return null
         })
         if (!outbound?.claimed) {
+            await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
             return
         }
         try {
@@ -2933,12 +2984,12 @@ class ForwarderPools extends BaseCompatibleModel {
             let sendResult
             try {
                 sendResult = await target.send(passthroughText, {
-                    media: [],
-                    cardMedia: [],
-                    contentMedia: [],
+                    media: mediaFiles,
+                    cardMedia: cardFiles,
+                    contentMedia: contentFiles,
                     timestamp: article.created_at,
-                    // A text-only passthrough must bypass require_media targets: otherwise Bilibili
-                    // reports ok with mode dynamic_media_required_suppressed and posts nothing.
+                    // The passthrough may legally be text-only when dedup hides all media, so it must
+                    // bypass require_media suppression.
                     runtime_config: { ...(runtime_config || {}), require_media: false },
                     article: cloneDeep(article),
                     forceSend: true,
@@ -2953,14 +3004,18 @@ class ForwarderPools extends BaseCompatibleModel {
                 // Provider results can carry raw axios responses (cyclic); sanitize before persisting or
                 // Prisma's error formatter recurses on the JSON write.
                 await DB.OutboundMessage.markSent(passthroughKey, summarizeProviderResult(getForwarderProviderResult(sendResult)))
-                log?.info(`Sent translation passthrough for ${article.a_id} to ${target.id}`)
+                log?.info(
+                    `Sent translation passthrough for ${article.a_id} to ${target.id}: media=${mediaFiles.length} card=${cardFiles.length}`,
+                )
             } else {
+                await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
                 await DB.OutboundMessage.markFailed(
                     passthroughKey,
                     new Error(`translation passthrough not sent: ${sendResult.status}`),
                 )
             }
         } catch (error) {
+            await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
             await DB.OutboundMessage.markFailed(passthroughKey, error).catch(() => undefined)
             log?.warn(
                 `Translation passthrough failed for ${article.a_id} to ${target.id}: ${
