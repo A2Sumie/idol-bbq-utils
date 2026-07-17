@@ -2947,7 +2947,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 )
             }
             if (sendResult.status === 'sent') {
-                await DB.OutboundMessage.markSent(passthroughKey, getForwarderProviderResult(sendResult))
+                // Provider results can carry raw axios responses (cyclic); sanitize before persisting or
+                // Prisma's error formatter recurses on the JSON write.
+                await DB.OutboundMessage.markSent(passthroughKey, summarizeProviderResult(getForwarderProviderResult(sendResult)))
                 log?.info(`Sent translation passthrough for ${article.a_id} to ${target.id}`)
             } else {
                 await DB.OutboundMessage.markFailed(
