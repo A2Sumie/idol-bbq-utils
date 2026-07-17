@@ -2005,9 +2005,17 @@ class ForwarderPools extends BaseCompatibleModel {
                 )
                 if (!exist) {
                     to.push(forwarder)
-                } else {
-                    log?.debug(`[Trace] Article ${article.a_id} already exists for target ${forwarder.forwarder.id}`)
+                    continue
                 }
+                // The ForwardBy prefilter would otherwise drop already-sent targets wholesale,
+                // including targets whose translation passthrough never went out (e.g. the
+                // feature landed after the article). Keep those so the passthrough can fire;
+                // the main send remains claim-blocked downstream.
+                if (await this.hasPendingTranslationPassthrough(article, forwarder.forwarder, forwarder.runtime_config)) {
+                    to.push(forwarder)
+                    continue
+                }
+                log?.debug(`[Trace] Article ${article.a_id} already exists for target ${forwarder.forwarder.id}`)
             }
             if (to.length > 0) {
                 articles_forwarders.push({
@@ -2835,6 +2843,29 @@ class ForwarderPools extends BaseCompatibleModel {
                 throw forceSendError
             }
         }
+    }
+
+    /**
+     * True when the target has translation_passthrough enabled, the article has a translation, and no
+     * passthrough outbound record exists yet (i.e. the passthrough still owes this target a send).
+     */
+    private async hasPendingTranslationPassthrough(
+        article: ArticleWithId,
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ) {
+        if (!target.getEffectiveConfig(runtime_config)?.translation_passthrough) {
+            return false
+        }
+        if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
+            return false
+        }
+        if (!String(article.translation || '').trim()) {
+            return false
+        }
+        const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article))
+        const record = await DB.OutboundMessage.getByIdempotencyKey(passthroughKey).catch(() => null)
+        return !record
     }
 
     /**

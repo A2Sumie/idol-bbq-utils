@@ -221,6 +221,8 @@ beforeEach(() => {
         return { claimed: true, record }
     }
     ;(DB.OutboundMessage as any).__records = outboundRecords
+    ;(DB.OutboundMessage as any).getByIdempotencyKey = async (idempotencyKey: string) =>
+        outboundRecords.get(idempotencyKey) || null
     ;(DB.OutboundMessage as any).markSending = async (idempotencyKey: string) => {
         const record = outboundRecords.get(idempotencyKey)
         Object.assign(record, {
@@ -1829,6 +1831,81 @@ test('sendArticles fires translation passthrough before queueing to a summary-ca
     expect(target.sent.length).toBe(1)
     expect(target.sent[0]?.texts).toEqual(['这是译文'])
     expect(target.sent[0]?.props?.outboundKey).toContain('translation_passthrough')
+})
+
+test('sendArticles keeps already-sent targets in the prefilter when a passthrough is still owed', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            translation_passthrough: true,
+        } as any,
+        'target-passthrough-backfill',
+    )
+
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    const article = {
+        id: 219,
+        a_id: 'passthrough-backfill-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        content: '原文です',
+        translation: '这是译文',
+    }
+    // The article was already visibly sent to this target (ForwardBy exists) but the passthrough
+    // feature landed afterwards, so no passthrough record exists.
+    await DB.ForwardBy.save(article.id, article.platform, target.id, 'article')
+
+    await (pools as any).sendArticles(
+        undefined,
+        'passthrough-backfill-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: undefined,
+            },
+        ],
+        {
+            render_type: 'text',
+        } as any,
+    )
+
+    // Only the passthrough goes out; the main article send stays claim-blocked.
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts).toEqual(['这是译文'])
 })
 
 test('sendArticles stops after render when forwarder pool starts shutting down', async () => {

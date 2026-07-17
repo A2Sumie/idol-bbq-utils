@@ -1385,6 +1385,12 @@ namespace DB {
             })
         }
 
+        export async function getByIdempotencyKey(idempotency_key: string) {
+            return await prisma.outbound_messages.findUnique({
+                where: { idempotency_key },
+            })
+        }
+
         export async function list(limit = 50, status?: string): Promise<Array<DBOutboundMessage>> {
             return await prisma.outbound_messages.findMany({
                 where: status ? { status } : undefined,
