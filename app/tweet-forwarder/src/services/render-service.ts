@@ -31,6 +31,7 @@ import {
     checkExactCrossPlatformMediaDuplicate,
     checkShortVideoCrossPlatformDuplicate,
     checkVideoFingerprintDuplicate,
+    ensureSatoriCompatibleImage,
     isPersistentMediaPath,
     markExactCrossPlatformMediaSeen,
     markShortVideoCrossPlatformSeen,
@@ -636,9 +637,12 @@ export class RenderService {
 
     private mediaFileToDataUrl(filePath: string) {
         try {
-            const ext = path.extname(filePath).slice(1).toLowerCase()
+            // Transcode formats satori cannot load (e.g. WebP-in-.jpg thumbnails) before inlining;
+            // the extension alone is not a reliable content indicator.
+            const compatiblePath = ensureSatoriCompatibleImage(filePath, this.log)
+            const ext = path.extname(compatiblePath).slice(1).toLowerCase()
             const mime = extToMime[ext as keyof typeof extToMime] || 'image/png'
-            return `data:${mime};base64,${readFileSync(filePath).toString('base64')}`
+            return `data:${mime};base64,${readFileSync(compatiblePath).toString('base64')}`
         } catch (e) {
             this.log?.warn(`Failed to inline media for rendered card ${filePath}: ${e}`)
             return null
@@ -647,7 +651,7 @@ export class RenderService {
 
     private mediaFileDimensions(filePath: string): { width: number; height: number } | null {
         try {
-            const buffer = readFileSync(filePath)
+            const buffer = readFileSync(ensureSatoriCompatibleImage(filePath, this.log))
             return this.parsePngDimensions(buffer) || this.parseJpegDimensions(buffer)
         } catch {
             return null

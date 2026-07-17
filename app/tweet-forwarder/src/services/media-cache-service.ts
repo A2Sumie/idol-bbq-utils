@@ -763,16 +763,80 @@ async function markExactCrossPlatformMediaSeen(mediaType: MediaType, hash: strin
     return await DB.MediaHash.save(storagePlatform, hash, articleMarker)
 }
 
+function sniffImageKind(buffer: Buffer): 'png' | 'jpeg' | 'gif' | 'webp' | null {
+    if (buffer.length >= 12 && buffer.readUInt32BE(0) === 0x52494646 && buffer.toString('ascii', 8, 12) === 'WEBP') {
+        return 'webp'
+    }
+    if (buffer.length >= 8 && buffer.readUInt32BE(0) === 0x89504e47 && buffer.readUInt32BE(4) === 0x0d0a1a0a) {
+        return 'png'
+    }
+    if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+        return 'jpeg'
+    }
+    if (buffer.length >= 6) {
+        const sig = buffer.toString('ascii', 0, 6)
+        if (sig === 'GIF87a' || sig === 'GIF89a') {
+            return 'gif'
+        }
+    }
+    return null
+}
+
+const SATORI_SAFE_IMAGE_KINDS = new Set(['png', 'jpeg', 'gif'])
+
+function isImageLikeMediaType(mediaType: MediaType) {
+    return mediaType === 'photo' || media_type_is_thumbnail(mediaType)
+}
+
+function media_type_is_thumbnail(mediaType: MediaType) {
+    return mediaType === 'video_thumbnail'
+}
+
+/**
+ * Satori's image loader crashes on formats it cannot parse (observed: WebP with a .jpg
+ * extension, the classic i.ytimg thumbnail). Transcode such images to PNG once and reuse
+ * the sibling file afterwards.
+ */
+function ensureSatoriCompatibleImage(filePath: string, log?: { warn?: (...args: Array<any>) => void }): string {
+    let buffer: Buffer
+    try {
+        buffer = fs.readFileSync(filePath)
+    } catch {
+        return filePath
+    }
+    const kind = sniffImageKind(buffer)
+    if (kind === null || SATORI_SAFE_IMAGE_KINDS.has(kind)) {
+        return filePath
+    }
+    const convertedPath = `${filePath}-satori.png`
+    if (fs.existsSync(convertedPath)) {
+        return convertedPath
+    }
+    try {
+        execFileSync(process.env.FFMPEG_PATH || 'ffmpeg', ['-y', '-v', 'error', '-i', filePath, convertedPath], {
+            stdio: 'ignore',
+            timeout: 20_000,
+        })
+        return convertedPath
+    } catch (error) {
+        log?.warn?.(`Failed to transcode ${kind} image ${filePath} for satori: ${error}`)
+        return filePath
+    }
+}
+
 function persistMediaFile(sourcePath: string, options: PersistMediaFileOptions): StoredMediaMetadata {
     ensureDirectory(MEDIA_STORE_ROOT)
     ensureDirectory(MEDIA_STORE_VIDEO_ROOT)
     ensureDirectory(MEDIA_STORE_IMAGE_ROOT)
 
-    const buffer = fs.readFileSync(sourcePath)
+    const effectiveSourcePath = isImageLikeMediaType(options.media_type)
+        ? ensureSatoriCompatibleImage(sourcePath)
+        : sourcePath
+    const buffer = fs.readFileSync(effectiveSourcePath)
     const hash = crypto.createHash('sha256').update(buffer).digest('hex')
-    const extension = normalizeExtension(path.extname(sourcePath))
+    const extension = normalizeExtension(path.extname(effectiveSourcePath))
     const storedPath = resolveStoredMediaPath(hash, extension, options.media_type)
-    moveIntoStore(sourcePath, storedPath)
+    moveIntoStore(effectiveSourcePath, storedPath)
 
     const stats = fs.statSync(storedPath)
     const now = Math.floor(Date.now() / 1000)
@@ -1022,6 +1086,7 @@ export {
     checkExactCrossPlatformMediaDuplicate,
     checkExactCrossPlatformVideoDuplicate,
     checkShortVideoCrossPlatformDuplicate,
+    ensureSatoriCompatibleImage,
     isPersistentMediaPath,
     markExactCrossPlatformMediaSeen,
     markExactCrossPlatformVideoSeen,

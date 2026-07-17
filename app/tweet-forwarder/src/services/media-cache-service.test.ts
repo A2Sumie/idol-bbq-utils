@@ -5,6 +5,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import {
+    ensureSatoriCompatibleImage,
     buildVideoFingerprintBandKeys,
     buildShortVideoDedupCandidate,
     cleanupMediaCache,
@@ -394,4 +395,35 @@ test('video fingerprint dedup ignores low-information repeated frame bands', asy
         group: '3rd',
     })
     expect(duplicate).toBeNull()
+})
+
+test('ensureSatoriCompatibleImage transcodes webp content despite a .jpg extension', () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'satori-compat-'))
+    const pngPath = path.join(tempDir, 'base.png')
+    fs.writeFileSync(
+        pngPath,
+        Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+            'base64',
+        ),
+    )
+    const webpPath = path.join(tempDir, 'thumb.jpg')
+    // The local ffmpeg build has no webp encoder; produce the webp fixture with PIL.
+    const { execFileSync } = require('child_process')
+    execFileSync('python3', ['-c', `from PIL import Image; Image.open(${JSON.stringify(pngPath)}).save(${JSON.stringify(webpPath)}, 'WEBP')`], {
+        stdio: 'ignore',
+    })
+    // Sanity: the file really is RIFF/WEBP content now.
+    const sniffed = fs.readFileSync(webpPath)
+    expect(sniffed.toString('ascii', 0, 4)).toBe('RIFF')
+    expect(sniffed.toString('ascii', 8, 12)).toBe('WEBP')
+
+    const converted = ensureSatoriCompatibleImage(webpPath)
+    expect(converted).not.toBe(webpPath)
+    const out = fs.readFileSync(converted)
+    expect(out.readUInt32BE(0)).toBe(0x89504e47)
+    // Idempotent.
+    expect(ensureSatoriCompatibleImage(webpPath)).toBe(converted)
+    // PNG input passes through untouched.
+    expect(ensureSatoriCompatibleImage(pngPath)).toBe(pngPath)
 })
