@@ -2920,19 +2920,32 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
         try {
-            await DB.OutboundMessage.markSending(passthroughKey)
-            const sendResult = await target.send(translation, {
-                media: [],
-                cardMedia: [],
-                contentMedia: [],
-                timestamp: article.created_at,
-                // A text-only passthrough must bypass require_media targets: otherwise Bilibili
-                // reports ok with mode dynamic_media_required_suppressed and posts nothing.
-                runtime_config: { ...(runtime_config || {}), require_media: false },
-                article: cloneDeep(article),
-                forceSend: true,
-                outboundKey: passthroughKey,
-            })
+            try {
+                await DB.OutboundMessage.markSending(passthroughKey)
+            } catch (markError) {
+                throw new Error(
+                    `passthrough markSending failed: ${markError instanceof Error ? markError.stack || markError.message : String(markError)}`,
+                )
+            }
+            let sendResult
+            try {
+                sendResult = await target.send(translation, {
+                    media: [],
+                    cardMedia: [],
+                    contentMedia: [],
+                    timestamp: article.created_at,
+                    // A text-only passthrough must bypass require_media targets: otherwise Bilibili
+                    // reports ok with mode dynamic_media_required_suppressed and posts nothing.
+                    runtime_config: { ...(runtime_config || {}), require_media: false },
+                    article: cloneDeep(article),
+                    forceSend: true,
+                    outboundKey: passthroughKey,
+                })
+            } catch (sendError) {
+                throw new Error(
+                    `passthrough target.send failed: ${sendError instanceof Error ? sendError.stack || sendError.message : String(sendError)}`,
+                )
+            }
             if (sendResult.status === 'sent') {
                 await DB.OutboundMessage.markSent(passthroughKey, getForwarderProviderResult(sendResult))
                 log?.info(`Sent translation passthrough for ${article.a_id} to ${target.id}`)
