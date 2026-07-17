@@ -2096,6 +2096,7 @@ test('APIManager resend infers website crawler platform from websites config', a
         expect(resendCalls[0][1]).toBe('22/7官网FC抓取 - 日间轮询')
         expect(resendCalls[0][4]).toEqual({
             targetIds: ['bilibili-转帖'],
+            forceSend: true,
         })
         expect(statusUpdates).toEqual([
             {

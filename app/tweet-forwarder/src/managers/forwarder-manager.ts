@@ -881,6 +881,9 @@ type ForwardTargetInstanceWithRuntimeConfig = {
 }
 type ResendArticleOptions = {
     targetIds?: Array<string>
+    /** Defaults to true (legacy force resend). false performs a normal dispatch, so already-sent
+     *  outbounds stay claim-blocked and only missing pieces (e.g. a deleted passthrough) go out. */
+    forceSend?: boolean
 }
 class ForwarderPools extends BaseCompatibleModel {
     NAME = 'ForwarderPools'
@@ -1624,7 +1627,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 normalizedArticles,
                 path.targets,
                 path.formatterConfig,
-                { forceSend: true },
+                { forceSend: options.forceSend !== false },
                 { routeKey: path.routeKey },
             )
         }

@@ -2185,6 +2185,7 @@ export class APIManager extends BaseCompatibleModel {
             a_id?: string
             crawlerName?: string
             targetIds?: Array<string>
+            force?: boolean
         }
         const platform = resolvePlatform(body.platform)
         if (!platform) {
@@ -2235,6 +2236,7 @@ export class APIManager extends BaseCompatibleModel {
             })
             await this.deps.forwarderPools.resendArticle(article as any, body.crawlerName, undefined, undefined, {
                 targetIds,
+                forceSend: body.force !== false,
             })
             await DB.TaskQueue.updateStatus(task.id, DB.TaskQueue.STATUS.Completed, {
                 result_summary: `resent ${article.a_id}`,
