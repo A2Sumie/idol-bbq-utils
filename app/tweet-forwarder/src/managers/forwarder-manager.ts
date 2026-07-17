@@ -3783,6 +3783,25 @@ class ForwarderPools extends BaseCompatibleModel {
         config: ResolvedSummaryCardConfig,
         renderResult: RenderResult,
     ): Promise<SummaryCardRealtimeMediaResult> {
+        // When the target has translation passthrough enabled and this article's passthrough already
+        // went out (it carries the card plus dedup-approved media), the realtime card push would be a
+        // visible duplicate of the same article.
+        const passthroughArticleKey = articleKey(article)
+        if (target.getEffectiveConfig(runtime_config)?.translation_passthrough && String(article.translation || '').trim()) {
+            const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', passthroughArticleKey)
+            const passthroughRecord = await DB.OutboundMessage.getByIdempotencyKey(passthroughKey).catch(() => null)
+            if (passthroughRecord && isOutboundVisibleCompletionStatus(passthroughRecord.status)) {
+                log?.debug(
+                    `Skipping summary realtime media for ${article.a_id} to ${target.id}: translation passthrough already delivered the card and media`,
+                )
+                return {
+                    hadMedia: true,
+                    handled: true,
+                    visibleMediaSent: true,
+                    skippedDuplicate: true,
+                }
+            }
+        }
         const rawMediaFiles = [...renderResult.originalMediaFiles]
         const mediaFiles = rawMediaFiles.filter((file) =>
             this.isSummaryRealtimeMediaEligible(target, file, rawMediaFiles),

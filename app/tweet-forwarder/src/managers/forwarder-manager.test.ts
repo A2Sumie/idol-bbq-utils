@@ -15,7 +15,7 @@ import { Forwarder, PartialForwarderSendError } from '@/middleware/forwarder/bas
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { normalizeCronSecond } from '@/utils/cron'
-import { articleOutboundKey, routeKey, targetRouteKey } from '@/services/outbound-message-service'
+import { articleKey, articleOutboundKey, routeKey, syntheticOutboundKey, targetRouteKey } from '@/services/outbound-message-service'
 import { processorRegistry } from '@/middleware/processor'
 import { ProcessorProvider } from '@/types/processor'
 
@@ -1909,6 +1909,91 @@ test('sendArticles keeps already-sent targets in the prefilter when a passthroug
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toContain('这是译文')
+})
+
+test('summary realtime media skips when the translation passthrough already went out', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            translation_passthrough: true,
+        } as any,
+        'target-rt-dedup',
+    )
+
+    const article = {
+        id: 221,
+        a_id: 'rt-dedup-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        content: '原文です',
+        translation: '这是译文',
+    }
+    const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article as any))
+    ;((DB.OutboundMessage as any).__records as Map<string, any>).set(passthroughKey, {
+        id: 555,
+        idempotency_key: passthroughKey,
+        route_key: 'r',
+        target_id: target.id,
+        target_platform: target.NAME,
+        task_kind: 'translation_passthrough',
+        article_key: articleKey(article as any),
+        synthetic_key: null,
+        payload_hash: 'h',
+        status: 'sent',
+        provider_message_ids: null,
+        segment_results: null,
+        attempt_count: 1,
+        last_error: null,
+        created_at: Math.floor(Date.now() / 1000) - 10,
+        updated_at: Math.floor(Date.now() / 1000) - 10,
+        finished_at: Math.floor(Date.now() / 1000) - 10,
+    })
+
+    const result = await (pools as any).sendSummaryCardRealtimeMedia(
+        undefined,
+        article,
+        target,
+        undefined,
+        'route:key',
+        {
+            mediaRealtime: true,
+            mediaRealtimeText: 'metadata',
+        },
+        {
+            text: 'x',
+            cardMediaFiles: [],
+            originalMediaFiles: [{ media_type: 'photo', path: '/tmp/rt-dedup.jpg' }],
+            mediaFiles: [],
+        },
+    )
+
+    expect(result.visibleMediaSent).toBe(true)
+    expect(result.skippedDuplicate).toBe(true)
+    expect(target.sent).toHaveLength(0)
 })
 
 test('sendArticles stops after render when forwarder pool starts shutting down', async () => {
