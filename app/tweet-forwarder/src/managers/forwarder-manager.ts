@@ -2892,6 +2892,9 @@ class ForwarderPools extends BaseCompatibleModel {
         if (!translation) {
             return
         }
+        // Header keeps the author/time/action metadata the normal card carries; body is the
+        // translation only (no original text), per the passthrough design.
+        const passthroughText = [formatArticleHeaderLine(article), translation].filter(Boolean).join('\n')
         const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article))
         const outbound = await DB.OutboundMessage.claim({
             idempotency_key: passthroughKey,
@@ -2904,7 +2907,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 routeKey: routeKeyForTarget,
                 targetId: target.id,
                 taskKind: 'translation_passthrough',
-                text: translation,
+                text: passthroughText,
                 articleKeys: [articleKey(article)],
                 media: [],
             }),
@@ -2929,7 +2932,7 @@ class ForwarderPools extends BaseCompatibleModel {
             }
             let sendResult
             try {
-                sendResult = await target.send(translation, {
+                sendResult = await target.send(passthroughText, {
                     media: [],
                     cardMedia: [],
                     contentMedia: [],

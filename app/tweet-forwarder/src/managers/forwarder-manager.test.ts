@@ -1676,7 +1676,8 @@ test('sendArticles sends a text-only translation passthrough before the main sen
     )
 
     expect(sends).toHaveLength(2)
-    expect(sends[0]?.texts).toEqual(['这是译文'])
+    expect(sends[0]?.texts).toHaveLength(1)
+    expect(sends[0]?.texts[0]).toContain('这是译文')
     expect(sends[0]?.props?.media).toEqual([])
     expect(sends[0]?.props?.outboundKey).toContain('translation_passthrough')
     // Text-only passthrough must bypass require_media suppression targets.
@@ -1829,7 +1830,8 @@ test('sendArticles fires translation passthrough before queueing to a summary-ca
     // The passthrough fires even though the article itself is queued for the summary window
     // (no direct visible send for the article text).
     expect(target.sent.length).toBe(1)
-    expect(target.sent[0]?.texts).toEqual(['这是译文'])
+    expect(target.sent[0]?.texts).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('这是译文')
     expect(target.sent[0]?.props?.outboundKey).toContain('translation_passthrough')
 })
 
@@ -1905,7 +1907,8 @@ test('sendArticles keeps already-sent targets in the prefilter when a passthroug
 
     // Only the passthrough goes out; the main article send stays claim-blocked.
     expect(target.sent).toHaveLength(1)
-    expect(target.sent[0]?.texts).toEqual(['这是译文'])
+    expect(target.sent[0]?.texts).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('这是译文')
 })
 
 test('sendArticles stops after render when forwarder pool starts shutting down', async () => {
