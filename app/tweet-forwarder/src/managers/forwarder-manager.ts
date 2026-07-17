@@ -2228,6 +2228,10 @@ class ForwarderPools extends BaseCompatibleModel {
                                 }
                             }
 
+                            // Fire before summary queueing so passthrough targets (summary_card targets
+                            // never reach the direct send below) still get the fast translation text.
+                            await this.sendTranslationPassthrough(log, article, target, routeKeyForTarget, runtime_config)
+
                             const queuedForSummary = await this.maybeQueueSummaryCardArticle(
                                 log,
                                 article,
@@ -2409,7 +2413,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             return
                         }
 
-                        const xTiktokTeaserMode = resolveXTiktokTeaserMode(runtime_config as any)
+                        const xTiktokTeaserMode = resolveXTiktokTeaserMode(target.getEffectiveConfig(runtime_config) as any)
                         if (
                             (xTiktokTeaserMode === 'image' || xTiktokTeaserMode === 'suppress') &&
                             isXTiktokTeaserArticle(article)
@@ -2436,10 +2440,6 @@ class ForwarderPools extends BaseCompatibleModel {
                             mediaFiles = transformXTiktokTeaserMediaToSingleImage(mediaFiles)
                             contentMediaFiles = transformXTiktokTeaserMediaToSingleImage(contentMediaFiles)
                             log?.info(`X TikTok teaser ${article.a_id} downgraded to a single cover image for ${target.id}`)
-                        }
-
-                        if (!options?.forceSend) {
-                            await this.sendTranslationPassthrough(log, article, target, routeKeyForTarget, runtime_config)
                         }
 
                         const translatedCompanionCard = suppressTranslations
@@ -2846,7 +2846,12 @@ class ForwarderPools extends BaseCompatibleModel {
         routeKeyForTarget: string,
         runtime_config?: ForwardTargetPlatformCommonConfig,
     ) {
-        if (!(runtime_config as any)?.translation_passthrough) {
+        // runtime_config only carries binding-layer keys; target-level knobs live in cfg_platform,
+        // so resolve through the merged effective config.
+        if (!target.getEffectiveConfig(runtime_config)?.translation_passthrough) {
+            return
+        }
+        if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return
         }
         const translation = String(article.translation || '').trim()

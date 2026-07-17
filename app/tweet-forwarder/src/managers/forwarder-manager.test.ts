@@ -1745,6 +1745,90 @@ test('sendArticles skips translation passthrough when there is no translation', 
     expect(sends[0]?.texts).toEqual(['main card payload'])
 })
 
+test('sendArticles fires translation passthrough before queueing to a summary-card target', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            translation_passthrough: true,
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                send_first_native: false,
+            },
+        } as any,
+        'target-passthrough-summary',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+            mediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    const article = {
+        id: 217,
+        a_id: 'passthrough-summary-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        content: '原文です',
+        translation: '这是译文',
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'passthrough-summary-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: undefined,
+            },
+        ],
+        {
+            render_type: 'text',
+        } as any,
+    )
+
+    // The passthrough fires even though the article itself is queued for the summary window
+    // (no direct visible send for the article text).
+    expect(target.sent.length).toBe(1)
+    expect(target.sent[0]?.texts).toEqual(['这是译文'])
+    expect(target.sent[0]?.props?.outboundKey).toContain('translation_passthrough')
+})
+
 test('sendArticles stops after render when forwarder pool starts shutting down', async () => {
     const pools = new ForwarderPools(
         {
