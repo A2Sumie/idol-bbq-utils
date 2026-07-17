@@ -1677,6 +1677,8 @@ test('sendArticles sends a text-only translation passthrough before the main sen
     expect(sends[0]?.texts).toEqual(['这是译文'])
     expect(sends[0]?.props?.media).toEqual([])
     expect(sends[0]?.props?.outboundKey).toContain('translation_passthrough')
+    // Text-only passthrough must bypass require_media suppression targets.
+    expect(sends[0]?.props?.runtime_config?.require_media).toBe(false)
     expect(sends[1]?.texts).toEqual(['main card payload'])
 })
 

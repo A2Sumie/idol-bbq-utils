@@ -2892,7 +2892,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 cardMedia: [],
                 contentMedia: [],
                 timestamp: article.created_at,
-                runtime_config,
+                // A text-only passthrough must bypass require_media targets: otherwise Bilibili
+                // reports ok with mode dynamic_media_required_suppressed and posts nothing.
+                runtime_config: { ...(runtime_config || {}), require_media: false },
                 article: cloneDeep(article),
                 forceSend: true,
                 outboundKey: passthroughKey,
