@@ -129,6 +129,38 @@ class BiliForwarder extends Forwarder {
         return parts.join('; ')
     }
 
+    private buvidFetchPromise: Promise<void> | null = null
+
+    /**
+     * upload_bfs (and other WAF-strict endpoints) reject sessions without buvid3/buvid4 even when
+     * SESSDATA/bili_jct are valid (-101). Fetch an anonymous pair from the SPI endpoint once and
+     * cache it when the config does not provide them.
+     */
+    private ensureBuvidCookies(): Promise<void> {
+        if ((this.buvid3 && this.buvid4) || this.buvidFetchPromise) {
+            return this.buvidFetchPromise || Promise.resolve()
+        }
+        this.buvidFetchPromise = (async () => {
+            try {
+                const res = await axios.get('https://api.bilibili.com/x/frontend/finger/spi', {
+                    headers: { 'User-Agent': 'Mozilla/5.0' },
+                    timeout: 10000,
+                })
+                const b3 = String(res.data?.data?.b_3 || '')
+                const b4 = String(res.data?.data?.b_4 || '')
+                if (b3 && b4) {
+                    this.buvid3 = b3
+                    this.buvid4 = b4
+                    this.log?.info(`Fetched anonymous buvid3/buvid4 for ${this.id} (config did not provide them)`)
+                }
+            } catch (error) {
+                this.buvidFetchPromise = null
+                this.log?.warn(`Failed to fetch buvid cookies for ${this.id}: ${error}`)
+            }
+        })()
+        return this.buvidFetchPromise
+    }
+
     private get biliApiHeaders() {
         return {
             'User-Agent':
@@ -375,6 +407,7 @@ class BiliForwarder extends Forwarder {
     }
 
     private async tryVideoUpload(texts: string[], props?: SendProps): Promise<BiliVideoUploadResult | false> {
+        await this.ensureBuvidCookies()
         const effectiveConfig = this.getEffectiveConfig(props?.runtime_config) as any
         if (effectiveConfig.x_tiktok_teaser_mode === 'image' && isXTiktokTeaserArticle(props?.article)) {
             this.log?.info(
@@ -606,6 +639,7 @@ class BiliForwarder extends Forwarder {
     }
 
     private async sendDynamicContent(texts: string[], props?: SendProps): Promise<any> {
+        await this.ensureBuvidCookies()
         let { media } = props || {}
         media = media || []
         const _log = this.log
