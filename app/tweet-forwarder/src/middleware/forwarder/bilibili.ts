@@ -658,14 +658,18 @@ class BiliForwarder extends Forwarder {
                             try {
                                 _log?.debug(`Uploading photo ${item.path}`)
                                 const obj = await pRetry(() => this.uploadPhoto(item.path), {
-                                    retries: 2,
-                                    onFailedAttempt() {
-                                        _log?.error('Upload photo failed, retrying...')
+                                    retries: 3,
+                                    // upload_bfs is rate-limited per account; the default ~1s backoff
+                                    // keeps every attempt inside the same throttle window.
+                                    minTimeout: 5000,
+                                    factor: 2,
+                                    onFailedAttempt(e) {
+                                        _log?.error(`Upload photo failed, retrying...: ${e.originalError.message}`)
                                     },
                                 })
                                 return obj
                             } catch (e) {
-                                _log?.error(`Upload photo ${item.path} failed, skip this photo`)
+                                _log?.error(`Upload photo ${item.path} failed, skip this photo: ${e instanceof Error ? e.message : String(e)}`)
                                 return
                             }
                         }
