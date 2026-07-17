@@ -2946,7 +2946,7 @@ class ForwarderPools extends BaseCompatibleModel {
             await DB.OutboundMessage.markFailed(passthroughKey, error).catch(() => undefined)
             log?.warn(
                 `Translation passthrough failed for ${article.a_id} to ${target.id}: ${
-                    error instanceof Error ? error.message : String(error)
+                    error instanceof Error ? error.stack || error.message : String(error)
                 }`,
             )
         }
