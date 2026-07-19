@@ -80,6 +80,7 @@ const RISK_COOLDOWN_MS: Record<CrawlErrorClass, number> = {
     parser: 0,
     unknown: 0,
 }
+const INSTAGRAM_TIMEOUT_COOLDOWN_MS = 10 * 60 * 1000
 
 type CrawlErrorClass = 'auth' | 'rate_limit' | 'timeout' | 'transient' | 'parser' | 'unknown'
 
@@ -308,7 +309,7 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
         return 'transient'
     }
     if (
-        /\b(login|logged out|auth|unauthorized|forbidden|csrf|cookie|cookies expired|check your cookies)\b/.test(
+        /\b(login|logged out|auth|unauthorized|forbidden|csrf|cookie|cookies expired|check your cookies|checkpoint|challenge|session expired)\b/.test(
             message,
         )
     ) {
@@ -1005,7 +1006,7 @@ class SpiderPools extends BaseCompatibleModel {
 
         let cookieString: string | undefined
         const cookie_file = cfg_crawler.cookie_file
-        if (cookie_file) {
+        if (cookie_file && cfg_crawler.seed_cookie_file !== false) {
             const cookies = parseNetscapeCookieToPuppeteerCookie(
                 resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
             )
@@ -1036,7 +1037,7 @@ class SpiderPools extends BaseCompatibleModel {
                     ...browserRequest,
                     user_agent: cfg_crawler.user_agent,
                 })
-                if (cookie_file) {
+                if (cookie_file && cfg_crawler.seed_cookie_file !== false) {
                     await page
                         .browserContext()
                         .setCookie(
@@ -1242,7 +1243,7 @@ class SpiderPools extends BaseCompatibleModel {
         let pageKey: string | undefined
 
         const cookie_file = cfg_crawler?.cookie_file
-        if (cookie_file) {
+        if (cookie_file && cfg_crawler?.seed_cookie_file !== false) {
             const cookies = parseNetscapeCookieToPuppeteerCookie(resolveConfiguredCookieFilePath(cookie_file) || cookie_file)
             cookieString = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
         }
@@ -1348,7 +1349,7 @@ class SpiderPools extends BaseCompatibleModel {
                         })
                         pageKey = nextPageKey
 
-                        if (cookie_file) {
+                        if (cookie_file && cfg_crawler?.seed_cookie_file !== false) {
                             await page
                                 .browserContext()
                                 .setCookie(
@@ -1801,7 +1802,10 @@ class SpiderPools extends BaseCompatibleModel {
     }
 
     private setCooldownForError(context: CrawlTargetContext, classification: CrawlErrorClass, message: string) {
-        const duration = RISK_COOLDOWN_MS[classification] || 0
+        const duration =
+            context.platform === Platform.Instagram && classification === 'timeout'
+                ? INSTAGRAM_TIMEOUT_COOLDOWN_MS
+                : RISK_COOLDOWN_MS[classification] || 0
         if (duration <= 0) {
             return
         }

@@ -578,37 +578,15 @@ test('Instagram grabPostsPrivateApi maps private feed items through postParser',
     }
 })
 
-test('Instagram article crawl prefers private API and skips the browser posts path', async () => {
+test('Instagram article crawl uses the browser posts path even when cookies are present', async () => {
     const originalGrabPosts = InsApiJsonParser.grabPosts
     const originalGrabStories = InsApiJsonParser.grabStories
-    const originalPrivateApi = InsApiJsonParser.grabPostsPrivateApi
     let browserCalled = false
     ;(InsApiJsonParser as any).grabPosts = async () => {
         browserCalled = true
-        throw new Error('browser must not be called when the private API succeeds')
+        return []
     }
     ;(InsApiJsonParser as any).grabStories = async () => []
-    ;(InsApiJsonParser as any).grabPostsPrivateApi = async (handle: string, cookieString: string) => {
-        expect(handle).toBe('instagram')
-        expect(cookieString).toBe('sessionid=abc')
-        return [
-            {
-                platform: 2,
-                a_id: 'APIPRIME1',
-                u_id: 'instagram',
-                username: 'Instagram',
-                created_at: 1773845200,
-                content: 'api post',
-                url: 'https://www.instagram.com/p/APIPRIME1/',
-                type: 'post',
-                ref: null,
-                has_media: false,
-                media: [],
-                extra: null,
-                u_avatar: null,
-            },
-        ]
-    }
 
     try {
         const spider = new InstagramSpider()
@@ -618,20 +596,17 @@ test('Instagram article crawl prefers private API and skips the browser posts pa
             cookieString: 'sessionid=abc',
         })
 
-        expect(articles).toHaveLength(1)
-        expect(articles[0]?.a_id).toBe('APIPRIME1')
-        expect(browserCalled).toBe(false)
+        expect(articles).toHaveLength(0)
+        expect(browserCalled).toBe(true)
     } finally {
         ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
-        ;(InsApiJsonParser as any).grabPostsPrivateApi = originalPrivateApi
     }
 })
 
-test('Instagram article crawl falls back to browser posts when the private API fails', async () => {
+test('Instagram article crawl does not invoke the private API fallback', async () => {
     const originalGrabPosts = InsApiJsonParser.grabPosts
     const originalGrabStories = InsApiJsonParser.grabStories
-    const originalPrivateApi = InsApiJsonParser.grabPostsPrivateApi
     ;(InsApiJsonParser as any).grabPosts = async () => [
         {
             platform: 2,
@@ -650,9 +625,6 @@ test('Instagram article crawl falls back to browser posts when the private API f
         },
     ]
     ;(InsApiJsonParser as any).grabStories = async () => []
-    ;(InsApiJsonParser as any).grabPostsPrivateApi = async () => {
-        throw new Error('HTTP 429')
-    }
 
     try {
         const spider = new InstagramSpider()
@@ -667,6 +639,5 @@ test('Instagram article crawl falls back to browser posts when the private API f
     } finally {
         ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
-        ;(InsApiJsonParser as any).grabPostsPrivateApi = originalPrivateApi
     }
 })

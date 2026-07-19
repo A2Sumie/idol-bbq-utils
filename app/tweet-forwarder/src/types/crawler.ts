@@ -123,6 +123,8 @@ interface CrawlerConfig extends CommonCfgConfig {
      * Path to the cookie file
      */
     cookie_file?: string
+    /** Seed a persistent browser profile from cookie_file on page creation. */
+    seed_cookie_file?: boolean
     /**
      * Random waiting time for per crawling
      */

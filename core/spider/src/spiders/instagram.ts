@@ -161,21 +161,10 @@ class InstagramSpider extends BaseSpider {
             const articles: Array<GenericArticle<Platform.Instagram>> = []
             if (wantPosts) {
                 this.log?.info('Trying to grab posts.')
-                // The mobile private API is the low-footprint primary path (2 light requests, same traffic
-                // shape as the real app). The full browser page + GraphQL XHR costs ~30 requests per
-                // profile and is the first thing Instagram throttles, so it is the fallback.
-                const grabViaBrowser = () => InsApiJsonParser.grabPosts(page, _url)
-                const grabViaApi = async () => {
-                    try {
-                        return await InsApiJsonParser.grabPostsPrivateApi(id, config.cookieString as string)
-                    } catch (apiError) {
-                        this.log?.warn(
-                            `Private API posts crawl failed for ${id} (${apiError instanceof Error ? apiError.message : String(apiError)}); falling back to browser GraphQL`,
-                        )
-                        return await grabViaBrowser()
-                    }
-                }
-                articles.push(...(await (config.cookieString ? grabViaApi() : grabViaBrowser())))
+                // Keep one identity: use the persistent browser session for posts. Mixing a desktop
+                // browser identity with the mobile private API causes session revocations and turns
+                // one failed request into a second, more aggressive browser crawl.
+                articles.push(...(await InsApiJsonParser.grabPosts(page, _url)))
             }
             if (wantStories) {
                 this.log?.info(`Trying to grab stories.`)
