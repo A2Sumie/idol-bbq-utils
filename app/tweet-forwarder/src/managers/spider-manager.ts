@@ -81,6 +81,8 @@ const RISK_COOLDOWN_MS: Record<CrawlErrorClass, number> = {
     unknown: 0,
 }
 const INSTAGRAM_TIMEOUT_COOLDOWN_MS = 10 * 60 * 1000
+const INSTAGRAM_AUTH_COOLDOWN_MS = 6 * 60 * 60 * 1000
+const INSTAGRAM_RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000
 
 type CrawlErrorClass = 'auth' | 'rate_limit' | 'timeout' | 'transient' | 'parser' | 'unknown'
 
@@ -338,6 +340,17 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
 function shouldRetryCrawlError(error: unknown) {
     const classification = classifyCrawlError(error)
     return classification !== 'auth' && classification !== 'rate_limit' && classification !== 'parser'
+}
+
+function shouldRetryCrawlErrorForPlatform(error: unknown, platform?: Platform) {
+    const classification = classifyCrawlError(error)
+    if (
+        platform === Platform.Instagram &&
+        (classification === 'auth' || classification === 'rate_limit' || classification === 'timeout')
+    ) {
+        return false
+    }
+    return shouldRetryCrawlError(error)
 }
 
 function summarizeCrawlerTaskResult(
@@ -912,6 +925,7 @@ class SpiderPools extends BaseCompatibleModel {
     private browserPool: BrowserSessionPool
     private instagramLiveRelay: InstagramLiveRelayService
     private riskCooldowns = new Map<string, CrawlRiskCooldown>()
+    private seededBrowserSessions = new Set<string>()
     /**
      * BaseSpider._VALID_URL.source
      */
@@ -1349,7 +1363,12 @@ class SpiderPools extends BaseCompatibleModel {
                         })
                         pageKey = nextPageKey
 
-                        if (cookie_file && cfg_crawler?.seed_cookie_file !== false) {
+                        const seedKey = browserRequest.session_profile || browserRequest.device_profile || 'default'
+                        if (
+                            cookie_file &&
+                            cfg_crawler?.seed_cookie_file !== false &&
+                            !this.seededBrowserSessions.has(seedKey)
+                        ) {
                             await page
                                 .browserContext()
                                 .setCookie(
@@ -1357,6 +1376,7 @@ class SpiderPools extends BaseCompatibleModel {
                                         resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
                                     ),
                                 )
+                            this.seededBrowserSessions.add(seedKey)
                         }
                     } else if (!needsBrowser) {
                         ctx.log?.debug(`Using non-browser engine: ${crawl_engine}`)
@@ -1411,7 +1431,7 @@ class SpiderPools extends BaseCompatibleModel {
                                 }),
                             {
                                 retries: RETRY_LIMIT,
-                                shouldRetry: (error) => shouldRetryCrawlError(error),
+                                shouldRetry: (error) => shouldRetryCrawlErrorForPlatform(error, spiderPlugin.platform),
                                 onFailedAttempt: (error) => {
                                     const classification = classifyCrawlError(error)
                                     ctx.log?.error(
@@ -1803,8 +1823,14 @@ class SpiderPools extends BaseCompatibleModel {
 
     private setCooldownForError(context: CrawlTargetContext, classification: CrawlErrorClass, message: string) {
         const duration =
-            context.platform === Platform.Instagram && classification === 'timeout'
-                ? INSTAGRAM_TIMEOUT_COOLDOWN_MS
+            context.platform === Platform.Instagram
+                ? classification === 'auth'
+                    ? INSTAGRAM_AUTH_COOLDOWN_MS
+                    : classification === 'rate_limit'
+                      ? INSTAGRAM_RATE_LIMIT_COOLDOWN_MS
+                      : classification === 'timeout'
+                        ? INSTAGRAM_TIMEOUT_COOLDOWN_MS
+                        : RISK_COOLDOWN_MS[classification] || 0
                 : RISK_COOLDOWN_MS[classification] || 0
         if (duration <= 0) {
             return
@@ -1998,7 +2024,7 @@ class SpiderPools extends BaseCompatibleModel {
                     }),
                 {
                     retries: RETRY_LIMIT,
-                    shouldRetry: (error) => shouldRetryCrawlError(error),
+                    shouldRetry: (error) => shouldRetryCrawlErrorForPlatform(error, platform),
                     onFailedAttempt: (error) => {
                         const classification = classifyCrawlError(error)
                         ctx.log?.error(
