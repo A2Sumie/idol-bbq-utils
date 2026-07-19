@@ -641,3 +641,38 @@ test('Instagram article crawl does not invoke the private API fallback', async (
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
     }
 })
+
+test('Instagram private API runs only for the explicit daily gap-fill subtask', async () => {
+    const originalGrabPosts = InsApiJsonParser.grabPosts
+    const originalGrabStories = InsApiJsonParser.grabStories
+    const originalPrivateApi = InsApiJsonParser.grabPostsPrivateApi
+    let privateApiCalls = 0
+    ;(InsApiJsonParser as any).grabPosts = async () => {
+        throw new Error('browser posts must not run for private API gap-fill')
+    }
+    ;(InsApiJsonParser as any).grabStories = async () => {
+        throw new Error('stories must not run for private API gap-fill')
+    }
+    ;(InsApiJsonParser as any).grabPostsPrivateApi = async (_handle: string, cookieString: string) => {
+        privateApiCalls += 1
+        expect(cookieString).toBe('sessionid=abc')
+        return []
+    }
+
+    try {
+        const spider = new InstagramSpider()
+        const articles = await spider.crawl('https://www.instagram.com/instagram/', {} as any, 'ig-daily-gap-fill', {
+            task_type: 'article',
+            crawl_engine: 'browser',
+            sub_task_type: ['private_api_posts'],
+            cookieString: 'sessionid=abc',
+        })
+
+        expect(articles).toEqual([])
+        expect(privateApiCalls).toBe(1)
+    } finally {
+        ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
+        ;(InsApiJsonParser as any).grabStories = originalGrabStories
+        ;(InsApiJsonParser as any).grabPostsPrivateApi = originalPrivateApi
+    }
+})

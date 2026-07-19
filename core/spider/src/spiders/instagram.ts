@@ -42,6 +42,7 @@ enum ArticleTypeEnum {
 enum InstagramArticleTaskType {
     posts = 'posts',
     stories = 'stories',
+    private_api_posts = 'private_api_posts',
 }
 
 /**
@@ -157,9 +158,16 @@ class InstagramSpider extends BaseSpider {
                 !sub_task_type ||
                 sub_task_type.length === 0 ||
                 sub_task_type.includes(InstagramArticleTaskType.stories)
+            const wantPrivateApiPosts = sub_task_type?.includes(InstagramArticleTaskType.private_api_posts) ?? false
 
             const articles: Array<GenericArticle<Platform.Instagram>> = []
-            if (wantPosts) {
+            if (wantPrivateApiPosts) {
+                if (!config.cookieString) {
+                    throw new Error('Instagram private API gap-fill requires cookies')
+                }
+                this.log?.info('Trying daily private API posts gap-fill.')
+                articles.push(...(await InsApiJsonParser.grabPostsPrivateApi(id, config.cookieString)))
+            } else if (wantPosts) {
                 this.log?.info('Trying to grab posts.')
                 // Keep one identity: use the persistent browser session for posts. Mixing a desktop
                 // browser identity with the mobile private API causes session revocations and turns

@@ -80,9 +80,9 @@ const RISK_COOLDOWN_MS: Record<CrawlErrorClass, number> = {
     parser: 0,
     unknown: 0,
 }
-const INSTAGRAM_TIMEOUT_COOLDOWN_MS = 10 * 60 * 1000
+const INSTAGRAM_TIMEOUT_COOLDOWN_MS = 5 * 60 * 1000
 const INSTAGRAM_AUTH_COOLDOWN_MS = 6 * 60 * 60 * 1000
-const INSTAGRAM_RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000
+const INSTAGRAM_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000
 
 type CrawlErrorClass = 'auth' | 'rate_limit' | 'timeout' | 'transient' | 'parser' | 'unknown'
 
@@ -1020,7 +1020,7 @@ class SpiderPools extends BaseCompatibleModel {
 
         let cookieString: string | undefined
         const cookie_file = cfg_crawler.cookie_file
-        if (cookie_file && cfg_crawler.seed_cookie_file !== false) {
+        if (cookie_file) {
             const cookies = parseNetscapeCookieToPuppeteerCookie(
                 resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
             )
@@ -1257,7 +1257,7 @@ class SpiderPools extends BaseCompatibleModel {
         let pageKey: string | undefined
 
         const cookie_file = cfg_crawler?.cookie_file
-        if (cookie_file && cfg_crawler?.seed_cookie_file !== false) {
+        if (cookie_file) {
             const cookies = parseNetscapeCookieToPuppeteerCookie(resolveConfiguredCookieFilePath(cookie_file) || cookie_file)
             cookieString = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
         }

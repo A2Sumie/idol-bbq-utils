@@ -977,7 +977,14 @@ export class APIManager extends BaseCompatibleModel {
                 fs.mkdirSync(dir, { recursive: true })
             }
 
-            fs.writeFileSync(cookieFile, serializeCookiesToNetscape(snapshot.cookies), 'utf8')
+            const serializedCookies = serializeCookiesToNetscape(snapshot.cookies)
+            const temporaryCookieFile = `${cookieFile}.tmp-${process.pid}-${Date.now()}`
+            fs.writeFileSync(temporaryCookieFile, serializedCookies, { encoding: 'utf8', mode: 0o600 })
+            fs.chmodSync(temporaryCookieFile, 0o600)
+            if (fs.existsSync(cookieFile)) {
+                fs.copyFileSync(cookieFile, `${cookieFile}.bak-sync-${Date.now()}`)
+            }
+            fs.renameSync(temporaryCookieFile, cookieFile)
             this.log?.info(
                 `Cookie synced for ${finder} from session ${snapshot.sessionProfile || 'unknown'} to ${publicCookieFileMetadata(cookieFile).filename || 'unknown'} (${snapshot.cookies.length} cookies)`,
             )
