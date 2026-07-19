@@ -77,6 +77,7 @@ export interface SendProps {
     media?: MediaFile[]
     cardMedia?: MediaFile[]
     contentMedia?: MediaFile[]
+    videoUploadMedia?: MediaFile[]
     timestamp?: number
     runtime_config?: ForwardTargetPlatformCommonConfig
     article?: Article

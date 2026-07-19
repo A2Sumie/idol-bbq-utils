@@ -555,11 +555,21 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
 
     private resolveCrawlerProcessorId(crawler: Crawler) {
         const crawlerKeys = [(crawler as any).id, crawler.name]
-        return (
+        const configured =
             lookupConnectionValues(this.props.connections?.['crawler-processor'], crawlerKeys) ||
             crawler.cfg_crawler?.processor_id ||
             ''
-        )
+        if (configured) {
+            return configured
+        }
+
+        // Website articles must have a translation before the immediate forwarder dispatch. Keep
+        // this default for the configured 22/7 website host even when an older config omits the map.
+        const websites = Array.isArray(crawler.websites) ? crawler.websites : []
+        if (websites.some((url) => String(url).toLowerCase().includes('nanabunnonijyuuni-mobile.com/s/n110/'))) {
+            return '22_7-social-ja-zh'
+        }
+        return ''
     }
 
     private resolveCrawlerProcessor(crawler: Crawler) {

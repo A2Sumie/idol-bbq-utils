@@ -47,6 +47,29 @@ test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', (
     expect(candidate?.config.tags).not.toContain('长视频')
 })
 
+test('buildBiliupUploadCandidate prefers a video thumbnail over photos', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.X,
+            u_id: 'member',
+            username: 'Member',
+            a_id: 'video-cover-priority',
+            content: 'video',
+            created_at: 1710900000,
+            url: 'https://x.com/member/status/video-cover-priority',
+        } as any,
+        ['video'],
+        [
+            { media_type: 'photo', path: '/tmp/unrelated-photo.jpg' },
+            { media_type: 'video_thumbnail', path: '/tmp/platform-thumbnail.jpg' },
+            { media_type: 'video', path: '/tmp/video.mp4' },
+        ],
+        { enabled: true },
+    )
+
+    expect(candidate?.coverPath).toBe('/tmp/platform-thumbnail.jpg')
+})
+
 test('buildBiliupUploadCandidate keeps YouTube Shorts original title at description top', () => {
     const candidate = buildBiliupUploadCandidate(
         {

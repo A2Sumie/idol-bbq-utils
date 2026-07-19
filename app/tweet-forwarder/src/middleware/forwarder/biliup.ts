@@ -1707,7 +1707,9 @@ function buildBiliupUploadCandidate(
         return null
     }
 
-    const coverPath = media.find((item) => item.media_type === 'photo' || item.media_type === 'video_thumbnail')?.path
+    const coverPath =
+        media.find((item) => item.media_type === 'video_thumbnail')?.path ||
+        media.find((item) => item.media_type === 'photo')?.path
     return {
         title: deriveTitle(article, texts, resolvedConfig.metadata_timezone, resolvedConfig.metadata_templates?.title),
         description: deriveDescription(

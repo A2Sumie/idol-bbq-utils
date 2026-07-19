@@ -18,6 +18,7 @@ import { normalizeCronSecond } from '@/utils/cron'
 import { articleKey, articleOutboundKey, routeKey, syntheticOutboundKey, targetRouteKey } from '@/services/outbound-message-service'
 import { processorRegistry } from '@/middleware/processor'
 import { ProcessorProvider } from '@/types/processor'
+import { resolveSummaryCardConfig as resolveSummaryCardPolicyConfig } from '@/services/summary-card-policy'
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 process.env.RENDER_REMOTE_ASSETS = '0'
@@ -1683,6 +1684,59 @@ test('sendArticles sends a text-only translation passthrough before the main sen
     // Text-only passthrough must bypass require_media suppression targets.
     expect(sends[0]?.props?.runtime_config?.require_media).toBe(false)
     expect(sends[1]?.texts).toEqual(['main card payload'])
+})
+
+test('Bilibili translation passthrough does not standalone-send translated text without source media', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: { render_type: 'text' } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+    const target = {
+        id: 'bilibili-eligibility-test',
+        NAME: 'bilibili',
+        getEffectiveConfig: () => ({
+            translation_passthrough: true,
+            require_media: true,
+            summary_card: {
+                enabled: true,
+                send_first_immediately: true,
+                send_first_native: true,
+                interval_seconds: 1800,
+            },
+        }),
+        check_blocked: async () => false,
+        send: async () => ({ status: 'sent' }),
+    }
+    const article = {
+        id: 218,
+        a_id: 'bilibili-text-only-eligibility',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        content: '原文',
+        translation: '译文',
+    }
+    ;(pools as any).summaryCardLastSentAt.set(
+        (pools as any).getSummaryCardQueueKey(
+            (pools as any).buildSummaryCardSharedRouteKey(target.id),
+            target.id,
+            undefined,
+            resolveSummaryCardPolicyConfig(target.getEffectiveConfig()),
+        ),
+        Math.floor(Date.now() / 1000),
+    )
+
+    const eligible = await (pools as any).canSendTranslationPassthroughStandalone(article, target, undefined, {
+        originalMediaFiles: [],
+    })
+    expect(eligible).toBe(false)
 })
 
 test('sendArticles skips translation passthrough when there is no translation', async () => {

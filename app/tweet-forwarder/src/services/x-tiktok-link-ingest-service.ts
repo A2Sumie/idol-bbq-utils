@@ -351,6 +351,9 @@ function extractWebsiteLinksFromText(text: string | null | undefined, hosts: Arr
         if (!hosts.some((rule) => hostMatches(host, rule))) {
             continue
         }
+        if (hostMatches(host, 'nanabunnonijyuuni-mobile.com') && !url.pathname.startsWith('/s/n110/')) {
+            continue
+        }
         if (!out.includes(cleaned)) {
             out.push(cleaned)
         }

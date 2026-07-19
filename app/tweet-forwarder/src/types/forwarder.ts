@@ -261,8 +261,8 @@ interface ForwardTargetPlatformCommonConfig {
      */
     x_tiktok_teaser_mode?: 'video' | 'image' | 'suppress'
     /**
-     * When true, the root article's translation is also sent immediately as a text-only message
-     * (no original text, no card), ahead of the normal card send. Intended for B站 and 图透群.
+     * When true, the root article's translation is exposed with the normal card/media payload.
+     * Bilibili still applies standalone eligibility; non-eligible text remains in the summary window.
      */
     translation_passthrough?: boolean
     /**

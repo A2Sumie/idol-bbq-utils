@@ -14,10 +14,10 @@ import {
 
 test('extractWebsiteLinksFromText keeps allowlisted hosts and drops known platforms', () => {
     const links = extractWebsiteLinksFromText(
-        '博客更新了 https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038 还有 https://vt.tiktok.com/abc/ 和 https://x.com/foo/status/1 以及 https://note.com/227/n/xyz',
+        '博客更新了 https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969 还有 https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038 和 https://vt.tiktok.com/abc/',
         ['nanabunnonijyuuni-mobile.com'],
     )
-    expect(links).toEqual(['https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038'])
+    expect(links).toEqual(['https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969'])
 })
 
 test('enqueueMissingWebsiteLinksFromXArticle queues an immediate website crawl', async () => {
@@ -37,14 +37,14 @@ test('enqueueMissingWebsiteLinksFromXArticle queues an immediate website crawl',
                 id: 9507,
                 platform: Platform.X,
                 a_id: '2068685300046700999',
-                content: '新博客 https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038',
+                content: '新博客 https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969',
             } as any,
             { now: 1782048000 },
         )
 
         expect(queued).toEqual([
             {
-                url: 'https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038',
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969',
                 taskQueueId: 777,
                 status: 'pending',
             },
@@ -53,7 +53,7 @@ test('enqueueMissingWebsiteLinksFromXArticle queues an immediate website crawl',
             type: DB.TaskQueue.TYPE.ScheduledCrawlerRun,
             payload: {
                 crawler: '22/7官网Blog抓取 - 高频',
-                websites: ['https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1038'],
+                websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969'],
                 reason: 'x website link 2068685300046700999',
             },
             executeAt: 1782048000,

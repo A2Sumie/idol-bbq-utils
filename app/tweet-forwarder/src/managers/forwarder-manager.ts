@@ -2160,11 +2160,25 @@ class ForwarderPools extends BaseCompatibleModel {
                             ((article.extra as any)?.data || (article.extra as any))?.premiere?.resolved_at || 0,
                         )
                         if (!options?.forceSend) {
+                            const passthroughPending = await this.hasPendingTranslationPassthrough(
+                                article,
+                                target,
+                                runtime_config,
+                            )
+                            const passthroughEligible =
+                                passthroughPending &&
+                                (await this.canSendTranslationPassthroughStandalone(
+                                    article,
+                                    target,
+                                    runtime_config,
+                                    renderResult,
+                                ))
                             const TWO_HOURS_SECONDS = 3600 * 2
                             const now = dayjs().unix()
                             if (
                                 now - article.created_at > TWO_HOURS_SECONDS &&
-                                (!premiereResolvedAt || now - premiereResolvedAt > TWO_HOURS_SECONDS)
+                                (!premiereResolvedAt || now - premiereResolvedAt > TWO_HOURS_SECONDS) &&
+                                !passthroughEligible
                             ) {
                                 const claimed = await this.claimArticleChain(article, platform, target.id)
                                 await this.markArticleOutboundSkipped(
@@ -2242,7 +2256,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
                             // Fire before summary queueing so passthrough targets (summary_card targets
                             // never reach the direct send below) still get the fast translation text.
-                            await this.sendTranslationPassthrough(
+                            const passthroughSent = await this.sendTranslationPassthrough(
                                 log,
                                 article,
                                 target,
@@ -2250,6 +2264,11 @@ class ForwarderPools extends BaseCompatibleModel {
                                 runtime_config,
                                 renderResult,
                             )
+                            if (passthroughSent && target.NAME === 'bilibili') {
+                                await this.claimArticleChain(article, platform, target.id)
+                                hadNonErrorOutcome = true
+                                return
+                            }
 
                             const queuedForSummary = await this.maybeQueueSummaryCardArticle(
                                 log,
@@ -2666,6 +2685,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             media: mediaFiles,
                             cardMedia: cardMediaFiles,
                             contentMedia: contentMediaFiles,
+                            videoUploadMedia: targetRenderResult.originalMediaFiles,
                             timestamp: article.created_at,
                             runtime_config,
                             article: cloneDeep(targetArticle),
@@ -2854,8 +2874,8 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     /**
-     * True when the target has translation_passthrough enabled, the article has a translation, and no
-     * passthrough outbound record exists yet (i.e. the passthrough still owes this target a send).
+     * True when the target still owes this article a translation passthrough. Keep retryable failed and
+     * in-progress records in the dispatch path so OutboundMessage.claim can apply its retry policy.
      */
     private async hasPendingTranslationPassthrough(
         article: ArticleWithId,
@@ -2868,12 +2888,47 @@ class ForwarderPools extends BaseCompatibleModel {
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return false
         }
-        if (!String(article.translation || '').trim()) {
+        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
+        if (
+            !String(article.translation || '').trim() &&
+            !(article.content && summaryConfig?.translatedCard?.processorId)
+        ) {
             return false
         }
         const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article))
         const record = await DB.OutboundMessage.getByIdempotencyKey(passthroughKey).catch(() => null)
-        return !record
+        if (!record) {
+            return true
+        }
+        if (isOutboundSuppressedCompletionStatus(record.status)) {
+            return false
+        }
+        return !DB.OutboundMessage.isTerminalFailed(record)
+    }
+
+    private async canSendTranslationPassthroughStandalone(
+        article: ArticleWithId,
+        target: BaseForwarder,
+        runtime_config: ForwardTargetPlatformCommonConfig | undefined,
+        renderResult?: Pick<RenderResult, 'originalMediaFiles'>,
+    ) {
+        if (target.NAME !== 'bilibili') {
+            return true
+        }
+        if ((renderResult?.originalMediaFiles || []).some((file) => ['photo', 'video'].includes(file.media_type))) {
+            return true
+        }
+
+        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
+        if (!summaryConfig) {
+            return false
+        }
+        const routeKeyValue = this.buildSummaryCardSharedRouteKey(target.id)
+        const queueKey = this.getSummaryCardQueueKey(routeKeyValue, target.id, runtime_config, summaryConfig)
+        if (this.summaryCardQueues.has(queueKey)) {
+            return false
+        }
+        return this.canSendSummaryCardNow(queueKey, summaryConfig, Math.floor(Date.now() / 1000), target.id)
     }
 
     /**
@@ -2901,9 +2956,20 @@ class ForwarderPools extends BaseCompatibleModel {
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return
         }
+        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
+        if (!String(article.translation || '').trim() && summaryConfig?.translatedCard?.processorId) {
+            await this.prepareArticleChainTranslations(
+                summaryConfig.translatedCard.processorId,
+                [article],
+                `translation passthrough ${target.id}`,
+            )
+        }
         const translation = String(article.translation || '').trim()
         if (!translation) {
-            return
+            return false
+        }
+        if (!(await this.canSendTranslationPassthroughStandalone(article, target, runtime_config, renderResult))) {
+            return false
         }
         const authorLine = [formatArticleUserId(article), String(article.username || '').trim()]
             .filter(Boolean)
@@ -2971,7 +3037,7 @@ class ForwarderPools extends BaseCompatibleModel {
         })
         if (!outbound?.claimed) {
             await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
-            return
+            return isOutboundVisibleCompletionStatus(outbound?.record.status)
         }
         try {
             try {
@@ -2987,6 +3053,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     media: mediaFiles,
                     cardMedia: cardFiles,
                     contentMedia: contentFiles,
+                    videoUploadMedia: renderResult?.originalMediaFiles || [],
                     timestamp: article.created_at,
                     // The passthrough may legally be text-only when dedup hides all media, so it must
                     // bypass require_media suppression.
@@ -3007,12 +3074,22 @@ class ForwarderPools extends BaseCompatibleModel {
                 log?.info(
                     `Sent translation passthrough for ${article.a_id} to ${target.id}: media=${mediaFiles.length} card=${cardFiles.length}`,
                 )
+                if (target.NAME === 'bilibili' && summaryConfig) {
+                    const summaryRouteKey = this.buildSummaryCardSharedRouteKey(target.id)
+                    this.markSummaryCardVisibleSent(
+                        this.getSummaryCardQueueKey(summaryRouteKey, target.id, runtime_config, summaryConfig),
+                        target.id,
+                        Math.floor(Date.now() / 1000),
+                    )
+                }
+                return true
             } else {
                 await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
                 await DB.OutboundMessage.markFailed(
                     passthroughKey,
                     new Error(`translation passthrough not sent: ${sendResult.status}`),
                 )
+                return false
             }
         } catch (error) {
             await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
@@ -3022,6 +3099,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     error instanceof Error ? error.stack || error.message : String(error)
                 }`,
             )
+            return false
         }
     }
 
@@ -3439,7 +3517,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const memoryTargetLastSentAt = this.summaryCardTargetLastSentAt.get(targetId) || 0
         const latestVisibleOutbound = await DB.OutboundMessage.findLatestVisibleCompletion({
             target_id: targetId,
-            task_kinds: ['summary_card', 'summary_single_native', 'article'],
+            task_kinds: ['summary_card', 'summary_single_native', 'article', 'translation_passthrough'],
         }).catch((error) => {
             this.log?.warn(
                 `Failed to read durable summary-card cooldown for ${targetId}: ${
@@ -4663,6 +4741,17 @@ class ForwarderPools extends BaseCompatibleModel {
                         carrier,
                         visible_carriers: item.visibleCarriers,
                     },
+                    reason,
+                )
+                return
+            }
+
+            if (!(await this.canSendSummaryCardNow(queueKey, queue.config, now, queue.target.id))) {
+                await this.markSummaryCardSingleItemSkipped(
+                    queue,
+                    item,
+                    'single_item_drop',
+                    { single_item_behavior: queue.config.singleItemBehavior, reason: 'recent_visible_send' },
                     reason,
                 )
                 return

@@ -69,6 +69,33 @@ test('SpiderTaskScheduler injects connected processor definitions into crawler t
     expect((scheduler as any).resolveCrawlerProcessorId(taskData)).toBe('processor-v4-flash')
 })
 
+test('SpiderTaskScheduler defaults 22/7 website crawlers to the social translator', () => {
+    const scheduler = new SpiderTaskScheduler(
+        {
+            crawlers: [],
+            connections: {} as any,
+            processors: [
+                {
+                    id: '22_7-social-ja-zh',
+                    provider: ProcessorProvider.DeepSeekV4Flash,
+                    api_key: 'env:OPENCODE_GO_API_KEY',
+                    cfg_processor: { action: 'translate' },
+                },
+            ],
+        },
+        new EventEmitter(),
+    )
+
+    const taskData = (scheduler as any).buildCrawlerTaskData({
+        name: '22/7官网Blog抓取 - 高频',
+        websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/diary/official_blog/list'],
+        cfg_crawler: {},
+    })
+
+    expect((scheduler as any).resolveCrawlerProcessorId(taskData)).toBe('22_7-social-ja-zh')
+    expect(taskData.cfg_crawler.processor?.id).toBe('22_7-social-ja-zh')
+})
+
 test('SpiderTaskScheduler dispatches due non-Cron crawler slots', async () => {
     const originalRecover = DB.TaskQueue.recoverStaleProcessing
     const originalGetPending = DB.TaskQueue.getPending

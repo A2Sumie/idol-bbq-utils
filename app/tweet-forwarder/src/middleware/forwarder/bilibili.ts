@@ -212,7 +212,8 @@ class BiliForwarder extends Forwarder {
     }
 
     private resolveVideoUploadMedia(props?: SendProps) {
-        const media = props?.media?.length ? props.media : [...(props?.contentMedia || []), ...(props?.cardMedia || [])]
+        const cardPaths = new Set((props?.cardMedia || []).map((item) => item.path))
+        const media = props?.videoUploadMedia || (props?.media || []).filter((item) => !cardPaths.has(item.path))
         const rootMedia = media.filter((item) => this.isRootArticleMedia(item, props))
         const rootHasVideo = rootMedia.some((item) => item.media_type === 'video')
         if (!rootHasVideo) {
@@ -221,7 +222,11 @@ class BiliForwarder extends Forwarder {
 
         const seen = new Set(rootMedia.map((item) => item.path))
         const referencedVideos = media.filter((item) => {
-            if (this.isRootArticleMedia(item, props) || item.media_type !== 'video' || seen.has(item.path)) {
+            if (
+                this.isRootArticleMedia(item, props) ||
+                !['video', 'video_thumbnail'].includes(item.media_type) ||
+                seen.has(item.path)
+            ) {
                 return false
             }
             seen.add(item.path)
