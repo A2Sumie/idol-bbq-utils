@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test'
+import axios from 'axios'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import { BiliForwarder } from './bilibili'
+import { BiliForwarder, BiliUploadThrottledError } from './bilibili'
 import { QQForwarder } from './qq'
-import { PartialForwarderSendError } from './base'
+import { NonRetryableForwarderSendError, PartialForwarderSendError } from './base'
 import { resolveForwarderImageMaxBytes } from '@/services/forwarder-image-attachment-service'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
@@ -1110,4 +1111,126 @@ test('QQForwarder does not count ref media from users outside the list context',
     expect(payloads[0].filter((segment: any) => segment.type === 'image')).toHaveLength(3)
     expect(payloads[0][0]?.data?.text).toContain('root text')
     expect(payloads[0][0]?.data?.text).toContain('follow-up text')
+})
+
+test('BiliForwarder maps upload_bfs provider codes to error classes', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-upload-code-test',
+    )
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'bili-upload-code-'))
+    const photoPath = path.join(tempRoot, 'photo.bin')
+    await writeFile(photoPath, Buffer.alloc(16, 1))
+
+    const originalPost = axios.post
+    try {
+        ;(axios as any).post = async () => ({ data: { code: -111, message: 'csrf校验失败' } })
+        await expect((forwarder as any).uploadPhoto(photoPath)).rejects.toThrow(BiliUploadThrottledError)
+
+        ;(axios as any).post = async () => ({ data: { code: -101, message: '账号未登录' } })
+        await expect((forwarder as any).uploadPhoto(photoPath)).rejects.toThrow(NonRetryableForwarderSendError)
+
+        ;(axios as any).post = async () => ({ data: { code: -412, message: 'risk control' } })
+        await expect((forwarder as any).uploadPhoto(photoPath)).rejects.toThrow(/Upload photo to bilibili failed/)
+    } finally {
+        ;(axios as any).post = originalPost
+        await rm(tempRoot, { recursive: true, force: true })
+    }
+})
+
+test('BiliForwarder serializes photo uploads inside one send', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-upload-pacing-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+
+    let inFlight = 0
+    let maxInFlight = 0
+    const uploadOrder: string[] = []
+    ;(forwarder as any).uploadPhoto = async (filePath: string) => {
+        inFlight += 1
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        inFlight -= 1
+        uploadOrder.push(filePath)
+        return {
+            image_url: `https://i0.hdslb.com/bfs/test/paced-${uploadOrder.length}.jpg`,
+            image_width: 100,
+            image_height: 100,
+            img_size: 10,
+        }
+    }
+    let sentPicCount = 0
+    ;(forwarder as any).sendTextWithPhotos = async (_text: string, pics: any[]) => {
+        sentPicCount = pics.length
+        return { data: { code: 0, message: 'ok', data: { dyn_id_str: 'paced-dynamic' } } }
+    }
+    ;(forwarder as any).fetchDynamicDetail = async () => ({
+        data: {
+            code: 0,
+            data: {
+                item: {
+                    modules: {
+                        module_dynamic: {
+                            major: {
+                                type: 'MAJOR_TYPE_DRAW',
+                                draw: {
+                                    items: [{ src: 'a' }, { src: 'b' }, { src: 'c' }],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    })
+
+    await (forwarder as any).sendDynamicContent(['paced text'], {
+        media: [
+            { media_type: 'photo', path: '/tmp/paced-a.jpg' },
+            { media_type: 'photo', path: '/tmp/paced-b.jpg' },
+            { media_type: 'photo', path: '/tmp/paced-c.jpg' },
+        ],
+    })
+
+    expect(maxInFlight).toBe(1)
+    expect(uploadOrder).toEqual(['/tmp/paced-a.jpg', '/tmp/paced-b.jpg', '/tmp/paced-c.jpg'])
+    expect(sentPicCount).toBe(3)
+})
+
+test('BiliForwarder fails the whole send when a photo upload stays throttled', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-upload-throttle-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).photoUploadRetries = 0
+
+    let sendCalled = false
+    ;(forwarder as any).uploadPhoto = async () => {
+        throw new BiliUploadThrottledError('throttled by test')
+    }
+    ;(forwarder as any).sendTextWithPhotos = async () => {
+        sendCalled = true
+        return { data: { code: 0, message: 'ok' } }
+    }
+
+    await expect(
+        (forwarder as any).sendDynamicContent(['throttled text'], {
+            media: [{ media_type: 'photo', path: '/tmp/throttled.jpg' }],
+        }),
+    ).rejects.toThrow(BiliUploadThrottledError)
+    expect(sendCalled).toBeFalse()
 })

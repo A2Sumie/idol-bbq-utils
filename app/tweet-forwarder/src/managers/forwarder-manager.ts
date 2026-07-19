@@ -4019,6 +4019,30 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
             }
 
+            // Re-check the translation passthrough record after the outbound claim: media prep and
+            // card rendering between the flow-start check and here can take seconds, and the
+            // passthrough send may have completed in the meantime. Posting now would duplicate the
+            // article and re-upload the same photos, which trips Bilibili's upload velocity control.
+            if (target.getEffectiveConfig(runtime_config)?.translation_passthrough && String(article.translation || '').trim()) {
+                const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', currentArticleKey)
+                const passthroughRecord = await DB.OutboundMessage.getByIdempotencyKey(passthroughKey).catch(() => null)
+                if (passthroughRecord && isOutboundVisibleCompletionStatus(passthroughRecord.status)) {
+                    await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, 'translation_passthrough_delivered', {
+                        passthrough_status: passthroughRecord.status,
+                    }).catch(() => undefined)
+                    await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
+                    log?.debug(
+                        `Skipping summary realtime media for ${article.a_id} to ${target.id}: translation passthrough delivered during send preparation`,
+                    )
+                    return {
+                        hadMedia: true,
+                        handled: true,
+                        visibleMediaSent: true,
+                        skippedDuplicate: true,
+                    }
+                }
+            }
+
             // Forwarding-time content fingerprint dedup for the realtime media path (independent switch, default
             // off). This push is the dominant delivery path for `media_realtime` + `send_first_native` targets, so
             // without this the per-target `content_fingerprint_dedup` switch would never take effect here. Mirrors

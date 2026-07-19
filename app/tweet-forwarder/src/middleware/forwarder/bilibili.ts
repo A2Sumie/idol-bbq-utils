@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, type SendProps } from './base'
 import { pRetry } from '@idol-bbq-utils/utils'
+import { delay } from '@/utils/time'
 import FormData from 'form-data'
 import fs from 'fs'
 import { chunk } from 'lodash'
@@ -34,6 +35,23 @@ import {
 } from '@/services/video-pairing-service'
 
 const BILI_VIDEO_UPLOAD_HASH_NAMESPACE = 'bilibili-video-upload'
+
+/**
+ * upload_bfs answers -111 (csrf-flavoured WAF response) when the account trips Bilibili's
+ * per-account upload velocity control; the same credentials succeed again seconds later.
+ * It is therefore transient and must not skip the photo silently: retry with real backoff,
+ * and if the window is still closed, fail the whole send so fallback paths retry later with
+ * the full media set instead of posting a media-less dynamic that dedup counts as delivered.
+ */
+class BiliUploadThrottledError extends Error {
+    constructor(message: string) {
+        super(message)
+        this.name = 'BiliUploadThrottledError'
+    }
+}
+
+/** Gap between consecutive photo uploads inside one send; parallel bursts trip the -111 velocity control. */
+const BILI_PHOTO_UPLOAD_GAP_MS = 2000
 
 interface BiliImageUploaded {
     img_src: string
@@ -98,6 +116,10 @@ class BiliForwarder extends Forwarder {
     private media_check_level: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['media_check_level']
     private video_upload: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['video_upload']
     private dynamicDetailValidationRetries = 3
+    /** Pacing knobs as instance fields so tests can override them (same pattern as minInterval). */
+    private photoUploadGapMs = BILI_PHOTO_UPLOAD_GAP_MS
+    private photoUploadRetries = 3
+    private photoUploadRetryMinTimeoutMs = 10000
     protected override BASIC_TEXT_LIMIT = 1000
 
     constructor(...[config, ...rest]: [...ConstructorParameters<typeof Forwarder>]) {
@@ -656,38 +678,44 @@ class BiliForwarder extends Forwarder {
         })
         media = normalizedAttachments.media
         try {
-            let pics: Array<BiliImageUploaded> = (
-                await Promise.all(
-                    media.map(async (item) => {
-                        if (this.isDynamicImageMedia(item)) {
-                            try {
-                                _log?.debug(`Uploading photo ${item.path}`)
-                                const obj = await pRetry(() => this.uploadPhoto(item.path), {
-                                    retries: 3,
-                                    // upload_bfs is rate-limited per account; the default ~1s backoff
-                                    // keeps every attempt inside the same throttle window.
-                                    minTimeout: 5000,
-                                    factor: 2,
-                                    shouldRetry(error) {
-                                        return !(error.originalError instanceof NonRetryableForwarderSendError)
-                                    },
-                                    onFailedAttempt(e) {
-                                        _log?.error(`Upload photo failed, retrying...: ${e.originalError.message}`)
-                                    },
-                                })
-                                return obj
-                            } catch (e) {
-                                if (e instanceof NonRetryableForwarderSendError) {
-                                    throw e
-                                }
-                                _log?.error(`Upload photo ${item.path} failed, skip this photo: ${e instanceof Error ? e.message : String(e)}`)
-                                return
-                            }
-                        }
-                        // video to gif
-                    }),
-                )
-            )
+            // Upload photos one at a time with a gap: parallel upload_bfs bursts trip Bilibili's
+            // per-account velocity control (-111), which previously killed the whole realtime send.
+            const uploadedPhotos: Array<BiliImageUploaded | undefined> = []
+            let firstPhoto = true
+            for (const item of media) {
+                if (!this.isDynamicImageMedia(item)) {
+                    // video to gif
+                    continue
+                }
+                if (!firstPhoto) {
+                    await delay(this.photoUploadGapMs)
+                }
+                firstPhoto = false
+                try {
+                    _log?.debug(`Uploading photo ${item.path}`)
+                    const obj = await pRetry(() => this.uploadPhoto(item.path), {
+                        retries: this.photoUploadRetries,
+                        // upload_bfs is rate-limited per account; short backoff keeps every attempt
+                        // inside the same throttle window, and -111 is transient velocity control.
+                        minTimeout: this.photoUploadRetryMinTimeoutMs,
+                        factor: 2,
+                        shouldRetry(error) {
+                            return !(error.originalError instanceof NonRetryableForwarderSendError)
+                        },
+                        onFailedAttempt(e) {
+                            _log?.error(`Upload photo failed, retrying...: ${e.originalError.message}`)
+                        },
+                    })
+                    uploadedPhotos.push(obj)
+                } catch (e) {
+                    if (e instanceof NonRetryableForwarderSendError || e instanceof BiliUploadThrottledError) {
+                        throw e
+                    }
+                    _log?.error(`Upload photo ${item.path} failed, skip this photo: ${e instanceof Error ? e.message : String(e)}`)
+                    uploadedPhotos.push(undefined)
+                }
+            }
+            let pics: Array<BiliImageUploaded> = uploadedPhotos
                 .filter((i) => i !== undefined)
                 .map((i) => this.normalizeUploadedPhoto(i))
                 .filter((i): i is BiliImageUploaded => Boolean(i))
@@ -758,9 +786,14 @@ class BiliForwarder extends Forwarder {
         this.log?.debug(`Upload photo response: ${JSON.stringify(res.data)}`)
         if (res.data?.code !== 0) {
             const code = Number(res.data?.code)
-            if (code === -101 || code === -111) {
+            if (code === -101) {
                 throw new NonRetryableForwarderSendError(
-                    `Bilibili photo upload rejected by provider (${code}): ${res.data?.message || 'authentication or CSRF failure'}`,
+                    `Bilibili photo upload rejected by provider (${code}): ${res.data?.message || 'authentication failure'}`,
+                )
+            }
+            if (code === -111) {
+                throw new BiliUploadThrottledError(
+                    `Bilibili photo upload throttled by provider (${code}): ${res.data?.message || 'velocity control'}`,
                 )
             }
             throw new Error(`Upload photo to ${this.NAME} failed. ${res.data?.message}: ${JSON.stringify(res.data)}`)
@@ -838,4 +871,4 @@ class BiliForwarder extends Forwarder {
     }
 }
 
-export { BiliForwarder }
+export { BiliForwarder, BiliUploadThrottledError }

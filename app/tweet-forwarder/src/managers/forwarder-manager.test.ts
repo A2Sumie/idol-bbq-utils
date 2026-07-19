@@ -2050,6 +2050,109 @@ test('summary realtime media skips when the translation passthrough already went
     expect(target.sent).toHaveLength(0)
 })
 
+test('summary realtime media skips when the passthrough completes during send preparation', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            translation_passthrough: true,
+        } as any,
+        'target-rt-race-dedup',
+    )
+
+    const article = {
+        id: 222,
+        a_id: 'rt-race-dedup-article',
+        platform: 1,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        content: '原文です',
+        translation: '这是译文',
+    }
+    const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article as any))
+    const now = Math.floor(Date.now() / 1000)
+    const passthroughRecord = {
+        id: 556,
+        idempotency_key: passthroughKey,
+        route_key: 'r',
+        target_id: target.id,
+        target_platform: target.NAME,
+        task_kind: 'translation_passthrough',
+        article_key: articleKey(article as any),
+        synthetic_key: null,
+        payload_hash: 'h',
+        status: 'sent',
+        provider_message_ids: null,
+        segment_results: null,
+        attempt_count: 1,
+        last_error: null,
+        created_at: now - 10,
+        updated_at: now - 10,
+        finished_at: now - 10,
+    }
+
+    // First read (flow-start check) reports no passthrough yet; the send-preparation re-check
+    // after the outbound claim sees the passthrough that completed in the meantime.
+    const defaultGetter = (DB.OutboundMessage as any).getByIdempotencyKey
+    let passthroughReads = 0
+    ;(DB.OutboundMessage as any).getByIdempotencyKey = async (idempotencyKey: string) => {
+        if (idempotencyKey === passthroughKey) {
+            passthroughReads += 1
+            return passthroughReads === 1 ? null : passthroughRecord
+        }
+        return defaultGetter(idempotencyKey)
+    }
+
+    const result = await (pools as any).sendSummaryCardRealtimeMedia(
+        undefined,
+        article,
+        target,
+        undefined,
+        'route:key',
+        {
+            mediaRealtime: true,
+            mediaRealtimeText: 'metadata',
+        },
+        {
+            text: 'x',
+            cardMediaFiles: [],
+            originalMediaFiles: [{ media_type: 'photo', path: '/tmp/rt-race-dedup.jpg' }],
+            mediaFiles: [],
+        },
+    )
+
+    expect(passthroughReads).toBeGreaterThanOrEqual(2)
+    expect(result.visibleMediaSent).toBe(true)
+    expect(result.skippedDuplicate).toBe(true)
+    expect(target.sent).toHaveLength(0)
+    const outboundKey = syntheticOutboundKey(target.id, 'summary_realtime_media', `route:key:${articleKey(article as any)}`)
+    const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
+    expect(outboundRecord?.status).toBe('skipped')
+    expect(outboundRecord?.provider_message_ids?.reason).toBe('translation_passthrough_delivered')
+})
+
 test('sendArticles stops after render when forwarder pool starts shutting down', async () => {
     const pools = new ForwarderPools(
         {
