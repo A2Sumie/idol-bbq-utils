@@ -180,7 +180,16 @@ fi
 migration_names_tmp="$(mktemp)"
 printf '%s\n' "$migration_names" > "$migration_names_tmp"
 db_status_tmp="$(mktemp)"
-python3 - "$db_path" "$migration_names_tmp" "$backup_container_dir" "$backup_host_dir" "$backup_parent_dir" "$backup_count" "$latest_backup" > "$db_status_tmp" <<'PY'
+db_read_path="$db_path"
+db_container_tmp=""
+if [ "$container_running" = "true" ]; then
+    db_container_tmp="/tmp/forwarder-preflight-db-$$.sqlite"
+    docker exec "$CONTAINER_NAME" python3 -c "import sqlite3; source=sqlite3.connect('/app/data.db'); target=sqlite3.connect('$db_container_tmp'); source.backup(target); target.close(); source.close()"
+    db_read_path="$(mktemp)"
+    docker cp "$CONTAINER_NAME:$db_container_tmp" "$db_read_path" >/dev/null
+    docker exec "$CONTAINER_NAME" rm -f "$db_container_tmp"
+fi
+python3 - "$db_read_path" "$migration_names_tmp" "$backup_container_dir" "$backup_host_dir" "$backup_parent_dir" "$backup_count" "$latest_backup" > "$db_status_tmp" <<'PY'
 import os
 import sqlite3
 import sys
@@ -363,6 +372,9 @@ rm -f "$binds_tmp" "$container_env_tmp" "$processor_env_tmp"
 printf 'migration_head=%s\n' "$migration_head"
 cat "$db_status_tmp"
 rm -f "$migration_names_tmp" "$db_status_tmp"
+if [ -n "$db_container_tmp" ]; then
+    rm -f "$db_read_path"
+fi
 printf 'remote_dirty_tracked=%s\n' "$remote_dirty_tracked"
 printf 'remote_dirty_untracked=%s\n' "$remote_dirty_untracked"
 

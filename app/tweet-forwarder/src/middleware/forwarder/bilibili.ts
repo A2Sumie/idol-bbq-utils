@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Forwarder, PartialForwarderSendError, type SendProps } from './base'
+import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, type SendProps } from './base'
 import { pRetry } from '@idol-bbq-utils/utils'
 import FormData from 'form-data'
 import fs from 'fs'
@@ -668,12 +668,18 @@ class BiliForwarder extends Forwarder {
                                     // keeps every attempt inside the same throttle window.
                                     minTimeout: 5000,
                                     factor: 2,
+                                    shouldRetry(error) {
+                                        return !(error.originalError instanceof NonRetryableForwarderSendError)
+                                    },
                                     onFailedAttempt(e) {
                                         _log?.error(`Upload photo failed, retrying...: ${e.originalError.message}`)
                                     },
                                 })
                                 return obj
                             } catch (e) {
+                                if (e instanceof NonRetryableForwarderSendError) {
+                                    throw e
+                                }
                                 _log?.error(`Upload photo ${item.path} failed, skip this photo: ${e instanceof Error ? e.message : String(e)}`)
                                 return
                             }
@@ -751,6 +757,12 @@ class BiliForwarder extends Forwarder {
         })
         this.log?.debug(`Upload photo response: ${JSON.stringify(res.data)}`)
         if (res.data?.code !== 0) {
+            const code = Number(res.data?.code)
+            if (code === -101 || code === -111) {
+                throw new NonRetryableForwarderSendError(
+                    `Bilibili photo upload rejected by provider (${code}): ${res.data?.message || 'authentication or CSRF failure'}`,
+                )
+            }
             throw new Error(`Upload photo to ${this.NAME} failed. ${res.data?.message}: ${JSON.stringify(res.data)}`)
         }
         return res.data.data

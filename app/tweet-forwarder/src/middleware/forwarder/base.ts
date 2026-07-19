@@ -140,7 +140,7 @@ class PartialForwarderSendError extends Error {
     }
 }
 
-class NonRetryableForwarderSendError extends Error {
+export class NonRetryableForwarderSendError extends Error {
     constructor(message: string) {
         super(message)
         this.name = 'NonRetryableForwarderSendError'
