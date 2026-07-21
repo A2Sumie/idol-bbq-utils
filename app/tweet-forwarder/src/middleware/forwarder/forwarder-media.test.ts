@@ -596,6 +596,51 @@ test('BiliForwarder treats code-zero photo dynamics without visible detail media
     expect((caught as PartialForwarderSendError).partialResults).toHaveLength(1)
 })
 
+test('BiliForwarder post-validation partial failure is not retried by the whole-send layer (no re-upload/re-post)', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            media_check_level: 'strict',
+            require_media: true,
+        } as any,
+        'bili-partial-no-retry-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).dynamicDetailValidationRetries = 0
+
+    let uploadCount = 0
+    let createCount = 0
+    ;(forwarder as any).uploadPhoto = async () => {
+        uploadCount += 1
+        return {
+            image_url: 'https://i0.hdslb.com/bfs/test/partial-no-retry.jpg',
+            image_width: 900,
+            image_height: 1200,
+            img_size: 188,
+        }
+    }
+    ;(forwarder as any).sendTextWithPhotos = async () => {
+        createCount += 1
+        return { data: { code: 0, message: 'OK', data: { dyn_id_str: 'dyn-partial' } } }
+    }
+    ;(forwarder as any).fetchDynamicDetail = async () => ({
+        data: { code: 0, data: { item: { modules: { module_dynamic: { major: null } } } } },
+    })
+
+    await expect(
+        (forwarder as any).sendPrepared(['dynamic text'], {
+            media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
+        }),
+    ).rejects.toBeInstanceOf(PartialForwarderSendError)
+
+    // The dynamic was actually created once; retrying would re-upload the photo and re-post the
+    // dynamic, producing a duplicate. The whole-send pRetry must treat partial as terminal.
+    expect(uploadCount).toBe(1)
+    expect(createCount).toBe(1)
+})
+
 test('QQForwarder keeps long text as a single payload instead of chunking', async () => {
     const forwarder = new QQForwarder(
         {

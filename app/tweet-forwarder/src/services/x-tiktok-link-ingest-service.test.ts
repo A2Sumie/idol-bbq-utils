@@ -377,3 +377,132 @@ test('enqueueMissingTikTokLinksFromXArticle honors disabled and custom crawler c
         ;(DB.TaskQueue as any).add = originalTaskAdd
     }
 })
+
+test('extractWebsiteLinksFromText rejects non-n110 paths, foreign hosts, and caps link count', () => {
+    const hosts = ['nanabunnonijyuuni-mobile.com']
+    expect(
+        extractWebsiteLinksFromText('https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1', hosts),
+    ).toEqual([])
+    expect(extractWebsiteLinksFromText('https://example.com/s/n110/diary/detail/1', hosts)).toEqual([])
+    expect(
+        extractWebsiteLinksFromText('https://evil-nanabunnonijyuuni-mobile.com/s/n110/diary/detail/1', hosts),
+    ).toEqual([])
+
+    const many = Array.from(
+        { length: 6 },
+        (_, i) => `https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/${100 + i}`,
+    ).join(' ')
+    expect(extractWebsiteLinksFromText(many, hosts).length).toBeLessThanOrEqual(3)
+})
+
+test('extractWebsiteLinksFromText honors a custom host allowlist', () => {
+    const links = extractWebsiteLinksFromText(
+        'https://blog.example.jp/entry/1 https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/2',
+        ['blog.example.jp'],
+    )
+    expect(links).toEqual(['https://blog.example.jp/entry/1'])
+})
+
+test('enqueueMissingWebsiteLinksFromXArticle skips a link whose article already exists (real dedup path)', async () => {
+    const originalFindByUrl = DB.Article.findByUrl
+    const originalTaskAdd = DB.TaskQueue.add
+    const seenUrls: string[] = []
+    let added = 0
+
+    ;(DB.Article as any).findByUrl = async (url: string) => {
+        seenUrls.push(url)
+        return { id: 42 }
+    }
+    ;(DB.TaskQueue as any).add = async () => {
+        added += 1
+        return { id: 1, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingWebsiteLinksFromXArticle(
+            {
+                id: 9600,
+                platform: Platform.X,
+                a_id: 'x-web-known',
+                content: '新博客 https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969',
+            } as any,
+            { now: 1782048000 },
+        )
+        expect(queued).toEqual([])
+        expect(added).toBe(0)
+        // The extractor must have passed the n110 link through so findByUrl is actually exercised.
+        expect(seenUrls).toEqual(['https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969'])
+    } finally {
+        ;(DB.Article as any).findByUrl = originalFindByUrl
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingWebsiteLinksFromXArticle de-duplicates repeated links and honors disabled config', async () => {
+    const originalFindByUrl = DB.Article.findByUrl
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+
+    ;(DB.Article as any).findByUrl = async () => null
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 501, status: 'pending' }
+    }
+
+    try {
+        const article = {
+            id: 9601,
+            platform: Platform.X,
+            a_id: 'x-web-dup',
+            content:
+                '博客 https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969 再看 https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969',
+        } as any
+
+        expect(
+            await enqueueMissingWebsiteLinksFromXArticle(article, {
+                now: 1782048000,
+                crawlerConfig: { x_website_link_ingest: false } as any,
+            }),
+        ).toEqual([])
+        expect(adds).toHaveLength(0)
+
+        const queued = await enqueueMissingWebsiteLinksFromXArticle(article, { now: 1782048000 })
+        expect(queued).toHaveLength(1)
+        expect(adds).toHaveLength(1)
+        expect(adds[0].payload.websites).toEqual([
+            'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969',
+        ])
+    } finally {
+        ;(DB.Article as any).findByUrl = originalFindByUrl
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingWebsiteLinksFromXArticle ignores non-X source platforms', async () => {
+    const originalFindByUrl = DB.Article.findByUrl
+    const originalTaskAdd = DB.TaskQueue.add
+    let added = 0
+
+    ;(DB.Article as any).findByUrl = async () => null
+    ;(DB.TaskQueue as any).add = async () => {
+        added += 1
+        return { id: 1, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingWebsiteLinksFromXArticle(
+            {
+                id: 9602,
+                platform: Platform.Instagram,
+                a_id: 'ig-1',
+                content: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969',
+            } as any,
+            { now: 1782048000 },
+        )
+        expect(queued).toEqual([])
+        expect(added).toBe(0)
+    } finally {
+        ;(DB.Article as any).findByUrl = originalFindByUrl
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})

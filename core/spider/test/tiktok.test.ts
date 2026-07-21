@@ -432,3 +432,44 @@ test('TikTok grabPosts surfaces creator API rejection when the page has no usabl
         ;(HTTPClient as any).download_webpage = original
     }
 })
+
+test('TikTok spider routes an X-ingested /video/ URL to a single-video grab', async () => {
+    const original = HTTPClient.download_webpage
+    const fetchedUrls: string[] = []
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        fetchedUrls.push(url)
+        return new Response(
+            tiktokUniversalHtml({
+                __DEFAULT_SCOPE__: {
+                    'webapp.video-detail': {
+                        itemInfo: {
+                            itemStruct: {
+                                id: '7653464242506616085',
+                                createTime: 1710759600,
+                                desc: 'single video',
+                                author: { uniqueId: 'tabesugiyaseruzo', nickname: 'tabesugiyaseruzo' },
+                                video: { cover: 'https://example.com/cover.jpg' },
+                            },
+                        },
+                    },
+                },
+            }),
+        )
+    }
+
+    try {
+        const spider = new TiktokSpider()
+        const articles = await spider.crawl(
+            'https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085',
+            undefined,
+            'x-ingested-video',
+            { task_type: 'article', crawl_engine: 'api' as any },
+        )
+        expect(articles.map((a: any) => a.a_id)).toEqual(['7653464242506616085'])
+        // Single-video grab hits exactly the detail page, never the creator item_list API.
+        expect(fetchedUrls).toEqual(['https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085/'])
+        expect(fetchedUrls.some((url) => url.includes('/api/creator/item_list'))).toBe(false)
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
+})
