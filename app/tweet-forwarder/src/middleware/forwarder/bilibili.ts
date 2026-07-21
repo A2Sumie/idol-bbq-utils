@@ -155,6 +155,10 @@ class BiliForwarder extends Forwarder {
             } catch (error) {
                 this.buvidFetchPromise = null
                 this.log?.warn(`Failed to fetch buvid cookies for ${this.id}: ${error}`)
+            } finally {
+                if (!this.api.hasBuvid) {
+                    this.buvidFetchPromise = null
+                }
             }
         })()
         return this.buvidFetchPromise
@@ -754,6 +758,9 @@ class BiliForwarder extends Forwarder {
                 minTimeout: this.dynamicCreateRetryMinTimeoutMs,
                 factor: 2,
                 shouldRetry(error) {
+                    if (error.originalError instanceof BiliUploadVelocityError) {
+                        return true
+                    }
                     return !(error.originalError instanceof NonRetryableForwarderSendError)
                 },
                 onFailedAttempt: (error) => {

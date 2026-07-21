@@ -1186,6 +1186,27 @@ test('BiliForwarder maps upload_bfs provider codes to error classes', async () =
     }
 })
 
+test('BiliForwarder retries anonymous buvid fetch after an empty SPI response', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-empty-buvid-test',
+    )
+    const calls: string[] = []
+    ;(forwarder as any).api.fetchAnonymousBuvid = async () => {
+        calls.push('fetch')
+        return calls.length === 1 ? null : { buvid3: 'b3', buvid4: 'b4' }
+    }
+
+    await (forwarder as any).ensureBuvidCookies()
+    expect((forwarder as any).api.hasBuvid).toBe(false)
+    await (forwarder as any).ensureBuvidCookies()
+    expect((forwarder as any).api.hasBuvid).toBe(true)
+    expect(calls).toHaveLength(2)
+})
+
 test('BiliForwarder serializes photo uploads inside one send', async () => {
     const forwarder = new BiliForwarder(
         {
@@ -1435,6 +1456,47 @@ test('BiliForwarder retries a transient dynamic create in-band without re-upload
 
     const result = await (forwarder as any).sendPrepared(['card text'], {
         media: [{ media_type: 'photo', path: '/tmp/transient.jpg' }],
+    })
+
+    expect(uploadCount).toBe(1)
+    expect(createCount).toBe(2)
+    expect(result).toHaveLength(1)
+})
+
+test('BiliForwarder retries dynamic create -111 in-band without re-uploading the photo', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-create-throttle-retry',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).dynamicCreateRetryMinTimeoutMs = 0
+    ;(forwarder as any).assertPhotoDynamicVisible = async () => {}
+
+    let uploadCount = 0
+    ;(forwarder as any).uploadPhoto = async () => {
+        uploadCount += 1
+        return {
+            image_url: 'https://i0.hdslb.com/bfs/test/throttle-create.jpg',
+            image_width: 100,
+            image_height: 100,
+            img_size: 10,
+        }
+    }
+    let createCount = 0
+    ;(forwarder as any).sendTextWithPhotos = async () => {
+        createCount += 1
+        if (createCount < 2) {
+            return { data: { code: -111, message: 'velocity control' } }
+        }
+        return { data: { code: 0, message: 'ok', data: { dyn_id_str: 'throttle-create-dyn' } } }
+    }
+
+    const result = await (forwarder as any).sendPrepared(['card text'], {
+        media: [{ media_type: 'photo', path: '/tmp/throttle-create.jpg' }],
     })
 
     expect(uploadCount).toBe(1)
