@@ -1,9 +1,6 @@
-import axios from 'axios'
 import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, type SendProps } from './base'
 import { pRetry } from '@idol-bbq-utils/utils'
 import { delay } from '@/utils/time'
-import FormData from 'form-data'
-import fs from 'fs'
 import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 import { buildBiliupUploadCandidate, completeBiliupUploadCandidateTags, runBiliupUpload } from './biliup'
@@ -13,6 +10,7 @@ import {
 } from '@/services/forwarder-image-attachment-service'
 import DB, { type Article } from '@/db'
 import { createHash } from 'crypto'
+import fs from 'fs'
 import {
     buildShortVideoDedupCandidate,
     buildVideoFingerprintCandidate,
@@ -33,15 +31,15 @@ import {
     markExpiredVideoPairings,
     resolveVideoPairingConfig,
 } from '@/services/video-pairing-service'
+import { assertBiliResponseOk, BilibiliApiClient, BiliUploadVelocityError } from './bilibili-api'
 
 const BILI_VIDEO_UPLOAD_HASH_NAMESPACE = 'bilibili-video-upload'
 
-class BiliUploadThrottledError extends NonRetryableForwarderSendError {
-    constructor(message: string) {
-        super(message)
-        this.name = 'BiliUploadThrottledError'
-    }
-}
+/**
+ * Kept as an alias of the API client's velocity error so existing imports and `instanceof` checks
+ * (tests, whole-send retry policy) keep working after transport was extracted into bilibili-api.ts.
+ */
+const BiliUploadThrottledError = BiliUploadVelocityError
 
 const BILI_PHOTO_UPLOAD_GAP_MS = 2000
 
@@ -103,10 +101,9 @@ class BiliForwarder extends Forwarder {
     NAME = 'bilibili'
     private bili_jct: string
     private sessdata: string
-    private buvid3: string
-    private buvid4: string
     private media_check_level: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['media_check_level']
     private video_upload: ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>['video_upload']
+    private api: BilibiliApiClient
     private dynamicDetailValidationRetries = 3
     /** Pacing knobs as instance fields so tests can override them (same pattern as minInterval). */
     private photoUploadGapMs = BILI_PHOTO_UPLOAD_GAP_MS
@@ -132,17 +129,9 @@ class BiliForwarder extends Forwarder {
         }
         this.bili_jct = bili_jct
         this.sessdata = sessdata
-        this.buvid3 = buvid3
-        this.buvid4 = buvid4
         this.media_check_level = media_check_level
         this.video_upload = video_upload
-    }
-
-    private buildBiliCookieHeader(): string {
-        const parts = [`SESSDATA=${this.sessdata}`, `bili_jct=${this.bili_jct}`]
-        if (this.buvid3) parts.push(`buvid3=${this.buvid3}`)
-        if (this.buvid4) parts.push(`buvid4=${this.buvid4}`)
-        return parts.join('; ')
+        this.api = new BilibiliApiClient({ bili_jct, sessdata, buvid3, buvid4 })
     }
 
     private buvidFetchPromise: Promise<void> | null = null
@@ -153,20 +142,14 @@ class BiliForwarder extends Forwarder {
      * cache it when the config does not provide them.
      */
     private ensureBuvidCookies(): Promise<void> {
-        if ((this.buvid3 && this.buvid4) || this.buvidFetchPromise) {
+        if (this.api.hasBuvid || this.buvidFetchPromise) {
             return this.buvidFetchPromise || Promise.resolve()
         }
         this.buvidFetchPromise = (async () => {
             try {
-                const res = await axios.get('https://api.bilibili.com/x/frontend/finger/spi', {
-                    headers: { 'User-Agent': 'Mozilla/5.0' },
-                    timeout: 10000,
-                })
-                const b3 = String(res.data?.data?.b_3 || '')
-                const b4 = String(res.data?.data?.b_4 || '')
-                if (b3 && b4) {
-                    this.buvid3 = b3
-                    this.buvid4 = b4
+                const buvid = await this.api.fetchAnonymousBuvid()
+                if (buvid) {
+                    this.api.setBuvid(buvid.buvid3, buvid.buvid4)
                     this.log?.info(`Fetched anonymous buvid3/buvid4 for ${this.id} (config did not provide them)`)
                 }
             } catch (error) {
@@ -175,15 +158,6 @@ class BiliForwarder extends Forwarder {
             }
         })()
         return this.buvidFetchPromise
-    }
-
-    private get biliApiHeaders() {
-        return {
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            Referer: 'https://t.bilibili.com/',
-            Origin: 'https://t.bilibili.com',
-        }
     }
 
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
@@ -612,21 +586,7 @@ class BiliForwarder extends Forwarder {
     }
 
     private async fetchDynamicDetail(dynamicId: string) {
-        return axios.get('https://api.bilibili.com/x/polymer/web-dynamic/v1/detail', {
-            params: {
-                id: dynamicId,
-            },
-            headers: {
-                ...this.biliApiHeaders,
-                Cookie: this.buildBiliCookieHeader(),
-            },
-        })
-    }
-
-    private assertProviderResponseOk(res: BiliCreateDynamicResponse, context: string) {
-        if (res.data?.code !== 0) {
-            throw new Error(`Send ${context} to ${this.NAME} failed. ${res.data?.message}: ${JSON.stringify(res.data)}`)
-        }
+        return this.api.fetchDynamicDetail(dynamicId)
     }
 
     private async assertPhotoDynamicVisible(res: BiliCreateDynamicResponse, expectedPicCount: number) {
@@ -677,7 +637,7 @@ class BiliForwarder extends Forwarder {
         try {
             // Upload photos one at a time with a gap: parallel upload_bfs bursts trip Bilibili's
             // per-account velocity control (-111), which previously killed the whole realtime send.
-            const uploadedPhotos: Array<BiliImageUploaded | undefined> = []
+            const uploadedPhotos: Array<BiliUploadPhotoResponse | undefined> = []
             let firstPhoto = true
             for (const item of media) {
                 if (!this.isDynamicImageMedia(item)) {
@@ -785,13 +745,8 @@ class BiliForwarder extends Forwarder {
         return pRetry(
             async () => {
                 const res = await create()
-                const code = Number(res.data?.code)
-                if (code === -101) {
-                    throw new NonRetryableForwarderSendError(
-                        `Send ${context} to ${this.NAME} rejected by provider (${code}): ${res.data?.message || 'authentication failure'}`,
-                    )
-                }
-                this.assertProviderResponseOk(res, context)
+                // Centralized policy: -101 -> non-retryable auth, -111 -> throttle, else generic/ok.
+                assertBiliResponseOk(res, `create ${context}`)
                 return res
             },
             {
@@ -825,63 +780,13 @@ class BiliForwarder extends Forwarder {
     }
 
     private async uploadPhoto(path: string) {
-        const form = new FormData()
-        form.append('file_up', fs.createReadStream(path))
-        form.append('category', 'daily')
-        form.append('csrf', this.bili_jct)
-        const res = await axios.post('https://api.bilibili.com/x/dynamic/feed/draw/upload_bfs', form, {
-            headers: {
-                ...form.getHeaders(),
-                ...this.biliApiHeaders,
-                Cookie: this.buildBiliCookieHeader(),
-            },
-        })
-        this.log?.debug(`Upload photo response: ${JSON.stringify(res.data)}`)
-        if (res.data?.code !== 0) {
-            const code = Number(res.data?.code)
-            if (code === -101) {
-                throw new NonRetryableForwarderSendError(
-                    `Bilibili photo upload rejected by provider (${code}): ${res.data?.message || 'authentication failure'}`,
-                )
-            }
-            if (code === -111) {
-                throw new BiliUploadThrottledError(
-                    `Bilibili photo upload throttled by provider (${code}): ${res.data?.message || 'velocity control'}`,
-                )
-            }
-            throw new Error(`Upload photo to ${this.NAME} failed. ${res.data?.message}: ${JSON.stringify(res.data)}`)
-        }
-        return res.data.data
+        const { rawResponse, data } = await this.api.uploadPhoto(path)
+        this.log?.debug(`Upload photo response: ${JSON.stringify(rawResponse.data)}`)
+        return data as BiliUploadPhotoResponse
     }
 
     private async sendText(text: string) {
-        return axios.post(
-            'https://api.bilibili.com/x/dynamic/feed/create/dyn',
-            {
-                dyn_req: {
-                    content: {
-                        contents: [
-                            {
-                                raw_text: text,
-                                type: 1,
-                                biz_id: '',
-                            },
-                        ],
-                    },
-                    scene: 1,
-                },
-            },
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...this.biliApiHeaders,
-                    Cookie: this.buildBiliCookieHeader(),
-                },
-                params: {
-                    csrf: this.bili_jct,
-                },
-            },
-        )
+        return this.api.createTextDynamic(text)
     }
 
     private async sendTextWithPhotos(
@@ -893,34 +798,7 @@ class BiliForwarder extends Forwarder {
             img_size: number
         }>,
     ) {
-        return axios.post(
-            'https://api.bilibili.com/x/dynamic/feed/create/dyn',
-            {
-                dyn_req: {
-                    content: {
-                        contents: [
-                            {
-                                raw_text: text,
-                                type: 1,
-                                biz_id: '',
-                            },
-                        ],
-                    },
-                    pics: pics,
-                    scene: 2,
-                },
-            },
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...this.biliApiHeaders,
-                    Cookie: this.buildBiliCookieHeader(),
-                },
-                params: {
-                    csrf: this.bili_jct,
-                },
-            },
-        )
+        return this.api.createPhotoDynamic(text, pics)
     }
 }
 
