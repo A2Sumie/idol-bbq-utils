@@ -6,6 +6,7 @@ import { join } from 'path'
 import { createLogger, winston, format } from '@idol-bbq-utils/log'
 import { test, expect } from 'bun:test'
 import type { GenericFollows } from '@/types'
+import { assertXResponseOk } from '../src/spiders/x'
 
 const dataPath = (...parts: Array<string>) => join(import.meta.dir, 'data', ...parts)
 
@@ -498,4 +499,30 @@ test('X unified list hydration stops after rate limit response', async () => {
 
     expect(articles).toEqual([])
     expect(requestedUsers).toEqual(['alpha'])
+})
+
+test('assertXResponseOk passes through a 2xx response without throwing', () => {
+    expect(() => assertXResponseOk({ ok: true, status: 200, statusText: 'OK' } as Response, 'tweets')).not.toThrow()
+})
+
+test('assertXResponseOk always embeds the numeric status even when statusText is empty', () => {
+    // fetch over HTTP/2 commonly returns an empty statusText; the numeric status must survive so the
+    // downstream crawl-error classifier can still distinguish auth/rate-limit/transient.
+    let thrown: unknown
+    try {
+        assertXResponseOk({ ok: false, status: 429, statusText: '' } as Response, 'tweets')
+    } catch (error) {
+        thrown = error
+    }
+    expect((thrown as Error).message).toBe('Failed to fetch tweets: 429')
+})
+
+test('assertXResponseOk keeps statusText when the runtime provides it', () => {
+    let thrown: unknown
+    try {
+        assertXResponseOk({ ok: false, status: 403, statusText: 'Forbidden' } as Response, 'user info (X)')
+    } catch (error) {
+        thrown = error
+    }
+    expect((thrown as Error).message).toBe('Failed to fetch user info (X): 403 Forbidden')
 })

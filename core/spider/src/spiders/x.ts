@@ -142,6 +142,19 @@ async function fetchWithTimeout(input: string | URL, init: RequestInit = {}, tim
     }
 }
 
+/**
+ * Single response-status gate for every X API fetch. Always embeds the numeric HTTP status in the
+ * thrown message so downstream crawl-error classification can distinguish auth (401/403), rate limit
+ * (429) and transient (5xx). statusText is often empty over HTTP/2, so the number must not be dropped.
+ */
+function assertXResponseOk(res: Response, context: string): void {
+    if (res.ok) {
+        return
+    }
+    const statusText = res.statusText ? ` ${res.statusText}` : ''
+    throw new Error(`Failed to fetch ${context}: ${res.status}${statusText}`)
+}
+
 class XUserTimeLineSpider extends BaseSpider {
     // extends from XBaseSpider regex
     static _VALID_URL = new RegExp(X_BASE_VALID_URL.source + /(?<id>\w+)$/.source)
@@ -781,9 +794,7 @@ class XListSpider extends BaseSpider {
             },
         })
 
-        if (!res.ok) {
-            throw new Error(`Failed to fetch tweets: ${res.statusText}`)
-        }
+        assertXResponseOk(res, 'tweets')
 
         const json = await res.json()
         if (!json) {
@@ -818,9 +829,7 @@ class XListSpider extends BaseSpider {
             },
         })
 
-        if (!res.ok) {
-            throw new Error(`Failed to fetch follows: ${res.statusText}`)
-        }
+        assertXResponseOk(res, 'follows')
         const json = await res.json()
         if (!json) {
             throw new Error('Failed to fetch follows with empty json')
@@ -851,9 +860,7 @@ class XListSpider extends BaseSpider {
             },
         })
 
-        if (!res.ok) {
-            throw new Error(`Failed to fetch follows: ${res.statusText}`)
-        }
+        assertXResponseOk(res, 'follows')
         const json = await res.json()
         if (!json) {
             throw new Error('Failed to fetch follows with empty json')
@@ -1314,9 +1321,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/${id}`,
             }),
         })
-        if (!res.ok) {
-            throw new Error(`Failed to fetch user info (${id}): ${res.statusText}`)
-        }
+        assertXResponseOk(res, `user info (${id})`)
         const json = await res.json()
         return json
     }
@@ -1427,9 +1432,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/${id}`,
             }),
         })
-        if (!res.ok) {
-            throw new Error(`Failed to fetch tweets: ${res.status} ${res.statusText}`)
-        }
+        assertXResponseOk(res, 'tweets')
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)
@@ -1497,9 +1500,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/${id}/with_replies`,
             }),
         })
-        if (!res.ok) {
-            throw new Error(`Failed to fetch replies: ${res.status} ${res.statusText}`)
-        }
+        assertXResponseOk(res, 'replies')
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch replies: ${json.errors[0].message}`)
@@ -1574,9 +1575,7 @@ class XApiClient {
                 referer,
             }),
         })
-        if (!res.ok) {
-            throw new Error(`Failed to fetch tweet detail: ${res.status} ${res.statusText}`)
-        }
+        assertXResponseOk(res, 'tweet detail')
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch tweet detail: ${json.errors[0].message}`)
@@ -1644,9 +1643,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/i/lists/${list_id}`,
             }),
         })
-        if (!res.ok) {
-            throw new Error(`Failed to fetch tweets: ${res.statusText}`)
-        }
+        assertXResponseOk(res, 'tweets')
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)
@@ -1706,9 +1703,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/i/lists/${list_id}`,
             }),
         })
-        if (!res.ok) {
-            throw new Error(`Failed to fetch tweets: ${res.statusText}`)
-        }
+        assertXResponseOk(res, 'tweets')
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)
@@ -2498,6 +2493,6 @@ type Card<T extends CardTypeEnum> = {
 
 type ExtraContentType = Card<CardTypeEnum> | null
 
-export { ArticleTypeEnum, XApiJsonParser, XUserTimeLineSpider, XStatusSpider, XListSpider }
+export { ArticleTypeEnum, assertXResponseOk, XApiJsonParser, XUserTimeLineSpider, XStatusSpider, XListSpider }
 
 export type { ExtraContentType, XListApiEngine }
