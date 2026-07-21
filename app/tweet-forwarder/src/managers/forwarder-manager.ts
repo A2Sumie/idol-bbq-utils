@@ -27,9 +27,9 @@ import {
     followsToText,
     formatArticleHeaderLine,
     formatArticleSourceActionAttribution,
-    formatArticleSourceActionLabel,
     formatArticleTimeToken,
     formatArticleUserId,
+    formatTranslationPassthrough,
 } from '@idol-bbq-utils/render'
 import dayjs from 'dayjs'
 import { cloneDeep, orderBy } from 'lodash'
@@ -2891,7 +2891,8 @@ class ForwarderPools extends BaseCompatibleModel {
         const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
         if (
             !String(article.translation || '').trim() &&
-            !(article.content && summaryConfig?.translatedCard?.processorId)
+            !(article.content && summaryConfig?.translatedCard?.processorId) &&
+            !this.articleHasRenderableRef(article)
         ) {
             return false
         }
@@ -2904,6 +2905,10 @@ class ForwarderPools extends BaseCompatibleModel {
             return false
         }
         return !DB.OutboundMessage.isTerminalFailed(record)
+    }
+
+    private articleHasRenderableRef(article: Pick<ArticleWithId, 'ref'>) {
+        return Boolean(article.ref) && typeof article.ref === 'object'
     }
 
     private async canSendTranslationPassthroughStandalone(
@@ -2932,10 +2937,16 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     /**
-     * Fast passthrough of the root article's translation (no original text). Layout per user spec:
-     *   @handle displayName
+     * Fast passthrough of the root article's translation (no original text). Layout per user spec
+     * (see formatTranslationPassthrough):
+     *   南伊織【22/7】1556⁹(260720)
      *   <translation>
-     *   <clock(date)> <platform action>
+     *   <blank line>
+     *   @minami__iori 南伊織【22/7】 1556⁹(260720) X发推
+     * Ref-only articles (bare retweet/reply, content on the card) instead get:
+     *   <blank line>
+     *   ---（余下见卡片）---
+     *   @minami__iori 南伊織【22/7】 1556⁹(260720) X转推
      * Attachments keep the rendered card plus the media the target's visibility/dedup policy
      * allows; claimed slots are kept on success (so the main send dedups against them) and
      * released on failure. Enabled per target via `translation_passthrough`.
@@ -2965,19 +2976,14 @@ class ForwarderPools extends BaseCompatibleModel {
             )
         }
         const translation = String(article.translation || '').trim()
-        if (!translation) {
+        const isRefOnlyPassthrough = !translation && this.articleHasRenderableRef(article)
+        if (!translation && !isRefOnlyPassthrough) {
             return false
         }
         if (!(await this.canSendTranslationPassthroughStandalone(article, target, runtime_config, renderResult))) {
             return false
         }
-        const authorLine = [formatArticleUserId(article), String(article.username || '').trim()]
-            .filter(Boolean)
-            .join(' ')
-        const metaLine = [formatArticleTimeToken(article.created_at), formatArticleSourceActionLabel(article)]
-            .filter(Boolean)
-            .join(' ')
-        const passthroughText = [authorLine, translation, metaLine].filter(Boolean).join('\n')
+        const passthroughText = formatTranslationPassthrough(article as any, translation)
 
         // Media visibility (dedup review): attach the rendered card and only the original media the
         // target policy still allows. Claims stay on success so the main flow hides duplicates.

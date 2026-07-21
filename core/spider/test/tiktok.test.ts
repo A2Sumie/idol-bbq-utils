@@ -3,7 +3,41 @@ import { readFileSync } from 'fs'
 import type { GenericFollows } from '../src/types'
 import { Platform } from '../src/types'
 import { TiktokApiJsonParser, TiktokSpider } from '../src/spiders/tiktok'
+import { HTTPClient } from '../src/utils'
 import { test, expect } from 'bun:test'
+
+function tiktokUniversalHtml(universalData: unknown) {
+    return `<html><body><script id="__UNIVERSAL_DATA_FOR_REHYDRATION__" type="application/json">${JSON.stringify(
+        universalData,
+    )}</script></body></html>`
+}
+
+function tiktokPost(handle: string, postId: string, desc = 'page post') {
+    return {
+        id: postId,
+        createTime: 1710759600,
+        desc,
+        author: { uniqueId: handle, nickname: handle },
+        video: { cover: 'https://example.com/cover.jpg' },
+    }
+}
+
+function tiktokPageHtml(params: { handle: string; postId: string; secUid: string; itemList?: Array<any> }) {
+    return tiktokUniversalHtml({
+        __DEFAULT_SCOPE__: {
+            'webapp.user-detail': {
+                userInfo: {
+                    user: {
+                        uniqueId: params.handle,
+                        nickname: params.handle,
+                        secUid: params.secUid,
+                    },
+                    itemList: params.itemList ?? [tiktokPost(params.handle, params.postId)],
+                },
+            },
+        },
+    })
+}
 
 test('TikTok Spider URL Validation', async () => {
     const url = 'https://www.tiktok.com/@tiktok'
@@ -255,4 +289,146 @@ test('TikTok follows parser reports TikTok platform identity', () => {
         username: 'Cure Rinochi',
         followers: 227000,
     })
+})
+
+test('TikTok grabPosts keeps page posts when the unsigned creator API is rejected', async () => {
+    const original = HTTPClient.download_webpage
+    let calls = 0
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        calls += 1
+        if (calls === 1) {
+            return new Response(
+                tiktokPageHtml({ handle: 'cure_rinochi', postId: '7351147085025500001', secUid: 'SEC_UID_ABC' }),
+            )
+        }
+        return new Response(JSON.stringify({ statusCode: 10201, statusMsg: 'rejected' }))
+    }
+
+    try {
+        const posts = await TiktokApiJsonParser.grabPosts('https://www.tiktok.com/@cure_rinochi', 'abcdef0', 12345)
+        expect(calls).toBe(2)
+        expect(posts).toHaveLength(1)
+        expect(posts[0]?.a_id).toBe('7351147085025500001')
+        expect(posts[0]?.u_id).toBe('cure_rinochi')
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
+})
+
+test('TikTok grabPosts keeps page posts when the creator API throws', async () => {
+    const original = HTTPClient.download_webpage
+    let calls = 0
+    ;(HTTPClient as any).download_webpage = async () => {
+        calls += 1
+        if (calls === 1) {
+            return new Response(
+                tiktokPageHtml({ handle: 'cure_rinochi', postId: '7351147085025500001', secUid: 'SEC_UID_ABC' }),
+            )
+        }
+        throw new Error('HTTP 403 for creator api')
+    }
+
+    try {
+        const posts = await TiktokApiJsonParser.grabPosts('https://www.tiktok.com/@cure_rinochi', 'abcdef0', 12345)
+        expect(posts).toHaveLength(1)
+        expect(posts[0]?.a_id).toBe('7351147085025500001')
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
+})
+
+test('TikTok grabPosts merges creator API posts with page posts without duplicates', async () => {
+    const original = HTTPClient.download_webpage
+    let calls = 0
+    ;(HTTPClient as any).download_webpage = async () => {
+        calls += 1
+        if (calls === 1) {
+            return new Response(
+                tiktokPageHtml({ handle: 'cure_rinochi', postId: '7351147085025500001', secUid: 'SEC_UID_ABC' }),
+            )
+        }
+        return new Response(
+            JSON.stringify({
+                itemList: [
+                    tiktokPost('cure_rinochi', '7351147085025500001'),
+                    tiktokPost('cure_rinochi', '7351147085025500999', 'deeper api post'),
+                ],
+            }),
+        )
+    }
+
+    try {
+        const posts = await TiktokApiJsonParser.grabPosts('https://www.tiktok.com/@cure_rinochi', 'abcdef0', 12345)
+        expect(posts.map((post) => post.a_id)).toEqual(['7351147085025500001', '7351147085025500999'])
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
+})
+
+test('TikTok grabPosts falls back to ItemModule when matched userInfo has an empty itemList', async () => {
+    const original = HTTPClient.download_webpage
+    let calls = 0
+    ;(HTTPClient as any).download_webpage = async () => {
+        calls += 1
+        if (calls === 1) {
+            return new Response(
+                tiktokUniversalHtml({
+                    __DEFAULT_SCOPE__: {
+                        'webapp.user-detail': {
+                            userInfo: {
+                                user: {
+                                    uniqueId: 'cure_rinochi',
+                                    nickname: 'cure_rinochi',
+                                    secUid: 'SEC_UID_ABC',
+                                },
+                                itemList: [],
+                            },
+                        },
+                        ItemModule: {
+                            '7351147085025500888': tiktokPost(
+                                'cure_rinochi',
+                                '7351147085025500888',
+                                'item module fallback',
+                            ),
+                        },
+                    },
+                }),
+            )
+        }
+        return new Response(JSON.stringify({ statusCode: 10201, statusMsg: 'rejected' }))
+    }
+
+    try {
+        const posts = await TiktokApiJsonParser.grabPosts('https://www.tiktok.com/@cure_rinochi', 'abcdef0', 12345)
+        expect(posts.map((post) => post.a_id)).toEqual(['7351147085025500888'])
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
+})
+
+test('TikTok grabPosts surfaces creator API rejection when the page has no usable posts', async () => {
+    const original = HTTPClient.download_webpage
+    let calls = 0
+    ;(HTTPClient as any).download_webpage = async () => {
+        calls += 1
+        if (calls === 1) {
+            return new Response(
+                tiktokPageHtml({
+                    handle: 'cure_rinochi',
+                    postId: 'unused',
+                    secUid: 'SEC_UID_ABC',
+                    itemList: [],
+                }),
+            )
+        }
+        return new Response(JSON.stringify({ statusCode: 10201, statusMsg: 'rejected' }))
+    }
+
+    try {
+        await expect(
+            TiktokApiJsonParser.grabPosts('https://www.tiktok.com/@cure_rinochi', 'abcdef0', 12345),
+        ).rejects.toThrow(/no itemList/)
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
 })

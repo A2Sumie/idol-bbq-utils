@@ -1316,6 +1316,66 @@ test('BiliForwarder records text-keyed short-video dedupe keys after successful 
     }
 })
 
+test('BiliForwarder dedupes videos supplied only through videoUploadMedia', async () => {
+    const originalCheckExist = DB.MediaHash.checkExist
+    const originalSave = DB.MediaHash.save
+    const saved: Array<{ platform: string; hash: string; a_id: string }> = []
+    DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        saved.push({ platform, hash, a_id })
+        return { platform, hash, a_id } as any
+    }
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            video_upload: {
+                enabled: true,
+            },
+        } as any,
+        'bili-video-upload-media-test',
+    )
+
+    ;(forwarder as any).performBiliupUpload = async () => {}
+    ;(forwarder as any).sendDynamicContent = async () => [{ ok: true, mode: 'dynamic' }]
+
+    try {
+        const result = await (forwarder as any).realSend(['hello'], {
+            article: {
+                platform: Platform.X,
+                a_id: '2063561843692716999',
+                u_id: '227_staff',
+                username: '22/7(ナナブンノニジュウニ)',
+                type: 'tweet',
+                created_at: 1780826457,
+                url: 'https://x.com/227_staff/status/2063561843692716999',
+                content: '22/7_the 3rd Music Video公開中',
+            },
+            media: [],
+            videoUploadMedia: [
+                {
+                    media_type: 'video',
+                    path: '/tmp/video-upload-media-only.mp4',
+                    content_hash: 'video-upload-media-only-hash',
+                    duration_seconds: 45.7,
+                },
+            ],
+        })
+
+        expect(result).toEqual([{ ok: true, mode: 'biliup' }])
+        expect(saved).toContainEqual({
+            platform: 'bilibili-video-upload',
+            hash: 'video-upload-media-only-hash',
+            a_id: `${Platform.X}:2063561843692716999`,
+        })
+        expect(saved.some((item) => item.platform.startsWith('cross-short-video:'))).toBe(true)
+    } finally {
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    }
+})
+
 test('BiliForwarder suppresses TT/INS semantic short-video duplicates without dynamic fallback', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
     const originalSave = DB.MediaHash.save

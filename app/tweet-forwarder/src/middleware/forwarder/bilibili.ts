@@ -36,21 +36,13 @@ import {
 
 const BILI_VIDEO_UPLOAD_HASH_NAMESPACE = 'bilibili-video-upload'
 
-/**
- * upload_bfs answers -111 (csrf-flavoured WAF response) when the account trips Bilibili's
- * per-account upload velocity control; the same credentials succeed again seconds later.
- * It is therefore transient and must not skip the photo silently: retry with real backoff,
- * and if the window is still closed, fail the whole send so fallback paths retry later with
- * the full media set instead of posting a media-less dynamic that dedup counts as delivered.
- */
-class BiliUploadThrottledError extends Error {
+class BiliUploadThrottledError extends NonRetryableForwarderSendError {
     constructor(message: string) {
         super(message)
         this.name = 'BiliUploadThrottledError'
     }
 }
 
-/** Gap between consecutive photo uploads inside one send; parallel bursts trip the -111 velocity control. */
 const BILI_PHOTO_UPLOAD_GAP_MS = 2000
 
 interface BiliImageUploaded {
@@ -120,6 +112,8 @@ class BiliForwarder extends Forwarder {
     private photoUploadGapMs = BILI_PHOTO_UPLOAD_GAP_MS
     private photoUploadRetries = 3
     private photoUploadRetryMinTimeoutMs = 10000
+    private dynamicCreateRetries = 2
+    private dynamicCreateRetryMinTimeoutMs = 3000
     protected override BASIC_TEXT_LIMIT = 1000
 
     constructor(...[config, ...rest]: [...ConstructorParameters<typeof Forwarder>]) {
@@ -269,12 +263,13 @@ class BiliForwarder extends Forwarder {
         return createHash('sha256').update(buffer).digest('hex')
     }
 
-    private resolveVideoUploadExactHashRecords(videoPaths: string[], props?: SendProps): BiliVideoUploadHashRecord[] {
+    private resolveVideoUploadExactHashRecords(
+        videoPaths: string[],
+        uploadMedia: NonNullable<SendProps['media']> = [],
+    ): BiliVideoUploadHashRecord[] {
         const records = new Map<string, BiliVideoUploadHashRecord>()
         for (const videoPath of videoPaths) {
-            const mediaFile = (props?.media || []).find(
-                (item) => item.media_type === 'video' && item.path === videoPath,
-            )
+            const mediaFile = uploadMedia.find((item) => item.media_type === 'video' && item.path === videoPath)
             const hash = mediaFile?.content_hash || this.hashVideoFile(videoPath)
             records.set(hash, {
                 hash,
@@ -284,8 +279,12 @@ class BiliForwarder extends Forwarder {
         return Array.from(records.values())
     }
 
-    private resolveVideoUploadDedupeRecords(videoPaths: string[], props?: SendProps): BiliVideoUploadDedupeRecords {
-        const exact = this.resolveVideoUploadExactHashRecords(videoPaths, props)
+    private resolveVideoUploadDedupeRecords(
+        videoPaths: string[],
+        props?: SendProps,
+        uploadMedia: NonNullable<SendProps['media']> = props?.videoUploadMedia || props?.media || [],
+    ): BiliVideoUploadDedupeRecords {
+        const exact = this.resolveVideoUploadExactHashRecords(videoPaths, uploadMedia)
         if (!props?.article) {
             return {
                 exact,
@@ -294,9 +293,7 @@ class BiliForwarder extends Forwarder {
         }
 
         const videoMedia = videoPaths
-            .map((videoPath) =>
-                (props.media || []).find((item) => item.media_type === 'video' && item.path === videoPath),
-            )
+            .map((videoPath) => uploadMedia.find((item) => item.media_type === 'video' && item.path === videoPath))
             .filter((item): item is NonNullable<SendProps['media']>[number] => Boolean(item))
         return {
             exact,
@@ -467,7 +464,7 @@ class BiliForwarder extends Forwarder {
 
         let dedupeRecords: BiliVideoUploadDedupeRecords
         try {
-            dedupeRecords = this.resolveVideoUploadDedupeRecords(candidate.videoPaths, props)
+            dedupeRecords = this.resolveVideoUploadDedupeRecords(candidate.videoPaths, props, media)
             const duplicate = await this.findDuplicateBiliVideoUpload(dedupeRecords)
             if (duplicate) {
                 const detail =
@@ -695,11 +692,12 @@ class BiliForwarder extends Forwarder {
                     _log?.debug(`Uploading photo ${item.path}`)
                     const obj = await pRetry(() => this.uploadPhoto(item.path), {
                         retries: this.photoUploadRetries,
-                        // upload_bfs is rate-limited per account; short backoff keeps every attempt
-                        // inside the same throttle window, and -111 is transient velocity control.
                         minTimeout: this.photoUploadRetryMinTimeoutMs,
                         factor: 2,
                         shouldRetry(error) {
+                            if (error.originalError instanceof BiliUploadThrottledError) {
+                                return true
+                            }
                             return !(error.originalError instanceof NonRetryableForwarderSendError)
                         },
                         onFailedAttempt(e) {
@@ -708,7 +706,7 @@ class BiliForwarder extends Forwarder {
                     })
                     uploadedPhotos.push(obj)
                 } catch (e) {
-                    if (e instanceof NonRetryableForwarderSendError || e instanceof BiliUploadThrottledError) {
+                    if (e instanceof NonRetryableForwarderSendError) {
                         throw e
                     }
                     _log?.error(`Upload photo ${item.path} failed, skip this photo: ${e instanceof Error ? e.message : String(e)}`)
@@ -722,11 +720,11 @@ class BiliForwarder extends Forwarder {
             const dynamicImageCount = media.filter((item) => this.isDynamicImageMedia(item)).length
             if ((mediaCheckLevel === 'loose' || requireMedia) && dynamicImageCount !== 0 && pics.length === 0) {
                 _log?.error(`No photos uploaded, throw error.`)
-                throw new Error(`No photos uploaded, please check your bili_jct and sessdata.`)
+                throw new NonRetryableForwarderSendError(`No photos uploaded, please check your bili_jct and sessdata.`)
             }
             if ((mediaCheckLevel === 'strict' || requireMedia) && dynamicImageCount !== pics.length) {
                 _log?.error(`Some photos upload failed.`)
-                throw new Error(`Some photos upload failed, please check your bili_jct and sessdata.`)
+                throw new NonRetryableForwarderSendError(`Some photos upload failed, please check your bili_jct and sessdata.`)
             }
             // TODO: more pics support
             const MAX_PICS = 9
@@ -745,8 +743,14 @@ class BiliForwarder extends Forwarder {
 
                 let res
                 if (msgPics.length > 0) {
-                    res = await this.sendTextWithPhotos(text, msgPics)
-                    this.assertProviderResponseOk(res, `photo dynamic chunk ${i + 1}/${n}`)
+                    try {
+                        res = await this.createDynamicWithRetry(
+                            () => this.sendTextWithPhotos(text, msgPics),
+                            `photo dynamic chunk ${i + 1}/${n}`,
+                        )
+                    } catch (error) {
+                        throw this.buildDynamicCreateError(`photo dynamic chunk ${i + 1}/${n}`, _res, error)
+                    }
                     _res.push(res)
                     try {
                         await this.assertPhotoDynamicVisible(res, msgPics.length)
@@ -760,8 +764,11 @@ class BiliForwarder extends Forwarder {
                     }
                 } else {
                     if (!textChunks[i]) continue // If no text and no pics, skip (shouldn't happen due to Math.max logic unless textChunks ran out and picChunks ran out)
-                    res = await this.sendText(text)
-                    this.assertProviderResponseOk(res, `text dynamic chunk ${i + 1}/${n}`)
+                    try {
+                        res = await this.createDynamicWithRetry(() => this.sendText(text), `text dynamic chunk ${i + 1}/${n}`)
+                    } catch (error) {
+                        throw this.buildDynamicCreateError(`text dynamic chunk ${i + 1}/${n}`, _res, error)
+                    }
                     _res.push(res)
                 }
             }
@@ -769,6 +776,52 @@ class BiliForwarder extends Forwarder {
         } finally {
             normalizedAttachments.cleanup()
         }
+    }
+
+    private async createDynamicWithRetry(
+        create: () => Promise<BiliCreateDynamicResponse>,
+        context: string,
+    ): Promise<BiliCreateDynamicResponse> {
+        return pRetry(
+            async () => {
+                const res = await create()
+                const code = Number(res.data?.code)
+                if (code === -101) {
+                    throw new NonRetryableForwarderSendError(
+                        `Send ${context} to ${this.NAME} rejected by provider (${code}): ${res.data?.message || 'authentication failure'}`,
+                    )
+                }
+                this.assertProviderResponseOk(res, context)
+                return res
+            },
+            {
+                retries: this.dynamicCreateRetries,
+                minTimeout: this.dynamicCreateRetryMinTimeoutMs,
+                factor: 2,
+                shouldRetry(error) {
+                    return !(error.originalError instanceof NonRetryableForwarderSendError)
+                },
+                onFailedAttempt: (error) => {
+                    this.log?.warn(`Create ${context} failed, retrying...: ${error.originalError.message}`)
+                },
+            },
+        )
+    }
+
+    private buildDynamicCreateError(context: string, partialResults: unknown[], error: unknown): Error {
+        if (partialResults.length > 0) {
+            return new PartialForwarderSendError(
+                `Bilibili dynamic create failed for ${context} after earlier chunks posted`,
+                partialResults,
+                context,
+                error,
+            )
+        }
+        if (error instanceof NonRetryableForwarderSendError) {
+            return error
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        return new NonRetryableForwarderSendError(`Bilibili dynamic create failed for ${context}: ${message}`)
     }
 
     private async uploadPhoto(path: string) {

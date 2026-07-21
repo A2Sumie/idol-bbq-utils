@@ -889,7 +889,23 @@ async function extractBlogList(page: Page, url: string) {
                 }
             })
             .filter(Boolean)
-        const dedup = Array.from(new Map(items.map((item: any) => [item.detailUrl, item])).values())
+        const dedupMap = new Map<string, any>()
+        for (const item of items as Array<any>) {
+            const existing = dedupMap.get(item.detailUrl)
+            if (!existing) {
+                dedupMap.set(item.detailUrl, item)
+                continue
+            }
+            dedupMap.set(item.detailUrl, {
+                detailUrl: item.detailUrl,
+                title: existing.title || item.title,
+                dateText: existing.dateText || item.dateText,
+                summary: existing.summary || item.summary,
+                member: existing.member || item.member,
+                thumbnail: existing.thumbnail || item.thumbnail,
+            })
+        }
+        const dedup = Array.from(dedupMap.values())
         const nextUrl = absolute(document.querySelector('.pager .next a')?.getAttribute('href'))
         return {
             items: dedup,

@@ -1234,3 +1234,250 @@ test('BiliForwarder fails the whole send when a photo upload stays throttled', a
     ).rejects.toThrow(BiliUploadThrottledError)
     expect(sendCalled).toBeFalse()
 })
+
+test('BiliUploadThrottledError is non-retryable so the whole-send layer does not re-upload', async () => {
+    expect(new BiliUploadThrottledError('x')).toBeInstanceOf(NonRetryableForwarderSendError)
+
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-upload-throttle-nonretry-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).photoUploadRetries = 0
+
+    const uploadAttempts: string[] = []
+    ;(forwarder as any).uploadPhoto = async (filePath: string) => {
+        uploadAttempts.push(filePath)
+        if (filePath.endsWith('ok.jpg')) {
+            return {
+                image_url: 'https://i0.hdslb.com/bfs/test/ok.jpg',
+                image_width: 100,
+                image_height: 100,
+                img_size: 10,
+            }
+        }
+        throw new BiliUploadThrottledError('throttled by test')
+    }
+    ;(forwarder as any).sendTextWithPhotos = async () => ({ data: { code: 0, message: 'ok' } })
+
+    await expect(
+        (forwarder as any).sendPrepared(['throttled text'], {
+            media: [
+                { media_type: 'photo', path: '/tmp/ok.jpg' },
+                { media_type: 'photo', path: '/tmp/throttled.jpg' },
+            ],
+        }),
+    ).rejects.toThrow(BiliUploadThrottledError)
+
+    expect(uploadAttempts.filter((p) => p.endsWith('ok.jpg'))).toHaveLength(1)
+})
+
+test('BiliForwarder does not re-upload successful photos when strict upload validation fails', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            media_check_level: 'strict',
+        } as any,
+        'bili-upload-strict-validation-nonretry-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).photoUploadRetries = 0
+
+    const uploadAttempts: string[] = []
+    ;(forwarder as any).uploadPhoto = async (filePath: string) => {
+        uploadAttempts.push(filePath)
+        if (filePath.endsWith('ok.jpg')) {
+            return {
+                image_url: 'https://i0.hdslb.com/bfs/test/ok.jpg',
+                image_width: 100,
+                image_height: 100,
+                img_size: 10,
+            }
+        }
+        throw new Error('ordinary upload failure')
+    }
+    ;(forwarder as any).sendTextWithPhotos = async () => ({ data: { code: 0, message: 'ok' } })
+
+    await expect(
+        (forwarder as any).sendPrepared(['strict text'], {
+            media: [
+                { media_type: 'photo', path: '/tmp/ok.jpg' },
+                { media_type: 'photo', path: '/tmp/fail.jpg' },
+            ],
+        }),
+    ).rejects.toBeInstanceOf(NonRetryableForwarderSendError)
+
+    expect(uploadAttempts.filter((p) => p.endsWith('ok.jpg'))).toHaveLength(1)
+    expect(uploadAttempts.filter((p) => p.endsWith('fail.jpg'))).toHaveLength(1)
+})
+
+test('BiliForwarder does not re-upload photos when the dynamic create fails at the whole-send layer', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-create-fail-no-reupload',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).dynamicCreateRetries = 2
+    ;(forwarder as any).dynamicCreateRetryMinTimeoutMs = 0
+
+    let uploadCount = 0
+    ;(forwarder as any).uploadPhoto = async () => {
+        uploadCount += 1
+        return {
+            image_url: 'https://i0.hdslb.com/bfs/test/create-fail.jpg',
+            image_width: 100,
+            image_height: 100,
+            img_size: 10,
+        }
+    }
+    let createCount = 0
+    ;(forwarder as any).sendTextWithPhotos = async () => {
+        createCount += 1
+        return { data: { code: 4100000, message: 'risk control' } }
+    }
+
+    await expect(
+        (forwarder as any).sendPrepared(['card text'], {
+            media: [{ media_type: 'photo', path: '/tmp/create-fail.jpg' }],
+        }),
+    ).rejects.toBeInstanceOf(NonRetryableForwarderSendError)
+
+    expect(uploadCount).toBe(1)
+    expect(createCount).toBe(3)
+})
+
+test('BiliForwarder retries a transient dynamic create in-band without re-uploading the photo', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-create-transient-retry',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).dynamicCreateRetryMinTimeoutMs = 0
+    ;(forwarder as any).assertPhotoDynamicVisible = async () => {}
+
+    let uploadCount = 0
+    ;(forwarder as any).uploadPhoto = async () => {
+        uploadCount += 1
+        return {
+            image_url: 'https://i0.hdslb.com/bfs/test/transient.jpg',
+            image_width: 100,
+            image_height: 100,
+            img_size: 10,
+        }
+    }
+    let createCount = 0
+    ;(forwarder as any).sendTextWithPhotos = async () => {
+        createCount += 1
+        if (createCount < 2) {
+            return { data: { code: 500, message: 'server error' } }
+        }
+        return { data: { code: 0, message: 'ok', data: { dyn_id_str: 'transient-dyn' } } }
+    }
+
+    const result = await (forwarder as any).sendPrepared(['card text'], {
+        media: [{ media_type: 'photo', path: '/tmp/transient.jpg' }],
+    })
+
+    expect(uploadCount).toBe(1)
+    expect(createCount).toBe(2)
+    expect(result).toHaveLength(1)
+})
+
+test('BiliForwarder auth rejection on create is non-retryable and does not re-upload', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-create-auth-fail',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).dynamicCreateRetryMinTimeoutMs = 0
+
+    let uploadCount = 0
+    ;(forwarder as any).uploadPhoto = async () => {
+        uploadCount += 1
+        return {
+            image_url: 'https://i0.hdslb.com/bfs/test/auth-fail.jpg',
+            image_width: 100,
+            image_height: 100,
+            img_size: 10,
+        }
+    }
+    let createCount = 0
+    ;(forwarder as any).sendTextWithPhotos = async () => {
+        createCount += 1
+        return { data: { code: -101, message: 'account not logged in' } }
+    }
+
+    await expect(
+        (forwarder as any).sendPrepared(['card text'], {
+            media: [{ media_type: 'photo', path: '/tmp/auth-fail.jpg' }],
+        }),
+    ).rejects.toBeInstanceOf(NonRetryableForwarderSendError)
+
+    expect(uploadCount).toBe(1)
+    expect(createCount).toBe(1)
+})
+
+test('BiliForwarder does not re-post an earlier chunk when a later chunk create fails', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-multichunk-partial',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).dynamicCreateRetries = 0
+    ;(forwarder as any).dynamicCreateRetryMinTimeoutMs = 0
+    ;(forwarder as any).assertPhotoDynamicVisible = async () => {}
+
+    ;(forwarder as any).uploadPhoto = async (filePath: string) => ({
+        image_url: `https://i0.hdslb.com/bfs/test/${path.basename(filePath)}`,
+        image_width: 100,
+        image_height: 100,
+        img_size: 10,
+    })
+
+    const createdChunks: number[] = []
+    let createCount = 0
+    ;(forwarder as any).sendTextWithPhotos = async (_text: string, pics: any[]) => {
+        createCount += 1
+        if (createCount === 1) {
+            createdChunks.push(pics.length)
+            return { data: { code: 0, message: 'ok', data: { dyn_id_str: `chunk-${createCount}` } } }
+        }
+        return { data: { code: 4100000, message: 'risk control' } }
+    }
+
+    const media = Array.from({ length: 11 }, (_, i) => ({
+        media_type: 'photo' as const,
+        path: `/tmp/p${i}.jpg`,
+    }))
+
+    let thrown: unknown
+    await (forwarder as any).sendPrepared(['multi chunk'], { media }).catch((error: unknown) => {
+        thrown = error
+    })
+
+    expect(thrown).toBeInstanceOf(PartialForwarderSendError)
+    expect(createdChunks).toEqual([9])
+    expect(createCount).toBe(2)
+})

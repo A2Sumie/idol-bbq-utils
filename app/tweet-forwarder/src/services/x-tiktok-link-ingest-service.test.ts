@@ -113,6 +113,15 @@ test('parseTikTokUrl resolves canonical video metadata', () => {
     })
 })
 
+test('parseTikTokUrl rejects tiktok.com suffix impostor hosts', () => {
+    expect(parseTikTokUrl('https://evil-tiktok.com/@u/video/7653464242506616085')).toBeNull()
+    expect(parseTikTokUrl('https://nottiktok.com/@u/video/7653464242506616085')).toBeNull()
+    expect(parseTikTokUrl('https://sub.tiktok.com/@u/video/7653464242506616085')).toMatchObject({
+        videoId: '7653464242506616085',
+        username: 'u',
+    })
+})
+
 test('extractYouTubeLinksFromText finds YouTube watch and short links without trailing punctuation', () => {
     expect(
         extractYouTubeLinksFromText(
@@ -292,6 +301,77 @@ test('enqueueMissingTikTokLinksFromXArticle skips TikTok videos already in DB', 
 
         expect(queued).toEqual([])
         expect(addCalls).toBe(0)
+    } finally {
+        ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingTikTokLinksFromXArticle de-duplicates repeated X links before queueing', async () => {
+    const originalGetByArticleCode = DB.Article.getByArticleCode
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+
+    ;(DB.Article as any).getByArticleCode = async () => null
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 229, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingTikTokLinksFromXArticle(
+            {
+                platform: Platform.X,
+                a_id: 'x-repeat',
+                content:
+                    'https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085 https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085',
+            } as any,
+            { now: 1782048000 },
+        )
+
+        expect(queued).toHaveLength(1)
+        expect(adds).toHaveLength(1)
+        expect(adds[0].payload.websites).toEqual([
+            'https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085',
+        ])
+    } finally {
+        ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingTikTokLinksFromXArticle honors disabled and custom crawler config', async () => {
+    const originalGetByArticleCode = DB.Article.getByArticleCode
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+
+    ;(DB.Article as any).getByArticleCode = async () => null
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 230, status: 'pending' }
+    }
+
+    try {
+        const article = {
+            platform: Platform.X,
+            a_id: 'x-config',
+            content: 'https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085',
+        } as any
+        expect(
+            await enqueueMissingTikTokLinksFromXArticle(article, {
+                now: 1782048000,
+                crawlerConfig: { x_tiktok_link_ingest: false } as any,
+            }),
+        ).toEqual([])
+
+        const queued = await enqueueMissingTikTokLinksFromXArticle(article, {
+            now: 1782048000,
+            crawlerConfig: { x_tiktok_link_ingest: { crawler: 'Tiktok抓取 - 临时' } } as any,
+        })
+
+        expect(queued).toHaveLength(1)
+        expect(adds).toHaveLength(1)
+        expect(adds[0].payload.crawler).toBe('Tiktok抓取 - 临时')
     } finally {
         ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
         ;(DB.TaskQueue as any).add = originalTaskAdd

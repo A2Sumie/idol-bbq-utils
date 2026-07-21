@@ -310,15 +310,15 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
     if (status && status >= 500) {
         return 'transient'
     }
+    if (/\b(rate limit|rate-limit|too many requests|reached the limit|temporarily blocked)\b/.test(message)) {
+        return 'rate_limit'
+    }
     if (
-        /\b(login|logged out|auth|unauthorized|forbidden|csrf|cookie|cookies expired|check your cookies|checkpoint|challenge|session expired)\b/.test(
+        /\b(login_required|checkpoint_required|challenge_required|login|logged out|auth|unauthorized|forbidden|csrf|cookie|cookies expired|check your cookies|checkpoint|challenge|session expired)\b/.test(
             message,
         )
     ) {
         return 'auth'
-    }
-    if (/\b(rate limit|rate-limit|too many requests|reached the limit|temporarily blocked)\b/.test(message)) {
-        return 'rate_limit'
     }
     if (/\b(timeout|timed out|navigation timeout|aborterror)\b/.test(message)) {
         return 'timeout'
@@ -2271,4 +2271,4 @@ class SpiderPools extends BaseCompatibleModel {
     }
 }
 
-export { SpiderTaskScheduler, SpiderPools, CrawlerCookieExportError }
+export { SpiderTaskScheduler, SpiderPools, CrawlerCookieExportError, classifyCrawlError, shouldRetryCrawlErrorForPlatform }

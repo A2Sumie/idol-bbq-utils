@@ -7,7 +7,13 @@ import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import { ProcessorProvider } from '@/types/processor'
 import { TaskScheduler } from '@/utils/base'
-import { CrawlerCookieExportError, SpiderPools, SpiderTaskScheduler } from './spider-manager'
+import {
+    CrawlerCookieExportError,
+    SpiderPools,
+    SpiderTaskScheduler,
+    classifyCrawlError,
+    shouldRetryCrawlErrorForPlatform,
+} from './spider-manager'
 
 test('SpiderTaskScheduler treats same crawler pending or running tasks as active until completion', () => {
     const scheduler = new SpiderTaskScheduler({ crawlers: [] }, new EventEmitter())
@@ -1308,4 +1314,34 @@ test('SpiderPools exportCrawlerCookies reports safe browser page creation failur
         },
     })
     expect(JSON.stringify(exportError.publicDetails)).not.toContain('/private/profile/path')
+})
+
+test('classifyCrawlError treats a throttle 302 redirect as rate_limit, not auth', () => {
+    const throttleRedirect = new Error(
+        'Error: redirect (302) to https://www.instagram.com/ - likely rate limit or challenge',
+    )
+    expect(classifyCrawlError(throttleRedirect)).toBe('rate_limit')
+})
+
+test('classifyCrawlError still classifies genuine login/checkpoint bounces as auth', () => {
+    expect(classifyCrawlError(new Error('Error: login redirect (302): session expired or checkpoint'))).toBe('auth')
+    expect(classifyCrawlError(new Error('You need to login first, check your cookies'))).toBe('auth')
+    expect(classifyCrawlError(new Error('account challenge detected'))).toBe('auth')
+    expect(classifyCrawlError(new Error('challenge_required'))).toBe('auth')
+    expect(classifyCrawlError(new Error('checkpoint_required'))).toBe('auth')
+    expect(classifyCrawlError(new Error('login_required'))).toBe('auth')
+})
+
+test('classifyCrawlError keeps explicit rate-limit and status signals', () => {
+    expect(classifyCrawlError(new Error('Error: 429'))).toBe('rate_limit')
+    expect(classifyCrawlError(new Error('too many requests'))).toBe('rate_limit')
+    expect(classifyCrawlError(new Error('Error: 403'))).toBe('auth')
+})
+
+test('shouldRetryCrawlErrorForPlatform defers Instagram throttle instead of in-run hammering', () => {
+    const throttleRedirect = new Error(
+        'Error: redirect (302) to https://www.instagram.com/ - likely rate limit or challenge',
+    )
+    expect(shouldRetryCrawlErrorForPlatform(throttleRedirect, Platform.Instagram)).toBe(false)
+    expect(shouldRetryCrawlErrorForPlatform(new Error('fetch failed'), Platform.Instagram)).toBe(true)
 })

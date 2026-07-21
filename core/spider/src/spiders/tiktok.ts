@@ -235,10 +235,25 @@ namespace TiktokApiJsonParser {
 
     export function postsParser(json: any): Array<GenericArticle<Platform.TikTok>> {
         let items = json?.itemList
-        if (!items) {
+        if (!Array.isArray(items)) {
             return []
         }
         return items.map(postParser).filter((item: GenericArticle<Platform.TikTok>) => item.a_id && item.u_id)
+    }
+
+    function mergePostsById(
+        primary: Array<GenericArticle<Platform.TikTok>>,
+        secondary: Array<GenericArticle<Platform.TikTok>>,
+    ): Array<GenericArticle<Platform.TikTok>> {
+        const merged = [...primary]
+        const seen = new Set(primary.map((post) => post.a_id))
+        for (const post of secondary) {
+            if (post.a_id && !seen.has(post.a_id)) {
+                seen.add(post.a_id)
+                merged.push(post)
+            }
+        }
+        return merged
     }
 
     function normalizeHandle(value?: string | null) {
@@ -389,28 +404,42 @@ namespace TiktokApiJsonParser {
         const universalData = JSON.parse(content)
         const handle = url.match(/\/\@([^/?]+)/)?.[1] || ''
         const userInfo = findUserInfoForHandle(universalData, handle)
-        // The rehydration payload keeps the post list in a sibling ItemModule map when userInfo has none.
-        const fallbackItems = itemModuleValues(universalData)
-        const pagePosts = postsParser({ itemList: userInfo?.itemList || fallbackItems })
+        const userItems = Array.isArray(userInfo?.itemList) ? userInfo.itemList : []
+        const fallbackItems = userItems.length > 0 ? [] : itemModuleValues(universalData)
+        const pagePosts = postsParser({ itemList: userItems.length > 0 ? userItems : fallbackItems })
         const secUid = userInfo?.user?.secUid
         if (!secUid) {
             return pagePosts
         }
-        const query_obj = _build_web_query(secUid, Date.now(), device_id, random_hex7)
-        // @ts-ignore
-        const query = new URLSearchParams(query_obj)
-        const res = await HTTPClient.download_webpage(
-            `${_API_BASE_URL}?${query.toString()}`,
-            buildHeaders(url, cookieString),
-            { timeout: TIKTOK_HTTP_TIMEOUT_MS },
-        )
-        const json = await res.json()
-        if (!Array.isArray(json?.itemList)) {
-            throw new Error(
-                `TikTok creator API returned no itemList (statusCode=${json?.statusCode ?? 'unknown'}); the unsigned API likely rejected the request`,
+        let apiFailure: unknown
+        let apiPosts: Array<GenericArticle<Platform.TikTok>> = []
+        try {
+            const query_obj = _build_web_query(secUid, Date.now(), device_id, random_hex7)
+            // @ts-ignore
+            const query = new URLSearchParams(query_obj)
+            const res = await HTTPClient.download_webpage(
+                `${_API_BASE_URL}?${query.toString()}`,
+                buildHeaders(url, cookieString),
+                { timeout: TIKTOK_HTTP_TIMEOUT_MS },
             )
+            const json = await res.json()
+            if (Array.isArray(json?.itemList)) {
+                apiPosts = postsParser(json)
+            } else {
+                apiFailure = new Error(
+                    `TikTok creator API returned no itemList (statusCode=${json?.statusCode ?? 'unknown'}); the unsigned API likely rejected the request`,
+                )
+            }
+        } catch (error) {
+            apiFailure = error
         }
-        return postsParser(json)
+        if (apiPosts.length === 0) {
+            if (pagePosts.length === 0 && apiFailure) {
+                throw apiFailure
+            }
+            return pagePosts
+        }
+        return mergePostsById(pagePosts, apiPosts)
     }
 
     export async function grabVideo(

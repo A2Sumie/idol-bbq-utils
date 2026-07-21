@@ -1804,6 +1804,86 @@ test('sendArticles skips translation passthrough when there is no translation', 
     expect(sends[0]?.texts).toEqual(['main card payload'])
 })
 
+test('sendArticles sends a ref-only (deferred-to-card) passthrough for a bare retweet without translation', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const sends: Array<{ texts: string[]; props: any }> = []
+    const target = {
+        id: 'target-passthrough-refonly',
+        NAME: 'recording',
+        getEffectiveConfig: (runtimeConfig?: any) => runtimeConfig || {},
+        check_blocked: async () => false,
+        send: async (texts: string[] | string, props?: any) => {
+            sends.push({ texts: Array.isArray(texts) ? texts : [texts], props })
+            return { status: 'sent' }
+        },
+    }
+    const article = {
+        id: 215,
+        a_id: 'passthrough-refonly-article',
+        u_id: 'minami__iori',
+        username: '南伊織【22/7】',
+        platform: 1,
+        type: 'retweet',
+        created_at: Math.floor(Date.now() / 1000),
+        content: '',
+        translation: '',
+        ref: {
+            a_id: 'referenced-article',
+            u_id: 'someone_else',
+            username: 'Someone Else',
+            platform: 1,
+            type: 'tweet',
+            content: 'referenced body',
+            ref: null,
+        },
+    }
+
+    ;(pools as any).renderService = {
+        process: async () => ({
+            text: 'main card payload',
+            mediaFiles: [],
+            cardMediaFiles: [],
+            originalMediaFiles: [],
+        }),
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'passthrough-refonly-task',
+        [article],
+        [
+            {
+                forwarder: target,
+                runtime_config: { translation_passthrough: true },
+            },
+        ],
+        {
+            render_type: 'text',
+        } as any,
+    )
+
+    expect(sends).toHaveLength(2)
+    expect(sends[0]?.texts[0]).toContain('余下见卡片')
+    expect(sends[0]?.texts[0]).toContain('@minami__iori')
+    expect(sends[0]?.props?.outboundKey).toContain('translation_passthrough')
+    expect(sends[1]?.texts).toEqual(['main card payload'])
+})
+
 test('sendArticles fires translation passthrough before queueing to a summary-card target', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

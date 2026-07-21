@@ -198,6 +198,44 @@ function formatArticleAttributionLine(article: Article) {
         .join(' ')
 }
 
+const PASSTHROUGH_CARD_DEFERRED_MARKER = '---（余下见卡片）---'
+
+function formatPassthroughTitleLine(article: Pick<Article, 'u_id' | 'username' | 'a_id' | 'created_at'>) {
+    const username = String(article.username || '').trim()
+    const name = username || formatArticleUserId(article)
+    const timeToken = article.created_at ? formatArticleTimeToken(article.created_at) : ''
+    return `${name}${timeToken}`.trim()
+}
+
+function formatPassthroughAttributionLine(
+    article: Pick<Article, 'u_id' | 'username' | 'a_id' | 'created_at' | 'platform' | 'type'>,
+) {
+    const userId = formatArticleUserId(article)
+    const username = String(article.username || '').trim()
+    const showUsername = username && normalizeIdentityToken(username) !== normalizeIdentityToken(userId)
+    return [
+        userId,
+        showUsername ? username : '',
+        article.created_at ? formatArticleTimeToken(article.created_at) : '',
+        formatArticleSourceActionLabel(article),
+    ]
+        .filter(Boolean)
+        .join(' ')
+}
+
+function formatTranslationPassthrough(
+    article: Pick<Article, 'u_id' | 'username' | 'a_id' | 'created_at' | 'platform' | 'type'>,
+    translation: string,
+): string {
+    const attributionLine = formatPassthroughAttributionLine(article)
+    const body = String(translation || '').trim()
+    if (!body) {
+        return ['', PASSTHROUGH_CARD_DEFERRED_MARKER, attributionLine].filter((line) => line !== undefined).join('\n')
+    }
+    const titleLine = formatPassthroughTitleLine(article)
+    return [titleLine, body, '', attributionLine].join('\n')
+}
+
 function normalizeIdentityToken(value: string | null | undefined) {
     return String(value || '')
         .trim()
@@ -582,7 +620,11 @@ export {
     formatArticleUserId,
     formatCompactMetaline,
     formatMetaline,
+    formatPassthroughAttributionLine,
+    formatPassthroughTitleLine,
     formatTime,
+    formatTranslationPassthrough,
     parseRawContent,
     parseTranslationContent,
+    PASSTHROUGH_CARD_DEFERRED_MARKER,
 }

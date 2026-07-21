@@ -76,7 +76,7 @@ function parseTikTokUrl(rawUrl: string): TikTokLinkInfo | null {
     }
 
     const hostname = url.hostname.toLowerCase()
-    if (!hostname.endsWith('tiktok.com')) {
+    if (hostname !== 'tiktok.com' && !hostname.endsWith('.tiktok.com')) {
         return null
     }
 
