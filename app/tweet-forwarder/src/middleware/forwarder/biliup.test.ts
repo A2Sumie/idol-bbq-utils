@@ -1694,7 +1694,7 @@ test('BiliForwarder suppresses media-required dynamic posts without uploadable i
     expect(dynamicCalls).toBe(0)
 })
 
-test('BiliForwarder does not let rendered card media satisfy media-required source media', async () => {
+test('BiliForwarder lets rendered card media satisfy media-required dynamic posts', async () => {
     const forwarder = new BiliForwarder(
         {
             bili_jct: 'csrf-token',
@@ -1721,8 +1721,8 @@ test('BiliForwarder does not let rendered card media satisfy media-required sour
         contentMedia: [],
     })
 
-    expect(result).toEqual([{ ok: true, mode: 'dynamic_media_required_suppressed' }])
-    expect(dynamicCalls).toBe(0)
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(dynamicCalls).toBe(1)
 })
 
 test('BiliForwarder lets message-pack card media satisfy media-required dynamic posts', async () => {

@@ -711,16 +711,43 @@ class XListSpider extends BaseSpider {
             options.configuredUsers.length,
             options.hydrateLimit || X_UNIFIED_LIST_MAX_HYDRATED_USERS,
         )
-        const priorityUsers = this.sanitizeUserIds([...options.configuredUsers, ...options.activeUserIds])
-        if (priorityUsers.length >= effectiveLimit) {
-            return priorityUsers.slice(0, effectiveLimit)
+        const configuredUsers = this.sanitizeUserIds(options.configuredUsers).slice(0, effectiveLimit)
+        const configuredSet = new Set(configuredUsers)
+        const activePool = this.sanitizeUserIds(options.activeUserIds).filter((userId) => !configuredSet.has(userId))
+        const memberPool = this.sanitizeUserIds(options.listMemberUserIds).filter((userId) => !configuredSet.has(userId))
+        if (memberPool.length === 0) {
+            return [...configuredUsers, ...activePool].slice(0, effectiveLimit)
         }
 
-        const prioritySet = new Set(priorityUsers)
-        const memberPool = this.sanitizeUserIds(options.listMemberUserIds).filter((userId) => !prioritySet.has(userId))
-        const rotatedMembers = this.rotateMemberPool(options.listId, memberPool, effectiveLimit - priorityUsers.length)
+        const remaining = Math.max(0, effectiveLimit - configuredUsers.length)
+        if (remaining === 0) {
+            return configuredUsers
+        }
 
-        return [...priorityUsers, ...rotatedMembers].slice(0, effectiveLimit)
+        const memberSlots = Math.min(
+            memberPool.length,
+            remaining,
+            activePool.length === 0 ? remaining : Math.max(1, Math.floor(effectiveLimit / 2)),
+        )
+        const activeSlots = Math.max(0, remaining - memberSlots)
+        const selectedActive = activePool.slice(0, activeSlots)
+        const selectedSet = new Set([...configuredUsers, ...selectedActive])
+        const rotatedMembers = this.rotateMemberPool(
+            options.listId,
+            memberPool.filter((userId) => !selectedSet.has(userId)),
+            memberSlots,
+        )
+        const selected = this.sanitizeUserIds([...configuredUsers, ...selectedActive, ...rotatedMembers])
+        if (selected.length >= effectiveLimit) {
+            return selected.slice(0, effectiveLimit)
+        }
+
+        const refillSet = new Set(selected)
+        return this.sanitizeUserIds([
+            ...selected,
+            ...activePool.filter((userId) => !refillSet.has(userId)),
+            ...memberPool.filter((userId) => !refillSet.has(userId)),
+        ]).slice(0, effectiveLimit)
     }
 
     private rotateMemberPool(listId: string, userIds: Array<string>, take: number) {

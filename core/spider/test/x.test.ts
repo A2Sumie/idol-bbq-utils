@@ -420,6 +420,39 @@ test('X old API parser tolerates missing entities', async () => {
     })
 })
 
+test('X unified list hydration keeps member slots when active users fill the limit', () => {
+    const spider = new X.XListSpider()
+
+    const selected = (spider as any).selectHydrationUsers({
+        listId: 'member-slot-list',
+        configuredUsers: ['sally_amaki'],
+        activeUserIds: ['active1', 'active2', 'active3', 'active4', 'active5'],
+        listMemberUserIds: ['member1', 'member2', 'member3', 'member4', 'member5'],
+        hydrateLimit: 5,
+    })
+
+    expect(selected).toHaveLength(5)
+    expect(selected).toContain('sally_amaki')
+    expect(selected.some((userId: string) => userId.startsWith('member'))).toBe(true)
+})
+
+test('X unified list hydration rotates list members across rounds', () => {
+    const spider = new X.XListSpider()
+    const options = {
+        listId: 'rotating-member-list',
+        configuredUsers: [] as string[],
+        activeUserIds: [] as string[],
+        listMemberUserIds: ['member1', 'member2', 'member3', 'member4', 'member5', 'member6'],
+        hydrateLimit: 3,
+    }
+
+    const first = (spider as any).selectHydrationUsers(options)
+    const second = (spider as any).selectHydrationUsers(options)
+
+    expect(first).toEqual(['member1', 'member2', 'member3'])
+    expect(second).toEqual(['member4', 'member5', 'member6'])
+})
+
 test('X unified list hydration honors configured concurrency', async () => {
     const spider = new X.XListSpider()
     let activeRequests = 0

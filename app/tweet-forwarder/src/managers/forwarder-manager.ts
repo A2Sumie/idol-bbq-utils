@@ -2329,13 +2329,15 @@ class ForwarderPools extends BaseCompatibleModel {
                             return
                         }
 
-                        const baseText = await this.resolveTargetTextForArticle(
-                            targetArticle,
-                            targetRenderResult,
-                            cfg_forwarder,
-                            target,
-                            runtime_config,
-                        )
+                        const baseText =
+                            this.buildBilibiliTranslationCaption(article, target, runtime_config) ||
+                            (await this.resolveTargetTextForArticle(
+                                targetArticle,
+                                targetRenderResult,
+                                cfg_forwarder,
+                                target,
+                                runtime_config,
+                            ))
 
                         const premiereResolvedForceKey =
                             premiereResolvedAt && !options?.forceSend
@@ -2502,6 +2504,11 @@ class ForwarderPools extends BaseCompatibleModel {
                                     `cards=${translatedCompanionCard.cardMediaFiles.length} ` +
                                     `media=${translatedCompanionCard.mediaFiles.length}`,
                             )
+                        }
+
+                        if (this.shouldSendBilibiliCardOnly(article, target)) {
+                            mediaFiles = [...cardMediaFiles]
+                            contentMediaFiles = []
                         }
 
                         const outboundPayloadHash = payloadHash({
@@ -2681,13 +2688,17 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
 
                         await DB.OutboundMessage.markSending(outboundIdempotencyKey)
+                        const sendRuntimeConfig =
+                            options?.forceSend && target.NAME === 'bilibili'
+                                ? { ...(runtime_config || {}), summary_card_task_kind: 'summary_card' as const }
+                                : runtime_config
                         const sendResult = await target.send(text, {
                             media: mediaFiles,
                             cardMedia: cardMediaFiles,
                             contentMedia: contentMediaFiles,
                             videoUploadMedia: targetRenderResult.originalMediaFiles,
                             timestamp: article.created_at,
-                            runtime_config,
+                            runtime_config: sendRuntimeConfig,
                             article: cloneDeep(targetArticle),
                             forceSend: options?.forceSend,
                             outboundKey: outboundIdempotencyKey,
@@ -2877,18 +2888,43 @@ class ForwarderPools extends BaseCompatibleModel {
      * True when the target still owes this article a translation passthrough. Keep retryable failed and
      * in-progress records in the dispatch path so OutboundMessage.claim can apply its retry policy.
      */
+    private shouldUseTranslationPassthrough(
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+        _summaryConfig?: ResolvedSummaryCardConfig | null,
+    ) {
+        return target.getEffectiveConfig(runtime_config).translation_passthrough === true
+    }
+
+    private buildBilibiliTranslationCaption(
+        article: ArticleWithId,
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ) {
+        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
+        if (target.NAME !== 'bilibili' || !summaryConfig?.translatedCard || this.shouldSuppressTargetTranslations(target, runtime_config)) {
+            return null
+        }
+        const translation = String(article.translation || '').trim()
+        const isRefOnlyPassthrough = !translation && !this.articleHasOwnText(article) && this.articleHasRenderableRef(article)
+        if (!translation && !isRefOnlyPassthrough) {
+            return null
+        }
+        return formatTranslationPassthrough(article as any, translation)
+    }
+
     private async hasPendingTranslationPassthrough(
         article: ArticleWithId,
         target: BaseForwarder,
         runtime_config?: ForwardTargetPlatformCommonConfig,
     ) {
-        if (!target.getEffectiveConfig(runtime_config)?.translation_passthrough) {
+        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
+        if (!this.shouldUseTranslationPassthrough(target, runtime_config, summaryConfig)) {
             return false
         }
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return false
         }
-        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
         if (
             !String(article.translation || '').trim() &&
             !(article.content && summaryConfig?.translatedCard?.processorId) &&
@@ -2909,6 +2945,13 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private articleHasRenderableRef(article: Pick<ArticleWithId, 'ref'>) {
         return Boolean(article.ref) && typeof article.ref === 'object'
+    }
+
+    private articleHasOwnText(article: Pick<ArticleWithId, 'content' | 'extra'>) {
+        if (String(article.content || '').trim()) {
+            return true
+        }
+        return Boolean(String((article.extra as any)?.content || '').trim())
     }
 
     private async canSendTranslationPassthroughStandalone(
@@ -2961,13 +3004,13 @@ class ForwarderPools extends BaseCompatibleModel {
     ) {
         // runtime_config only carries binding-layer keys; target-level knobs live in cfg_platform,
         // so resolve through the merged effective config.
-        if (!target.getEffectiveConfig(runtime_config)?.translation_passthrough) {
+        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
+        if (!this.shouldUseTranslationPassthrough(target, runtime_config, summaryConfig)) {
             return
         }
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return
         }
-        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
         if (!String(article.translation || '').trim() && summaryConfig?.translatedCard?.processorId) {
             await this.prepareArticleChainTranslations(
                 summaryConfig.translatedCard.processorId,
@@ -2976,7 +3019,7 @@ class ForwarderPools extends BaseCompatibleModel {
             )
         }
         const translation = String(article.translation || '').trim()
-        const isRefOnlyPassthrough = !translation && this.articleHasRenderableRef(article)
+        const isRefOnlyPassthrough = !translation && !this.articleHasOwnText(article) && this.articleHasRenderableRef(article)
         if (!translation && !isRefOnlyPassthrough) {
             return false
         }
@@ -3575,7 +3618,13 @@ class ForwarderPools extends BaseCompatibleModel {
         article: ArticleWithId,
         renderResult: RenderResult,
         config: ResolvedSummaryCardConfig,
+        target?: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
     ) {
+        const bilibiliCaption = target ? this.buildBilibiliTranslationCaption(article, target, runtime_config) : null
+        if (bilibiliCaption) {
+            return bilibiliCaption
+        }
         if (config.mediaRealtimeText === 'rendered') {
             return renderResult.text || ''
         }
@@ -3726,12 +3775,20 @@ class ForwarderPools extends BaseCompatibleModel {
         return item.mediaAlreadyVisible ? '[图已发过]' : ''
     }
 
-    private shouldUseSummaryCardForArticle(article: ArticleWithId) {
+    private isOfficialBlogArticle(article: ArticleWithId) {
         if (article.platform !== Platform.Website) {
-            return true
+            return false
         }
         const feed = String((article.extra?.data as any)?.feed || '').trim()
-        return feed !== 'official-blog' && article.u_id !== '22/7:official-blog'
+        return feed === 'official-blog' || article.u_id === '22/7:official-blog'
+    }
+
+    private shouldUseSummaryCardForArticle(article: ArticleWithId) {
+        return !this.isOfficialBlogArticle(article)
+    }
+
+    private shouldSendBilibiliCardOnly(article: ArticleWithId, target: BaseForwarder) {
+        return target.NAME === 'bilibili' && this.isOfficialBlogArticle(article)
     }
 
     private isSummaryRealtimeMediaEligible(
@@ -3918,7 +3975,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const targetExtraMediaFiles = mediaFilesWithTargetExtras.filter(
             (file) => !mediaFiles.some((mediaFile) => mediaFile.path === file.path),
         )
-        const text = this.buildSummaryCardRealtimeMediaText(article, renderResult, config)
+        const text = this.buildSummaryCardRealtimeMediaText(article, renderResult, config, target, runtime_config)
         const latestVisibleOutbound = await DB.OutboundMessage.findLatestVisibleCompletion({
             target_id: target.id,
             task_kinds: ['summary_realtime_media'],
@@ -4111,7 +4168,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 media: visibleMediaFiles,
                 contentMedia: visibleMediaFiles,
                 timestamp: article.created_at,
-                runtime_config,
+                runtime_config: { ...(runtime_config || {}), summary_card_task_kind: 'summary_realtime_media' },
                 article: cloneDeep(article),
                 bypassMediaBatch: true,
             })
@@ -4571,7 +4628,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 media: mediaFiles,
                 contentMedia: mediaFiles,
                 timestamp: item.article.created_at,
-                runtime_config: queue.runtime_config,
+                runtime_config: { ...(queue.runtime_config || {}), summary_card_task_kind: 'summary_single_native' },
                 article: cloneDeep(stripArticleTranslations(item.article)),
                 forceSend: true,
                 bypassMediaBatch: true,
@@ -5003,7 +5060,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 cardMedia: cardMediaFiles,
                 contentMedia: originalMediaFiles,
                 timestamp: now,
-                runtime_config: queue.runtime_config,
+                runtime_config: { ...(queue.runtime_config || {}), summary_card_task_kind: 'summary_card' },
                 article: primaryCard.summaryArticle,
                 forceSend: true,
             })

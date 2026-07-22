@@ -94,7 +94,11 @@ type PlatformConfigMap = {
         sessdata: string
         buvid3?: string
         buvid4?: string
+        cookie_file?: string
+        cookies?: Record<string, string>
         media_check_level?: 'strict' | 'loose' | 'none'
+        image_max_edge_px?: number
+        image_max_pixels?: number
         video_upload?: BiliupVideoUploadConfig
     }
     /**
@@ -265,6 +269,7 @@ interface ForwardTargetPlatformCommonConfig {
      * Bilibili still applies standalone eligibility; non-eligible text remains in the summary window.
      */
     translation_passthrough?: boolean
+    summary_card_task_kind?: 'summary_card' | 'summary_realtime_media' | 'summary_single_native'
     /**
      * Forwarding-time content fingerprint dedup. Independent switch (default off). When enabled, an article
      * whose rendered text + media identity fingerprint already sent to this target is skipped before the

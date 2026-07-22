@@ -1686,6 +1686,58 @@ test('sendArticles sends a text-only translation passthrough before the main sen
     expect(sends[1]?.texts).toEqual(['main card payload'])
 })
 
+test('Bilibili translated-card native sends use passthrough metadata layout as the dynamic text', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: { render_type: 'text' } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+    const sends: Array<{ texts: string[]; props: any }> = []
+    const target = {
+        id: 'bilibili-caption-layout',
+        NAME: 'bilibili',
+        getEffectiveConfig: () => ({
+            require_media: true,
+            summary_card: {
+                enabled: true,
+                interval_seconds: 1800,
+                send_first_immediately: true,
+                send_first_native: true,
+                translated_card: { enabled: true, processor_id: 'processor-a' },
+            },
+        }),
+        check_blocked: async () => false,
+        send: async (texts: string[] | string, props?: any) => {
+            sends.push({ texts: Array.isArray(texts) ? texts : [texts], props })
+            return { status: 'sent' }
+        },
+    }
+    const article = {
+        id: 219,
+        a_id: 'bilibili-caption-layout-article',
+        u_id: 'minami__iori',
+        username: '南伊織【22/7】',
+        platform: 1,
+        type: 'tweet',
+        created_at: 1784626560,
+        content: '原文',
+        translation: '译文',
+    }
+    const text = (pools as any).buildBilibiliTranslationCaption(article, target, undefined)
+
+    expect(text).toContain('南伊織【22/7】')
+    expect(text).toContain('译文')
+    expect(text).toContain('\n\n@minami__iori 南伊織【22/7】')
+    expect(text).not.toContain('translation_passthrough')
+})
+
 test('Bilibili translation passthrough does not standalone-send translated text without source media', async () => {
     const pools = new ForwarderPools(
         {
@@ -1804,7 +1856,7 @@ test('sendArticles skips translation passthrough when there is no translation', 
     expect(sends[0]?.texts).toEqual(['main card payload'])
 })
 
-test('sendArticles sends a ref-only (deferred-to-card) passthrough for a bare retweet without translation', async () => {
+test('sendArticles sends a ref-only passthrough marker for a bare retweet without translation', async () => {
     const pools = new ForwarderPools(
         {
             forward_targets: [],
@@ -9751,6 +9803,110 @@ test('summary-card targets leave official blog articles on the native send path'
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toBe('official blog body')
     expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
+})
+
+test('Bilibili official blog native sends keep only card media plus translated card', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'bilibili'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: { render_type: 'text-card' } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            require_media: true,
+            summary_card: {
+                enabled: true,
+                interval_seconds: 1800,
+                send_first_immediately: true,
+                send_first_native: true,
+                translated_card: { enabled: true, badge_label: '译文' },
+            },
+        } as any,
+        'bilibili-blog-card-only',
+    )
+    const sourceMedia = Array.from({ length: 3 }, (_, index) => ({
+        media_type: 'photo',
+        path: `/tmp/blog-source-${index}.jpg`,
+    }))
+    const originalCard = { media_type: 'photo', path: '/tmp/blog-original-card.png' }
+    const translatedCard = { media_type: 'photo', path: '/tmp/blog-translated-card.png' }
+    let renderCalls = 0
+    ;(pools as any).renderService = {
+        process: async (_article: any, config?: any) => {
+            renderCalls += 1
+            if (String(config?.taskId || '').includes('-translated-card')) {
+                return {
+                    text: '译文卡',
+                    textCollapseMode: 'article',
+                    cardMediaFiles: [translatedCard],
+                    originalMediaFiles: sourceMedia,
+                    mediaFiles: [...sourceMedia, translatedCard],
+                }
+            }
+            return {
+                text: '原文卡',
+                textCollapseMode: 'article',
+                cardMediaFiles: [originalCard],
+                originalMediaFiles: sourceMedia,
+                mediaFiles: [...sourceMedia, originalCard],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'bilibili-blog-card-only-task',
+        [
+            {
+                id: 822,
+                a_id: 'blog-card-only',
+                platform: Platform.Website,
+                username: 'Blog Member',
+                u_id: '22/7:official-blog',
+                content: 'official blog body',
+                translation: '官方博客译文',
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/822',
+                type: 'article',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: true,
+                media: [],
+                extra: { data: { feed: 'official-blog' } },
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+        { forceSend: true },
+    )
+
+    expect(renderCalls).toBe(3)
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.props?.media.map((file: any) => file.path)).toEqual([
+        originalCard.path,
+        translatedCard.path,
+    ])
+    expect(target.sent[0]?.props?.contentMedia).toEqual([])
 })
 
 test('target media visibility text-collapses media after the second visible occurrence', async () => {

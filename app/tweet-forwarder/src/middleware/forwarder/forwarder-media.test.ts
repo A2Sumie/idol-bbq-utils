@@ -4,7 +4,10 @@ import { Platform } from '@idol-bbq-utils/spider/types'
 import { BiliForwarder, BiliUploadThrottledError } from './bilibili'
 import { QQForwarder } from './qq'
 import { NonRetryableForwarderSendError, PartialForwarderSendError } from './base'
-import { resolveForwarderImageMaxBytes } from '@/services/forwarder-image-attachment-service'
+import {
+    normalizeForwarderImageAttachments,
+    resolveForwarderImageMaxBytes,
+} from '@/services/forwarder-image-attachment-service'
 import { existsSync } from 'node:fs'
 import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -40,6 +43,33 @@ function probeImageSize(filePath: string) {
 test('image max byte config treats small legacy values as KiB', () => {
     expect(resolveForwarderImageMaxBytes({ max_image_bytes: 3500 })).toBe(3500 * 1024)
     expect(resolveForwarderImageMaxBytes({ max_image_bytes: 4_700_000 })).toBe(4_700_000)
+})
+
+test('forwarder image normalization compresses dimension-only oversize images', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'forwarder-image-dimension-'))
+    const sourcePath = path.join(tempRoot, 'tall.ppm')
+    try {
+        await writeLargePpm(sourcePath, 80, 400)
+        const normalized = normalizeForwarderImageAttachments([{ media_type: 'photo', path: sourcePath }], {
+            maxImageBytes: 10_000_000,
+            maxImageEdgePx: 200,
+            maxImagePixels: 1_000_000,
+        })
+        try {
+            expect(normalized.compressedCount).toBeGreaterThanOrEqual(2)
+            expect(normalized.media.length).toBeGreaterThanOrEqual(2)
+            for (const media of normalized.media) {
+                const dimensions = probeImageSize(media.path)
+                expect(dimensions.width).toBeNumber()
+                expect(dimensions.height).toBeNumber()
+                expect(Math.max(dimensions.width!, dimensions.height!)).toBeLessThanOrEqual(200)
+            }
+        } finally {
+            normalized.cleanup()
+        }
+    } finally {
+        await rm(tempRoot, { recursive: true, force: true })
+    }
 })
 
 test('QQForwarder does not send video thumbnails as standalone images', async () => {
@@ -1208,6 +1238,7 @@ test('BiliForwarder retries anonymous buvid fetch after an empty SPI response', 
 })
 
 test('BiliForwarder serializes photo uploads inside one send', async () => {
+    BiliForwarder.resetUploadQueuesForTests()
     const forwarder = new BiliForwarder(
         {
             bili_jct: 'csrf-token',
@@ -1272,7 +1303,66 @@ test('BiliForwarder serializes photo uploads inside one send', async () => {
     expect(sentPicCount).toBe(3)
 })
 
-test('BiliForwarder fails the whole send when a photo upload stays throttled', async () => {
+test('BiliForwarder serializes photo uploads across forwarders with the same account', async () => {
+    BiliForwarder.resetUploadQueuesForTests()
+    const first = new BiliForwarder({ bili_jct: 'shared-csrf', sessdata: 'shared-sess' } as any, 'bili-upload-global-a')
+    const second = new BiliForwarder({ bili_jct: 'shared-csrf', sessdata: 'shared-sess' } as any, 'bili-upload-global-b')
+    ;(first as any).minInterval = 0
+    ;(second as any).minInterval = 0
+    ;(first as any).photoUploadGapMs = 0
+    ;(second as any).photoUploadGapMs = 0
+
+    let inFlight = 0
+    let maxInFlight = 0
+    const uploadOrder: string[] = []
+    const uploadPhoto = async (filePath: string) => {
+        inFlight += 1
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        uploadOrder.push(filePath)
+        inFlight -= 1
+        return {
+            image_url: `https://i0.hdslb.com/bfs/test/${path.basename(filePath)}`,
+            image_width: 100,
+            image_height: 100,
+            img_size: 10,
+        }
+    }
+    ;(first as any).uploadPhoto = uploadPhoto
+    ;(second as any).uploadPhoto = uploadPhoto
+    ;(first as any).sendTextWithPhotos = async () => ({ data: { code: 0, data: { dyn_id_str: 'a' } } })
+    ;(second as any).sendTextWithPhotos = async () => ({ data: { code: 0, data: { dyn_id_str: 'b' } } })
+    const dynamicDetail = (src: string) => ({
+        data: {
+            code: 0,
+            data: {
+                item: {
+                    modules: {
+                        module_dynamic: {
+                            major: {
+                                type: 'MAJOR_TYPE_DRAW',
+                                draw: { items: [{ src }] },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    })
+    ;(first as any).fetchDynamicDetail = async () => dynamicDetail('a')
+    ;(second as any).fetchDynamicDetail = async () => dynamicDetail('b')
+
+    await Promise.all([
+        (first as any).sendDynamicContent(['a'], { media: [{ media_type: 'photo', path: '/tmp/global-a.jpg' }] }),
+        (second as any).sendDynamicContent(['b'], { media: [{ media_type: 'photo', path: '/tmp/global-b.jpg' }] }),
+    ])
+
+    expect(maxInFlight).toBe(1)
+    expect(uploadOrder.sort()).toEqual(['/tmp/global-a.jpg', '/tmp/global-b.jpg'].sort())
+})
+
+test('BiliForwarder fails the whole send when a non-summary photo upload stays throttled', async () => {
+    BiliForwarder.resetUploadQueuesForTests()
     const forwarder = new BiliForwarder(
         {
             bili_jct: 'csrf-token',
@@ -1301,7 +1391,54 @@ test('BiliForwarder fails the whole send when a photo upload stays throttled', a
     expect(sendCalled).toBeFalse()
 })
 
+test('BiliForwarder marks summary text with missing-media marker when upload stays throttled', async () => {
+    BiliForwarder.resetUploadQueuesForTests()
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            media_check_level: 'strict',
+            require_media: true,
+        } as any,
+        'bili-upload-throttle-summary-marker-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).photoUploadRetries = 0
+
+    let sentText = ''
+    let sendTextWithPhotosCalled = false
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'bili-throttle-summary-'))
+    const photoPath = path.join(tempDir, 'throttled.jpg')
+    await writeFile(photoPath, Buffer.from('not-a-real-image-but-existing'))
+    try {
+        ;(forwarder as any).uploadPhoto = async () => {
+            throw new BiliUploadThrottledError('throttled by test')
+        }
+        ;(forwarder as any).sendText = async (text: string) => {
+            sentText = text
+            return { data: { code: 0, message: 'ok', data: { dyn_id_str: 'missing-media-text-dyn' } } }
+        }
+        ;(forwarder as any).sendTextWithPhotos = async () => {
+            sendTextWithPhotosCalled = true
+            return { data: { code: 0, message: 'ok' } }
+        }
+
+        await (forwarder as any).sendDynamicContent(['summary text'], {
+            media: [{ media_type: 'photo', path: photoPath }],
+            runtime_config: { summary_card_task_kind: 'summary_card' },
+        })
+    } finally {
+        await rm(tempDir, { recursive: true, force: true })
+    }
+
+    expect(sendTextWithPhotosCalled).toBeFalse()
+    expect(sentText).toContain('[缺图]')
+    expect(sentText).toContain('summary text')
+})
+
 test('BiliUploadThrottledError is non-retryable so the whole-send layer does not re-upload', async () => {
+    BiliForwarder.resetUploadQueuesForTests()
     expect(new BiliUploadThrottledError('x')).toBeInstanceOf(NonRetryableForwarderSendError)
 
     const forwarder = new BiliForwarder(
@@ -1343,6 +1480,7 @@ test('BiliUploadThrottledError is non-retryable so the whole-send layer does not
 })
 
 test('BiliForwarder does not re-upload successful photos when strict upload validation fails', async () => {
+    BiliForwarder.resetUploadQueuesForTests()
     const forwarder = new BiliForwarder(
         {
             bili_jct: 'csrf-token',

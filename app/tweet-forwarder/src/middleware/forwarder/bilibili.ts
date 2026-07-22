@@ -42,6 +42,30 @@ const BILI_VIDEO_UPLOAD_HASH_NAMESPACE = 'bilibili-video-upload'
 const BiliUploadThrottledError = BiliUploadVelocityError
 
 const BILI_PHOTO_UPLOAD_GAP_MS = 2000
+const BILI_PHOTO_UPLOAD_COOLDOWN_MS = 15000
+const BILI_PHOTO_UPLOAD_MISSING_MARKER = '[缺图]'
+
+type BiliUploadQueueState = {
+    chain: Promise<unknown>
+    lastUploadAt: number
+    cooldownUntil: number
+}
+
+const biliUploadQueues = new Map<string, BiliUploadQueueState>()
+
+function isBiliUploadThrottledError(error: unknown): boolean {
+    let current = error
+    for (let depth = 0; depth < 4; depth++) {
+        if (current instanceof BiliUploadThrottledError) {
+            return true
+        }
+        if (!current || typeof current !== 'object' || !('originalError' in current)) {
+            return false
+        }
+        current = (current as { originalError?: unknown }).originalError
+    }
+    return false
+}
 
 interface BiliImageUploaded {
     img_src: string
@@ -109,9 +133,14 @@ class BiliForwarder extends Forwarder {
     private photoUploadGapMs = BILI_PHOTO_UPLOAD_GAP_MS
     private photoUploadRetries = 3
     private photoUploadRetryMinTimeoutMs = 10000
+    private photoUploadCooldownMs = BILI_PHOTO_UPLOAD_COOLDOWN_MS
     private dynamicCreateRetries = 2
     private dynamicCreateRetryMinTimeoutMs = 3000
     protected override BASIC_TEXT_LIMIT = 1000
+
+    static resetUploadQueuesForTests() {
+        biliUploadQueues.clear()
+    }
 
     constructor(...[config, ...rest]: [...ConstructorParameters<typeof Forwarder>]) {
         super(config, ...rest)
@@ -121,6 +150,8 @@ class BiliForwarder extends Forwarder {
             sessdata,
             buvid3 = '',
             buvid4 = '',
+            cookie_file,
+            cookies,
             media_check_level = 'none',
             video_upload,
         } = config as ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>
@@ -131,7 +162,17 @@ class BiliForwarder extends Forwarder {
         this.sessdata = sessdata
         this.media_check_level = media_check_level
         this.video_upload = video_upload
-        this.api = new BilibiliApiClient({ bili_jct, sessdata, buvid3, buvid4 })
+        const cookieFile = cookie_file || video_upload?.cookie_file
+        this.api = new BilibiliApiClient({
+            bili_jct,
+            sessdata,
+            buvid3,
+            buvid4,
+            cookies: {
+                ...BilibiliApiClient.readCookieDocument(cookieFile),
+                ...(cookies || {}),
+            },
+        })
     }
 
     private buvidFetchPromise: Promise<void> | null = null
@@ -535,8 +576,13 @@ class BiliForwarder extends Forwarder {
                 this.isDynamicImageMedia(item),
             )
         }
-        if (props.contentMedia) {
-            return props.contentMedia.filter((item) => this.isDynamicImageMedia(item))
+        const contentImages = (props.contentMedia || []).filter((item) => this.isDynamicImageMedia(item))
+        if (contentImages.length > 0) {
+            return contentImages
+        }
+        const cardImages = (props.cardMedia || []).filter((item) => this.isDynamicImageMedia(item))
+        if (cardImages.length > 0) {
+            return cardImages
         }
         const cardPaths = new Set((props.cardMedia || []).map((item) => item.path).filter(Boolean))
         return (props.media || []).filter((item) => this.isDynamicImageMedia(item) && !cardPaths.has(item.path))
@@ -626,6 +672,60 @@ class BiliForwarder extends Forwarder {
         )
     }
 
+    private getUploadQueueKey() {
+        return `${this.bili_jct}:${this.sessdata}`
+    }
+
+    private getUploadQueueState() {
+        const key = this.getUploadQueueKey()
+        let state = biliUploadQueues.get(key)
+        if (!state) {
+            state = { chain: Promise.resolve(), lastUploadAt: 0, cooldownUntil: 0 }
+            biliUploadQueues.set(key, state)
+        }
+        return state
+    }
+
+    private async runQueuedPhotoUpload<T>(upload: () => Promise<T>): Promise<T> {
+        const state = this.getUploadQueueState()
+        const run = async () => {
+            const now = Date.now()
+            const waitUntil = Math.max(state.lastUploadAt + this.photoUploadGapMs, state.cooldownUntil)
+            if (waitUntil > now) {
+                await delay(waitUntil - now)
+            }
+            try {
+                const result = await upload()
+                state.lastUploadAt = Date.now()
+                return result
+            } catch (error) {
+                if (error instanceof BiliUploadThrottledError) {
+                    state.cooldownUntil = Math.max(state.cooldownUntil, Date.now() + this.photoUploadCooldownMs)
+                }
+                throw error
+            }
+        }
+        const queued = state.chain.then(run, run)
+        state.chain = queued.catch(() => undefined)
+        return queued
+    }
+
+    private shouldAllowMissingSummaryMedia(props?: SendProps) {
+        const kind = String((props?.runtime_config as any)?.summary_card_task_kind || '')
+        return kind === 'summary_card' || kind === 'summary_realtime_media' || kind === 'summary_single_native'
+    }
+
+    private markTextWithMissingMedia(texts: string[]) {
+        if (texts.some((text) => text.includes(BILI_PHOTO_UPLOAD_MISSING_MARKER))) {
+            return texts
+        }
+        if (texts.length === 0) {
+            return [BILI_PHOTO_UPLOAD_MISSING_MARKER]
+        }
+        const [first, ...rest] = texts
+        return [`${BILI_PHOTO_UPLOAD_MISSING_MARKER}\n${first}`, ...rest]
+    }
+
     private async sendDynamicContent(texts: string[], props?: SendProps): Promise<any> {
         await this.ensureBuvidCookies()
         let { media } = props || {}
@@ -633,8 +733,11 @@ class BiliForwarder extends Forwarder {
         const _log = this.log
         const mediaCheckLevel = this.getMediaCheckLevel(props)
         const requireMedia = this.getEffectiveConfig(props?.runtime_config).require_media === true
+        const effectiveConfig = this.getEffectiveConfig(props?.runtime_config) as any
         const normalizedAttachments = normalizeForwarderImageAttachments(media, {
-            maxImageBytes: resolveForwarderImageMaxBytes(this.getEffectiveConfig(props?.runtime_config)),
+            maxImageBytes: resolveForwarderImageMaxBytes(effectiveConfig),
+            maxImageEdgePx: effectiveConfig.image_max_edge_px,
+            maxImagePixels: effectiveConfig.image_max_pixels,
             log: _log,
         })
         media = normalizedAttachments.media
@@ -642,19 +745,16 @@ class BiliForwarder extends Forwarder {
             // Upload photos one at a time with a gap: parallel upload_bfs bursts trip Bilibili's
             // per-account velocity control (-111), which previously killed the whole realtime send.
             const uploadedPhotos: Array<BiliUploadPhotoResponse | undefined> = []
-            let firstPhoto = true
+            const allowMissingSummaryMedia = this.shouldAllowMissingSummaryMedia(props)
+            let missingPhotoDueToThrottle = false
             for (const item of media) {
                 if (!this.isDynamicImageMedia(item)) {
                     // video to gif
                     continue
                 }
-                if (!firstPhoto) {
-                    await delay(this.photoUploadGapMs)
-                }
-                firstPhoto = false
                 try {
                     _log?.debug(`Uploading photo ${item.path}`)
-                    const obj = await pRetry(() => this.uploadPhoto(item.path), {
+                    const obj = await pRetry(() => this.runQueuedPhotoUpload(() => this.uploadPhoto(item.path)), {
                         retries: this.photoUploadRetries,
                         minTimeout: this.photoUploadRetryMinTimeoutMs,
                         factor: 2,
@@ -670,6 +770,16 @@ class BiliForwarder extends Forwarder {
                     })
                     uploadedPhotos.push(obj)
                 } catch (e) {
+                    if (isBiliUploadThrottledError(e) && allowMissingSummaryMedia) {
+                        missingPhotoDueToThrottle = true
+                        _log?.error(
+                            `Upload photo ${item.path} throttled, sending summary text with ${BILI_PHOTO_UPLOAD_MISSING_MARKER}: ${
+                                e instanceof Error ? e.message : String(e)
+                            }`,
+                        )
+                        uploadedPhotos.push(undefined)
+                        continue
+                    }
                     if (e instanceof NonRetryableForwarderSendError) {
                         throw e
                     }
@@ -682,19 +792,21 @@ class BiliForwarder extends Forwarder {
                 .map((i) => this.normalizeUploadedPhoto(i))
                 .filter((i): i is BiliImageUploaded => Boolean(i))
             const dynamicImageCount = media.filter((item) => this.isDynamicImageMedia(item)).length
-            if ((mediaCheckLevel === 'loose' || requireMedia) && dynamicImageCount !== 0 && pics.length === 0) {
-                _log?.error(`No photos uploaded, throw error.`)
-                throw new NonRetryableForwarderSendError(`No photos uploaded, please check your bili_jct and sessdata.`)
-            }
-            if ((mediaCheckLevel === 'strict' || requireMedia) && dynamicImageCount !== pics.length) {
-                _log?.error(`Some photos upload failed.`)
-                throw new NonRetryableForwarderSendError(`Some photos upload failed, please check your bili_jct and sessdata.`)
+            if (!allowMissingSummaryMedia || !missingPhotoDueToThrottle) {
+                if ((mediaCheckLevel === 'loose' || requireMedia) && dynamicImageCount !== 0 && pics.length === 0) {
+                    _log?.error(`No photos uploaded, throw error.`)
+                    throw new NonRetryableForwarderSendError(`No photos uploaded, please check your bili_jct and sessdata.`)
+                }
+                if ((mediaCheckLevel === 'strict' || requireMedia) && dynamicImageCount !== pics.length) {
+                    _log?.error(`Some photos upload failed.`)
+                    throw new NonRetryableForwarderSendError(`Some photos upload failed, please check your bili_jct and sessdata.`)
+                }
             }
             // TODO: more pics support
             const MAX_PICS = 9
             const picChunks = chunk(pics, MAX_PICS)
 
-            const textChunks = texts.length > 0 ? texts : []
+            const textChunks = missingPhotoDueToThrottle ? this.markTextWithMissingMedia(texts) : texts.length > 0 ? texts : []
 
             const n = Math.max(picChunks.length, textChunks.length)
             const _res = []

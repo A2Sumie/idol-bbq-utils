@@ -7,12 +7,16 @@ import fs from 'fs'
 import path from 'path'
 
 const DEFAULT_FORWARDER_IMAGE_MAX_BYTES = 4_000_000
+const DEFAULT_FORWARDER_IMAGE_MAX_EDGE_PX = 12000
+const DEFAULT_FORWARDER_IMAGE_MAX_PIXELS = 24_000_000
 const COMPRESSED_IMAGE_DIR = path.join(CACHE_DIR_ROOT, 'media', 'forwarder-compressed')
 
 type ImageAttachmentLogger = Partial<Pick<Logger, 'debug' | 'info' | 'warn'>>
 
 interface NormalizeForwarderImageAttachmentsOptions {
     maxImageBytes?: number
+    maxImageEdgePx?: number
+    maxImagePixels?: number
     ffmpegPath?: string
     ffprobePath?: string
     log?: ImageAttachmentLogger
@@ -22,6 +26,11 @@ interface NormalizedForwarderImageAttachments {
     media: MediaFile[]
     cleanup: () => void
     compressedCount: number
+}
+
+type NormalizedImageResult = {
+    path: string
+    size_bytes: number
 }
 
 interface ImageDimensions {
@@ -54,6 +63,7 @@ const COMPRESSION_ATTEMPTS: CompressionAttempt[] = [
     { maxDimension: 420, quality: 12 },
 ]
 const LEGACY_KIB_IMAGE_LIMIT_MAX = 10_000
+const SPLIT_IMAGE_QUALITY = 4
 
 function normalizeConfiguredImageMaxBytes(value: number) {
     if (value > 0 && value <= LEGACY_KIB_IMAGE_LIMIT_MAX) {
@@ -92,14 +102,33 @@ function safeEvenDimension(value: number) {
     return rounded % 2 === 0 ? rounded : rounded - 1
 }
 
-function fitDimensions(dimensions: ImageDimensions | null, maxDimension: number) {
+function exceedsImageDimensionLimit(dimensions: ImageDimensions | null, maxEdgePx: number, maxPixels: number) {
+    if (!dimensions || dimensions.width <= 0 || dimensions.height <= 0) {
+        return false
+    }
+    return dimensions.width > maxEdgePx || dimensions.height > maxEdgePx || dimensions.width * dimensions.height > maxPixels
+}
+
+function fitDimensions(
+    dimensions: ImageDimensions | null,
+    maxDimension: number,
+    limits: { maxEdgePx: number; maxPixels: number },
+) {
     if (!dimensions || dimensions.width <= 0 || dimensions.height <= 0) {
         return `${maxDimension}:${maxDimension}:force_original_aspect_ratio=decrease`
     }
 
     const isTallImage = dimensions.height / dimensions.width >= TALL_IMAGE_HEIGHT_WIDTH_RATIO
     const constrainedDimension = isTallImage ? dimensions.width : Math.max(dimensions.width, dimensions.height)
-    const ratio = Math.min(1, maxDimension / constrainedDimension)
+    let ratio = Math.min(1, maxDimension / constrainedDimension)
+    const longestEdge = Math.max(dimensions.width, dimensions.height)
+    if (longestEdge * ratio > limits.maxEdgePx) {
+        ratio = Math.min(ratio, limits.maxEdgePx / longestEdge)
+    }
+    const projectedPixels = dimensions.width * dimensions.height * ratio * ratio
+    if (projectedPixels > limits.maxPixels) {
+        ratio = Math.min(ratio, Math.sqrt(limits.maxPixels / (dimensions.width * dimensions.height)))
+    }
     return `${safeEvenDimension(dimensions.width * ratio)}:${safeEvenDimension(dimensions.height * ratio)}`
 }
 
@@ -143,19 +172,89 @@ function compressedOutputPath(sourcePath: string, attempt: CompressionAttempt) {
     return path.join(COMPRESSED_IMAGE_DIR, `${base}-${attempt.maxDimension}-q${attempt.quality}-${hash}.jpg`)
 }
 
+function splitTallImageUnderLimit(
+    sourcePath: string,
+    dimensions: ImageDimensions | null,
+    maxImageBytes: number,
+    limits: { maxEdgePx: number; maxPixels: number },
+    options: NormalizeForwarderImageAttachmentsOptions,
+): NormalizedImageResult[] | null {
+    if (!dimensions || dimensions.width <= 0 || dimensions.height <= limits.maxEdgePx) {
+        return null
+    }
+    const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg'
+    const chunkHeight = Math.max(2, safeEvenDimension(Math.min(limits.maxEdgePx, Math.floor(limits.maxPixels / dimensions.width))))
+    if (chunkHeight <= 0 || dimensions.height <= chunkHeight) {
+        return null
+    }
+    const results: NormalizedImageResult[] = []
+    const base = path.basename(sourcePath, path.extname(sourcePath)).replace(/[^a-zA-Z0-9._-]+/g, '_') || 'image'
+    const runHash = crypto.createHash('sha1').update(`${sourcePath}:${Date.now()}:${Math.random()}:split`).digest('hex').slice(0, 12)
+    try {
+        for (let top = 0, index = 0; top < dimensions.height; top += chunkHeight, index += 1) {
+            const height = Math.min(chunkHeight, dimensions.height - top)
+            const outputPath = path.join(COMPRESSED_IMAGE_DIR, `${base}-part${String(index + 1).padStart(2, '0')}-${runHash}.jpg`)
+            execFileSync(
+                ffmpegPath,
+                [
+                    '-y',
+                    '-v',
+                    'error',
+                    '-i',
+                    sourcePath,
+                    '-vf',
+                    `crop=${dimensions.width}:${height}:0:${top}`,
+                    '-frames:v',
+                    '1',
+                    '-q:v',
+                    String(SPLIT_IMAGE_QUALITY),
+                    '-pix_fmt',
+                    'yuvj420p',
+                    '-map_metadata',
+                    '-1',
+                    outputPath,
+                ],
+                { stdio: 'ignore', timeout: 30_000 },
+            )
+            const size = statSize(outputPath)
+            if (size === null || size > maxImageBytes) {
+                fs.rmSync(outputPath, { force: true })
+                throw new Error(`split chunk ${index + 1} exceeded byte limit`)
+            }
+            results.push({ path: outputPath, size_bytes: size })
+        }
+        return results.length > 0 ? results : null
+    } catch {
+        for (const result of results) {
+            fs.rmSync(result.path, { force: true })
+        }
+        return null
+    }
+}
+
+
 function compressImageUnderLimit(
     sourcePath: string,
     maxImageBytes: number,
+    limits: { maxEdgePx: number; maxPixels: number },
     options: NormalizeForwarderImageAttachmentsOptions,
 ) {
     const originalSize = statSize(sourcePath)
-    if (originalSize === null || originalSize <= maxImageBytes) {
+    if (originalSize === null) {
         return null
     }
 
     const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg'
     const ffprobePath = options.ffprobePath || process.env.FFPROBE_PATH || 'ffprobe'
     const dimensions = probeImageDimensions(sourcePath, ffprobePath)
+    const splitResults = splitTallImageUnderLimit(sourcePath, dimensions, maxImageBytes, limits, options)
+    if (splitResults) {
+        return splitResults
+    }
+    const dimensionLimited = exceedsImageDimensionLimit(dimensions, limits.maxEdgePx, limits.maxPixels)
+    if (originalSize <= maxImageBytes && !dimensionLimited) {
+        return null
+    }
     let bestPath: string | null = null
     let bestSize = Number.POSITIVE_INFINITY
 
@@ -171,7 +270,7 @@ function compressImageUnderLimit(
                     '-i',
                     sourcePath,
                     '-vf',
-                    `scale=${fitDimensions(dimensions, attempt.maxDimension)}`,
+                    `scale=${fitDimensions(dimensions, attempt.maxDimension, limits)}`,
                     '-frames:v',
                     '1',
                     '-q:v',
@@ -201,10 +300,12 @@ function compressImageUnderLimit(
                 options.log?.info?.(
                     `Compressed image attachment ${path.basename(sourcePath)} from ${originalSize} to ${compressedSize} bytes`,
                 )
-                return {
-                    path: outputPath,
-                    size_bytes: compressedSize,
-                }
+                return [
+                    {
+                        path: outputPath,
+                        size_bytes: compressedSize,
+                    },
+                ]
             }
         } catch {
             fs.rmSync(outputPath, { force: true })
@@ -213,10 +314,12 @@ function compressImageUnderLimit(
 
     if (bestPath) {
         if (bestSize <= maxImageBytes) {
-            return {
-                path: bestPath,
-                size_bytes: bestSize,
-            }
+            return [
+                {
+                    path: bestPath,
+                    size_bytes: bestSize,
+                },
+            ]
         }
         fs.rmSync(bestPath, { force: true })
     }
@@ -232,43 +335,49 @@ function normalizeForwarderImageAttachments(
     options: NormalizeForwarderImageAttachmentsOptions = {},
 ): NormalizedForwarderImageAttachments {
     const maxImageBytes = normalizeMaxImageBytes(options.maxImageBytes)
+    const limits = {
+        maxEdgePx: Math.max(1, Math.floor(Number(options.maxImageEdgePx || DEFAULT_FORWARDER_IMAGE_MAX_EDGE_PX))),
+        maxPixels: Math.max(1, Math.floor(Number(options.maxImagePixels || DEFAULT_FORWARDER_IMAGE_MAX_PIXELS))),
+    }
     const cleanupPaths: string[] = []
-    const compressedByPath = new Map<string, { path: string; size_bytes: number }>()
+    const compressedByPath = new Map<string, NormalizedImageResult[]>()
     let compressedCount = 0
 
-    const normalized = media.map((item) => {
+    const normalized = media.flatMap((item) => {
         if (!isImageLikeMedia(item)) {
-            return item
+            return [item]
         }
 
         const existing = compressedByPath.get(item.path)
         if (existing) {
-            return {
+            return existing.map((result) => ({
                 ...item,
-                path: existing.path,
-                size_bytes: existing.size_bytes,
-            }
+                path: result.path,
+                size_bytes: result.size_bytes,
+            }))
         }
 
-        const result = compressImageUnderLimit(item.path, maxImageBytes, options)
+        const result = compressImageUnderLimit(item.path, maxImageBytes, limits, options)
         if (!result) {
             const size = statSize(item.path)
-            return size === null
-                ? item
-                : {
-                      ...item,
-                      size_bytes: item.size_bytes || size,
-                  }
+            return [
+                size === null
+                    ? item
+                    : {
+                          ...item,
+                          size_bytes: item.size_bytes || size,
+                      },
+            ]
         }
 
         compressedByPath.set(item.path, result)
-        cleanupPaths.push(result.path)
-        compressedCount += 1
-        return {
+        cleanupPaths.push(...result.map((entry) => entry.path))
+        compressedCount += result.length
+        return result.map((entry) => ({
             ...item,
-            path: result.path,
-            size_bytes: result.size_bytes,
-        }
+            path: entry.path,
+            size_bytes: entry.size_bytes,
+        }))
     })
 
     return {
