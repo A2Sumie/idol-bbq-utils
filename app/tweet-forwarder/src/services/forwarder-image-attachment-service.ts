@@ -7,8 +7,8 @@ import fs from 'fs'
 import path from 'path'
 
 const DEFAULT_FORWARDER_IMAGE_MAX_BYTES = 4_000_000
-const DEFAULT_FORWARDER_IMAGE_MAX_EDGE_PX = 12000
-const DEFAULT_FORWARDER_IMAGE_MAX_PIXELS = 24_000_000
+const DEFAULT_FORWARDER_IMAGE_MAX_EDGE_PX = 30_000
+const DEFAULT_FORWARDER_IMAGE_MAX_PIXELS = 40_000_000
 const COMPRESSED_IMAGE_DIR = path.join(CACHE_DIR_ROOT, 'media', 'forwarder-compressed')
 
 type ImageAttachmentLogger = Partial<Pick<Logger, 'debug' | 'info' | 'warn'>>
