@@ -2906,8 +2906,7 @@ class ForwarderPools extends BaseCompatibleModel {
             return null
         }
         const translation = String(article.translation || '').trim()
-        const isRefOnlyPassthrough = !translation && !this.articleHasOwnText(article) && this.articleHasRenderableRef(article)
-        if (!translation && !isRefOnlyPassthrough) {
+        if (!translation || !this.articleHasOwnText(article)) {
             return null
         }
         return formatTranslationPassthrough(article as any, translation)
@@ -2925,11 +2924,10 @@ class ForwarderPools extends BaseCompatibleModel {
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return false
         }
-        if (
-            !String(article.translation || '').trim() &&
-            !(article.content && summaryConfig?.translatedCard?.processorId) &&
-            !this.articleHasRenderableRef(article)
-        ) {
+        if (!this.articleHasOwnText(article)) {
+            return false
+        }
+        if (!String(article.translation || '').trim() && !summaryConfig?.translatedCard?.processorId) {
             return false
         }
         const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article))
@@ -2979,21 +2977,7 @@ class ForwarderPools extends BaseCompatibleModel {
         return this.canSendSummaryCardNow(queueKey, summaryConfig, Math.floor(Date.now() / 1000), target.id)
     }
 
-    /**
-     * Fast passthrough of the root article's translation (no original text). Layout per user spec
-     * (see formatTranslationPassthrough):
-     *   南伊織【22/7】1556⁹(260720)
-     *   <translation>
-     *   <blank line>
-     *   @minami__iori 南伊織【22/7】 1556⁹(260720) X发推
-     * Ref-only articles (bare retweet/reply, content on the card) instead get:
-     *   <blank line>
-     *   ---（余下见卡片）---
-     *   @minami__iori 南伊織【22/7】 1556⁹(260720) X转推
-     * Attachments keep the rendered card plus the media the target's visibility/dedup policy
-     * allows; claimed slots are kept on success (so the main send dedups against them) and
-     * released on failure. Enabled per target via `translation_passthrough`.
-     */
+
     private async sendTranslationPassthrough(
         log: Logger | undefined,
         article: ArticleWithId,
@@ -3019,8 +3003,7 @@ class ForwarderPools extends BaseCompatibleModel {
             )
         }
         const translation = String(article.translation || '').trim()
-        const isRefOnlyPassthrough = !translation && !this.articleHasOwnText(article) && this.articleHasRenderableRef(article)
-        if (!translation && !isRefOnlyPassthrough) {
+        if (!translation || !this.articleHasOwnText(article)) {
             return false
         }
         if (!(await this.canSendTranslationPassthroughStandalone(article, target, runtime_config, renderResult))) {

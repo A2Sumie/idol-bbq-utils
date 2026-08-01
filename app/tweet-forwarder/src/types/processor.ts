@@ -72,11 +72,14 @@ interface ProcessorConfig extends CommonCfgConfig {
     model_id?: string
     max_tokens?: number
     temperature?: number
+    top_p?: number
     /**
      * extra config for request body
      */
     extended_payload?: Record<string, any>
     response_format?: 'json_schema' | 'json_object' | 'none'
+    wire_api?: 'chat_completions' | 'responses'
+    reasoning_effort?: string
     request_timeout_ms?: number
     output_schema?: Record<string, any>
     output_schema_file?: string
@@ -104,6 +107,9 @@ interface ProcessorFallbackConfig {
     model_id?: string
     base_url?: string
     temperature?: number
+    top_p?: number
+    wire_api?: 'chat_completions' | 'responses'
+    reasoning_effort?: string
     extended_payload?: Record<string, any>
 }
 

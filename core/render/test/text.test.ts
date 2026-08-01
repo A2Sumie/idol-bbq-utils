@@ -90,15 +90,43 @@ test('translation passthrough title joins name and time with no separating space
     expect(text.split('\n').at(-1)).toBe('@minami__iori 南伊織【22/7】 1556⁹(260720) X发推')
 })
 
-test('translation passthrough ref-only case defers the body to the card', () => {
-    const article = xArticle('retweet')
-    const text = formatTranslationPassthrough(article, '')
+test('translation passthrough appends the card marker when the first layer has body and a ref', () => {
+    const article = {
+        ...xArticle('retweet'),
+        ref: { ...xArticle('tweet'), u_id: 'someone_else', username: 'Someone Else' },
+    }
+    const text = formatTranslationPassthrough(article, '第一层评论')
 
     expect(text).toBe(
-        ['', PASSTHROUGH_CARD_DEFERRED_MARKER, '@minami__iori 南伊織【22/7】 1556⁹(260720) X转推'].join('\n'),
+        [
+            '南伊織【22/7】1556⁹(260720)',
+            '第一层评论',
+            '',
+            PASSTHROUGH_CARD_DEFERRED_MARKER,
+            '',
+            '@minami__iori 南伊織【22/7】 1556⁹(260720) X转推',
+        ].join('\n'),
     )
-    expect(text.startsWith('\n')).toBe(true)
     expect(text).toContain('余下见卡片')
+})
+
+test('translation passthrough without a ref keeps the plain title/body/attribution layout', () => {
+    const text = formatTranslationPassthrough(xArticle('tweet'), '译文')
+    expect(text).not.toContain('余下见卡片')
+    expect(text).toBe(
+        ['南伊織【22/7】1556⁹(260720)', '译文', '', '@minami__iori 南伊織【22/7】 1556⁹(260720) X发推'].join('\n'),
+    )
+})
+
+test('translation passthrough returns attribution only when the first layer has no body', () => {
+    const article = {
+        ...xArticle('retweet'),
+        ref: { ...xArticle('tweet'), u_id: 'someone_else', username: 'Someone Else' },
+    }
+    const text = formatTranslationPassthrough(article, '')
+
+    expect(text).toBe('@minami__iori 南伊織【22/7】 1556⁹(260720) X转推')
+    expect(text).not.toContain('余下见卡片')
 })
 
 test('translation passthrough drops a redundant @handle when it equals the display name', () => {

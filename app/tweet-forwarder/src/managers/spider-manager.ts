@@ -130,12 +130,12 @@ function articleExtraData(value: unknown) {
     if (typeof value === 'string') {
         try {
             const parsed = JSON.parse(value)
-            return parsed && typeof parsed === 'object' ? ((parsed as any).data || parsed) : null
+            return parsed && typeof parsed === 'object' ? (parsed as any).data || parsed : null
         } catch {
             return null
         }
     }
-    return value && typeof value === 'object' ? ((value as any).data || value) : null
+    return value && typeof value === 'object' ? (value as any).data || value : null
 }
 
 function premiereResolvedExtra(existing: any, next: Article, resolvedAt: number) {
@@ -147,7 +147,8 @@ function premiereResolvedExtra(existing: any, next: Article, resolvedAt: number)
             premiere: {
                 ...existingPremiere,
                 pending: false,
-                scheduled_start_at: existingPremiere.scheduled_start_at || (nextData as any)?.premiere?.scheduled_start_at || null,
+                scheduled_start_at:
+                    existingPremiere.scheduled_start_at || (nextData as any)?.premiere?.scheduled_start_at || null,
                 resolved_at: resolvedAt,
             },
         },
@@ -323,7 +324,11 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
     if (/\b(timeout|timed out|navigation timeout|aborterror)\b/.test(message)) {
         return 'timeout'
     }
-    if (/\b(econnreset|socket hang up|network|fetch failed|temporarily unavailable|bad gateway|service unavailable)\b/.test(message)) {
+    if (
+        /\b(econnreset|socket hang up|network|fetch failed|temporarily unavailable|bad gateway|service unavailable)\b/.test(
+            message,
+        )
+    ) {
         return 'transient'
     }
     if (/browser hydration missing/.test(message)) {
@@ -517,20 +522,15 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                                 end,
                                 target_ids: targetIds,
                             }
-                            await DB.TaskQueue.add(
-                                taskType,
-                                payload,
-                                now.unix(),
-                                {
-                                    source_ref: `${platform}:${u_id}`,
-                                    action_type: taskType,
-                                    idempotency_key: DB.TaskQueue.buildIdempotencyKey(
-                                        taskType,
-                                        idempotencyPayload,
-                                        DB.TaskQueue.IDEMPOTENCY_FORMAT.LegacyJson,
-                                    ),
-                                },
-                            )
+                            await DB.TaskQueue.add(taskType, payload, now.unix(), {
+                                source_ref: `${platform}:${u_id}`,
+                                action_type: taskType,
+                                idempotency_key: DB.TaskQueue.buildIdempotencyKey(
+                                    taskType,
+                                    idempotencyPayload,
+                                    DB.TaskQueue.IDEMPOTENCY_FORMAT.LegacyJson,
+                                ),
+                            })
                             this.log?.info(`Scheduled aggregation task for ${platform} ${u_id}`)
                         }
                     }
@@ -599,7 +599,9 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             (candidate) => candidate.id === processorId || candidate.name === processorId,
         )
         if (!processor) {
-            this.log?.warn(`Processor ${processorId} configured for crawler ${crawler.name || '(unnamed)'} was not found`)
+            this.log?.warn(
+                `Processor ${processorId} configured for crawler ${crawler.name || '(unnamed)'} was not found`,
+            )
             return undefined
         }
         return processor
@@ -1258,7 +1260,9 @@ class SpiderPools extends BaseCompatibleModel {
 
         const cookie_file = cfg_crawler?.cookie_file
         if (cookie_file) {
-            const cookies = parseNetscapeCookieToPuppeteerCookie(resolveConfiguredCookieFilePath(cookie_file) || cookie_file)
+            const cookies = parseNetscapeCookieToPuppeteerCookie(
+                resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
+            )
             cookieString = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
         }
 
@@ -1526,7 +1530,10 @@ class SpiderPools extends BaseCompatibleModel {
         this.log?.info('Spider Pools dropped')
     }
 
-    async exportCrawlerCookies(crawler: Crawler, options: CrawlerCookieExportOptions = {}): Promise<{
+    async exportCrawlerCookies(
+        crawler: Crawler,
+        options: CrawlerCookieExportOptions = {},
+    ): Promise<{
         cookies: Array<BrowserCookieSnapshot>
         visitedUrl: string
         sessionProfile: string | null
@@ -1714,8 +1721,7 @@ class SpiderPools extends BaseCompatibleModel {
                     fetch: options.fetch,
                     timeoutMs: options.timeoutMs,
                     xProbeTarget: platformHint === 'x' ? inferXProbeTarget(crawler) : undefined,
-                    instagramProbeTarget:
-                        platformHint === 'instagram' ? inferInstagramProbeTarget(crawler) : undefined,
+                    instagramProbeTarget: platformHint === 'instagram' ? inferInstagramProbeTarget(crawler) : undefined,
                     tiktokProbeTarget: platformHint === 'tiktok' ? inferTikTokProbeTarget(crawler) : undefined,
                 })
                 if (liveProbe.status === 'fail') {
@@ -1764,14 +1770,13 @@ class SpiderPools extends BaseCompatibleModel {
         // rendered. Default to the large Samsung Android Chrome profile and only allow explicit
         // mobile overrides (iOS Safari is allowed but discouraged).
         const deviceProfile =
-            cfg_crawler?.device_profile ||
-            (requiresMobileProfile ? DEFAULT_MOBILE_DEVICE_PROFILE : 'desktop_chrome')
+            cfg_crawler?.device_profile || (requiresMobileProfile ? DEFAULT_MOBILE_DEVICE_PROFILE : 'desktop_chrome')
 
         if (requiresMobileProfile && !MOBILE_DEVICE_PROFILES.has(deviceProfile)) {
             throw new Error(
-                `Crawler for ${url.hostname} must use a mobile device profile (${Array.from(MOBILE_DEVICE_PROFILES).join(
-                    ', ',
-                )}), got ${deviceProfile}`,
+                `Crawler for ${url.hostname} must use a mobile device profile (${Array.from(
+                    MOBILE_DEVICE_PROFILES,
+                ).join(', ')}), got ${deviceProfile}`,
             )
         }
 
@@ -1989,50 +1994,50 @@ class SpiderPools extends BaseCompatibleModel {
         const articles = liveRelayOnly
             ? ([] as Array<Article>)
             : await pRetry(
-                () =>
-                    spider.crawl(url.href, page, ctx.taskId, {
-                        task_type: 'article',
-                        crawl_engine: engine,
-                        sub_task_type,
-                        hydrate_users,
-                        hydrate_limit,
-                        hydrate_concurrency,
-                        hydrate_interval_time,
-                        cookieString,
-                        requestHeaders,
-                        max_list_pages,
-                        max_detail_count,
-                        detail_interval_time,
-                        block_resource_types,
-                        isArticleKnown: platform
-                            ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
-                            : undefined,
-                        isStoredPremierePending:
-                            platform === Platform.YouTube
-                                ? async (a_id: string) => {
-                                      const existing = await DB.Article.getByArticleCode(a_id, platform)
-                                      if (!existing) {
-                                          return false
-                                      }
-                                      return isPremierePendingArticleLike({
-                                          platform,
-                                          content: (existing as any)?.content || null,
-                                          extra: (existing as any)?.extra || null,
-                                      })
-                                  }
-                                : undefined,
-                    }),
-                {
-                    retries: RETRY_LIMIT,
-                    shouldRetry: (error) => shouldRetryCrawlErrorForPlatform(error, platform),
-                    onFailedAttempt: (error) => {
-                        const classification = classifyCrawlError(error)
-                        ctx.log?.error(
-                            `[${url.href}] Crawl article failed (${classification}), there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
-                        )
-                    },
-                },
-            )
+                  () =>
+                      spider.crawl(url.href, page, ctx.taskId, {
+                          task_type: 'article',
+                          crawl_engine: engine,
+                          sub_task_type,
+                          hydrate_users,
+                          hydrate_limit,
+                          hydrate_concurrency,
+                          hydrate_interval_time,
+                          cookieString,
+                          requestHeaders,
+                          max_list_pages,
+                          max_detail_count,
+                          detail_interval_time,
+                          block_resource_types,
+                          isArticleKnown: platform
+                              ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
+                              : undefined,
+                          isStoredPremierePending:
+                              platform === Platform.YouTube
+                                  ? async (a_id: string) => {
+                                        const existing = await DB.Article.getByArticleCode(a_id, platform)
+                                        if (!existing) {
+                                            return false
+                                        }
+                                        return isPremierePendingArticleLike({
+                                            platform,
+                                            content: (existing as any)?.content || null,
+                                            extra: (existing as any)?.extra || null,
+                                        })
+                                    }
+                                  : undefined,
+                      }),
+                  {
+                      retries: RETRY_LIMIT,
+                      shouldRetry: (error) => shouldRetryCrawlErrorForPlatform(error, platform),
+                      onFailedAttempt: (error) => {
+                          const classification = classifyCrawlError(error)
+                          ctx.log?.error(
+                              `[${url.href}] Crawl article failed (${classification}), there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
+                          )
+                      },
+                  },
+              )
         await this.maybeSyncInstagramLiveRelay(ctx, url, page, cookieString, requestHeaders)
         const existingArticleReusePolicy = resolveExistingArticleReusePolicy(cfg_crawler)
         let new_articles: Array<Article> = []
@@ -2056,7 +2061,9 @@ class SpiderPools extends BaseCompatibleModel {
                     translated_by: null,
                 } as Partial<Article>)
                 premiere_dispatch_ids.push((updated as any).id || isExist.id)
-                ctx.log?.info(`[${url.href}] Refreshed premiere placeholder article ${article.a_id} with public YouTube metadata.`)
+                ctx.log?.info(
+                    `[${url.href}] Refreshed premiere placeholder article ${article.a_id} with public YouTube metadata.`,
+                )
                 continue
             }
             if (
@@ -2110,11 +2117,14 @@ class SpiderPools extends BaseCompatibleModel {
                     crawlerConfig: cfg_crawler,
                     log: ctx.log,
                 })
-                if ((ingestedLinks?.website?.length || 0) > 0) {
-                    // Website ingest is meant to be near-immediate (linked blog/news should not wait for the
-                    // next schedule tick).
+                const queuedExternalLinks =
+                    (ingestedLinks?.tiktok?.length || 0) +
+                    (ingestedLinks?.youtube?.length || 0) +
+                    (ingestedLinks?.instagram?.length || 0) +
+                    (ingestedLinks?.website?.length || 0)
+                if (queuedExternalLinks > 0) {
                     this.pokeSchedules().catch((error) =>
-                        ctx.log?.warn(`Failed to poke schedules after website link ingest: ${error}`),
+                        ctx.log?.warn(`Failed to poke schedules after external link ingest: ${error}`),
                     )
                 }
             }
@@ -2271,4 +2281,10 @@ class SpiderPools extends BaseCompatibleModel {
     }
 }
 
-export { SpiderTaskScheduler, SpiderPools, CrawlerCookieExportError, classifyCrawlError, shouldRetryCrawlErrorForPlatform }
+export {
+    SpiderTaskScheduler,
+    SpiderPools,
+    CrawlerCookieExportError,
+    classifyCrawlError,
+    shouldRetryCrawlErrorForPlatform,
+}

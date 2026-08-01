@@ -167,9 +167,9 @@ namespace YoutubeApiJsonParser {
 
     function thumbnailParser(node: any): string | null {
         return (
-            pickLargestThumbnail(node?.thumbnails)
-            || pickLargestThumbnail(node?.image?.thumbnails)
-            || pickLargestThumbnail(node?.sources)
+            pickLargestThumbnail(node?.thumbnails) ||
+            pickLargestThumbnail(node?.image?.thumbnails) ||
+            pickLargestThumbnail(node?.sources)
         )
     }
 
@@ -232,10 +232,12 @@ namespace YoutubeApiJsonParser {
         if (!url) {
             return []
         }
-        return [{
-            type: 'video_thumbnail',
-            url,
-        }]
+        return [
+            {
+                type: 'video_thumbnail',
+                url,
+            },
+        ]
     }
 
     function isPremierePlaceholderTitle(value?: string | null) {
@@ -305,11 +307,13 @@ namespace YoutubeApiJsonParser {
             path: '$..channelMetadataRenderer',
             json,
         })[0]
-        const handleText = textParser(header?.channelHandleText) || metadata?.vanityChannelUrl?.split('/').pop() || fallbackHandle
+        const handleText =
+            textParser(header?.channelHandleText) || metadata?.vanityChannelUrl?.split('/').pop() || fallbackHandle
         return {
             handle: stripHandlePrefix(handleText || fallbackHandle),
             title: textParser(header?.title) || metadata?.title || stripHandlePrefix(fallbackHandle),
-            avatar: pickLargestThumbnail(header?.avatar?.thumbnails) || pickLargestThumbnail(metadata?.avatar?.thumbnails),
+            avatar:
+                pickLargestThumbnail(header?.avatar?.thumbnails) || pickLargestThumbnail(metadata?.avatar?.thumbnails),
         }
     }
 
@@ -360,17 +364,19 @@ namespace YoutubeApiJsonParser {
         if (contentType && !contentType.includes('VIDEO')) {
             return null
         }
-        const videoId = item?.contentId
-            || firstString(JSONPath({ path: '$..watchEndpoint.videoId', json: item }))
-            || firstString(JSONPath({ path: '$..addToPlaylistCommand.videoId', json: item }))
+        const videoId =
+            item?.contentId ||
+            firstString(JSONPath({ path: '$..watchEndpoint.videoId', json: item })) ||
+            firstString(JSONPath({ path: '$..addToPlaylistCommand.videoId', json: item }))
         if (!videoId) {
             return null
         }
 
         const title = textParser(item?.metadata?.lockupMetadataViewModel?.title)
         const publishedText = lockupMetadataTextParts(item).find((text) => /ago/i.test(text)) || ''
-        const thumbnail = thumbnailParser(item?.contentImage?.thumbnailViewModel?.image)
-            || thumbnailParser(item?.contentImage?.thumbnailViewModel)
+        const thumbnail =
+            thumbnailParser(item?.contentImage?.thumbnailViewModel?.image) ||
+            thumbnailParser(item?.contentImage?.thumbnailViewModel)
         const media = mediaParser(thumbnail)
         return {
             platform: Platform.YouTube,
@@ -390,8 +396,9 @@ namespace YoutubeApiJsonParser {
     }
 
     function shortsParserItem(item: any, channelMeta: ChannelMeta): YoutubeArticle | null {
-        const videoId = item?.onTap?.innertubeCommand?.reelWatchEndpoint?.videoId
-            || item?.navigationEndpoint?.reelWatchEndpoint?.videoId
+        const videoId =
+            item?.onTap?.innertubeCommand?.reelWatchEndpoint?.videoId ||
+            item?.navigationEndpoint?.reelWatchEndpoint?.videoId
         if (!videoId) {
             return null
         }
@@ -404,8 +411,7 @@ namespace YoutubeApiJsonParser {
             u_id: channelMeta.handle,
             username: channelMeta.title,
             created_at: relativeTimeParser(
-                textParser(item?.timestampText)
-                || textParser(item?.overlayMetadata?.secondaryText),
+                textParser(item?.timestampText) || textParser(item?.overlayMetadata?.secondaryText),
             ),
             content: buildContent(title, null),
             url: `https://www.youtube.com/shorts/${videoId}`,
@@ -459,17 +465,22 @@ namespace YoutubeApiJsonParser {
         const initialPlayerResponse = extractAssignedObject<any>(text, 'ytInitialPlayerResponse')
         const microformat = initialPlayerResponse?.microformat?.playerMicroformatRenderer
         const videoDetails = initialPlayerResponse?.videoDetails
-        const thumbnail = pickLargestThumbnail(microformat?.thumbnail?.thumbnails)
-            || pickLargestThumbnail(videoDetails?.thumbnail?.thumbnails)
+        const thumbnail =
+            pickLargestThumbnail(microformat?.thumbnail?.thumbnails) ||
+            pickLargestThumbnail(videoDetails?.thumbnail?.thumbnails)
         const publishedAt = microformat?.publishDate || microformat?.uploadDate
-        const liveDetails = microformat?.liveBroadcastDetails || initialPlayerResponse?.playabilityStatus?.liveStreamability?.liveStreamabilityRenderer
-        const scheduledStartText = liveDetails?.startTimestamp || liveDetails?.offlineSlate?.liveStreamOfflineSlateRenderer?.scheduledStartTime
+        const liveDetails =
+            microformat?.liveBroadcastDetails ||
+            initialPlayerResponse?.playabilityStatus?.liveStreamability?.liveStreamabilityRenderer
+        const scheduledStartText =
+            liveDetails?.startTimestamp || liveDetails?.offlineSlate?.liveStreamOfflineSlateRenderer?.scheduledStartTime
         const scheduled_start_at = scheduledStartText ? dayjs(scheduledStartText).unix() || null : null
         const title = videoDetails?.title || textParser(microformat?.title)
         const playabilityStatus = String(initialPlayerResponse?.playabilityStatus?.status || '')
-        const isUpcoming = Boolean(videoDetails?.isUpcoming)
-            || playabilityStatus === 'LIVE_STREAM_OFFLINE'
-            || Boolean(initialPlayerResponse?.playabilityStatus?.liveStreamability)
+        const isUpcoming =
+            Boolean(videoDetails?.isUpcoming) ||
+            playabilityStatus === 'LIVE_STREAM_OFFLINE' ||
+            Boolean(initialPlayerResponse?.playabilityStatus?.liveStreamability)
         const is_premiere_pending = Boolean(isUpcoming || isPremierePlaceholderTitle(title))
         const created_at = scheduled_start_at || (publishedAt ? dayjs(publishedAt).unix() : 0)
         return {
@@ -562,21 +573,33 @@ namespace YoutubeApiJsonParser {
             cookie: getCookieString(cookies),
         }
         const fallbackHandle = stripHandlePrefix(url.split('/').pop() || '')
+        const videosUrl = `${url}/videos?${LOCALE_QUERY}`
+        const shortsUrl = `${url}/shorts?${LOCALE_QUERY}`
         const [videosPage, shortsPage] = await Promise.all([
-            HTTPClient.download_webpage(`${url}/videos?${LOCALE_QUERY}`, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
-            HTTPClient.download_webpage(`${url}/shorts?${LOCALE_QUERY}`, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
+            HTTPClient.download_webpage(videosUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
+            HTTPClient.download_webpage(shortsUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
         ])
-        const [videosText, shortsText] = await Promise.all([videosPage.text(), shortsPage.text()])
-        const videosJson = extractAssignedObject<any>(videosText, 'ytInitialData')
-        const shortsJson = extractAssignedObject<any>(shortsText, 'ytInitialData')
+        let [videosText, shortsText] = await Promise.all([videosPage.text(), shortsPage.text()])
+        let videosJson = extractAssignedObject<any>(videosText, 'ytInitialData')
+        let shortsJson = extractAssignedObject<any>(shortsText, 'ytInitialData')
+        if (!videosJson && !shortsJson) {
+            const [curlVideosPage, curlShortsPage] = await Promise.all([
+                HTTPClient.download_webpage_curl(videosUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
+                HTTPClient.download_webpage_curl(shortsUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
+            ])
+            ;[videosText, shortsText] = await Promise.all([curlVideosPage.text(), curlShortsPage.text()])
+            videosJson = extractAssignedObject<any>(videosText, 'ytInitialData')
+            shortsJson = extractAssignedObject<any>(shortsText, 'ytInitialData')
+        }
         if (!videosJson && !shortsJson) {
             throw new Error('Cannot find YouTube initial data')
         }
 
         const channelMeta = channelMetaParser(videosJson || shortsJson, fallbackHandle)
-        const baseArticles = dedupeArticles([...videosParser(videosJson, channelMeta), ...shortsParser(shortsJson, channelMeta)]).sort(
-            (a, b) => b.created_at - a.created_at,
-        )
+        const baseArticles = dedupeArticles([
+            ...videosParser(videosJson, channelMeta),
+            ...shortsParser(shortsJson, channelMeta),
+        ]).sort((a, b) => b.created_at - a.created_at)
         const hydrateLimit = clampPositiveInteger(
             options.hydrate_limit,
             DEFAULT_YOUTUBE_HYDRATE_LIMIT,
@@ -616,14 +639,14 @@ namespace YoutubeApiJsonParser {
         }
 
         const articlesById = new Map(baseArticles.map((article) => [article.a_id, article]))
-        const hydrateQueue = baseArticles
-            .filter((article) => !knownIds.has(article.a_id))
-            .slice(0, hydrateLimit)
+        const hydrateQueue = baseArticles.filter((article) => !knownIds.has(article.a_id)).slice(0, hydrateLimit)
         for (let index = 0; index < hydrateQueue.length; index += hydrateConcurrency) {
             const chunk = hydrateQueue.slice(index, index + hydrateConcurrency)
             const hydrated = await Promise.allSettled(
                 chunk.map((article) =>
-                    hydrateArticle(article, headers, { markPremiereResolved: storedPendingPremiereIds.has(article.a_id) }),
+                    hydrateArticle(article, headers, {
+                        markPremiereResolved: storedPendingPremiereIds.has(article.a_id),
+                    }),
                 ),
             )
             for (let chunkIndex = 0; chunkIndex < hydrated.length; chunkIndex++) {

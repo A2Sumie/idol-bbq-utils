@@ -483,7 +483,7 @@ test('Instagram stories keep a non-empty username when og:title does not expose 
     expect(stories[0]?.url).toBe('https://www.instagram.com/stories/nananijigram22_7/36963634381048167')
 })
 
-test('Instagram article crawl defaults to posts and best-effort stories', async () => {
+test('Instagram article crawl defaults to posts only', async () => {
     const originalGrabPosts = InsApiJsonParser.grabPosts
     const originalGrabStories = InsApiJsonParser.grabStories
     const calls: Array<string> = []
@@ -519,62 +519,12 @@ test('Instagram article crawl defaults to posts and best-effort stories', async 
             crawl_engine: 'browser',
         })
 
-        expect(calls).toEqual(['posts', 'stories:12000'])
+        expect(calls).toEqual(['posts'])
         expect(articles).toHaveLength(1)
         expect(articles[0]?.a_id).toBe('POSTONLY')
     } finally {
         ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
-    }
-})
-
-test('Instagram grabPostsPrivateApi maps private feed items through postParser', async () => {
-    const { HTTPClient } = await import('../src/utils/http')
-    const originalDownload = HTTPClient.download_webpage_curl
-    const calls: Array<string> = []
-    ;(HTTPClient as any).download_webpage_curl = async (url: string) => {
-        calls.push(url)
-        if (url.includes('web_profile_info')) {
-            return new Response(
-                JSON.stringify({
-                    data: {
-                        user: {
-                            id: '7787134927',
-                            username: 'sallyamaki',
-                            full_name: 'Sally Amaki',
-                            profile_pic_url: 'https://example.com/avatar.jpg',
-                        },
-                    },
-                }),
-            )
-        }
-        return new Response(
-            JSON.stringify({
-                status: 'ok',
-                items: [
-                    {
-                        code: 'DDRidLLSPYm',
-                        taken_at: 1733567823,
-                        caption: { text: 'hello world' },
-                        image_versions2: { candidates: [{ url: 'https://example.com/1.jpg', width: 1080 }] },
-                        user: { username: 'sallyamaki', full_name: 'Sally Amaki' },
-                    },
-                ],
-            }),
-        )
-    }
-
-    try {
-        const posts = await InsApiJsonParser.grabPostsPrivateApi('sallyamaki', 'sessionid=abc')
-        expect(calls[0]).toContain('web_profile_info/?username=sallyamaki')
-        expect(calls[1]).toContain('/feed/user/7787134927/')
-        expect(posts).toHaveLength(1)
-        expect(posts[0]?.a_id).toBe('DDRidLLSPYm')
-        expect(posts[0]?.content).toBe('hello world')
-        expect(posts[0]?.media?.[0]?.type).toBe('photo')
-        expect(posts[0]?.u_id).toBe('sallyamaki')
-    } finally {
-        ;(HTTPClient as any).download_webpage_curl = originalDownload
     }
 })
 
@@ -639,40 +589,5 @@ test('Instagram article crawl does not invoke the private API fallback', async (
     } finally {
         ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
-    }
-})
-
-test('Instagram private API runs only for the explicit daily gap-fill subtask', async () => {
-    const originalGrabPosts = InsApiJsonParser.grabPosts
-    const originalGrabStories = InsApiJsonParser.grabStories
-    const originalPrivateApi = InsApiJsonParser.grabPostsPrivateApi
-    let privateApiCalls = 0
-    ;(InsApiJsonParser as any).grabPosts = async () => {
-        throw new Error('browser posts must not run for private API gap-fill')
-    }
-    ;(InsApiJsonParser as any).grabStories = async () => {
-        throw new Error('stories must not run for private API gap-fill')
-    }
-    ;(InsApiJsonParser as any).grabPostsPrivateApi = async (_handle: string, cookieString: string) => {
-        privateApiCalls += 1
-        expect(cookieString).toBe('sessionid=abc')
-        return []
-    }
-
-    try {
-        const spider = new InstagramSpider()
-        const articles = await spider.crawl('https://www.instagram.com/instagram/', {} as any, 'ig-daily-gap-fill', {
-            task_type: 'article',
-            crawl_engine: 'browser',
-            sub_task_type: ['private_api_posts'],
-            cookieString: 'sessionid=abc',
-        })
-
-        expect(articles).toEqual([])
-        expect(privateApiCalls).toBe(1)
-    } finally {
-        ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
-        ;(InsApiJsonParser as any).grabStories = originalGrabStories
-        ;(InsApiJsonParser as any).grabPostsPrivateApi = originalPrivateApi
     }
 })

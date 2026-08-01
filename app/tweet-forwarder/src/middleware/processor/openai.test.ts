@@ -7,7 +7,10 @@ import { processorRegistry } from '.'
 import { resetHy3CircuitBreakerForTest } from '@/services/hy3-circuit-breaker-service'
 
 function withHy3BreakerEnv<T>(threshold: string, fn: () => Promise<T>): Promise<T> {
-    const statePath = path.join(os.tmpdir(), `hy3-breaker-openai-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+    const statePath = path.join(
+        os.tmpdir(),
+        `hy3-breaker-openai-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    )
     const prevThreshold = process.env.HY3_FAILURE_THRESHOLD
     const prevStatePath = process.env.HY3_BREAKER_STATE_PATH
     process.env.HY3_FAILURE_THRESHOLD = threshold
@@ -122,6 +125,53 @@ test('DeepSeek V4 Flash provider applies OpenCode Go defaults and aliases', asyn
             ],
         })
         expect(calls[0]?.options?.headers?.Authorization).toBe('Bearer test-key')
+    } finally {
+        ;(axios as any).post = originalPost
+    }
+})
+
+test('DeepSeek V4 Flash provider supports the Responses API wire format', async () => {
+    const originalPost = axios.post
+    const calls: Array<{ url: string; body: any; options: any }> = []
+    ;(axios as any).post = async (url: string, body: any, options: any) => {
+        calls.push({ url, body, options })
+        return {
+            data: {
+                output: [
+                    { type: 'reasoning', content: [{ type: 'reasoning_text', text: 'internal' }] },
+                    { type: 'message', content: [{ type: 'output_text', text: '译文' }] },
+                ],
+            },
+        }
+    }
+
+    try {
+        const processor = await processorRegistry.create('DeepSeekV4Flash', 'test-key', undefined, {
+            prompt: 'Translate to Simplified Chinese.',
+            model_id: 'deepseek-v4-flash',
+            base_url: 'https://api.deepseek.com/responses',
+            wire_api: 'responses',
+            reasoning_effort: 'high',
+            temperature: 1.0,
+            top_p: 0.98,
+            max_tokens: 384000,
+        })
+        const result = await processor.process('こんにちは')
+
+        expect(result).toBe('译文')
+        expect(calls[0]?.body).toMatchObject({
+            model: 'deepseek-v4-flash',
+            input: [
+                { role: 'system', content: 'Translate to Simplified Chinese.' },
+                { role: 'user', content: 'こんにちは' },
+            ],
+            reasoning: { effort: 'high' },
+            temperature: 1.0,
+            top_p: 0.98,
+            max_output_tokens: 384000,
+        })
+        expect(calls[0]?.body.messages).toBeUndefined()
+        expect(calls[0]?.body.max_tokens).toBeUndefined()
     } finally {
         ;(axios as any).post = originalPost
     }
@@ -253,6 +303,51 @@ test('Hy3Free provider falls back to v4-pro Go endpoint on failure', async () =>
     }
 })
 
+test('Hy3Free fallback supports DeepSeek Flash over the Responses API', async () => {
+    const originalPost = axios.post
+    const calls: Array<{ url: string; body: any; options: any }> = []
+    ;(axios as any).post = async (url: string, body: any, options: any) => {
+        calls.push({ url, body, options })
+        if (url.includes('lkeap.cloud.tencent.com')) {
+            throw new Error('hy3 unavailable')
+        }
+        return {
+            data: {
+                output: [{ type: 'message', content: [{ type: 'output_text', text: 'flash fallback译文' }] }],
+            },
+        }
+    }
+
+    try {
+        await withHy3BreakerEnv('10', async () => {
+            const processor = await processorRegistry.create('Hy3Free', 'tencent-key', undefined, {
+                prompt: 'Translate to Simplified Chinese.',
+                fallback: {
+                    provider: 'DeepSeekV4Flash',
+                    api_key: 'deepseek-key',
+                    model_id: 'deepseek-v4-flash',
+                    base_url: 'https://api.deepseek.com/responses',
+                    wire_api: 'responses',
+                    reasoning_effort: 'high',
+                },
+            })
+            const result = await processor.process('こんにちは')
+
+            expect(result).toBe('flash fallback译文')
+            expect(calls[1]?.url).toBe('https://api.deepseek.com/responses')
+            expect(calls[1]?.body.model).toBe('deepseek-v4-flash')
+            expect(calls[1]?.body.input).toMatchObject([
+                { role: 'system', content: 'Translate to Simplified Chinese.' },
+                { role: 'user', content: 'こんにちは' },
+            ])
+            expect(calls[1]?.body.reasoning).toEqual({ effort: 'high' })
+            expect(calls[1]?.options?.headers?.Authorization).toBe('Bearer deepseek-key')
+        })
+    } finally {
+        ;(axios as any).post = originalPost
+    }
+})
+
 test('Hy3Free fallback can use a separate api_key from the primary', async () => {
     const originalPost = axios.post
     const calls: Array<{ url: string; body: any; options: any }> = []
@@ -302,7 +397,9 @@ test('Hy3Free provider skips hy3 and goes straight to fallback when frozen', asy
 
     try {
         await withHy3BreakerEnv('2', async () => {
-            const { getHy3CircuitBreaker, resolveHy3BreakerKey } = await import('@/services/hy3-circuit-breaker-service')
+            const { getHy3CircuitBreaker, resolveHy3BreakerKey } = await import(
+                '@/services/hy3-circuit-breaker-service'
+            )
             const breaker = getHy3CircuitBreaker(undefined, resolveHy3BreakerKey({}))
             breaker.recordFailure(new Error('pre-freeze-1'))
             breaker.recordFailure(new Error('pre-freeze-2'))

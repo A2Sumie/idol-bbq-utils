@@ -224,16 +224,17 @@ function formatPassthroughAttributionLine(
 }
 
 function formatTranslationPassthrough(
-    article: Pick<Article, 'u_id' | 'username' | 'a_id' | 'created_at' | 'platform' | 'type'>,
+    article: Pick<Article, 'u_id' | 'username' | 'a_id' | 'created_at' | 'platform' | 'type' | 'ref'>,
     translation: string,
 ): string {
     const attributionLine = formatPassthroughAttributionLine(article)
     const body = String(translation || '').trim()
     if (!body) {
-        return ['', PASSTHROUGH_CARD_DEFERRED_MARKER, attributionLine].filter((line) => line !== undefined).join('\n')
+        return attributionLine
     }
     const titleLine = formatPassthroughTitleLine(article)
-    return [titleLine, body, '', attributionLine].join('\n')
+    const deferredMarker = article.ref && typeof article.ref === 'object' ? ['', PASSTHROUGH_CARD_DEFERRED_MARKER] : []
+    return [titleLine, body, ...deferredMarker, '', attributionLine].join('\n')
 }
 
 function normalizeIdentityToken(value: string | null | undefined) {

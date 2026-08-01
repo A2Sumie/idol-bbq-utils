@@ -86,15 +86,7 @@ namespace HTTPClient {
     ): Promise<Response> {
         const timeout = Math.max(1, options.timeout ?? DEFAULT_FETCH_TIMEOUT_MS)
         const throwOnError = options.throwOnError ?? true
-        const args = [
-            '-sS',
-            '--max-time',
-            String(Math.ceil(timeout / 1000)),
-            '-o',
-            '-',
-            '-w',
-            '\n%{http_code}',
-        ]
+        const args = ['-sS', '-L', '--max-time', String(Math.ceil(timeout / 1000)), '-o', '-', '-w', '\n%{http_code}']
         for (const [name, value] of Object.entries(headers)) {
             args.push('-H', `${name}: ${value}`)
         }

@@ -254,8 +254,9 @@ function waitForResponse(
         data: PageEvents['response'],
         control: { done: (data?: any) => void; fail: (reason: any) => void },
     ) => void,
+    timeout?: number,
 ) {
-    return waitForEvent(page, 'response', handler)
+    return waitForEvent(page, 'response', handler, timeout)
 }
 
 const defaultViewport = {

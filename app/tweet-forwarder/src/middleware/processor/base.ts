@@ -81,6 +81,9 @@ abstract class BaseProcessor extends BaseCompatibleModel {
         if (typeof this.config?.temperature === 'number') {
             payload.temperature = this.config.temperature
         }
+        if (typeof this.config?.top_p === 'number') {
+            payload.top_p = this.config.top_p
+        }
         if (typeof this.config?.max_tokens === 'number') {
             payload.max_tokens = this.config.max_tokens
         }
@@ -130,7 +133,7 @@ class ProcessorRegistry {
     private static instance: ProcessorRegistry
     private plugins: Map<string, ProcessorPlugin> = new Map()
 
-    private constructor() { }
+    private constructor() {}
 
     static getInstance(): ProcessorRegistry {
         if (!ProcessorRegistry.instance) {

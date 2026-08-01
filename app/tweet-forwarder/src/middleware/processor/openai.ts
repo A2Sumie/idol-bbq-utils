@@ -2,7 +2,11 @@ import { BaseProcessor, resolveProcessorApiKey } from './base'
 import axios from 'axios'
 import { type ProcessorConfig, type ProcessorFallbackConfig, ProcessorProvider } from '@/types/processor'
 import { Logger } from '@idol-bbq-utils/log'
-import { getHy3CircuitBreaker, resolveHy3BreakerKey, type Hy3CircuitBreaker } from '@/services/hy3-circuit-breaker-service'
+import {
+    getHy3CircuitBreaker,
+    resolveHy3BreakerKey,
+    type Hy3CircuitBreaker,
+} from '@/services/hy3-circuit-breaker-service'
 
 abstract class BaseOpenai extends BaseProcessor {
     public name = 'base openai translator'
@@ -61,31 +65,62 @@ class OpenaiLikeLLMTranslator extends BaseOpenai {
         this.BASE_URL = config?.base_url || this.BASE_URL
     }
     public async process(text: string) {
-        const res = await axios.post(
-            this.BASE_URL,
+        const input = [
             {
-                ...this.buildOpenAICompatibleRequestConfig(),
-                ...this.config?.extended_payload,
-                model: this.config?.model_id || 'openai',
-                messages: [
-                    {
-                        role: 'system',
-                        content: this.getPrompt(),
-                    },
-                    {
-                        role: 'user',
-                        content: text,
-                    },
-                ],
+                role: 'system',
+                content: this.getPrompt(),
             },
             {
-                headers: {
-                    Authorization: `Bearer ${this.api_key}`,
-                },
-                timeout: this.config?.request_timeout_ms ?? 30_000,
+                role: 'user',
+                content: text,
             },
-        )
-        return res.data.choices[0].message.content as string
+        ]
+        const compatibleConfig = this.buildOpenAICompatibleRequestConfig()
+        const isResponsesApi = this.config?.wire_api === 'responses'
+        const body = isResponsesApi
+            ? this.buildResponsesRequest(input, compatibleConfig)
+            : {
+                  ...compatibleConfig,
+                  ...this.config?.extended_payload,
+                  model: this.config?.model_id || 'openai',
+                  messages: input,
+              }
+        const res = await axios.post(this.BASE_URL, body, {
+            headers: {
+                Authorization: `Bearer ${this.api_key}`,
+            },
+            timeout: this.config?.request_timeout_ms ?? 30_000,
+        })
+        return isResponsesApi ? this.readResponsesText(res.data) : (res.data.choices[0].message.content as string)
+    }
+
+    private buildResponsesRequest(
+        input: Array<{ role: string; content: string }>,
+        compatibleConfig: Record<string, any>,
+    ) {
+        const { max_tokens, response_format, ...shared } = compatibleConfig
+        return {
+            ...shared,
+            ...this.config?.extended_payload,
+            model: this.config?.model_id || 'openai',
+            input,
+            ...(typeof max_tokens === 'number' ? { max_output_tokens: max_tokens } : {}),
+            ...(response_format ? { text: { format: response_format } } : {}),
+            ...(this.config?.reasoning_effort ? { reasoning: { effort: this.config.reasoning_effort } } : {}),
+        }
+    }
+
+    private readResponsesText(data: any): string {
+        const text = (Array.isArray(data?.output) ? data.output : [])
+            .filter((item: any) => item?.type === 'message')
+            .flatMap((item: any) => (Array.isArray(item?.content) ? item.content : []))
+            .filter((item: any) => item?.type === 'output_text' && typeof item?.text === 'string')
+            .map((item: any) => item.text)
+            .join('')
+        if (!text) {
+            throw new Error('Responses API returned no output_text')
+        }
+        return text
     }
 }
 
@@ -105,12 +140,9 @@ class DeepSeekV4ProTranslator extends OpenaiLikeLLMTranslator {
     }
 }
 
-function buildFallbackProcessorConfig(
-    primary: ProcessorConfig,
-    fallback?: ProcessorFallbackConfig,
-): ProcessorConfig {
+function buildFallbackProcessorConfig(primary: ProcessorConfig, fallback?: ProcessorFallbackConfig): ProcessorConfig {
     const { fallback: _omit, extended_payload: _primaryPayload, ...primaryShared } = primary
-    const name = `${primary.name || 'hunyuan'}-fallback-v4pro`
+    const name = `${primary.name || 'hunyuan'}-fallback`
     if (!fallback) {
         // Never default to the primary model/endpoint: that would re-POST the same request that just failed
         // and call it a "fallback". Fall back to the v4-pro defaults instead.
@@ -128,6 +160,9 @@ function buildFallbackProcessorConfig(
         model_id: fallback.model_id ?? DEEPSEEK_V4_PRO_DEFAULT_CONFIG.model_id,
         base_url: fallback.base_url ?? DEEPSEEK_V4_PRO_DEFAULT_CONFIG.base_url,
         temperature: fallback.temperature ?? primaryShared.temperature,
+        top_p: fallback.top_p ?? primaryShared.top_p,
+        wire_api: fallback.wire_api ?? primaryShared.wire_api,
+        reasoning_effort: fallback.reasoning_effort ?? primaryShared.reasoning_effort,
         extended_payload: fallback.extended_payload,
     }
 }
@@ -163,7 +198,7 @@ class Hy3FreeTranslator extends OpenaiLikeLLMTranslator {
 
     public async process(text: string): Promise<string> {
         if (this.breaker.isFrozen()) {
-            this.log?.warn('HY3 frozen — using v4-pro fallback directly')
+            this.log?.warn('HY3 frozen — using fallback processor directly')
             this.breaker.recordFallback()
             return this.fallbackProcessor.process(text)
         }
@@ -174,7 +209,9 @@ class Hy3FreeTranslator extends OpenaiLikeLLMTranslator {
         } catch (error) {
             this.breaker.recordFailure(error)
             this.breaker.recordFallback()
-            this.log?.warn(`HY3 request failed — delegating to v4-pro fallback: ${error instanceof Error ? error.message : String(error)}`)
+            this.log?.warn(
+                `HY3 request failed — delegating to fallback processor: ${error instanceof Error ? error.message : String(error)}`,
+            )
             return this.fallbackProcessor.process(text)
         }
     }

@@ -9,7 +9,6 @@ import type {
     CrawlEngine,
 } from '@/types'
 import { BaseSpider, waitForResponse } from './base'
-import { HTTPClient } from '../utils/http'
 import { Page } from 'puppeteer-core'
 
 import { JSONPath } from 'jsonpath-plus'
@@ -42,7 +41,6 @@ enum ArticleTypeEnum {
 enum InstagramArticleTaskType {
     posts = 'posts',
     stories = 'stories',
-    private_api_posts = 'private_api_posts',
 }
 
 /**
@@ -151,33 +149,16 @@ class InstagramSpider extends BaseSpider {
 
         if (task_type === 'article') {
             const wantPosts =
-                !sub_task_type ||
-                sub_task_type.length === 0 ||
-                sub_task_type.includes(InstagramArticleTaskType.posts)
-            const wantStories =
-                !sub_task_type ||
-                sub_task_type.length === 0 ||
-                sub_task_type.includes(InstagramArticleTaskType.stories)
-            const wantPrivateApiPosts = sub_task_type?.includes(InstagramArticleTaskType.private_api_posts) ?? false
+                !sub_task_type || sub_task_type.length === 0 || sub_task_type.includes(InstagramArticleTaskType.posts)
+            const wantStories = sub_task_type?.includes(InstagramArticleTaskType.stories) ?? false
 
             const articles: Array<GenericArticle<Platform.Instagram>> = []
-            if (wantPrivateApiPosts) {
-                if (!config.cookieString) {
-                    throw new Error('Instagram private API gap-fill requires cookies')
-                }
-                this.log?.info('Trying daily private API posts gap-fill.')
-                articles.push(...(await InsApiJsonParser.grabPostsPrivateApi(id, config.cookieString)))
-            } else if (wantPosts) {
+            if (wantPosts) {
                 this.log?.info('Trying to grab posts.')
-                // Keep one identity: use the persistent browser session for posts. Mixing a desktop
-                // browser identity with the mobile private API causes session revocations and turns
-                // one failed request into a second, more aggressive browser crawl.
                 articles.push(...(await InsApiJsonParser.grabPosts(page, _url)))
             }
             if (wantStories) {
                 this.log?.info(`Trying to grab stories.`)
-                // Stories are best-effort: a failure or timeout here must never drop posts or fail
-                // the whole Instagram crawl.
                 try {
                     const stories = await InsApiJsonParser.grabStories(page, `${this.BASE_URL}stories/${id}/`, {
                         timeout: INSTAGRAM_STORIES_TIMEOUT_MS,
@@ -516,51 +497,6 @@ namespace InsApiJsonParser {
         return res
     }
 
-    const INSTAGRAM_PRIVATE_API_BASE = 'https://i.instagram.com/api/v1'
-    const INSTAGRAM_PRIVATE_API_APP_ID = '936619743392459'
-    const INSTAGRAM_PRIVATE_API_UA =
-        'Instagram 269.0.0.18.75 Android (33/13; 420dpi; 1080x2400; Google; Pixel 7; panther; panther; en_US)'
-    const INSTAGRAM_PRIVATE_API_TIMEOUT_MS = 15000
-
-    /**
-     * Fallback posts crawl over the mobile private API. Uses the same session cookies; feed items share
-     * the GraphQL node shape, so they map through the regular postParser.
-     */
-    export async function grabPostsPrivateApi(
-        handle: string,
-        cookieString: string,
-    ): Promise<Array<GenericArticle<Platform.Instagram>>> {
-        const headers = {
-            'x-ig-app-id': INSTAGRAM_PRIVATE_API_APP_ID,
-            'user-agent': INSTAGRAM_PRIVATE_API_UA,
-            cookie: cookieString,
-        }
-        // Instagram 429s runtime-fetch TLS fingerprints on the private API while allowing curl-like
-        // clients, so this path must use the curl transport.
-        const profileResponse = await HTTPClient.download_webpage_curl(
-            `${INSTAGRAM_PRIVATE_API_BASE}/users/web_profile_info/?username=${encodeURIComponent(handle)}`,
-            headers,
-            { timeout: INSTAGRAM_PRIVATE_API_TIMEOUT_MS },
-        )
-        const profileJson = await profileResponse.json()
-        const user = profileJson?.data?.user
-        const userId = user?.id || user?.pk
-        if (!userId) {
-            throw new Error('Instagram private API profile format may have changed')
-        }
-        const crawledProfile = profileContextFromUser(user)
-        const feedResponse = await HTTPClient.download_webpage_curl(
-            `${INSTAGRAM_PRIVATE_API_BASE}/feed/user/${userId}/?count=12`,
-            headers,
-            { timeout: INSTAGRAM_PRIVATE_API_TIMEOUT_MS },
-        )
-        const feedJson = await feedResponse.json()
-        const items = Array.isArray(feedJson?.items) ? feedJson.items : []
-        return items
-            .map((item: any) => postParser({ node: item }, crawledProfile))
-            .filter((article) => Boolean(article.a_id))
-    }
-
     /**
      * @param url https://www.instagram.com/username
      * @description grab common posts from user page
@@ -590,7 +526,11 @@ namespace InsApiJsonParser {
                 if (/login/i.test(location)) {
                     fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
                 } else {
-                    fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                    fail(
+                        new Error(
+                            `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
+                        ),
+                    )
                 }
                 return
             }
@@ -696,7 +636,11 @@ namespace InsApiJsonParser {
                 if (/login/i.test(location)) {
                     fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
                 } else {
-                    fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                    fail(
+                        new Error(
+                            `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
+                        ),
+                    )
                 }
                 return
             }

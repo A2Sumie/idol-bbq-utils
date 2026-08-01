@@ -1,12 +1,14 @@
 import { Platform } from '@/types'
 import type { GenericMediaInfo, GenericArticle, GenericFollows, TaskType, TaskTypeResult, CrawlEngine } from '@/types'
-import { BaseSpider } from './base'
+import { BaseSpider, waitForResponse } from './base'
 import { Page } from 'puppeteer-core'
 
 import { JSONPath } from 'jsonpath-plus'
 import { getCookieString, HTTPClient, SimpleExpiringCache } from '@/utils'
 
 const TIKTOK_HTTP_TIMEOUT_MS = 15000
+const TIKTOK_BROWSER_HYDRATE_ATTEMPTS = 4
+const TIKTOK_BROWSER_HYDRATE_POLL_MS = 5000
 
 enum ArticleTypeEnum {
     /**
@@ -17,7 +19,8 @@ enum ArticleTypeEnum {
 
 class TiktokSpider extends BaseSpider {
     // extends from XBaseSpider regex
-    static _VALID_URL = /^(https:\/\/)?(www\.)?tiktok\.com\/@(?<id>[A-Za-z0-9._]+)(?:\/video\/(?<videoId>\d+)\/?)?(?:\?.*)?$/i
+    static _VALID_URL =
+        /^(https:\/\/)?(www\.)?tiktok\.com\/@(?<id>[A-Za-z0-9._]+)(?:\/video\/(?<videoId>\d+)\/?)?(?:\?.*)?$/i
     static _PLATFORM = Platform.TikTok
     BASE_URL: string = 'https://www.tiktok.com/'
     NAME: string = 'Tiktok Generic Spider'
@@ -145,7 +148,45 @@ namespace TiktokApiJsonParser {
         )
     }
 
+    async function loadUniversalDataFromBrowser(url: string, page: Page): Promise<string> {
+        await page.goto(url, {
+            waitUntil: 'domcontentloaded',
+        })
+        await checkLogin(page)
+        await checkSomethingWrong(page)
+        for (let attempt = 0; attempt < TIKTOK_BROWSER_HYDRATE_ATTEMPTS; attempt++) {
+            await page
+                .waitForSelector('script[id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]', {
+                    timeout: TIKTOK_BROWSER_HYDRATE_POLL_MS,
+                })
+                .catch(() => null)
+            const browserContent = extractUniversalData(await page.content())
+            if (browserContent) {
+                return browserContent
+            }
+            await checkSomethingWrong(page)
+        }
+
+        throw new Error('Cannot find user data (browser hydration missing)')
+    }
+
     async function loadUniversalData(url: string, page?: Page, cookieString?: string): Promise<string> {
+        if (page) {
+            try {
+                return await loadUniversalDataFromBrowser(url, page)
+            } catch (browserError) {
+                try {
+                    const headers = buildHeaders(url, cookieString)
+                    const webpage = await HTTPClient.download_webpage(url, headers, { timeout: TIKTOK_HTTP_TIMEOUT_MS })
+                    const content = extractUniversalData(await webpage.text())
+                    if (content) {
+                        return content
+                    }
+                } catch {}
+                throw browserError
+            }
+        }
+
         const headers = buildHeaders(url, cookieString)
         const webpage = await HTTPClient.download_webpage(url, headers, { timeout: TIKTOK_HTTP_TIMEOUT_MS })
         const text = await webpage.text()
@@ -154,24 +195,7 @@ namespace TiktokApiJsonParser {
             return content
         }
 
-        if (!page) {
-            throw new Error('Cannot find user data (fetch blocked, no browser fallback available)')
-        }
-
-        await page.goto(url, {
-            waitUntil: 'domcontentloaded',
-        })
-        await checkLogin(page)
-        await checkSomethingWrong(page)
-        await page
-            .waitForSelector('script[id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]', { timeout: 5000 })
-            .catch(() => null)
-        const browserContent = extractUniversalData(await page.content())
-        if (browserContent) {
-            return browserContent
-        }
-
-        throw new Error('Cannot find user data (browser hydration missing)')
+        throw new Error('Cannot find user data (fetch blocked, no browser fallback available)')
     }
 
     function mediaParser(item: any): Array<GenericMediaInfo> {
@@ -221,7 +245,7 @@ namespace TiktokApiJsonParser {
             a_id: item?.id,
             u_id: author?.uniqueId,
             username: author?.nickname,
-            created_at: item?.createTime,
+            created_at: Number(item?.createTime) || 0,
             content: item?.desc,
             url: `https://www.tiktok.com/@${author?.uniqueId}/video/${item?.id}/`,
             type: ArticleTypeEnum.POST,
@@ -271,8 +295,9 @@ namespace TiktokApiJsonParser {
             resultType: 'value',
         }) as Array<any>
         return (
-            candidates.find((candidate) => normalizeHandle(candidate?.user?.uniqueId || candidate?.user?.username) === target) ||
-            null
+            candidates.find(
+                (candidate) => normalizeHandle(candidate?.user?.uniqueId || candidate?.user?.username) === target,
+            ) || null
         )
     }
 
@@ -292,7 +317,8 @@ namespace TiktokApiJsonParser {
 
     export function videoParser(json: any): Array<GenericArticle<Platform.TikTok>> {
         const scope = universalScope(json)
-        const item = scope?.['webapp.video-detail']?.itemInfo?.itemStruct || json?.itemInfo?.itemStruct || json?.itemStruct
+        const item =
+            scope?.['webapp.video-detail']?.itemInfo?.itemStruct || json?.itemInfo?.itemStruct || json?.itemStruct
         return item ? postsParser({ itemList: [item] }) : []
     }
 
@@ -367,46 +393,58 @@ namespace TiktokApiJsonParser {
         page?: Page,
         cookieString?: string,
     ): Promise<Array<GenericArticle<Platform.TikTok>>> {
-        // const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
-        //     const url = response.url()
-        //     const request = response.request()
-        //     if (url.includes('/api/post/item_list') && request.method() === 'GET') {
-        //         if (response.status() >= 400) {
-        //             fail(new Error(`Error: ${response.status()}`))
-        //             return
-        //         }
-        //         // will get empty response from api
-        //         response
-        //             .json()
-        //             .then((json) => {
-        //                 done(json)
-        //             })
-        //             .catch((error) => {
-        //                 fail(error)
-        //             })
-        //     }
-        // })
-        // await page.setViewport(config.viewport ?? defaultViewport)
-        // await page.goto(url)
-        // try {
-        //     // await checkLogin(page)
-        //     // await checkSomethingWrong(page)
-        // } catch (error) {
-        //     cleanup()
-        //     throw error
-        // }
-        // return postsParser(posts_json)
-        /**
-         * Use api query instead of headless browser
-         */
-        // ref: https://github.com/yt-dlp/yt-dlp/blob/master/yt_dlp/extractor/tiktok.py
-        const content = await loadUniversalData(url, page, cookieString)
+        let browserPosts: Array<GenericArticle<Platform.TikTok>> = []
+        if (page) {
+            const { cleanup, promise: waitForPosts } = waitForResponse(
+                page,
+                async (response, { done, fail }) => {
+                    if (!response.url().includes('/api/post/item_list/') || response.request().method() !== 'GET') {
+                        return
+                    }
+                    if (response.status() >= 400) {
+                        fail(new Error(`Error: ${response.status()}`))
+                        return
+                    }
+                    try {
+                        const json = await response.json()
+                        if (Array.isArray(json?.itemList)) {
+                            done(json)
+                        }
+                    } catch {}
+                },
+                TIKTOK_BROWSER_HYDRATE_POLL_MS,
+            )
+            try {
+                await page.goto(url, { waitUntil: 'domcontentloaded' })
+                await checkLogin(page)
+                await checkSomethingWrong(page)
+                const data = await waitForPosts
+                if (data.success) {
+                    browserPosts = postsParser(data.data)
+                }
+            } catch {
+                cleanup()
+            }
+        }
+
+        let content: string
+        try {
+            content = await loadUniversalData(url, page, cookieString)
+        } catch (error) {
+            if (browserPosts.length > 0) {
+                return browserPosts
+            }
+            throw error
+        }
         const universalData = JSON.parse(content)
         const handle = url.match(/\/\@([^/?]+)/)?.[1] || ''
         const userInfo = findUserInfoForHandle(universalData, handle)
         const userItems = Array.isArray(userInfo?.itemList) ? userInfo.itemList : []
         const fallbackItems = userItems.length > 0 ? [] : itemModuleValues(universalData)
-        const pagePosts = postsParser({ itemList: userItems.length > 0 ? userItems : fallbackItems })
+        const pagePosts = mergePostsById(
+            browserPosts,
+            postsParser({ itemList: userItems.length > 0 ? userItems : fallbackItems }),
+        )
         const secUid = userInfo?.user?.secUid
         if (!secUid) {
             return pagePosts
@@ -442,13 +480,97 @@ namespace TiktokApiJsonParser {
         return mergePostsById(pagePosts, apiPosts)
     }
 
+    function hasPlayableVideo(articles: Array<GenericArticle<Platform.TikTok>>): boolean {
+        return articles.some((article) => article.media?.some((media) => media.type === 'video'))
+    }
+
+    async function grabVideoFromPlayer(
+        url: string,
+        page: Page,
+        cookieString?: string,
+    ): Promise<Array<GenericArticle<Platform.TikTok>>> {
+        const match = url.match(/\/video\/(\d+)/)
+        const videoId = match?.[1]
+        if (!videoId) {
+            return []
+        }
+        const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`
+        const response = await HTTPClient.download_webpage(oembedUrl, buildHeaders(url, cookieString), {
+            timeout: TIKTOK_HTTP_TIMEOUT_MS,
+        })
+        const metadata = await response.json()
+        if (String(metadata?.embed_product_id || '') !== videoId) {
+            return []
+        }
+
+        await page.goto(`https://www.tiktok.com/player/v1/${videoId}?autoplay=1&loop=0&music_info=1&description=1`, {
+            waitUntil: 'domcontentloaded',
+        })
+        await checkLogin(page)
+        await checkSomethingWrong(page)
+        const viewport = page.viewport() || { width: 800, height: 600 }
+        await page.mouse.click(Math.floor(viewport.width / 2), Math.floor(viewport.height / 3))
+        await page.keyboard.press('Space').catch(() => undefined)
+        await page.waitForSelector('video', { timeout: 15000 }).catch(() => null)
+        await checkLogin(page)
+        await checkSomethingWrong(page)
+        const videoUrl = await page
+            .$eval('video', (video) => (video as HTMLVideoElement).currentSrc || (video as HTMLVideoElement).src)
+            .catch(() => '')
+        if (!videoUrl) {
+            throw new Error('Cannot find user data (browser hydration missing: player video unavailable)')
+        }
+        const media: Array<GenericMediaInfo> = []
+        if (metadata?.thumbnail_url) {
+            media.push({ type: 'video_thumbnail', url: String(metadata.thumbnail_url) })
+        }
+        media.push({ type: 'video', url: videoUrl })
+        const createdAt = Number(metadata?.create_time) || Number(BigInt(videoId) >> 32n)
+        if (!createdAt) {
+            throw new Error('Cannot determine TikTok video creation time')
+        }
+        return [
+            {
+                platform: Platform.TikTok,
+                a_id: videoId,
+                u_id: String(metadata?.author_unique_id || ''),
+                username: String(metadata?.author_name || metadata?.author_unique_id || ''),
+                created_at: createdAt,
+                content: String(metadata?.title || ''),
+                url,
+                type: ArticleTypeEnum.POST,
+                ref: null,
+                has_media: true,
+                media,
+                extra: null,
+                u_avatar: null,
+            },
+        ]
+    }
+
     export async function grabVideo(
         url: string,
         page?: Page,
         cookieString?: string,
     ): Promise<Array<GenericArticle<Platform.TikTok>>> {
-        const content = await loadUniversalData(url, page, cookieString)
-        return videoParser(JSON.parse(content))
+        try {
+            const content = await loadUniversalData(url, page, cookieString)
+            const articles = videoParser(JSON.parse(content))
+            if (hasPlayableVideo(articles)) {
+                return articles
+            }
+            if (!page && articles.length > 0) {
+                return articles
+            }
+        } catch (error) {
+            if (!page) {
+                throw error
+            }
+        }
+        if (!page) {
+            return []
+        }
+        return await grabVideoFromPlayer(url, page, cookieString)
     }
 
     export async function grabFollowsNumber(

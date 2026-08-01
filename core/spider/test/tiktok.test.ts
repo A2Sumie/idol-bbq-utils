@@ -3,7 +3,7 @@ import { readFileSync } from 'fs'
 import type { GenericFollows } from '../src/types'
 import { Platform } from '../src/types'
 import { TiktokApiJsonParser, TiktokSpider } from '../src/spiders/tiktok'
-import { HTTPClient } from '../src/utils'
+import { HTTPClient, HttpStatusError } from '../src/utils'
 import { test, expect } from 'bun:test'
 
 function tiktokUniversalHtml(universalData: unknown) {
@@ -65,7 +65,9 @@ test('TikTok Spider URL Validation supports dotted handles', async () => {
         const match = spider._match_valid_url(url, TiktokSpider)
         expect(match?.groups?.id).toBe('nananiji.official')
     }
-    const videoMatch = plugin?.create()._match_valid_url('https://www.tiktok.com/@nananiji.official/video/123', TiktokSpider)
+    const videoMatch = plugin
+        ?.create()
+        ._match_valid_url('https://www.tiktok.com/@nananiji.official/video/123', TiktokSpider)
     expect(videoMatch?.groups?.id).toBe('nananiji.official')
     expect(videoMatch?.groups?.videoId).toBe('123')
 })
@@ -466,9 +468,130 @@ test('TikTok spider routes an X-ingested /video/ URL to a single-video grab', as
             { task_type: 'article', crawl_engine: 'api' as any },
         )
         expect(articles.map((a: any) => a.a_id)).toEqual(['7653464242506616085'])
-        // Single-video grab hits exactly the detail page, never the creator item_list API.
         expect(fetchedUrls).toEqual(['https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085/'])
         expect(fetchedUrls.some((url) => url.includes('/api/creator/item_list'))).toBe(false)
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
+})
+
+test('TikTok single-video grab falls back to the player when hydration has only a thumbnail', async () => {
+    const original = HTTPClient.download_webpage
+    const fetchedUrls: string[] = []
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        fetchedUrls.push(url)
+        if (url.includes('/oembed?')) {
+            return new Response(
+                JSON.stringify({
+                    embed_product_id: '7668653969584999701',
+                    author_unique_id: 'emma_tsukishiro',
+                    author_name: 'emma',
+                    title: 'player recovered video',
+                    thumbnail_url: 'https://example.com/oembed-cover.jpg',
+                }),
+                { headers: { 'content-type': 'application/json' } },
+            )
+        }
+        throw new Error(`Unexpected fetch: ${url}`)
+    }
+
+    const gotoUrls: string[] = []
+    const pageContent = tiktokUniversalHtml({
+        __DEFAULT_SCOPE__: {
+            'webapp.video-detail': {
+                itemInfo: {
+                    itemStruct: {
+                        id: '7668653969584999701',
+                        createTime: '1710759600',
+                        desc: 'thumbnail only',
+                        author: { uniqueId: 'emma_tsukishiro', nickname: 'emma' },
+                        video: { cover: 'https://example.com/cover.jpg' },
+                    },
+                },
+            },
+        },
+    })
+    const fakePage: any = {
+        goto: async (url: string) => {
+            gotoUrls.push(url)
+            return null
+        },
+        waitForSelector: async () => null,
+        content: async () => pageContent,
+        browserContext: () => ({ cookies: async () => [] }),
+        viewport: () => ({ width: 800, height: 600 }),
+        mouse: { click: async () => undefined },
+        keyboard: { press: async () => undefined },
+        $eval: async () => 'https://example.com/player.mp4',
+    }
+
+    try {
+        const articles = await TiktokApiJsonParser.grabVideo(
+            'https://www.tiktok.com/@emma_tsukishiro/video/7668653969584999701/',
+            fakePage,
+        )
+        expect(articles).toHaveLength(1)
+        expect(articles[0]?.created_at).toBe(1785497639)
+        expect(articles[0]?.media?.filter((item) => item.type === 'video').map((item) => item.url)).toEqual([
+            'https://example.com/player.mp4',
+        ])
+        expect(gotoUrls.at(-1)).toContain('/player/v1/7668653969584999701')
+        expect(fetchedUrls.some((url) => url.includes('/oembed?'))).toBeTrue()
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
+})
+
+test('TikTok single-video grab uses the browser when the unsigned fetch is blocked (403)', async () => {
+    const original = HTTPClient.download_webpage
+    const fetchedUrls: string[] = []
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        fetchedUrls.push(url)
+        throw new HttpStatusError(403, url)
+    }
+
+    const gotoUrls: string[] = []
+    const pageContent = tiktokUniversalHtml({
+        __DEFAULT_SCOPE__: {
+            'webapp.video-detail': {
+                itemInfo: {
+                    itemStruct: {
+                        id: '7668653969584999701',
+                        createTime: '1710759600',
+                        desc: 'browser recovered video',
+                        author: { uniqueId: 'emma_tsukishiro', nickname: 'emma' },
+                        video: {
+                            cover: 'https://example.com/cover.jpg',
+                            playAddr: 'https://example.com/video.mp4',
+                        },
+                    },
+                },
+            },
+        },
+    })
+    const fakePage: any = {
+        goto: async (url: string) => {
+            gotoUrls.push(url)
+            return null
+        },
+        waitForSelector: async () => null,
+        content: async () => pageContent,
+        browserContext: () => ({ cookies: async () => [] }),
+    }
+
+    try {
+        const spider = new TiktokSpider()
+        const articles = await spider.crawl(
+            'https://www.tiktok.com/@emma_tsukishiro/video/7668653969584999701',
+            fakePage,
+            'x-ingested-video-blocked',
+            { task_type: 'article', crawl_engine: 'browser' as any },
+        )
+        expect(articles.map((a: any) => a.a_id)).toEqual(['7668653969584999701'])
+        expect(articles[0]?.created_at).toBe(1710759600)
+        expect(typeof articles[0]?.created_at).toBe('number')
+        expect(articles[0]?.media?.some((item) => item.type === 'video')).toBeTrue()
+        expect(gotoUrls).toEqual(['https://www.tiktok.com/@emma_tsukishiro/video/7668653969584999701/'])
     } finally {
         ;(HTTPClient as any).download_webpage = original
     }

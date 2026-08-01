@@ -23,6 +23,11 @@ type YouTubeLinkInfo = {
     watchUrl?: string
 }
 
+type InstagramLinkInfo = {
+    originalUrl: string
+    profileUrl?: string
+}
+
 type EnqueueOptions = {
     crawlerConfig?: CrawlerConfig
     log?: MinimalLog
@@ -32,10 +37,13 @@ type EnqueueOptions = {
 
 const TIKTOK_URL_RE = /https?:\/\/(?:www\.|vm\.|vt\.)?tiktok\.com\/[^\s<>"'，。！？、）)\]}]+/gi
 const YOUTUBE_URL_RE = /https?:\/\/(?:(?:www|m)\.)?(?:youtube\.com|youtu\.be)\/[^\s<>"'，。！？、）)\]}]+/gi
+const INSTAGRAM_URL_RE = /https?:\/\/(?:www\.)?instagram\.com\/[^\s<>"'，。！？、）)\]}]+/gi
 const DEFAULT_TIKTOK_CRAWLER_NAME = 'Tiktok抓取'
 const DEFAULT_YOUTUBE_CRAWLER_NAME = 'YouTube抓取'
+const DEFAULT_INSTAGRAM_CRAWLER_NAME = 'Instagram抓取 - 高频时段'
 const MAX_TIKTOK_LINKS_PER_X_ARTICLE = 5
 const MAX_YOUTUBE_LINKS_PER_X_ARTICLE = 5
+const MAX_INSTAGRAM_LINKS_PER_X_ARTICLE = 5
 const TIKTOK_LINK_RESOLVE_TIMEOUT_MS = 10_000
 const YOUTUBE_VIDEO_ID_RE = /^[A-Za-z0-9_-]{6,128}$/
 
@@ -45,6 +53,21 @@ function cleanExternalUrl(value: string) {
 
 function cleanTikTokUrl(value: string) {
     return cleanExternalUrl(value)
+}
+
+function externalLinkText(article: Article): string {
+    const texts: Array<string> = []
+    let current: unknown = article
+    let depth = 0
+    while (current && typeof current === 'object' && depth < 4) {
+        const node = current as { content?: unknown; ref?: unknown }
+        if (typeof node.content === 'string' && node.content.trim()) {
+            texts.push(node.content)
+        }
+        current = node.ref
+        depth += 1
+    }
+    return texts.join('\n')
 }
 
 function extractTikTokLinksFromText(text?: string | null): Array<string> {
@@ -61,10 +84,40 @@ function extractYouTubeLinksFromText(text?: string | null): Array<string> {
     if (!text) {
         return []
     }
-    return Array.from(new Set(Array.from(text.matchAll(YOUTUBE_URL_RE)).map((match) => cleanExternalUrl(match[0])))).slice(
-        0,
-        MAX_YOUTUBE_LINKS_PER_X_ARTICLE,
-    )
+    return Array.from(
+        new Set(Array.from(text.matchAll(YOUTUBE_URL_RE)).map((match) => cleanExternalUrl(match[0]))),
+    ).slice(0, MAX_YOUTUBE_LINKS_PER_X_ARTICLE)
+}
+
+function extractInstagramLinksFromText(text?: string | null): Array<string> {
+    if (!text) {
+        return []
+    }
+    return Array.from(
+        new Set(Array.from(text.matchAll(INSTAGRAM_URL_RE)).map((match) => cleanExternalUrl(match[0]))),
+    ).slice(0, MAX_INSTAGRAM_LINKS_PER_X_ARTICLE)
+}
+
+function parseInstagramUrl(rawUrl: string): InstagramLinkInfo | null {
+    let url: URL
+    try {
+        url = new URL(rawUrl)
+    } catch {
+        return null
+    }
+    const hostname = url.hostname.toLowerCase()
+    if (hostname !== 'instagram.com' && hostname !== 'www.instagram.com') {
+        return null
+    }
+    const parts = url.pathname.split('/').filter(Boolean)
+    const handle = parts[0]
+    if (!handle || ['p', 'reel', 'reels', 'stories', 'explore', 'accounts', 'direct'].includes(handle.toLowerCase())) {
+        return { originalUrl: rawUrl }
+    }
+    return {
+        originalUrl: rawUrl,
+        profileUrl: `https://www.instagram.com/${handle}`,
+    }
 }
 
 function parseTikTokUrl(rawUrl: string): TikTokLinkInfo | null {
@@ -172,8 +225,9 @@ function resolveTikTokCrawlerName(crawlerConfig?: CrawlerConfig) {
     if (config === false || config?.enabled === false) {
         return null
     }
-    return String(config?.crawler || (crawlerConfig as any)?.tiktok_link_ingest_crawler || DEFAULT_TIKTOK_CRAWLER_NAME)
-        .trim()
+    return String(
+        config?.crawler || (crawlerConfig as any)?.tiktok_link_ingest_crawler || DEFAULT_TIKTOK_CRAWLER_NAME,
+    ).trim()
 }
 
 function resolveYouTubeCrawlerName(crawlerConfig?: CrawlerConfig) {
@@ -181,8 +235,17 @@ function resolveYouTubeCrawlerName(crawlerConfig?: CrawlerConfig) {
     if (config === false || config?.enabled === false) {
         return null
     }
-    return String(config?.crawler || (crawlerConfig as any)?.youtube_link_ingest_crawler || DEFAULT_YOUTUBE_CRAWLER_NAME)
-        .trim()
+    return String(
+        config?.crawler || (crawlerConfig as any)?.youtube_link_ingest_crawler || DEFAULT_YOUTUBE_CRAWLER_NAME,
+    ).trim()
+}
+
+function resolveInstagramCrawlerName(crawlerConfig?: CrawlerConfig) {
+    const config = (crawlerConfig as any)?.x_instagram_link_ingest
+    if (config === false || config?.enabled === false) {
+        return null
+    }
+    return String(config?.crawler || DEFAULT_INSTAGRAM_CRAWLER_NAME).trim()
 }
 
 async function enqueueMissingTikTokLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
@@ -195,7 +258,7 @@ async function enqueueMissingTikTokLinksFromXArticle(article: Article, options: 
         return []
     }
 
-    const links = extractTikTokLinksFromText(article.content || '')
+    const links = extractTikTokLinksFromText(externalLinkText(article))
     if (links.length === 0) {
         return []
     }
@@ -259,7 +322,7 @@ async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options:
         return []
     }
 
-    const links = extractYouTubeLinksFromText(article.content || '')
+    const links = extractYouTubeLinksFromText(externalLinkText(article))
     if (links.length === 0) {
         return []
     }
@@ -312,16 +375,67 @@ async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options:
     return queued
 }
 
+async function enqueueMissingInstagramLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
+    if (article.platform !== Platform.X && article.platform !== Platform.Twitter) {
+        return []
+    }
+
+    const crawlerName = resolveInstagramCrawlerName(options.crawlerConfig)
+    if (!crawlerName) {
+        return []
+    }
+
+    const links = extractInstagramLinksFromText(externalLinkText(article))
+    if (links.length === 0) {
+        return []
+    }
+
+    const now = options.now || Math.floor(Date.now() / 1000)
+    const queued: Array<{ profileUrl?: string; taskQueueId: number; status: string }> = []
+    const seenProfiles = new Set<string>()
+    for (const link of links) {
+        const resolved = parseInstagramUrl(link)
+        if (!resolved) {
+            continue
+        }
+        const profileUrl = resolved.profileUrl
+        const idempotencyProfile = profileUrl || 'instagram-configured-accounts'
+        if (seenProfiles.has(idempotencyProfile)) {
+            continue
+        }
+        seenProfiles.add(idempotencyProfile)
+
+        const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
+        const payload: { crawler: string; websites?: Array<string>; reason: string } = {
+            crawler: crawlerName,
+            reason: `x instagram link ${article.a_id || article.id || ''}`.trim().slice(0, 200),
+        }
+        if (profileUrl) {
+            payload.websites = [profileUrl]
+        }
+        const task = await DB.TaskQueue.add(taskType, payload, now, {
+            source_ref: `x-instagram-link:${article.a_id || article.id || idempotencyProfile}`,
+            action_type: 'x_instagram_link_ingest',
+            idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, {
+                crawler: crawlerName,
+                profileUrl: profileUrl || null,
+                sourcePlatform: 'x',
+                sourceArticleId: article.a_id || article.id || null,
+            }),
+        })
+        queued.push({ profileUrl, taskQueueId: task.id, status: task.status })
+    }
+
+    if (queued.length > 0) {
+        options.log?.info?.(
+            `Queued ${queued.length} Instagram ingest task(s) from X article ${article.a_id || article.id || '(unknown)'}`,
+        )
+    }
+    return queued
+}
+
 const GENERIC_URL_RE = /https?:\/\/[^\s<>"'，。！？、）)\]}]+/gi
-const KNOWN_PLATFORM_HOSTS = [
-    'x.com',
-    'twitter.com',
-    't.co',
-    'tiktok.com',
-    'youtube.com',
-    'youtu.be',
-    'instagram.com',
-]
+const KNOWN_PLATFORM_HOSTS = ['x.com', 'twitter.com', 't.co', 'tiktok.com', 'youtube.com', 'youtu.be', 'instagram.com']
 const DEFAULT_WEBSITE_CRAWLER_NAME = '22/7官网Blog抓取 - 高频'
 const DEFAULT_WEBSITE_INGEST_HOSTS = ['nanabunnonijyuuni-mobile.com']
 const MAX_WEBSITE_LINKS_PER_X_ARTICLE = 3
@@ -329,6 +443,15 @@ const MAX_WEBSITE_LINKS_PER_X_ARTICLE = 3
 function hostMatches(host: string, rule: string) {
     const normalized = rule.toLowerCase()
     return host === normalized || host.endsWith(`.${normalized}`)
+}
+
+function isSupported227WebsitePath(url: URL): boolean {
+    if (url.hostname.toLowerCase() !== 'nanabunnonijyuuni-mobile.com') {
+        return true
+    }
+    return /^\/s\/n110\/(?:news\/(?:list|detail\/[^/]+)|ticket\/(?:list|detail\/[^/]+)|diary\/(?:official_blog\/list|nananiji_movie(?:\/list)?|special\/list|detail\/\d+)|contents_list|contents\/[^/]+|gallery(?:\/[^/]+)?)\/?$/.test(
+        url.pathname,
+    )
 }
 
 function extractWebsiteLinksFromText(text: string | null | undefined, hosts: Array<string>): Array<string> {
@@ -351,7 +474,7 @@ function extractWebsiteLinksFromText(text: string | null | undefined, hosts: Arr
         if (!hosts.some((rule) => hostMatches(host, rule))) {
             continue
         }
-        if (hostMatches(host, 'nanabunnonijyuuni-mobile.com') && !url.pathname.startsWith('/s/n110/')) {
+        if (!isSupported227WebsitePath(url)) {
             continue
         }
         if (!out.includes(cleaned)) {
@@ -386,7 +509,7 @@ async function enqueueMissingWebsiteLinksFromXArticle(article: Article, options:
         return []
     }
 
-    const links = extractWebsiteLinksFromText(article.content || '', ingestConfig.hosts)
+    const links = extractWebsiteLinksFromText(externalLinkText(article), ingestConfig.hosts)
     if (links.length === 0) {
         return []
     }
@@ -428,8 +551,9 @@ async function enqueueMissingWebsiteLinksFromXArticle(article: Article, options:
 async function enqueueMissingExternalMediaLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
     const tiktok = await enqueueMissingTikTokLinksFromXArticle(article, options)
     const youtube = await enqueueMissingYouTubeLinksFromXArticle(article, options)
+    const instagram = await enqueueMissingInstagramLinksFromXArticle(article, options)
     const website = await enqueueMissingWebsiteLinksFromXArticle(article, options)
-    return { tiktok, youtube, website }
+    return { tiktok, youtube, instagram, website }
 }
 
 export {
@@ -437,13 +561,17 @@ export {
     DEFAULT_WEBSITE_INGEST_HOSTS,
     DEFAULT_YOUTUBE_CRAWLER_NAME,
     DEFAULT_TIKTOK_CRAWLER_NAME,
+    DEFAULT_INSTAGRAM_CRAWLER_NAME,
     enqueueMissingExternalMediaLinksFromXArticle,
+    enqueueMissingInstagramLinksFromXArticle,
     enqueueMissingTikTokLinksFromXArticle,
     enqueueMissingWebsiteLinksFromXArticle,
     enqueueMissingYouTubeLinksFromXArticle,
+    extractInstagramLinksFromText,
     extractTikTokLinksFromText,
     extractWebsiteLinksFromText,
     extractYouTubeLinksFromText,
+    parseInstagramUrl,
     parseTikTokUrl,
     parseYouTubeUrl,
     resolveTikTokLink,

@@ -80,7 +80,7 @@ const OPENCODE_GO_MODEL_CAPABILITIES: Record<string, ProcessorModelCapability> =
             requires_reasoning_content_on_assistant_messages: true,
         },
     },
-    'hy3': {
+    hy3: {
         provider_id: 'tencent-lkeap',
         model_id: 'hy3',
         display_name: 'Tencent Hunyuan (hy3, LKEAP subscription)',
@@ -183,8 +183,11 @@ function endpointHost(baseUrl?: string | null) {
 function requestDefaults(config?: ProcessorConfig) {
     return {
         temperature: typeof config?.temperature === 'number' ? config.temperature : undefined,
+        top_p: typeof config?.top_p === 'number' ? config.top_p : undefined,
         max_tokens: typeof config?.max_tokens === 'number' ? config.max_tokens : undefined,
         response_format: config?.response_format,
+        wire_api: config?.wire_api,
+        reasoning_effort: config?.reasoning_effort,
         request_timeout_ms: config?.request_timeout_ms,
         thinking: config?.extended_payload?.thinking,
     }

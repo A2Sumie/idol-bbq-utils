@@ -2,12 +2,15 @@ import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import {
+    enqueueMissingInstagramLinksFromXArticle,
     enqueueMissingWebsiteLinksFromXArticle,
     enqueueMissingYouTubeLinksFromXArticle,
     enqueueMissingTikTokLinksFromXArticle,
+    extractInstagramLinksFromText,
     extractTikTokLinksFromText,
     extractWebsiteLinksFromText,
     extractYouTubeLinksFromText,
+    parseInstagramUrl,
     parseYouTubeUrl,
     parseTikTokUrl,
 } from './x-tiktok-link-ingest-service'
@@ -127,10 +130,57 @@ test('extractYouTubeLinksFromText finds YouTube watch and short links without tr
         extractYouTubeLinksFromText(
             '新動画 https://www.youtube.com/watch?v=PWUNnCNTOLk。 shorts https://youtube.com/shorts/iYbrU0efOGw?feature=share,',
         ),
-    ).toEqual([
-        'https://www.youtube.com/watch?v=PWUNnCNTOLk',
-        'https://youtube.com/shorts/iYbrU0efOGw?feature=share',
-    ])
+    ).toEqual(['https://www.youtube.com/watch?v=PWUNnCNTOLk', 'https://youtube.com/shorts/iYbrU0efOGw?feature=share'])
+})
+
+test('Instagram link parsing distinguishes profiles from post/reel links', () => {
+    expect(
+        extractInstagramLinksFromText(
+            'IG https://www.instagram.com/kawase_uta/ reel https://www.instagram.com/reel/DbK-To2RLeF/?igsh=abc',
+        ),
+    ).toEqual(['https://www.instagram.com/kawase_uta/', 'https://www.instagram.com/reel/DbK-To2RLeF/?igsh=abc'])
+    expect(parseInstagramUrl('https://www.instagram.com/kawase_uta/')).toMatchObject({
+        profileUrl: 'https://www.instagram.com/kawase_uta',
+    })
+    expect(parseInstagramUrl('https://www.instagram.com/reel/DbK-To2RLeF/')).toEqual({
+        originalUrl: 'https://www.instagram.com/reel/DbK-To2RLeF/',
+    })
+})
+
+test('enqueueMissingInstagramLinksFromXArticle triggers the high-frequency crawler', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 813, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingInstagramLinksFromXArticle(
+            {
+                platform: Platform.X,
+                a_id: 'x-instagram-1',
+                content: 'IG https://www.instagram.com/kawase_uta/',
+            } as any,
+            { now: 1782214209 },
+        )
+        expect(queued).toEqual([
+            {
+                profileUrl: 'https://www.instagram.com/kawase_uta',
+                taskQueueId: 813,
+                status: 'pending',
+            },
+        ])
+        expect(adds[0]).toMatchObject({
+            payload: {
+                crawler: 'Instagram抓取 - 高频时段',
+                websites: ['https://www.instagram.com/kawase_uta'],
+            },
+            meta: { action_type: 'x_instagram_link_ingest' },
+        })
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
 })
 
 test('parseYouTubeUrl resolves canonical video metadata', () => {
@@ -331,9 +381,7 @@ test('enqueueMissingTikTokLinksFromXArticle de-duplicates repeated X links befor
 
         expect(queued).toHaveLength(1)
         expect(adds).toHaveLength(1)
-        expect(adds[0].payload.websites).toEqual([
-            'https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085',
-        ])
+        expect(adds[0].payload.websites).toEqual(['https://www.tiktok.com/@tabesugiyaseruzo/video/7653464242506616085'])
     } finally {
         ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
         ;(DB.TaskQueue as any).add = originalTaskAdd
@@ -380,10 +428,9 @@ test('enqueueMissingTikTokLinksFromXArticle honors disabled and custom crawler c
 
 test('extractWebsiteLinksFromText rejects non-n110 paths, foreign hosts, and caps link count', () => {
     const hosts = ['nanabunnonijyuuni-mobile.com']
-    expect(
-        extractWebsiteLinksFromText('https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1', hosts),
-    ).toEqual([])
+    expect(extractWebsiteLinksFromText('https://nanabunnonijyuuni-mobile.com/s/n129/diary/detail/1', hosts)).toEqual([])
     expect(extractWebsiteLinksFromText('https://example.com/s/n110/diary/detail/1', hosts)).toEqual([])
+    expect(extractWebsiteLinksFromText('https://nanabunnonijyuuni-mobile.com/s/n110/form/question', hosts)).toEqual([])
     expect(
         extractWebsiteLinksFromText('https://evil-nanabunnonijyuuni-mobile.com/s/n110/diary/detail/1', hosts),
     ).toEqual([])
@@ -469,9 +516,7 @@ test('enqueueMissingWebsiteLinksFromXArticle de-duplicates repeated links and ho
         const queued = await enqueueMissingWebsiteLinksFromXArticle(article, { now: 1782048000 })
         expect(queued).toHaveLength(1)
         expect(adds).toHaveLength(1)
-        expect(adds[0].payload.websites).toEqual([
-            'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969',
-        ])
+        expect(adds[0].payload.websites).toEqual(['https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/451969'])
     } finally {
         ;(DB.Article as any).findByUrl = originalFindByUrl
         ;(DB.TaskQueue as any).add = originalTaskAdd
@@ -503,6 +548,77 @@ test('enqueueMissingWebsiteLinksFromXArticle ignores non-X source platforms', as
         expect(added).toBe(0)
     } finally {
         ;(DB.Article as any).findByUrl = originalFindByUrl
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingWebsiteLinksFromXArticle scans quoted/retweet ref content', async () => {
+    const originalFindByUrl = DB.Article.findByUrl
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+
+    ;(DB.Article as any).findByUrl = async () => null
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 811, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingWebsiteLinksFromXArticle(
+            {
+                id: 9700,
+                platform: Platform.X,
+                a_id: 'x-quote-blog',
+                content: 'これは必見！',
+                ref: {
+                    a_id: 'x-quoted',
+                    platform: Platform.X,
+                    content: '新ブログ https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/452591',
+                    ref: null,
+                },
+            } as any,
+            { now: 1782048000 },
+        )
+
+        expect(queued).toHaveLength(1)
+        expect(adds[0].payload.websites).toEqual(['https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/452591'])
+    } finally {
+        ;(DB.Article as any).findByUrl = originalFindByUrl
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingYouTubeLinksFromXArticle scans quoted/retweet ref content', async () => {
+    const originalGetByArticleCode = DB.Article.getByArticleCode
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+
+    ;(DB.Article as any).getByArticleCode = async () => null
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 812, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingYouTubeLinksFromXArticle(
+            {
+                platform: Platform.X,
+                a_id: 'x-quote-yt',
+                content: 'RT',
+                ref: {
+                    a_id: 'x-quoted-yt',
+                    platform: Platform.X,
+                    content: '配信 https://youtu.be/PWUNnCNTOLk',
+                    ref: null,
+                },
+            } as any,
+            { now: 1782214209 },
+        )
+
+        expect(queued).toHaveLength(1)
+        expect(adds[0].payload.crawler).toBe('YouTube抓取')
+    } finally {
+        ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
         ;(DB.TaskQueue as any).add = originalTaskAdd
     }
 })

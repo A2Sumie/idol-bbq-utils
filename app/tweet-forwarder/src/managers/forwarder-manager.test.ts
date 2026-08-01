@@ -1646,7 +1646,15 @@ test('sendArticles sends a text-only translation passthrough before the main sen
         a_id: 'passthrough-article',
         platform: 1,
         created_at: Math.floor(Date.now() / 1000),
-        ref: null,
+        ref: {
+            a_id: 'passthrough-referenced-article',
+            u_id: 'someone_else',
+            username: 'Someone Else',
+            platform: 1,
+            type: 'tweet',
+            content: 'referenced body',
+            ref: null,
+        },
         content: '原文です',
         translation: '这是译文',
     }
@@ -1678,7 +1686,7 @@ test('sendArticles sends a text-only translation passthrough before the main sen
 
     expect(sends).toHaveLength(2)
     expect(sends[0]?.texts).toHaveLength(1)
-    expect(sends[0]?.texts[0]).toContain('这是译文')
+    expect(sends[0]?.texts[0]).toContain('这是译文\n\n---（余下见卡片）---\n\n')
     expect(sends[0]?.props?.media).toEqual([])
     expect(sends[0]?.props?.outboundKey).toContain('translation_passthrough')
     // Text-only passthrough must bypass require_media suppression targets.
@@ -1856,7 +1864,7 @@ test('sendArticles skips translation passthrough when there is no translation', 
     expect(sends[0]?.texts).toEqual(['main card payload'])
 })
 
-test('sendArticles sends a ref-only passthrough marker for a bare retweet without translation', async () => {
+test('sendArticles does not send a passthrough for a bare retweet without first-layer content', async () => {
     const pools = new ForwarderPools(
         {
             forward_targets: [],
@@ -1929,11 +1937,9 @@ test('sendArticles sends a ref-only passthrough marker for a bare retweet withou
         } as any,
     )
 
-    expect(sends).toHaveLength(2)
-    expect(sends[0]?.texts[0]).toContain('余下见卡片')
-    expect(sends[0]?.texts[0]).toContain('@minami__iori')
-    expect(sends[0]?.props?.outboundKey).toContain('translation_passthrough')
-    expect(sends[1]?.texts).toEqual(['main card payload'])
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.texts).toEqual(['main card payload'])
+    expect(sends[0]?.texts[0]).not.toContain('余下见卡片')
 })
 
 test('sendArticles fires translation passthrough before queueing to a summary-card target', async () => {
