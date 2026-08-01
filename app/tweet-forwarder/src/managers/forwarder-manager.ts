@@ -345,6 +345,16 @@ function stripHashtagsFromText(text?: string | null) {
         .trim()
 }
 
+function stripUrlsFromText(text: string) {
+    return text
+        .split('\n')
+        .map((line) => line.replace(/https?:\/\/\S+/gi, '').replace(/[ \t]+$/g, ''))
+        .filter((line, index, lines) => !(line === '' && lines[index - 1] === ''))
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
 function preserveSourceHashtags(sourceText: string, translatedText: string) {
     if (!BaseProcessor.isValidResult(translatedText)) {
         return translatedText
@@ -2329,7 +2339,7 @@ class ForwarderPools extends BaseCompatibleModel {
                             return
                         }
 
-                        const baseText =
+                        const resolvedText =
                             this.buildBilibiliTranslationCaption(article, target, runtime_config) ||
                             (await this.resolveTargetTextForArticle(
                                 targetArticle,
@@ -2338,6 +2348,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 target,
                                 runtime_config,
                             ))
+                        const baseText = target.NAME === 'bilibili' ? stripUrlsFromText(resolvedText) : resolvedText
 
                         const premiereResolvedForceKey =
                             premiereResolvedAt && !options?.forceSend
@@ -7078,4 +7089,5 @@ export {
     resolveBatchTargetIds,
     resolveMatchingForwarderTemplate,
     resolveSummaryCardConfig,
+    stripUrlsFromText,
 }

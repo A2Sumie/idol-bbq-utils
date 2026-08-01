@@ -8,6 +8,7 @@ import {
     resolveBatchAggregationConfig,
     resolveBatchTargetIds,
     resolveSummaryCardConfig,
+    stripUrlsFromText,
 } from './forwarder-manager'
 import { TaskScheduler } from '@/utils/base'
 import { fileURLToPath } from 'url'
@@ -22,6 +23,14 @@ import { resolveSummaryCardConfig as resolveSummaryCardPolicyConfig } from '@/se
 
 process.env.FONTS_DIR = fileURLToPath(new URL('../../../../assets/fonts', import.meta.url))
 process.env.RENDER_REMOTE_ASSETS = '0'
+
+test('stripUrlsFromText removes links while preserving website metadata', () => {
+    expect(
+        stripUrlsFromText(
+            '【22/7 博客｜三雲遥加】心象風景。\n\n22/7官网 博客 抓取于 2353⁹（260801）\nhttps://example.com/blog',
+        ),
+    ).toBe('【22/7 博客｜三雲遥加】心象風景。\n\n22/7官网 博客 抓取于 2353⁹（260801）')
+})
 
 const originalOutboundMessage = { ...DB.OutboundMessage }
 const originalAggregationWindow = { ...DB.AggregationWindow }

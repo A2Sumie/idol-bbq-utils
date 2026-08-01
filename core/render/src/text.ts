@@ -46,6 +46,16 @@ const SYNTHETIC_ACTION_LABELS: Record<string, string> = {
     message_pack: '合并',
     summary: '合并',
 }
+const WEBSITE_FEED_LABELS: Record<string, string> = {
+    'official-blog': '博客',
+    'official-news': '新闻',
+    'fc-news': 'FC新闻',
+    'live-report': 'LIVE REPORT',
+    photo: 'PHOTO',
+    movie: 'MOVIE',
+    radio: 'RADIO',
+    ticket: 'TICKET',
+}
 const SUPERSCRIPT_DIGITS: Record<string, string> = {
     '-': '⁻',
     '0': '⁰',
@@ -596,6 +606,18 @@ function followsToText(data: Array<[Platform, Array<[Follows, Follows | null]>]>
     return texts.join('\n\n')
 }
 
+function formatWebsiteCardText(article: Article) {
+    const data = article.extra?.extra_type === 'website_meta' ? ((article.extra.data as any) ?? null) : null
+    const feed = String(data?.feed || '').trim()
+    const label = WEBSITE_FEED_LABELS[feed] || '更新'
+    const author = String(data?.member || (feed === 'official-blog' ? article.username : '') || '').trim()
+    const title = String(data?.title || extractArticleHeadline(article) || '').trim()
+    const site = String(data?.site || '22/7').trim()
+    const heading = `【${site} ${[label, author].filter(Boolean).join('｜')}】${title}`
+    const attribution = [`${site}官网`, label, formatArticleDisplayAttributionTime(article)].filter(Boolean).join(' ')
+    return [heading, '', attribution, article.url].filter((line) => line !== undefined).join('\n')
+}
+
 function formatMetaline(article: Article) {
     return formatArticleHeaderLine(article)
 }
@@ -611,6 +633,7 @@ export {
     extractArticleHeadline,
     extractTextHeadline,
     followsToText,
+    formatWebsiteCardText,
     formatArticleActionLabel,
     formatArticleAttributionLine,
     formatArticleAttributionTimeToken,

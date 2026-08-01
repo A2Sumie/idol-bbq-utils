@@ -16,6 +16,7 @@ import {
     compactArticleToText,
     extractArticleHeadline,
     formatMetaline,
+    formatWebsiteCardText,
     ImgConverter,
     type ArticleTextOptions,
 } from '@idol-bbq-utils/render'
@@ -323,7 +324,10 @@ export class RenderService {
         } else if (render_type === 'text-card' || render_type === 'text-compact-card') {
             text = this.renderText(article, config)
             textCollapseMode = this.resolveArticleTextCollapseMode(render_type)
-            if (!LONG_TEXT_CARD_TYPES.has(String(article.type || '')) && text.length > CARD_TEXT_TITLE_THRESHOLD) {
+            if (article.platform === Platform.Website) {
+                text = formatWebsiteCardText(article)
+                textCollapseMode = 'none'
+            } else if (!LONG_TEXT_CARD_TYPES.has(String(article.type || '')) && text.length > CARD_TEXT_TITLE_THRESHOLD) {
                 text = extractArticleHeadline(article)
                 textCollapseMode = 'none'
             }

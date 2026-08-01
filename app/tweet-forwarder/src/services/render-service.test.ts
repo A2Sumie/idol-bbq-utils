@@ -913,24 +913,33 @@ describe('RenderService text-card', () => {
         service.cleanup(result.mediaFiles)
     })
 
-    test('uses only the headline when article text is too long', async () => {
+    test('website blog card text shows feed, author, title, attribution, and link without body', async () => {
         const service = new RenderService()
         const result = await service.process(
             {
                 id: 12,
                 a_id: 'web-text-card-long',
-                u_id: 'live-report',
-                username: 'LIVE REPORT',
+                u_id: '22/7:official-blog',
+                username: '三雲遥加',
                 created_at: 1710000000,
-                content: `需要保留的标题\n\n${'很长的正文'.repeat(260)}`,
-                translation: null,
-                translated_by: null,
-                url: 'https://www.227-official.com/live/report',
+                content: `【心象風景。】\n\n${'很长的正文'.repeat(260)}`,
+                translation: `【心象风景。】\n\n${'很长的译文'.repeat(260)}`,
+                translated_by: 'processor',
+                url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/452591',
                 type: 'article',
                 ref: null,
                 has_media: false,
                 media: [],
-                extra: null,
+                extra: {
+                    extra_type: 'website_meta',
+                    data: {
+                        site: '22/7',
+                        feed: 'official-blog',
+                        member: '三雲遥加',
+                        title: '心象風景。',
+                        time_source: 'crawl_observed',
+                    },
+                },
                 u_avatar: null,
                 platform: Platform.Website,
             } as any,
@@ -940,7 +949,11 @@ describe('RenderService text-card', () => {
             },
         )
 
-        expect(result.text).toBe('需要保留的标题')
+        expect(result.text).toContain('【22/7 博客｜三雲遥加】心象風景。')
+        expect(result.text).toContain('22/7官网 博客 抓取于')
+        expect(result.text).toContain('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/452591')
+        expect(result.text).not.toContain('很长的正文')
+        expect(result.text).not.toContain('很长的译文')
         expect(result.cardMediaFiles).toHaveLength(1)
 
         service.cleanup(result.mediaFiles)
