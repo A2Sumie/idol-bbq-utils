@@ -29,6 +29,7 @@ const SHORT_ACTION_LABELS: Partial<Record<Platform, Record<string, string>>> = {
     [Platform.Instagram]: {
         post: '发帖',
         story: '故事',
+        highlight: '精选',
     },
     [Platform.TikTok]: {
         post: '视频',

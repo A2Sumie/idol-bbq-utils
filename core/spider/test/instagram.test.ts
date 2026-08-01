@@ -61,8 +61,12 @@ test.skip('spider', async () => {
 test('Instagram API JSON Parser', async () => {
     const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
     const profile_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-profile.json'), 'utf-8'))
+    const highlights_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-highlights.json'), 'utf-8'))
 
     const posts_json_result = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts-result.json'), 'utf-8'))
+    const highlights_json_result = JSON.parse(
+        readFileSync(dataPath('instagram', 'instagram-highlights-result.json'), 'utf-8'),
+    )
     const profile_json_result = JSON.parse(
         readFileSync(dataPath('instagram', 'instagram-follows-result.json'), 'utf-8'),
     )
@@ -80,6 +84,7 @@ test('Instagram API JSON Parser', async () => {
     expect(posts.every((item) => item.username.length > 0)).toBeTrue()
     expect(posts.every((item) => item.u_id.length > 0)).toBeTrue()
     expect(posts.some((item) => (item.media?.length ?? 0) > 0)).toBeTrue()
+    expect(InsApiJsonParser.highlightsParser(highlights_json, 1710759600)).toEqual(highlights_json_result)
     expect(InsApiJsonParser.followsParser(profile_json)).toMatchObject({
         platform: 2,
         u_id: profile_json_result.u_id,
@@ -525,6 +530,40 @@ test('Instagram article crawl defaults to posts only', async () => {
     } finally {
         ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
+    }
+})
+
+test('Instagram highlights run only through the explicit highlights subtask', async () => {
+    const originalGrabPosts = InsApiJsonParser.grabPosts
+    const originalGrabStories = InsApiJsonParser.grabStories
+    const originalGrabHighlights = InsApiJsonParser.grabHighlights
+    const calls: Array<string> = []
+    ;(InsApiJsonParser as any).grabPosts = async () => {
+        calls.push('posts')
+        return []
+    }
+    ;(InsApiJsonParser as any).grabStories = async () => {
+        calls.push('stories')
+        return []
+    }
+    ;(InsApiJsonParser as any).grabHighlights = async () => {
+        calls.push('highlights')
+        return []
+    }
+
+    try {
+        const spider = new InstagramSpider()
+        const articles = await spider.crawl('https://www.instagram.com/instagram/', {} as any, 'ig-highlights', {
+            task_type: 'article',
+            crawl_engine: 'browser',
+            sub_task_type: ['highlights'],
+        })
+        expect(articles).toEqual([])
+        expect(calls).toEqual(['highlights'])
+    } finally {
+        ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
+        ;(InsApiJsonParser as any).grabStories = originalGrabStories
+        ;(InsApiJsonParser as any).grabHighlights = originalGrabHighlights
     }
 })
 

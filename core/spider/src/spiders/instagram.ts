@@ -25,7 +25,7 @@ enum ArticleTypeEnum {
     /**
      * https://www.instagram.com/stories/highlights/username
      */
-    // HIGHLIGHTS = 'highlights',
+    HIGHLIGHT = 'highlight',
     /**
      * TODO
      *
@@ -34,13 +34,10 @@ enum ArticleTypeEnum {
     // REEL = 'reel',
 }
 
-/**
- * Fine-grained Instagram article sub-tasks. When no sub_task_type is configured, both posts and
- * stories are crawled (stories best-effort). Configure `sub_task_type` to restrict to one.
- */
 enum InstagramArticleTaskType {
     posts = 'posts',
     stories = 'stories',
+    highlights = 'highlights',
 }
 
 /**
@@ -151,6 +148,7 @@ class InstagramSpider extends BaseSpider {
             const wantPosts =
                 !sub_task_type || sub_task_type.length === 0 || sub_task_type.includes(InstagramArticleTaskType.posts)
             const wantStories = sub_task_type?.includes(InstagramArticleTaskType.stories) ?? false
+            const wantHighlights = sub_task_type?.includes(InstagramArticleTaskType.highlights) ?? false
 
             const articles: Array<GenericArticle<Platform.Instagram>> = []
             if (wantPosts) {
@@ -167,6 +165,10 @@ class InstagramSpider extends BaseSpider {
                 } catch (error) {
                     this.log?.warn(`Failed to grab stories for ${id}, keeping posts only: ${error}`)
                 }
+            }
+            if (wantHighlights) {
+                this.log?.info('Trying to grab highlights.')
+                articles.push(...(await InsApiJsonParser.grabHighlights(page, _url)))
             }
             return articles as TaskTypeResult<T, Platform.Instagram>
         }
@@ -358,6 +360,7 @@ namespace InsApiJsonParser {
         const handle = fallbackUsername(owner?.u_id, crawledProfile?.u_id)
         const displayName = fallbackUsername(owner?.username, crawledProfile?.username, handle)
         const avatarUrl = normalizeInstagramUrl(owner?.u_avatar || crawledProfile?.u_avatar)
+        const permalinkType = node?.product_type === 'clips' ? 'reel' : 'p'
         return {
             platform: Platform.Instagram,
             a_id: node?.code,
@@ -365,7 +368,7 @@ namespace InsApiJsonParser {
             username: displayName,
             created_at: node?.taken_at,
             content: sanitizeInstagramGeneratedText(node?.caption?.text),
-            url: `https://www.instagram.com/p/${node?.code}/`,
+            url: `https://www.instagram.com/${permalinkType}/${node?.code}/`,
             type: ArticleTypeEnum.POST,
             ref: null,
             has_media: true,
@@ -375,28 +378,28 @@ namespace InsApiJsonParser {
         }
     }
 
-    // function highlightParser(edge: any): GenericArticle<Platform.Instagram> {
-    //     const node = edge.node
-    //     const id = /\w+[:,](?<id>\d+)/.exec(node?.id)?.groups?.id ?? ''
-    //     return {
-    //         platform: Platform.Instagram,
-    //         a_id: id,
-    //         u_id: node?.user?.username,
-    //         username: '',
-    //         /**
-    //          * TODO: notify when highlight updates
-    //          */
-    //         created_at: 0,
-    //         content: node?.title,
-    //         url: `https://www.instagram.com/stories/highlights/${id}/`,
-    //         type: ArticleTypeEnum.HIGHLIGHTS,
-    //         ref: null,
-    //         has_media: true,
-    //         media: null,
-    //         extra: null,
-    //         u_avatar: null,
-    //     }
-    // }
+    function highlightParser(edge: any, observedAt: number): GenericArticle<Platform.Instagram> {
+        const node = edge?.node
+        const id = /\w+[:,](?<id>\d+)/.exec(node?.id)?.groups?.id ?? ''
+        const coverUrl = normalizeInstagramUrl(
+            node?.cover_media?.cropped_image_version?.url || node?.cover_media?.full_image_version?.url,
+        )
+        return {
+            platform: Platform.Instagram,
+            a_id: id,
+            u_id: fallbackUsername(node?.user?.username),
+            username: '',
+            created_at: observedAt,
+            content: node?.title ?? null,
+            url: `https://www.instagram.com/stories/highlights/${id}/`,
+            type: ArticleTypeEnum.HIGHLIGHT,
+            ref: null,
+            has_media: Boolean(coverUrl),
+            media: coverUrl ? [{ type: 'photo', url: coverUrl }] : null,
+            extra: null,
+            u_avatar: null,
+        }
+    }
     function storyParser(item: any): GenericArticle<Platform.Instagram> {
         return {
             platform: Platform.Instagram,
@@ -415,10 +418,15 @@ namespace InsApiJsonParser {
         }
     }
 
-    // export function highlightsParser(json: any): Array<GenericArticle<Platform.Instagram>> {
-    //     let edges = parseEdges(json)
-    //     return edges.map(highlightParser)
-    // }
+    export function highlightsParser(
+        json: any,
+        observedAt = Math.floor(Date.now() / 1000),
+    ): Array<GenericArticle<Platform.Instagram>> {
+        const edges = parseEdges(json)
+        return edges
+            .map((edge: any) => highlightParser(edge, observedAt))
+            .filter((article: GenericArticle<Platform.Instagram>) => article.a_id && article.u_id)
+    }
 
     export function postsParser(json: any): Array<GenericArticle<Platform.Instagram>> {
         let edges = parseEdges(json)
@@ -561,12 +569,66 @@ namespace InsApiJsonParser {
             throw data.error
         }
         const posts = postsParser(data.data)
-        // const highlights = highlightsParser(reasonable_jsons[PROFILE_HIGHLIGHTS_KEY]).map((h) => {
-        //     h.username = posts[0]?.username ?? ''
-        //     h.u_avatar = posts[0]?.u_avatar ?? ''
-        //     return h
-        // })
         return posts
+    }
+
+    export async function grabHighlights(
+        page: Page,
+        url: string,
+        config: {
+            viewport?: {
+                width: number
+                height: number
+            }
+        } = {},
+    ): Promise<Array<GenericArticle<Platform.Instagram>>> {
+        const { cleanup, promise: waitForHighlights } = waitForResponse(page, async (response, { done, fail }) => {
+            const responseUrl = response.url()
+            const request = response.request()
+            const friendlyName = graphQLFriendlyNameFromRequest(responseUrl, request.method(), request.postData())
+            if (friendlyName !== PROFILE_HIGHLIGHTS_KEY) {
+                return
+            }
+            if (response.status() >= 300 && response.status() < 400) {
+                const location = response.headers()['location'] || ''
+                if (/login/i.test(location)) {
+                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                } else {
+                    fail(
+                        new Error(
+                            `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
+                        ),
+                    )
+                }
+                return
+            }
+            if (response.status() >= 400) {
+                fail(new Error(`Error: ${response.status()}`))
+                return
+            }
+            try {
+                done(await response.json())
+            } catch (e) {
+                fail(e)
+            }
+        })
+        if (config.viewport) {
+            await page.setViewport(config.viewport)
+        }
+        await page.goto(url)
+        try {
+            await checkLogin(page)
+            await checkSomethingWrong(page)
+        } catch (error) {
+            cleanup()
+            throw error
+        }
+
+        const data = await waitForHighlights
+        if (!data.success) {
+            throw data.error
+        }
+        return highlightsParser(data.data)
     }
 
     /** 由于使用了bun做运行时，无法使用xpath做内容筛选
