@@ -2939,7 +2939,7 @@ class ForwarderPools extends BaseCompatibleModel {
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return false
         }
-        if (this.shouldSkipOfficialOriginalTranslationPassthrough(article)) {
+        if (this.shouldSkipRetweetOfOfficialTranslationPassthrough(article)) {
             return false
         }
         if (!this.articleHasOwnText(article)) {
@@ -2963,16 +2963,19 @@ class ForwarderPools extends BaseCompatibleModel {
         return Boolean(article.ref) && typeof article.ref === 'object'
     }
 
-    private shouldSkipOfficialOriginalTranslationPassthrough(article: ArticleWithId) {
-        const userId = String(article.u_id || '')
+    private shouldSkipRetweetOfOfficialTranslationPassthrough(article: ArticleWithId) {
+        if (
+            (article.platform !== Platform.X && article.platform !== Platform.Twitter) ||
+            String(article.type || '').toLowerCase() !== 'retweet' ||
+            !this.articleHasRenderableRef(article)
+        ) {
+            return false
+        }
+        const refUserId = String((article.ref as ArticleWithId).u_id || '')
             .trim()
             .replace(/^@+/, '')
             .toLowerCase()
-        return (
-            (article.platform === Platform.X || article.platform === Platform.Twitter) &&
-            userId === '227_staff' &&
-            !this.articleHasRenderableRef(article)
-        )
+        return refUserId === '227_staff'
     }
 
     private articleHasOwnText(article: Pick<ArticleWithId, 'content' | 'extra'>) {
@@ -3025,7 +3028,7 @@ class ForwarderPools extends BaseCompatibleModel {
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return
         }
-        if (this.shouldSkipOfficialOriginalTranslationPassthrough(article)) {
+        if (this.shouldSkipRetweetOfOfficialTranslationPassthrough(article)) {
             return false
         }
         if (!String(article.translation || '').trim() && summaryConfig?.translatedCard?.processorId) {

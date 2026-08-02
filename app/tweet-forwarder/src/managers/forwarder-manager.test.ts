@@ -1703,7 +1703,7 @@ test('sendArticles sends a text-only translation passthrough before the main sen
     expect(sends[1]?.texts).toEqual(['main card payload'])
 })
 
-test('227_staff original tweets skip translation passthrough while official retweets keep it', async () => {
+test('retweets of 227_staff skip translation passthrough while official posts and retweets keep it', async () => {
     const pools = new ForwarderPools(
         {
             forward_targets: [],
@@ -1728,62 +1728,92 @@ test('227_staff original tweets skip translation passthrough while official retw
         },
     }
     const baseArticle = {
-        id: 1213,
         platform: Platform.X,
-        u_id: '227_staff',
-        username: '22/7',
         created_at: Math.floor(Date.now() / 1000),
-        content: '公式投稿です',
-        translation: '这是官方原创推文',
+        content: '投稿です',
+        translation: '这是译文',
         has_media: false,
         media: [],
         extra: null,
         u_avatar: null,
     }
+    const sendPassthrough = (article: any, routeKey: string) =>
+        (pools as any).sendTranslationPassthrough(
+            undefined,
+            article,
+            target,
+            routeKey,
+            { translation_passthrough: true },
+            { cardMediaFiles: [], originalMediaFiles: [] },
+        )
 
-    const originalResult = await (pools as any).sendTranslationPassthrough(
-        undefined,
-        {
-            ...baseArticle,
-            a_id: 'official-original-passthrough',
-            url: 'https://x.com/227_staff/status/1213',
-            type: 'tweet',
-            ref: null,
-        },
-        target,
-        'official-original-route',
-        { translation_passthrough: true },
-        { cardMediaFiles: [], originalMediaFiles: [] },
-    )
-    expect(originalResult).toBe(false)
-    expect(sends).toHaveLength(0)
-
-    const retweetResult = await (pools as any).sendTranslationPassthrough(
-        undefined,
-        {
-            ...baseArticle,
-            id: 1214,
-            a_id: 'official-retweet-passthrough',
-            url: 'https://x.com/227_staff/status/1214',
-            type: 'retweet',
-            ref: {
-                a_id: 'member-original',
-                platform: Platform.X,
-                u_id: 'member_account',
-                username: 'Member',
+    expect(
+        await sendPassthrough(
+            {
+                ...baseArticle,
+                id: 1213,
+                a_id: 'official-original-passthrough',
+                u_id: '227_staff',
+                username: '22/7',
+                url: 'https://x.com/227_staff/status/1213',
                 type: 'tweet',
-                content: 'member post',
                 ref: null,
             },
-        },
-        target,
-        'official-retweet-route',
-        { translation_passthrough: true },
-        { cardMediaFiles: [], originalMediaFiles: [] },
-    )
-    expect(retweetResult).toBe(true)
+            'official-original-route',
+        ),
+    ).toBe(true)
     expect(sends).toHaveLength(1)
-    expect(sends[0]?.props?.outboundKey).toContain('translation_passthrough')
+
+    expect(
+        await sendPassthrough(
+            {
+                ...baseArticle,
+                id: 1214,
+                a_id: 'official-retweet-passthrough',
+                u_id: '227_staff',
+                username: '22/7',
+                url: 'https://x.com/227_staff/status/1214',
+                type: 'retweet',
+                ref: {
+                    a_id: 'member-original',
+                    platform: Platform.X,
+                    u_id: 'member_account',
+                    username: 'Member',
+                    type: 'tweet',
+                    content: 'member post',
+                    ref: null,
+                },
+            },
+            'official-retweet-route',
+        ),
+    ).toBe(true)
+    expect(sends).toHaveLength(2)
+
+    expect(
+        await sendPassthrough(
+            {
+                ...baseArticle,
+                id: 1215,
+                a_id: 'member-retweets-official-passthrough',
+                u_id: 'member_account',
+                username: 'Member',
+                url: 'https://x.com/member_account/status/1215',
+                type: 'retweet',
+                ref: {
+                    a_id: 'official-original',
+                    platform: Platform.X,
+                    u_id: '227_staff',
+                    username: '22/7',
+                    type: 'tweet',
+                    content: 'official post',
+                    ref: null,
+                },
+            },
+            'member-retweets-official-route',
+        ),
+    ).toBe(false)
+    expect(sends).toHaveLength(2)
+    expect(sends.every((send) => String(send.props?.outboundKey).includes('translation_passthrough'))).toBe(true)
 })
 
 test('Bilibili translated-card native sends use passthrough metadata layout as the dynamic text', async () => {
