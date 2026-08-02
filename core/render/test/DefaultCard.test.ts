@@ -376,12 +376,14 @@ test('aggregated translation block gets a 1px segmented marker bar on the left',
     const { component } = articleParser(article as any)
     const bar = findReactElement(component, (node) => node.props?.['data-translated-block-bar'] === 'true')
     const cardBar = findReactElement(component, (node) => node.props?.['data-translated-card-bar'] === 'true')
+    const translationText = findReactElement(component, (node) => node.props?.children === article.translation)
 
     expect(cardBar).toBeNull()
     expect(bar).toBeTruthy()
     expect(bar?.props?.style?.left).toBe(0)
     expect(bar?.props?.style?.width).toBe(1)
     expect(bar?.props?.style?.height).toBeGreaterThan(3)
+    expect(translationText?.props?.style?.paddingLeft).toBe(1)
     const segments = (bar?.props?.children || []).map((segment: any) => segment.props?.style?.backgroundColor)
     expect(segments).toEqual(EXPECTED_TRANSLATED_MARKER_BAR_COLORS)
     segments.forEach((_color: string, index: number) => {
@@ -471,6 +473,8 @@ test('translated-corner-badge feature renders sparse multicolor geometry waterma
     const visibleTextBadge = findReactElement(component, (node) => node.props?.children === '译文')
 
     expect(card).toBeTruthy()
+    expect(String(card?.props?.tw || '')).not.toContain('rounded')
+    expect(card?.props?.style?.borderRadius).toBeUndefined()
     expect(pinkFill).toBeNull()
     expect(pattern).toBeTruthy()
     expect(clusters.length).toBe(0)

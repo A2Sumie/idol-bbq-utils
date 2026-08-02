@@ -1443,6 +1443,7 @@ function ArticleContent({
                                 lineHeight: CARD_LINE_HEIGHT.base,
                                 whiteSpace: 'pre-wrap',
                                 fontWeight: 400,
+                                paddingLeft: 1,
                                 overflowWrap: 'anywhere',
                                 wordBreak: 'break-word',
                             }}
@@ -1559,7 +1560,7 @@ function BaseCard({
     const translatedMarkedCard = isTranslatedMarkedCard(article, features)
     return (
         <div
-            tw={clsx('p-4 bg-white rounded-2xl shadow-sm h-full w-full flex flex-col relative', {
+            tw={clsx('p-4 bg-white shadow-sm h-full w-full flex flex-col relative', {
                 'pb-5': hasVisualMedia,
                 'pb-3': !hasVisualMedia,
             })}
