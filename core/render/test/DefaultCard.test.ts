@@ -353,7 +353,7 @@ const EXPECTED_TRANSLATED_MARKER_BAR_COLORS = [
     '#29B6F6',
 ]
 
-test('aggregated translation block gets a 3px segmented marker bar', () => {
+test('aggregated translation block gets a 1px segmented marker bar on the left', () => {
     const article = {
         id: -1,
         platform: Platform.X,
@@ -379,15 +379,18 @@ test('aggregated translation block gets a 3px segmented marker bar', () => {
 
     expect(cardBar).toBeNull()
     expect(bar).toBeTruthy()
-    expect(bar?.props?.style?.height).toBe(3)
+    expect(bar?.props?.style?.left).toBe(0)
+    expect(bar?.props?.style?.width).toBe(1)
+    expect(bar?.props?.style?.height).toBeGreaterThan(3)
     const segments = (bar?.props?.children || []).map((segment: any) => segment.props?.style?.backgroundColor)
     expect(segments).toEqual(EXPECTED_TRANSLATED_MARKER_BAR_COLORS)
     segments.forEach((_color: string, index: number) => {
         expect(bar?.props?.children?.[index]?.props?.style?.flex).toBe(1)
+        expect(bar?.props?.children?.[index]?.props?.style?.width).toBe(1)
     })
 })
 
-test('standalone translated card gets a 7px segmented marker bar', () => {
+test('standalone translated card gets a 3px segmented marker bar on the left', () => {
     const article = {
         id: -1,
         platform: Platform.X,
@@ -420,9 +423,14 @@ test('standalone translated card gets a 7px segmented marker bar', () => {
 
     expect(blockBar).toBeNull()
     expect(cardBar).toBeTruthy()
-    expect(cardBar?.props?.style?.height).toBe(7)
+    expect(cardBar?.props?.style?.left).toBe(0)
+    expect(cardBar?.props?.style?.width).toBe(3)
+    expect(cardBar?.props?.style?.height).toBeGreaterThan(7)
     const segments = (cardBar?.props?.children || []).map((segment: any) => segment.props?.style?.backgroundColor)
     expect(segments).toEqual(EXPECTED_TRANSLATED_MARKER_BAR_COLORS)
+    segments.forEach((_color: string, index: number) => {
+        expect(cardBar?.props?.children?.[index]?.props?.style?.width).toBe(3)
+    })
 })
 
 test('translated-corner-badge feature renders sparse multicolor geometry watermark without text badge', () => {

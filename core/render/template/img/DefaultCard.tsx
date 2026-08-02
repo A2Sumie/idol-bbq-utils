@@ -913,7 +913,7 @@ function TranslatedMarkerBar({
     return (
         <div
             {...segmentProps}
-            tw="absolute flex flex-row"
+            tw="absolute flex flex-col"
             style={{
                 left: 0,
                 top: 0,
@@ -928,7 +928,7 @@ function TranslatedMarkerBar({
                     tw="flex"
                     style={{
                         flex: 1,
-                        height,
+                        width,
                         backgroundColor: color,
                     }}
                 />
@@ -1433,11 +1433,7 @@ function ArticleContent({
                             width={translationBlockWidth}
                             height={translationPatternHeight}
                         />
-                        <TranslatedMarkerBar
-                            width={translationBlockWidth}
-                            height={3}
-                            dataAttr="translated-block-bar"
-                        />
+                        <TranslatedMarkerBar width={1} height={translationPatternHeight} dataAttr="translated-block-bar" />
                         <pre
                             tw="relative w-full my-0 text-[#1f2937]"
                             lang="zh-CN"
@@ -1576,7 +1572,7 @@ function BaseCard({
             }}
         >
             {translatedMarkedCard && <TranslatedCardPattern cardHeight={cardHeight} />}
-            {translatedMarkedCard && <TranslatedMarkerBar width={CARD_WIDTH} height={7} dataAttr="translated-card-bar" />}
+            {translatedMarkedCard && <TranslatedMarkerBar width={3} height={cardHeight} dataAttr="translated-card-bar" />}
             {badge.layers.map((layer, index) => (
                 <img
                     key={`${layer.icon}-${index}`}
