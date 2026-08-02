@@ -6551,12 +6551,12 @@ test('sendArticles fills missing translations before rendering translated summar
         id: 915,
         a_id: 'translated-on-demand',
         platform: Platform.X,
-        username: '22/7',
-        u_id: '227_staff',
+        username: '22/7 Member',
+        u_id: '227_member',
         content: 'この後19:00〜 バースデーSHOWROOM配信スタート',
         translation: null,
         translated_by: null,
-        url: 'https://x.com/227_staff/status/915',
+        url: 'https://x.com/227_member/status/915',
         type: 'tweet',
         created_at: Math.floor(Date.now() / 1000),
         ref: null,
@@ -7340,12 +7340,12 @@ test('sendArticles suppresses empty translated summary companion when processor 
                     id: 916,
                     a_id: 'translated-missing-key',
                     platform: Platform.X,
-                    username: '22/7',
-                    u_id: '227_staff',
+                    username: '22/7 Member',
+                    u_id: '227_member',
                     content: 'この後20:00〜 配信スタート',
                     translation: null,
                     translated_by: null,
-                    url: 'https://x.com/227_staff/status/916',
+                    url: 'https://x.com/227_member/status/916',
                     type: 'tweet',
                     created_at: Math.floor(Date.now() / 1000),
                     ref: null,
@@ -9731,7 +9731,44 @@ test('summary-card queues social platforms together per target instead of per ro
     expect(windows).toHaveLength(1)
 })
 
-test('summary-card targets leave official blog articles on the native send path', async () => {
+test('summary-card policy bypasses aggregation for priority official sources except YouTube shorts', () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: { render_type: 'text' } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+    const shouldUseSummaryCard = (article: any) => (pools as any).shouldUseSummaryCardForArticle(article)
+
+    expect(shouldUseSummaryCard({ platform: Platform.X, u_id: '227_staff', type: 'tweet', has_media: false })).toBe(
+        false,
+    )
+    expect(shouldUseSummaryCard({ platform: Platform.X, u_id: '@227_staff', type: 'tweet', has_media: true })).toBe(
+        false,
+    )
+    expect(
+        shouldUseSummaryCard({ platform: Platform.Website, u_id: '22/7:official-news', type: 'article', has_media: true }),
+    ).toBe(false)
+    expect(
+        shouldUseSummaryCard({ platform: Platform.Website, u_id: '22/7:fc-news', type: 'article', has_media: false }),
+    ).toBe(false)
+    expect(shouldUseSummaryCard({ platform: Platform.YouTube, u_id: '@227SMEJ', type: 'video', has_media: true })).toBe(
+        false,
+    )
+    expect(shouldUseSummaryCard({ platform: Platform.YouTube, u_id: '227SMEJ', type: 'shorts', has_media: true })).toBe(
+        true,
+    )
+    expect(shouldUseSummaryCard({ platform: Platform.YouTube, u_id: 'other-channel', type: 'video' })).toBe(true)
+    expect(shouldUseSummaryCard({ platform: Platform.X, u_id: 'other_account', type: 'tweet' })).toBe(true)
+})
+
+test('batch and summary-card targets leave official website articles on the native send path', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'qq'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -9750,6 +9787,7 @@ test('summary-card targets leave official blog articles on the native send path'
             formatters: [],
             cfg_forwarder: {
                 render_type: 'text',
+                aggregation: true,
             } as any,
             forwarders: [],
             crawlers: [],

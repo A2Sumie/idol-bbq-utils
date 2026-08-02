@@ -2214,7 +2214,11 @@ class ForwarderPools extends BaseCompatibleModel {
                             }
 
                             const isAggregation = cfg_forwarder?.aggregation || (cfg_forwarder as any)?.batch_mode
-                            if (isAggregation && (runtime_config as any)?.bypass_batch !== true) {
+                            if (
+                                isAggregation &&
+                                (runtime_config as any)?.bypass_batch !== true &&
+                                !this.isForcedImmediateSource(article)
+                            ) {
                                 const claimed = await this.claimArticleChain(article, platform, target.id)
                                 await this.markArticleOutboundSkipped(
                                     log,
@@ -3777,8 +3781,26 @@ class ForwarderPools extends BaseCompatibleModel {
         return feed === 'official-blog' || article.u_id === '22/7:official-blog'
     }
 
+    private isForcedImmediateSource(article: ArticleWithId) {
+        const userId = String(article.u_id || '')
+            .trim()
+            .replace(/^@+/, '')
+            .toLowerCase()
+        if (article.platform === Platform.X || article.platform === Platform.Twitter) {
+            return userId === '227_staff'
+        }
+        if (article.platform === Platform.Website) {
+            return userId.startsWith('22/7:')
+        }
+        if (article.platform === Platform.YouTube) {
+            const isShorts = String(article.type || '').toLowerCase() === 'shorts'
+            return userId === '227smej' && !isShorts
+        }
+        return false
+    }
+
     private shouldUseSummaryCardForArticle(article: ArticleWithId) {
-        return !this.isOfficialBlogArticle(article)
+        return !this.isOfficialBlogArticle(article) && !this.isForcedImmediateSource(article)
     }
 
     private shouldSendBilibiliCardOnly(article: ArticleWithId, target: BaseForwarder) {
