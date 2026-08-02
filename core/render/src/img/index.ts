@@ -145,7 +145,7 @@ const SYSTEM_FALLBACK_FONTS: Array<FontConfig & { paths: Array<string> }> = [
     },
 ]
 const BASE_FONT_EXCLUDED_NAMES = new Set(['Unifont'])
-const UNIFONT_FALLBACK_CODES = new Set(['unknown', 'symbol', 'math', 'zh-CN'])
+const UNIFONT_FALLBACK_CODES = new Set(['unknown', 'symbol', 'math', 'zh-CN', 'ja-JP'])
 const SYMBOL_FALLBACK_FONT_NAMES = ['Noto Sans Symbols 2', 'Noto Sans Symbols', 'Unifont']
 
 // Our own encoding of multiple fonts and their code, so we can fetch them in one request. The structure is:
@@ -476,10 +476,16 @@ class ImgConverter {
             },
             tailwindConfig,
         })
+        const fontsDir = process.env.FONTS_DIR || './assets/fonts'
         const resvg = new Resvg(svg, {
             fitTo: {
                 mode: 'width',
                 value: Math.round(CARD_WIDTH * resolveRasterScale(article, height)),
+            },
+            font: {
+                fontDirs: [fontsDir],
+                loadSystemFonts: true,
+                defaultFontFamily: 'Noto Sans',
             },
         })
         const data = resvg.render()

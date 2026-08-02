@@ -13,6 +13,7 @@ import {
 import { languageFontMap } from '../src/img/utils/font'
 import { getIconCode } from '../src/img/utils/twemoji'
 import { ImgConverter, isSupportedOpenTypeFont, loadDynamicAsset, resolveSatoriFontLang } from '../src/img'
+import satori from 'satori'
 import fs from 'fs'
 
 function buildWebsiteArticle(feed: string, site: string = '22/7') {
@@ -137,22 +138,58 @@ test('estimateTextLinesHeight stays conservative for long mixed Japanese text', 
     expect(estimateTextLinesHeight(text, 16, 492)).toBeGreaterThan(280)
 })
 
-test('card font family keeps CJK before broad fallback fonts', () => {
+test('card font family puts Latin digits font before CJK so digit metrics stay proportional', () => {
     const families = CARD_FONT_FAMILY.split(',').map((font) => font.trim())
 
-    expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Noto Sans'))
+    expect(families[0]).toBe('Noto Sans')
+    expect(families.indexOf('Noto Sans')).toBeLessThan(families.indexOf('Noto Sans CJK JP'))
+    expect(families.indexOf('Noto Sans')).toBeLessThan(families.indexOf('Noto Sans SC'))
     expect(families).toContain('Noto Sans JP')
-    expect(families.indexOf('Noto Sans SC')).toBeLessThan(families.indexOf('Noto Sans'))
-    expect(families).not.toContain('Unifont')
+    expect(families.at(-1)).toBe('Unifont')
 })
 
-test('translation font family prefers simplified Chinese before Japanese fallback', () => {
+test('translation font family keeps Latin digits ahead of CJK while preserving SC-before-JP order', () => {
     const families = CARD_TRANSLATION_FONT_FAMILY.split(',').map((font) => font.trim())
 
-    expect(families[0]).toBe('Noto Sans SC')
+    expect(families[0]).toBe('Noto Sans')
+    expect(families.indexOf('Noto Sans')).toBeLessThan(families.indexOf('Noto Sans SC'))
+    expect(families.indexOf('Noto Sans SC')).toBeLessThan(families.indexOf('Noto Sans CJK JP'))
     expect(families.indexOf('Noto Sans CJK SC')).toBeLessThan(families.indexOf('Noto Sans CJK JP'))
-    expect(families.indexOf('Noto Sans CJK JP')).toBeLessThan(families.indexOf('Noto Sans'))
     expect(families.at(-1)).toBe('Unifont')
+})
+
+test('Latin digit run keeps proportional advance under the card font stack', async () => {
+    const fontsDir = process.env.FONTS_DIR || './assets/fonts'
+    const notoSans = fs.readFileSync(`${fontsDir}/NotoSans-Regular.ttf`)
+    const nodes: Array<{ width: number; index: number }> = []
+    let index = 0
+    await satori(
+        {
+            type: 'div',
+            props: {
+                style: { display: 'flex', fontFamily: CARD_FONT_FAMILY, fontSize: 32 },
+                children: [
+                    { type: 'span', props: { style: { display: 'flex' }, children: '0123456789' } },
+                    { type: 'span', props: { style: { display: 'flex' }, children: 'ABCDEFGHIJ' } },
+                ],
+            },
+        },
+        {
+            width: 1000,
+            height: 100,
+            fonts: [{ name: 'Noto Sans', data: notoSans, weight: 400, style: 'normal' }],
+            onNodeDetected: (node: any) => {
+                if (node?.type === 'span') {
+                    nodes.push({ width: node.width, index: index++ })
+                }
+            },
+        },
+    )
+    const digitWidth = nodes.find((node) => node.index === 0)?.width || 0
+    const latinWidth = nodes.find((node) => node.index === 1)?.width || 0
+    expect(digitWidth).toBeGreaterThan(0)
+    expect(digitWidth).toBeLessThan(220)
+    expect(Math.abs(digitWidth - latinWidth)).toBeLessThan(latinWidth)
 })
 
 test('card UI metadata font prefers modern sans before simplified CJK fallback', () => {
@@ -304,6 +341,88 @@ test('standard original plus translation card patterns only the translation bloc
     expect(fullCardPattern).toBeNull()
     expect(translationBlockPattern).toBeTruthy()
     expect(geometryShapes.length).toBeGreaterThan(0)
+})
+
+const EXPECTED_TRANSLATED_MARKER_BAR_COLORS = [
+    '#29B6F6',
+    '#FDD835',
+    '#EC407A',
+    '#FFB300',
+    '#66BB6A',
+    '#AD1457',
+    '#29B6F6',
+]
+
+test('aggregated translation block gets a 3px segmented marker bar', () => {
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'combined-translation-bar-test',
+        u_id: 'member',
+        username: 'Member',
+        created_at: 1710000000,
+        content: '原文ではなく日本語の本文です。',
+        translation: '这是同一张动态卡里的译文。',
+        translated_by: 'LLM',
+        url: 'https://x.com/member/status/1',
+        type: 'tweet',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    const { component } = articleParser(article as any)
+    const bar = findReactElement(component, (node) => node.props?.['data-translated-block-bar'] === 'true')
+    const cardBar = findReactElement(component, (node) => node.props?.['data-translated-card-bar'] === 'true')
+
+    expect(cardBar).toBeNull()
+    expect(bar).toBeTruthy()
+    expect(bar?.props?.style?.height).toBe(3)
+    const segments = (bar?.props?.children || []).map((segment: any) => segment.props?.style?.backgroundColor)
+    expect(segments).toEqual(EXPECTED_TRANSLATED_MARKER_BAR_COLORS)
+    segments.forEach((_color: string, index: number) => {
+        expect(bar?.props?.children?.[index]?.props?.style?.flex).toBe(1)
+    })
+})
+
+test('standalone translated card gets a 7px segmented marker bar', () => {
+    const article = {
+        id: -1,
+        platform: Platform.X,
+        a_id: 'summary-card-bar-test',
+        u_id: 'message_pack',
+        username: '聚合',
+        created_at: 1710000000,
+        content: '聚合',
+        translation: null,
+        translated_by: null,
+        url: '',
+        type: 'message_pack',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: {
+            extra_type: 'message_pack_meta',
+            data: {
+                range: '1条 / 1900～2100',
+                translated_badge_label: '译文',
+                groups: [],
+            },
+        },
+        u_avatar: null,
+    }
+
+    const { component } = articleParser(article as any, { features: ['translated-corner-badge'] } as any)
+    const cardBar = findReactElement(component, (node) => node.props?.['data-translated-card-bar'] === 'true')
+    const blockBar = findReactElement(component, (node) => node.props?.['data-translated-block-bar'] === 'true')
+
+    expect(blockBar).toBeNull()
+    expect(cardBar).toBeTruthy()
+    expect(cardBar?.props?.style?.height).toBe(7)
+    const segments = (cardBar?.props?.children || []).map((segment: any) => segment.props?.style?.backgroundColor)
+    expect(segments).toEqual(EXPECTED_TRANSLATED_MARKER_BAR_COLORS)
 })
 
 test('translated-corner-badge feature renders sparse multicolor geometry watermark without text badge', () => {
@@ -655,7 +774,9 @@ test('dynamic asset loader can run in deterministic no-remote mode', async () =>
 
     try {
         expect(await loadDynamicAsset('twemoji', 'emoji', '🧪')).toStartWith('data:image/svg+xml;base64,')
-        expect(await loadDynamicAsset('twemoji', 'ja-JP', 'テスト')).toEqual([])
+        const jaFallbackFonts = await loadDynamicAsset('twemoji', 'ja-JP', 'テスト')
+        expect(jaFallbackFonts).toBeArray()
+        expect((jaFallbackFonts as any[])[0]?.name).toBe('Unifont')
         const zhFallbackFonts = await loadDynamicAsset('twemoji', 'zh-CN', '测试')
         expect(zhFallbackFonts).toBeArray()
         expect((zhFallbackFonts as any[])[0]?.name).toBe('Unifont')

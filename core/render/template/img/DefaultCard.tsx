@@ -34,11 +34,11 @@ const CARD_LINE_HEIGHT = {
 }
 const CARD_TEXT_IGNORABLE_PATTERN = /[\uFE0E\u200B\u200C\u200E\u200F\u202A-\u202E\u2066-\u2069]/g
 export const CARD_FONT_FAMILY = [
+    'Noto Sans',
     'Noto Sans CJK JP',
     'Noto Sans JP',
     'Noto Sans SC',
     'Noto Sans CJK SC',
-    'Noto Sans',
     'Noto Sans Lao',
     'Noto Sans Armenian',
     'Noto Sans Syriac',
@@ -74,17 +74,18 @@ export const CARD_FONT_FAMILY = [
     'Noto Sans Gujarati',
     'Noto Sans Georgian',
     'Noto Sans Oriya',
+    'Unifont',
 ].join(', ')
 
 export function sanitizeCardText(value: string | null | undefined) {
     return (value || '').replace(/\u2764\uFE0E+/g, '\u2764\uFE0F').replace(CARD_TEXT_IGNORABLE_PATTERN, '')
 }
 export const CARD_TRANSLATION_FONT_FAMILY = [
+    'Noto Sans',
     'Noto Sans SC',
     'Noto Sans CJK SC',
     'Noto Sans CJK JP',
     'Noto Sans JP',
-    'Noto Sans',
     'Noto Sans Lao',
     'Noto Sans Armenian',
     'Noto Sans Syriac',
@@ -138,6 +139,7 @@ export const CARD_UI_FONT_FAMILY = [
     'Noto Sans Inscriptional Pahlavi',
     'Noto Sans Miao',
     'Noto Sans Bamum',
+    'Unifont',
 ].join(', ')
 
 type CardRenderFeatures = Set<string>
@@ -896,6 +898,45 @@ function TranslatedPatternShape({
     )
 }
 
+const TRANSLATED_MARKER_BAR_COLORS = ['#29B6F6', '#FDD835', '#EC407A', '#FFB300', '#66BB6A', '#AD1457', '#29B6F6']
+
+function TranslatedMarkerBar({
+    width,
+    height,
+    dataAttr,
+}: {
+    width: number
+    height: number
+    dataAttr: 'translated-card-bar' | 'translated-block-bar'
+}) {
+    const segmentProps = { [`data-${dataAttr}`]: 'true' } as Record<string, string>
+    return (
+        <div
+            {...segmentProps}
+            tw="absolute flex flex-row"
+            style={{
+                left: 0,
+                top: 0,
+                width,
+                height,
+                overflow: 'hidden',
+            }}
+        >
+            {TRANSLATED_MARKER_BAR_COLORS.map((color, index) => (
+                <div
+                    key={index}
+                    tw="flex"
+                    style={{
+                        flex: 1,
+                        height,
+                        backgroundColor: color,
+                    }}
+                />
+            ))}
+        </div>
+    )
+}
+
 function TranslatedCardPattern({ cardHeight }: { cardHeight: number }) {
     const shapes: Array<'circle' | 'square' | 'triangle' | 'diamond'> = ['triangle', 'square', 'circle', 'diamond']
     const colors = ['#facc15', '#38bdf8', '#fde047', '#22c55e', '#ec4899']
@@ -1392,6 +1433,11 @@ function ArticleContent({
                             width={translationBlockWidth}
                             height={translationPatternHeight}
                         />
+                        <TranslatedMarkerBar
+                            width={translationBlockWidth}
+                            height={3}
+                            dataAttr="translated-block-bar"
+                        />
                         <pre
                             tw="relative w-full my-0 text-[#1f2937]"
                             lang="zh-CN"
@@ -1530,6 +1576,7 @@ function BaseCard({
             }}
         >
             {translatedMarkedCard && <TranslatedCardPattern cardHeight={cardHeight} />}
+            {translatedMarkedCard && <TranslatedMarkerBar width={CARD_WIDTH} height={7} dataAttr="translated-card-bar" />}
             {badge.layers.map((layer, index) => (
                 <img
                     key={`${layer.icon}-${index}`}

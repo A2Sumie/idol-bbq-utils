@@ -26,6 +26,13 @@ RUN bun build app/tweet-forwarder/scripts/crawler-health-audit.ts --outdir=./app
 RUN bun build app/tweet-forwarder/scripts/crawler-cookie-export-audit.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
 COPY ./assets/knowledge ./assets/knowledge
 
+FROM base AS font-extractor
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fonts-noto-cjk python3 python3-fonttools \
+    && rm -rf /var/lib/apt/lists/*
+COPY app/tweet-forwarder/scripts/extract-cjk-fonts.py /tmp/extract-cjk-fonts.py
+RUN OUTPUT_DIR=/out python3 /tmp/extract-cjk-fonts.py
+
 FROM base AS runner
 
 ARG CHROME_VERSION
@@ -55,6 +62,7 @@ COPY --from=builder /app/app/tweet-forwarder/build/crawler-cookie-export-audit.j
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
 # Copy assets
 COPY --from=builder /app/assets/fonts /app/assets/fonts
+COPY --from=font-extractor /out /app/assets/fonts
 COPY --from=builder /app/assets/branding /app/assets/branding
 COPY --from=builder /app/assets/knowledge /app/assets/knowledge
 # Copy node_modules (including prisma)

@@ -238,5 +238,29 @@
         "font_file_name": "NotoSansOriya-Regular.ttf",
         "style": "normal",
         "weight": 400
+    },
+    {
+        "name": "Noto Sans CJK JP",
+        "font_file_name": "NotoSansCJKjp-Regular.otf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Noto Sans CJK JP",
+        "font_file_name": "NotoSansCJKjp-Bold.otf",
+        "style": "normal",
+        "weight": 700
+    },
+    {
+        "name": "Noto Sans CJK SC",
+        "font_file_name": "NotoSansCJKsc-Regular.otf",
+        "style": "normal",
+        "weight": 400
+    },
+    {
+        "name": "Noto Sans CJK SC",
+        "font_file_name": "NotoSansCJKsc-Bold.otf",
+        "style": "normal",
+        "weight": 700
     }
 ]
