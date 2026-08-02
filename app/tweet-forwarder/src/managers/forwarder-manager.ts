@@ -2939,6 +2939,9 @@ class ForwarderPools extends BaseCompatibleModel {
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return false
         }
+        if (this.shouldSkipOfficialOriginalTranslationPassthrough(article)) {
+            return false
+        }
         if (!this.articleHasOwnText(article)) {
             return false
         }
@@ -2958,6 +2961,18 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private articleHasRenderableRef(article: Pick<ArticleWithId, 'ref'>) {
         return Boolean(article.ref) && typeof article.ref === 'object'
+    }
+
+    private shouldSkipOfficialOriginalTranslationPassthrough(article: ArticleWithId) {
+        const userId = String(article.u_id || '')
+            .trim()
+            .replace(/^@+/, '')
+            .toLowerCase()
+        return (
+            (article.platform === Platform.X || article.platform === Platform.Twitter) &&
+            userId === '227_staff' &&
+            !this.articleHasRenderableRef(article)
+        )
     }
 
     private articleHasOwnText(article: Pick<ArticleWithId, 'content' | 'extra'>) {
@@ -3009,6 +3024,9 @@ class ForwarderPools extends BaseCompatibleModel {
         }
         if (this.shouldSuppressTargetTranslations(target, runtime_config)) {
             return
+        }
+        if (this.shouldSkipOfficialOriginalTranslationPassthrough(article)) {
+            return false
         }
         if (!String(article.translation || '').trim() && summaryConfig?.translatedCard?.processorId) {
             await this.prepareArticleChainTranslations(

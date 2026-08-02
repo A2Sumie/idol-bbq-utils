@@ -383,7 +383,7 @@ test('aggregated translation block gets a 1px segmented marker bar on the left',
     expect(bar?.props?.style?.left).toBe(0)
     expect(bar?.props?.style?.width).toBe(1)
     expect(bar?.props?.style?.height).toBeGreaterThan(3)
-    expect(translationText?.props?.style?.paddingLeft).toBe(1)
+    expect(translationText?.props?.style?.paddingLeft).toBe(3)
     const segments = (bar?.props?.children || []).map((segment: any) => segment.props?.style?.backgroundColor)
     expect(segments).toEqual(EXPECTED_TRANSLATED_MARKER_BAR_COLORS)
     segments.forEach((_color: string, index: number) => {

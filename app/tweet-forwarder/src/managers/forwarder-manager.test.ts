@@ -1703,6 +1703,89 @@ test('sendArticles sends a text-only translation passthrough before the main sen
     expect(sends[1]?.texts).toEqual(['main card payload'])
 })
 
+test('227_staff original tweets skip translation passthrough while official retweets keep it', async () => {
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: { render_type: 'text' } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+    const sends: Array<{ texts: string[]; props: any }> = []
+    const target = {
+        id: 'target-official-passthrough',
+        NAME: 'recording',
+        getEffectiveConfig: (runtimeConfig?: any) => runtimeConfig || {},
+        check_blocked: async () => false,
+        send: async (texts: string[] | string, props?: any) => {
+            sends.push({ texts: Array.isArray(texts) ? texts : [texts], props })
+            return { status: 'sent' }
+        },
+    }
+    const baseArticle = {
+        id: 1213,
+        platform: Platform.X,
+        u_id: '227_staff',
+        username: '22/7',
+        created_at: Math.floor(Date.now() / 1000),
+        content: '公式投稿です',
+        translation: '这是官方原创推文',
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    const originalResult = await (pools as any).sendTranslationPassthrough(
+        undefined,
+        {
+            ...baseArticle,
+            a_id: 'official-original-passthrough',
+            url: 'https://x.com/227_staff/status/1213',
+            type: 'tweet',
+            ref: null,
+        },
+        target,
+        'official-original-route',
+        { translation_passthrough: true },
+        { cardMediaFiles: [], originalMediaFiles: [] },
+    )
+    expect(originalResult).toBe(false)
+    expect(sends).toHaveLength(0)
+
+    const retweetResult = await (pools as any).sendTranslationPassthrough(
+        undefined,
+        {
+            ...baseArticle,
+            id: 1214,
+            a_id: 'official-retweet-passthrough',
+            url: 'https://x.com/227_staff/status/1214',
+            type: 'retweet',
+            ref: {
+                a_id: 'member-original',
+                platform: Platform.X,
+                u_id: 'member_account',
+                username: 'Member',
+                type: 'tweet',
+                content: 'member post',
+                ref: null,
+            },
+        },
+        target,
+        'official-retweet-route',
+        { translation_passthrough: true },
+        { cardMediaFiles: [], originalMediaFiles: [] },
+    )
+    expect(retweetResult).toBe(true)
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.props?.outboundKey).toContain('translation_passthrough')
+})
+
 test('Bilibili translated-card native sends use passthrough metadata layout as the dynamic text', async () => {
     const pools = new ForwarderPools(
         {

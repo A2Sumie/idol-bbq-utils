@@ -1443,7 +1443,7 @@ function ArticleContent({
                                 lineHeight: CARD_LINE_HEIGHT.base,
                                 whiteSpace: 'pre-wrap',
                                 fontWeight: 400,
-                                paddingLeft: 1,
+                                paddingLeft: 3,
                                 overflowWrap: 'anywhere',
                                 wordBreak: 'break-word',
                             }}
