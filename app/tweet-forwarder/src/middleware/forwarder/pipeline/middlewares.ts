@@ -1,8 +1,14 @@
 import type { ForwarderContext, ForwarderMiddleware } from './types'
 import { formatTime, getSubtractTime } from '@/utils/time'
 import { isStringArrayArray } from '@/utils/typeguards'
-import { articleToText, extractArticleHeadline, extractTextHeadline } from '@idol-bbq-utils/render'
+import {
+    articleToText,
+    extractArticleHeadline,
+    extractTextHeadline,
+    formatWebsiteCardText,
+} from '@idol-bbq-utils/render'
 import { SimpleExpiringCache } from '@idol-bbq-utils/spider'
+import { Platform } from '@idol-bbq-utils/spider/types'
 import type { Article } from '@/db'
 import dayjs, { type ManipulateType } from 'dayjs'
 
@@ -250,7 +256,9 @@ export class TextChunkMiddleware implements ForwarderMiddleware {
         }
 
         const fallbackText = context.article
-            ? extractArticleHeadline(context.article, Math.min(120, this.basicTextLimit))
+            ? context.article.platform === Platform.Website
+                ? formatWebsiteCardText(context.article)
+                : extractArticleHeadline(context.article, Math.min(120, this.basicTextLimit))
             : extractTextHeadline(text, Math.min(120, this.basicTextLimit))
 
         const singleChunk = fallbackText || text.slice(0, this.basicTextLimit).trimEnd()
