@@ -77,6 +77,8 @@ test('schedule webhook writer posts confident items and resolves env indirection
                         event_type: 'stream',
                         starts_at: '2026-06-15T20:00:00+09:00',
                         source_time_text: '20:00頃',
+                        showroom_url: 'https://www.showroom-live.com/r/nanabun3rd?t=1785751200',
+                        members: ['黒崎ありす', '三雲遥加', '吉沢珠摛'],
                         confidence: 0.88,
                         needs_review: true,
                     },
@@ -109,6 +111,10 @@ test('schedule webhook writer posts confident items and resolves env indirection
                 scheduleType: 'reminder',
                 executionTime: '2026-06-15T20:00:00+09:00',
                 apiKey: 'resolved-schedule-key',
+                payload: {
+                    showroomUrl: 'https://www.showroom-live.com/r/nanabun3rd?t=1785751200',
+                    members: ['黒崎ありす', '三雲遥加', '吉沢珠摛'],
+                },
             },
         })
         expect(results).toHaveLength(1)

@@ -8,6 +8,8 @@ Rules:
 - Convert event start times to ISO 8601 with timezone offset when possible.
 - If a date or time is ambiguous, keep the original text and set confidence below 0.6.
 - Return time-event candidates only. Do not schedule reminders, start live-player, create capture jobs, or infer hidden operational actions.
+- For a SHOWROOM event, copy the explicit showroom-live.com/r/... URL into showroom_url. Do not invent a room URL.
+- Put explicitly named performers in members as plain names. Return an empty array when no performer is explicit.
 - Ignore purely retrospective reports unless the text also announces a future or currently-starting event.
 - If the input has no time-bearing event, return {"items":[]}.
 
@@ -21,7 +23,9 @@ Expected shape:
       "ends_at": "ISO-8601 string or null",
       "timezone": "Asia/Tokyo or source timezone",
       "source_time_text": "original date/time text",
-      "source_url": "string or null",
+      "source_url": "source post URL or null",
+      "showroom_url": "explicit showroom-live.com/r/... URL or null",
+      "members": ["plain performer name"],
       "confidence": 0.0,
       "needs_review": true,
       "notes": "short string or null"

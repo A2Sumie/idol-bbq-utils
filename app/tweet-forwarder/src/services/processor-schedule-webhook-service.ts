@@ -144,6 +144,9 @@ function normalizePayload(candidate: any, sourceRef: string) {
     if (candidate?.payload && typeof candidate.payload === 'object') {
         return candidate.payload
     }
+    const members = Array.isArray(candidate?.members)
+        ? candidate.members.map((item: unknown) => stringValue(item)).filter((item: string) => item.length > 0)
+        : []
     return {
         schema_version: 1,
         type: 'idol_bbq_time_event_candidate',
@@ -154,6 +157,8 @@ function normalizePayload(candidate: any, sourceRef: string) {
         timezone: stringValue(candidate?.timezone) || null,
         sourceTimeText: stringValue(candidate?.source_time_text) || stringValue(candidate?.sourceTimeText) || null,
         sourceUrl: stringValue(candidate?.source_url) || stringValue(candidate?.sourceUrl) || null,
+        showroomUrl: stringValue(candidate?.showroom_url) || stringValue(candidate?.showroomUrl) || null,
+        members,
         confidence: numberValue(candidate?.confidence),
         needsReview: candidate?.needs_review === true || candidate?.needsReview === true,
     }
@@ -196,8 +201,7 @@ async function writeSchedulesFromProcessorResult(
         return []
     }
 
-    const apiKey =
-        resolveConfigValue(options.scheduleApiKey) || process.env.SCHEDULE_WEBHOOK_API_KEY?.trim() || null
+    const apiKey = resolveConfigValue(options.scheduleApiKey) || process.env.SCHEDULE_WEBHOOK_API_KEY?.trim() || null
     const minConfidence =
         typeof options.minConfidence === 'number' && Number.isFinite(options.minConfidence)
             ? options.minConfidence
