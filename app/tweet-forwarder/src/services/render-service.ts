@@ -15,6 +15,7 @@ import {
     articleToText,
     compactArticleToText,
     extractArticleHeadline,
+    formatArticleTimeToken,
     formatMetaline,
     formatWebsiteCardText,
     ImgConverter,
@@ -372,6 +373,9 @@ export class RenderService {
     }
 
     private formatPlatformFrom(article: Article): string {
+        if (article.platform === Platform.X || article.platform === Platform.Twitter) {
+            return [article.username?.trim(), formatArticleTimeToken(article.created_at), 'X'].filter(Boolean).join(' ')
+        }
         return formatPlatformTag(article, this.log)
     }
 

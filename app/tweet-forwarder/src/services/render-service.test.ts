@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import { formatArticleTimeToken, formatTime } from '@idol-bbq-utils/render'
+import { formatArticleAttributionTimeToken, formatArticleTimeToken, formatTime } from '@idol-bbq-utils/render'
 import { formatPlatformTag, RenderService } from './render-service'
 import { fileURLToPath } from 'url'
 import DB from '@/db'
@@ -106,14 +106,36 @@ function readPngSize(buffer: Buffer) {
 }
 
 describe('formatPlatformTag', () => {
-    test('includes platform and display name for image-tag style labels', () => {
+    test('keeps the generic platform-name label for non-card consumers', () => {
         expect(
             formatPlatformTag({
                 a_id: '1',
                 platform: Platform.X,
-                username: '天城サリー',
+                username: '22/7(ナナブンノニジュウニ)',
             }),
-        ).toBe('X 天城サリー')
+        ).toBe('X 22/7(ナナブンノニジュウニ)')
+    })
+
+    test('renders X card headers as name, compact time, then platform', () => {
+        const service = new RenderService()
+        expect(
+            (service as any).formatPlatformFrom({
+                a_id: '1',
+                platform: Platform.X,
+                username: '22/7(ナナブンノニジュウニ)',
+                created_at: 1710000000,
+            }),
+        ).toBe(`22/7(ナナブンノニジュウニ) ${formatArticleTimeToken(1710000000)} X`)
+    })
+
+    test('keeps the platform prefix for non-X platforms', () => {
+        expect(
+            formatPlatformTag({
+                a_id: '3',
+                platform: Platform.Instagram,
+                username: '河瀬詩',
+            }),
+        ).toBe('Instagram 河瀬詩')
     })
 
     test('avoids repeating the platform name when no useful display name exists', () => {
@@ -157,7 +179,7 @@ describe('RenderService text-compact', () => {
         )
 
         const expectedClock = expectedTime.split('(')[0]
-        const expectedAttributionTime = expectedTime.replace('(', '（').replace(')', '）')
+        const expectedAttributionTime = formatArticleAttributionTimeToken(1710000000)
         const lines = result.text.split('\n')
         expect(lines[0]).toBe(`@mao_asaoka227 ${expectedClock} X引用`)
         expect(lines[1]).toBe('')
@@ -198,7 +220,7 @@ describe('RenderService text-compact', () => {
         expect(expectedTime).toContain('⁹(')
         expect(formatTime(1710000000).startsWith('240310 ')).toBeTrue()
         const expectedClock = expectedTime.split('(')[0]
-        const expectedAttributionTime = expectedTime.replace('(', '（').replace(')', '）')
+        const expectedAttributionTime = formatArticleAttributionTimeToken(1710000000)
         const lines = result.text.split('\n')
         expect(lines[0]).toBe(`@kawase_uta ${expectedClock} IG发帖`)
         expect(lines[1]).toBe('')

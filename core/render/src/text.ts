@@ -57,6 +57,7 @@ const WEBSITE_FEED_LABELS: Record<string, string> = {
     ticket: 'TICKET',
 }
 const SUPERSCRIPT_DIGITS: Record<string, string> = {
+    '+': '⁺',
     '-': '⁻',
     '0': '⁰',
     '1': '¹',
@@ -69,12 +70,32 @@ const SUPERSCRIPT_DIGITS: Record<string, string> = {
     '8': '⁸',
     '9': '⁹',
 }
+const SUBSCRIPT_DIGITS: Record<string, string> = {
+    '0': '₀',
+    '1': '₁',
+    '2': '₂',
+    '3': '₃',
+    '4': '₄',
+    '5': '₅',
+    '6': '₆',
+    '7': '₇',
+    '8': '₈',
+    '9': '₉',
+}
 
-function toSuperscript(value: string) {
+function mapDigits(value: string, digits: Record<string, string>) {
     return value
         .split('')
-        .map((char) => SUPERSCRIPT_DIGITS[char] || char)
+        .map((char) => digits[char] || char)
         .join('')
+}
+
+function toSuperscript(value: string) {
+    return mapDigits(value, SUPERSCRIPT_DIGITS)
+}
+
+function toSubscript(value: string) {
+    return mapDigits(value, SUBSCRIPT_DIGITS)
 }
 
 function formatTimezoneSuffix(offsetMinutes: number = RENDER_TIMEZONE_OFFSET_MINUTES) {
@@ -86,7 +107,7 @@ function formatTimezoneSuffix(offsetMinutes: number = RENDER_TIMEZONE_OFFSET_MIN
     const hours = Math.floor(absoluteMinutes / 60)
     const minutes = absoluteMinutes % 60
     const zone = minutes === 0 ? `${hours}` : `${hours}${String(minutes).padStart(2, '0')}`
-    return `${offsetMinutes < 0 ? SUPERSCRIPT_DIGITS['-'] : ''}${toSuperscript(zone)}`
+    return `${SUPERSCRIPT_DIGITS[offsetMinutes < 0 ? '-' : '+']}${toSuperscript(zone)}`
 }
 
 function getRenderDate(unixTimestamp: number) {
@@ -125,7 +146,10 @@ function formatDisplayDate(unix_timestamp: number) {
 }
 
 function formatArticleTimeToken(unix_timestamp: number) {
-    return `${formatClock(unix_timestamp)}(${formatDisplayDate(unix_timestamp)})`
+    const time = getRenderDate(unix_timestamp)
+    const monthDay = `${pad2(time.getUTCMonth() + 1)}${pad2(time.getUTCDate())}`
+    const year = toSubscript(pad2(time.getUTCFullYear() % 100))
+    return `${formatClock(unix_timestamp)}(${monthDay}${year})`
 }
 
 function formatArticleAttributionTimeToken(unix_timestamp: number) {
@@ -215,7 +239,7 @@ function formatPassthroughTitleLine(article: Pick<Article, 'u_id' | 'username' |
     const username = String(article.username || '').trim()
     const name = username || formatArticleUserId(article)
     const timeToken = article.created_at ? formatArticleTimeToken(article.created_at) : ''
-    return `${name}${timeToken}`.trim()
+    return [name, timeToken].filter(Boolean).join(' ').trim()
 }
 
 function formatPassthroughAttributionLine(

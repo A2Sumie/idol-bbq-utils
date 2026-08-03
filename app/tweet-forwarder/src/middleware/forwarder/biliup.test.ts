@@ -1845,17 +1845,17 @@ test('BiliForwarder tightens X action header spacing for Bilibili posts', async 
 
     await (forwarder as any).realSend(
         [
-            '@member 0203⁹ X发推\n\n本文\n\nmember 0203⁹（260101） X 发推',
-            '@member 0204⁹ X引用\n\n引用本文\n\nmember 0204⁹（260101） X 引用',
+            '@member 0203⁺⁹ X发推\n\n本文\n\nmember 0203⁺⁹（260101） X 发推',
+            '@member 0204⁺⁹ X引用\n\n引用本文\n\nmember 0204⁺⁹（260101） X 引用',
         ],
         {},
     )
 
-    expect(uploadTexts[0]).toContain('@member 0203⁹ X发推:\n本文')
-    expect(dynamicTexts[0]).toContain('@member 0203⁹ X发推:\n本文')
+    expect(uploadTexts[0]).toContain('@member 0203⁺⁹ X发推:\n本文')
+    expect(dynamicTexts[0]).toContain('@member 0203⁺⁹ X发推:\n本文')
     expect(dynamicTexts[0]).not.toContain('X发推\n\n本文')
-    expect(uploadTexts[1]).toContain('@member 0204⁹ X引用:\n引用本文')
-    expect(dynamicTexts[1]).toContain('@member 0204⁹ X引用:\n引用本文')
+    expect(uploadTexts[1]).toContain('@member 0204⁺⁹ X引用:\n引用本文')
+    expect(dynamicTexts[1]).toContain('@member 0204⁺⁹ X引用:\n引用本文')
     expect(dynamicTexts[1]).not.toContain('X引用\n\n引用本文')
 })
 
