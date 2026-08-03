@@ -9971,7 +9971,7 @@ test('batch and summary-card targets leave official website articles on the nati
     expect(getSummaryCardQueueForTarget(pools, target.id)).toBeUndefined()
 })
 
-test('Bilibili official blog native sends keep only card media plus translated card', async () => {
+test('Bilibili official blog native sends keep article images plus original and translated cards', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'bilibili'
         sent: Array<{ texts: string[]; props: any }> = []
@@ -10005,7 +10005,7 @@ test('Bilibili official blog native sends keep only card media plus translated c
                 translated_card: { enabled: true, badge_label: '译文' },
             },
         } as any,
-        'bilibili-blog-card-only',
+        'bilibili-blog-images',
     )
     const sourceMedia = Array.from({ length: 3 }, (_, index) => ({
         media_type: 'photo',
@@ -10041,11 +10041,11 @@ test('Bilibili official blog native sends keep only card media plus translated c
 
     await (pools as any).sendArticles(
         undefined,
-        'bilibili-blog-card-only-task',
+        'bilibili-blog-images-task',
         [
             {
                 id: 822,
-                a_id: 'blog-card-only',
+                a_id: 'blog-images',
                 platform: Platform.Website,
                 username: 'Blog Member',
                 u_id: '22/7:official-blog',
@@ -10069,10 +10069,11 @@ test('Bilibili official blog native sends keep only card media plus translated c
     expect(renderCalls).toBe(3)
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.props?.media.map((file: any) => file.path)).toEqual([
+        ...sourceMedia.map((file) => file.path),
         originalCard.path,
         translatedCard.path,
     ])
-    expect(target.sent[0]?.props?.contentMedia).toEqual([])
+    expect(target.sent[0]?.props?.contentMedia).toEqual(sourceMedia)
 })
 
 test('target media visibility text-collapses media after the second visible occurrence', async () => {

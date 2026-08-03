@@ -2521,11 +2521,6 @@ class ForwarderPools extends BaseCompatibleModel {
                             )
                         }
 
-                        if (this.shouldSendBilibiliCardOnly(article, target)) {
-                            mediaFiles = [...cardMediaFiles]
-                            contentMediaFiles = []
-                        }
-
                         const outboundPayloadHash = payloadHash({
                             routeKey: routeKeyForTarget,
                             targetId: target.id,
@@ -3822,10 +3817,6 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private shouldUseSummaryCardForArticle(article: ArticleWithId) {
         return !this.isOfficialBlogArticle(article) && !this.isForcedImmediateSource(article)
-    }
-
-    private shouldSendBilibiliCardOnly(article: ArticleWithId, target: BaseForwarder) {
-        return target.NAME === 'bilibili' && this.isOfficialBlogArticle(article)
     }
 
     private isSummaryRealtimeMediaEligible(
