@@ -465,6 +465,7 @@ namespace DB {
             AggregateHourly: 'aggregate_hourly',
             ManualCrawlerRun: 'manual_crawler_run',
             ScheduledCrawlerRun: 'scheduled_crawler_run',
+            LiveCapturePlan: 'live_capture_plan',
             NotificationSignal: 'notification_signal',
             ArticleSimulate: 'article_simulate',
             ArticleReprocess: 'article_reprocess',
@@ -493,6 +494,7 @@ namespace DB {
         ] as const
 
         export const STATUS = {
+            Planned: 'planned',
             Pending: 'pending',
             Processing: 'processing',
             Completed: 'completed',
@@ -654,6 +656,63 @@ namespace DB {
             }
         }
 
+        export async function addPlanned(
+            type: string,
+            payload: any,
+            execute_at: number,
+            meta?: {
+                source_ref?: string
+                action_type?: string
+                idempotency_key?: string
+            },
+        ) {
+            const now = Math.floor(Date.now() / 1000)
+            if (meta?.idempotency_key) {
+                const existing = await prisma.task_queue.findUnique({
+                    where: {
+                        type_idempotency_key: {
+                            type,
+                            idempotency_key: meta.idempotency_key,
+                        },
+                    },
+                })
+                if (existing) return { task: existing, created: false }
+            }
+            try {
+                const task = await prisma.task_queue.create({
+                    data: {
+                        type,
+                        payload,
+                        execute_at,
+                        created_at: now,
+                        updated_at: now,
+                        status: STATUS.Planned,
+                        source_ref: meta?.source_ref,
+                        action_type: meta?.action_type,
+                        idempotency_key: meta?.idempotency_key,
+                    },
+                })
+                return { task, created: true }
+            } catch (error) {
+                if (
+                    meta?.idempotency_key &&
+                    error instanceof Prisma.PrismaClientKnownRequestError &&
+                    error.code === 'P2002'
+                ) {
+                    const task = await prisma.task_queue.findUniqueOrThrow({
+                        where: {
+                            type_idempotency_key: {
+                                type,
+                                idempotency_key: meta.idempotency_key,
+                            },
+                        },
+                    })
+                    return { task, created: false }
+                }
+                throw error
+            }
+        }
+
         export async function getPending(now: number, options?: { types?: Array<string> }) {
             return await prisma.task_queue.findMany({
                 where: {
@@ -769,6 +828,48 @@ namespace DB {
                 },
                 take: clampListLimit(limit),
             })
+        }
+
+        export async function getPlanned(id: number, type: string) {
+            return await prisma.task_queue.findFirst({
+                where: {
+                    id,
+                    type,
+                    status: STATUS.Planned,
+                },
+            })
+        }
+
+        export async function updatePlanned(
+            id: number,
+            type: string,
+            payload: any,
+            execute_at: number,
+            meta?: {
+                source_ref?: string
+                action_type?: string
+                idempotency_key?: string
+            },
+        ) {
+            const existing = await getPlanned(id, type)
+            if (!existing) return null
+            return await prisma.task_queue.update({
+                where: { id },
+                data: {
+                    payload,
+                    execute_at,
+                    updated_at: Math.floor(Date.now() / 1000),
+                    source_ref: meta?.source_ref,
+                    action_type: meta?.action_type,
+                    idempotency_key: meta?.idempotency_key,
+                },
+            })
+        }
+
+        export async function deletePlanned(id: number, type: string) {
+            const existing = await getPlanned(id, type)
+            if (!existing) return null
+            return await prisma.task_queue.delete({ where: { id } })
         }
 
         export async function countsByStatus(): Promise<Record<string, number>> {

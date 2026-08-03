@@ -70,6 +70,15 @@ import {
 } from '@/services/codex-mcp-client-service'
 import { buildCrawlerScheduleRecommendations, type CrawlerHotScheduleConfig } from '@/services/crawler-schedule-service'
 import { ForwardTargetPlatformEnum } from '@/types/forwarder'
+import {
+    LIVE_CAPTURE_PLAN_JSON_SCHEMA,
+    LIVE_CAPTURE_PLAN_SCHEMA_VERSION,
+    LIVE_CAPTURE_PLATFORMS,
+    LIVE_CAPTURE_QUALITY_OPTIONS,
+    LIVE_CAPTURE_SOURCE_KINDS,
+    normalizeLiveCapturePlanInput,
+    type LiveCapturePlanPayload,
+} from '@/services/live-capture-plan-service'
 
 interface ApiConfig {
     port?: number
@@ -672,6 +681,20 @@ export class APIManager extends BaseCompatibleModel {
         if (req.method === 'GET' && url.pathname === '/api/articles') return this.handleArticleList(url)
         if (req.method === 'GET' && url.pathname.startsWith('/api/articles/')) return this.handleArticleView(url)
         if (req.method === 'GET' && url.pathname === '/api/tasks') return this.handleTasks(url)
+        if (req.method === 'GET' && url.pathname === '/api/live-capture-plans/schema')
+            return this.handleLiveCapturePlanSchema()
+        if (req.method === 'POST' && url.pathname === '/api/live-capture-plans/validate')
+            return this.handleLiveCapturePlanValidate(req)
+        if (req.method === 'GET' && url.pathname === '/api/live-capture-plans')
+            return this.handleLiveCapturePlanList(url)
+        if (req.method === 'POST' && url.pathname === '/api/live-capture-plans')
+            return this.handleLiveCapturePlanCreate(req)
+        if (url.pathname.startsWith('/api/live-capture-plans/')) {
+            const planId = url.pathname.slice('/api/live-capture-plans/'.length)
+            if (req.method === 'GET') return this.handleLiveCapturePlanGet(planId)
+            if (req.method === 'POST') return this.handleLiveCapturePlanUpdate(planId, req)
+            if (req.method === 'DELETE') return this.handleLiveCapturePlanDelete(planId)
+        }
         if (req.method === 'GET' && url.pathname === '/api/schedules/crawlers') return this.handleCrawlerScheduleList()
         if (req.method === 'GET' && url.pathname === '/api/schedules/crawlers/recommendations')
             return this.handleCrawlerScheduleRecommendations(url)
@@ -1625,6 +1648,178 @@ export class APIManager extends BaseCompatibleModel {
             idempotency_key: url.searchParams.get('idempotency_key') || undefined,
         })
         return jsonResponse(redactTaskQueueEntriesForApi(tasks))
+    }
+
+    private liveCapturePlanId(value: string) {
+        const id = Number(value)
+        return Number.isInteger(id) && id > 0 ? id : null
+    }
+
+    private liveCapturePlanResponse(task: any) {
+        return {
+            id: task.id,
+            status: task.status,
+            scheduled: false,
+            executable: false,
+            created_at: task.created_at,
+            updated_at: task.updated_at,
+            plan: task.payload as LiveCapturePlanPayload,
+        }
+    }
+
+    private async parseLiveCapturePlanRequest(req: Request) {
+        const body = (await req.json()) as Record<string, unknown>
+        const { plan: wrappedPlan, idempotency_key: keySnake, idempotencyKey: keyCamel, ...directPlan } = body
+        const plan = normalizeLiveCapturePlanInput(wrappedPlan ?? directPlan)
+        const requestedKey = String(keySnake ?? keyCamel ?? '').trim()
+        if (requestedKey.length > 200) throw new Error('idempotency_key must be at most 200 characters')
+        const idempotencyKey =
+            requestedKey ||
+            DB.TaskQueue.buildIdempotencyKey(DB.TaskQueue.TYPE.LiveCapturePlan, {
+                platform: plan.target.platform,
+                handle: plan.target.handle,
+                starts_at: plan.event.starts_at,
+            })
+        return { plan, idempotencyKey }
+    }
+
+    private handleLiveCapturePlanSchema(): Response {
+        return jsonResponse({
+            schema_version: LIVE_CAPTURE_PLAN_SCHEMA_VERSION,
+            purpose: 'Store structured live capture plans for later scheduling',
+            execution: {
+                scheduled: false,
+                executable: false,
+                activation_endpoint: null,
+            },
+            input_schema: LIVE_CAPTURE_PLAN_JSON_SCHEMA,
+            required: ['target.platform', 'target.handle', 'event.starts_at'],
+            enums: {
+                platforms: LIVE_CAPTURE_PLATFORMS,
+                source_kinds: LIVE_CAPTURE_SOURCE_KINDS,
+                quality_options: LIVE_CAPTURE_QUALITY_OPTIONS,
+            },
+            defaults: {
+                event: { timezone: 'Asia/Tokyo' },
+                window: { before_minutes: 10, after_minutes: 240 },
+                capture: {
+                    poll_seconds: 15,
+                    first_byte_timeout_seconds: 30,
+                    quality_order: LIVE_CAPTURE_QUALITY_OPTIONS,
+                    upload: false,
+                },
+                source: { kind: 'manual' },
+            },
+        })
+    }
+
+    private async handleLiveCapturePlanValidate(req: Request): Promise<Response> {
+        try {
+            const { plan, idempotencyKey } = await this.parseLiveCapturePlanRequest(req)
+            return jsonResponse({
+                valid: true,
+                scheduled: false,
+                executable: false,
+                idempotencyKey,
+                plan,
+            })
+        } catch (error) {
+            return jsonResponse({ valid: false, error: error instanceof Error ? error.message : String(error) }, 400)
+        }
+    }
+
+    private async handleLiveCapturePlanList(url: URL): Promise<Response> {
+        const limit = DB.TaskQueue.clampListLimit(Number(url.searchParams.get('limit') || '100'))
+        const tasks = await DB.TaskQueue.list(limit, {
+            type: DB.TaskQueue.TYPE.LiveCapturePlan,
+            status: DB.TaskQueue.STATUS.Planned,
+        })
+        const platform = String(url.searchParams.get('platform') || '').trim().toLowerCase()
+        const handle = String(url.searchParams.get('handle') || '')
+            .trim()
+            .replace(/^@/, '')
+            .toLowerCase()
+        const plans = tasks
+            .filter((task) => {
+                const plan = task.payload as unknown as LiveCapturePlanPayload
+                if (platform && plan?.target?.platform !== platform) return false
+                if (handle && plan?.target?.handle?.toLowerCase() !== handle) return false
+                return true
+            })
+            .map((task) => this.liveCapturePlanResponse(task))
+        return jsonResponse({ success: true, scheduled: false, executable: false, plans })
+    }
+
+    private async handleLiveCapturePlanGet(value: string): Promise<Response> {
+        const id = this.liveCapturePlanId(value)
+        if (!id) return new Response('Invalid live capture plan id', { status: 400 })
+        const task = await DB.TaskQueue.getPlanned(id, DB.TaskQueue.TYPE.LiveCapturePlan)
+        if (!task) return new Response('Live capture plan not found', { status: 404 })
+        return jsonResponse({ success: true, ...this.liveCapturePlanResponse(task) })
+    }
+
+    private async handleLiveCapturePlanCreate(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Live capture plan create')
+        if (disabled) return disabled
+        try {
+            const { plan, idempotencyKey } = await this.parseLiveCapturePlanRequest(req)
+            const { task, created } = await DB.TaskQueue.addPlanned(
+                DB.TaskQueue.TYPE.LiveCapturePlan,
+                plan,
+                plan.window.opens_at,
+                {
+                    source_ref: `${plan.target.platform}:${plan.target.handle}`,
+                    action_type: 'capture_plan',
+                    idempotency_key: idempotencyKey,
+                },
+            )
+            return jsonResponse(
+                {
+                    success: true,
+                    created,
+                    ...this.liveCapturePlanResponse(task),
+                    idempotencyKey,
+                },
+                created ? 201 : 200,
+            )
+        } catch (error) {
+            return new Response(error instanceof Error ? error.message : String(error), { status: 400 })
+        }
+    }
+
+    private async handleLiveCapturePlanUpdate(value: string, req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Live capture plan update')
+        if (disabled) return disabled
+        const id = this.liveCapturePlanId(value)
+        if (!id) return new Response('Invalid live capture plan id', { status: 400 })
+        try {
+            const { plan, idempotencyKey } = await this.parseLiveCapturePlanRequest(req)
+            const task = await DB.TaskQueue.updatePlanned(
+                id,
+                DB.TaskQueue.TYPE.LiveCapturePlan,
+                plan,
+                plan.window.opens_at,
+                {
+                    source_ref: `${plan.target.platform}:${plan.target.handle}`,
+                    action_type: 'capture_plan',
+                    idempotency_key: idempotencyKey,
+                },
+            )
+            if (!task) return new Response('Live capture plan not found', { status: 404 })
+            return jsonResponse({ success: true, ...this.liveCapturePlanResponse(task), idempotencyKey })
+        } catch (error) {
+            return new Response(error instanceof Error ? error.message : String(error), { status: 400 })
+        }
+    }
+
+    private async handleLiveCapturePlanDelete(value: string): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('Live capture plan delete')
+        if (disabled) return disabled
+        const id = this.liveCapturePlanId(value)
+        if (!id) return new Response('Invalid live capture plan id', { status: 400 })
+        const task = await DB.TaskQueue.deletePlanned(id, DB.TaskQueue.TYPE.LiveCapturePlan)
+        if (!task) return new Response('Live capture plan not found', { status: 404 })
+        return jsonResponse({ success: true, id, deleted: true, scheduled: false, executable: false })
     }
 
     private async handleCrawlerScheduleList(): Promise<Response> {

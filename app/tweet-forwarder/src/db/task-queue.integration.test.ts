@@ -289,6 +289,74 @@ test('TaskQueue add revives failed idempotent tasks without duplicating pending 
     expect(await DB.TaskQueue.countsByStatus()).toEqual({ pending: 1 })
 })
 
+test('TaskQueue planned live capture records are never returned as executable pending work', async () => {
+    const { task: planned, created } = await DB.TaskQueue.addPlanned(
+        DB.TaskQueue.TYPE.LiveCapturePlan,
+        {
+            schema_version: 1,
+            target: { platform: 'tiktok', handle: 'mao_asaoka' },
+            event: { starts_at: 1785674700 },
+        },
+        100,
+        {
+            source_ref: 'tiktok:mao_asaoka',
+            action_type: 'capture_plan',
+            idempotency_key: 'mao-20260802',
+        },
+    )
+
+    expect(created).toBe(true)
+    expect(planned).toMatchObject({
+        status: 'planned',
+        type: DB.TaskQueue.TYPE.LiveCapturePlan,
+        execute_at: 100,
+    })
+    expect(await DB.TaskQueue.getPending(150)).toEqual([])
+    expect(await DB.TaskQueue.getPlanned(planned.id, DB.TaskQueue.TYPE.LiveCapturePlan)).toMatchObject({
+        id: planned.id,
+        status: 'planned',
+    })
+
+    const duplicate = await DB.TaskQueue.addPlanned(
+        DB.TaskQueue.TYPE.LiveCapturePlan,
+        {
+            schema_version: 1,
+            target: { platform: 'tiktok', handle: 'mao_asaoka' },
+            event: { starts_at: 1785674700 },
+        },
+        100,
+        {
+            source_ref: 'tiktok:mao_asaoka',
+            action_type: 'capture_plan',
+            idempotency_key: 'mao-20260802',
+        },
+    )
+    expect(duplicate.created).toBe(false)
+    expect(duplicate.task.id).toBe(planned.id)
+
+    const updated = await DB.TaskQueue.updatePlanned(
+        planned.id,
+        DB.TaskQueue.TYPE.LiveCapturePlan,
+        {
+            schema_version: 1,
+            target: { platform: 'tiktok', handle: 'mao_asaoka' },
+            event: { starts_at: 1785675000 },
+        },
+        200,
+        {
+            source_ref: 'tiktok:mao_asaoka',
+            action_type: 'capture_plan',
+            idempotency_key: 'mao-20260802-updated',
+        },
+    )
+    expect(updated).toMatchObject({ execute_at: 200, idempotency_key: 'mao-20260802-updated' })
+
+    expect(await DB.TaskQueue.deletePlanned(planned.id, DB.TaskQueue.TYPE.LiveCapturePlan)).toMatchObject({
+        id: planned.id,
+    })
+    expect(await DB.TaskQueue.getPlanned(planned.id, DB.TaskQueue.TYPE.LiveCapturePlan)).toBeNull()
+})
+
 test('TaskQueue claim, stale recovery, filtering, and terminal status updates work on SQLite', async () => {
     const due = await DB.TaskQueue.add('aggregate_daily', { value: 'due' }, 100, {
         source_ref: 'x:due',

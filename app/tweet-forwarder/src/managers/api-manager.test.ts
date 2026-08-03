@@ -1739,6 +1739,167 @@ test('APIManager hot-upserts crawler schedules without runtime reload', async ()
     ])
 })
 
+test('APIManager stores structured live capture plans without scheduling or execution', async () => {
+    const originalAddPlanned = DB.TaskQueue.addPlanned
+    const calls: any[] = []
+    ;(DB.TaskQueue as any).addPlanned = async (type: string, payload: any, executeAt: number, meta: any) => {
+        calls.push({ type, payload, executeAt, meta })
+        return {
+            created: true,
+            task: {
+                id: 501,
+                type,
+                payload,
+                status: 'planned',
+                created_at: 1785668400,
+                updated_at: 1785668400,
+                execute_at: executeAt,
+            },
+        }
+    }
+
+    try {
+        const manager = new APIManager({
+            getConfig: () =>
+                ({
+                    api: { secret: 'test-secret' },
+                }) as any,
+            getDeps: () =>
+                ({
+                    spiderTaskScheduler: {
+                        pokeSchedules: () => {
+                            throw new Error('must not schedule')
+                        },
+                    },
+                }) as any,
+        })
+        const response = await (manager as any).dispatchApiRequest(
+            new Request('http://localhost/api/live-capture-plans', {
+                method: 'POST',
+                headers: {
+                    Authorization: 'Bearer test-secret',
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    plan: {
+                        schema_version: 1,
+                        target: { platform: 'tiktok', handle: '@mao_asaoka' },
+                        event: {
+                            starts_at: '2026-08-02T21:45:00+09:00',
+                            timezone: 'Asia/Tokyo',
+                            performer: '麻丘真央',
+                        },
+                        source: {
+                            kind: 'llm_extraction',
+                            ref: 'social-post-1',
+                        },
+                    },
+                    idempotency_key: 'mao-20260802-2145',
+                }),
+            }),
+            { timeout: () => {} },
+            'test-secret',
+        )
+        const payload = await response.json()
+
+        expect(response.status).toBe(201)
+        expect(payload).toMatchObject({
+            success: true,
+            created: true,
+            id: 501,
+            status: 'planned',
+            scheduled: false,
+            executable: false,
+            idempotencyKey: 'mao-20260802-2145',
+            plan: {
+                target: { platform: 'tiktok', handle: 'mao_asaoka' },
+                event: { starts_at: 1785674700 },
+                capture: { poll_seconds: 15, upload: false },
+            },
+        })
+        expect(calls).toHaveLength(1)
+        expect(calls[0]).toMatchObject({
+            type: DB.TaskQueue.TYPE.LiveCapturePlan,
+            executeAt: 1785674100,
+            meta: {
+                source_ref: 'tiktok:mao_asaoka',
+                action_type: 'capture_plan',
+                idempotency_key: 'mao-20260802-2145',
+            },
+        })
+    } finally {
+        ;(DB.TaskQueue as any).addPlanned = originalAddPlanned
+    }
+})
+
+test('APIManager exposes a machine-readable non-executable live capture plan schema', async () => {
+    const manager = new APIManager({
+        getConfig: () => ({ api: { secret: 'test-secret' } }) as any,
+        getDeps: () => ({}) as any,
+    })
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/live-capture-plans/schema', {
+            headers: { Authorization: 'Bearer test-secret' },
+        }),
+        { timeout: () => {} },
+        'test-secret',
+    )
+    const payload = await response.json()
+
+    expect(payload).toMatchObject({
+        schema_version: 1,
+        execution: {
+            scheduled: false,
+            executable: false,
+            activation_endpoint: null,
+        },
+        input_schema: {
+            type: 'object',
+            required: ['schema_version', 'target', 'event'],
+            properties: {
+                target: {
+                    properties: {
+                        platform: { enum: ['tiktok', 'instagram', 'youtube', 'showroom', 'openrec', 'other'] },
+                    },
+                },
+                capture: {
+                    properties: {
+                        upload: { const: false },
+                    },
+                },
+            },
+        },
+    })
+})
+
+test('APIManager validates live capture plans without persisting them', async () => {
+    const manager = new APIManager({
+        getConfig: () => ({ api: { secret: 'test-secret' } }) as any,
+        getDeps: () => ({}) as any,
+    })
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/live-capture-plans/validate', {
+            method: 'POST',
+            headers: {
+                Authorization: 'Bearer test-secret',
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                target: { platform: 'tiktok', handle: 'mao_asaoka' },
+                event: { starts_at: '2026-08-02T21:45:00' },
+            }),
+        }),
+        { timeout: () => {} },
+        'test-secret',
+    )
+
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({
+        valid: false,
+        error: 'event.starts_at must include a UTC offset or Z',
+    })
+})
+
 test('APIManager inserts temporary crawler schedule points into task_queue', async () => {
     const originalTaskAdd = DB.TaskQueue.add
     const adds: any[] = []
