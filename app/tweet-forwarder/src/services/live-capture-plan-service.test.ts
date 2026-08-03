@@ -73,6 +73,15 @@ test('requires an explicit timezone offset in extracted start times', () => {
     ).toThrow('event.starts_at must include a UTC offset or Z')
 })
 
+test('rejects timestamps beyond the task queue Int range before persistence', () => {
+    expect(() =>
+        normalizeLiveCapturePlanInput({
+            target: { platform: 'tiktok', handle: 'mao_asaoka' },
+            event: { starts_at: '2099-01-01T00:00:00+09:00' },
+        }),
+    ).toThrow('event.starts_at must be a Unix timestamp or ISO-8601 timestamp with timezone offset no later than 2038-01-19T03:14:07Z')
+})
+
 test('rejects unknown fields so LLM extraction mistakes are visible', () => {
     expect(() =>
         normalizeLiveCapturePlanInput({

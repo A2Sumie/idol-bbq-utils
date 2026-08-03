@@ -1,4 +1,5 @@
 const LIVE_CAPTURE_PLAN_SCHEMA_VERSION = 1
+const LIVE_CAPTURE_PLAN_MAX_TIMESTAMP = 2_147_483_647
 const LIVE_CAPTURE_PLATFORMS = ['tiktok', 'instagram', 'youtube', 'showroom', 'openrec', 'other'] as const
 const LIVE_CAPTURE_SOURCE_KINDS = ['manual', 'social_post', 'webpage', 'llm_extraction', 'other'] as const
 const LIVE_CAPTURE_QUALITY_OPTIONS = ['origin_rtmp', 'hd_flv', 'hd_hls'] as const
@@ -25,7 +26,7 @@ const LIVE_CAPTURE_PLAN_JSON_SCHEMA = {
             properties: {
                 starts_at: {
                     oneOf: [
-                        { type: 'integer', minimum: 1 },
+                        { type: 'integer', minimum: 1, maximum: LIVE_CAPTURE_PLAN_MAX_TIMESTAMP },
                         { type: 'string', minLength: 1, description: 'ISO-8601 with UTC offset or Z' },
                     ],
                 },
@@ -68,7 +69,7 @@ const LIVE_CAPTURE_PLAN_JSON_SCHEMA = {
                 url: { type: 'string', maxLength: 2048 },
                 observed_at: {
                     oneOf: [
-                        { type: 'integer', minimum: 1 },
+                        { type: 'integer', minimum: 1, maximum: LIVE_CAPTURE_PLAN_MAX_TIMESTAMP },
                         { type: 'string', minLength: 1, description: 'ISO-8601 with UTC offset or Z' },
                     ],
                 },
@@ -191,7 +192,7 @@ function enumValue<T extends readonly string[]>(value: unknown, field: string, v
 function timestampValue(value: unknown, field: string) {
     if (typeof value === 'number' && Number.isFinite(value)) {
         const seconds = value > 10_000_000_000 ? Math.floor(value / 1000) : Math.floor(value)
-        if (seconds > 0) return seconds
+        if (seconds > 0 && seconds <= LIVE_CAPTURE_PLAN_MAX_TIMESTAMP) return seconds
     }
     if (typeof value === 'string' && value.trim()) {
         const normalized = value.trim()
@@ -200,9 +201,14 @@ function timestampValue(value: unknown, field: string) {
             throw new Error(`${field} must include a UTC offset or Z`)
         }
         const milliseconds = Date.parse(normalized)
-        if (Number.isFinite(milliseconds)) return Math.floor(milliseconds / 1000)
+        if (Number.isFinite(milliseconds)) {
+            const seconds = Math.floor(milliseconds / 1000)
+            if (seconds > 0 && seconds <= LIVE_CAPTURE_PLAN_MAX_TIMESTAMP) return seconds
+        }
     }
-    throw new Error(`${field} must be a Unix timestamp or ISO-8601 timestamp with timezone offset`)
+    throw new Error(
+        `${field} must be a Unix timestamp or ISO-8601 timestamp with timezone offset no later than 2038-01-19T03:14:07Z`,
+    )
 }
 
 function optionalTimestamp(value: unknown, field: string) {
