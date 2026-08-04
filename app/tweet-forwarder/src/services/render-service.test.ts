@@ -138,6 +138,36 @@ describe('formatPlatformTag', () => {
         ).toBe('Instagram 河瀬詩')
     })
 
+    test('uses the body-free website card text for Website img-tag captions', () => {
+        const service = new RenderService()
+        const text = (service as any).formatPlatformFrom({
+            a_id: 'website-blog-caption',
+            u_id: '22/7:official-blog',
+            platform: Platform.Website,
+            username: '三雲遥加',
+            created_at: 1710000000,
+            type: 'article',
+            content: '【心象風景。】\n\nここは本文です。',
+            url: 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/452591',
+            extra: {
+                extra_type: 'website_meta',
+                data: {
+                    site: '22/7',
+                    feed: 'official-blog',
+                    member: '三雲遥加',
+                    title: '心象風景。',
+                    time_source: 'crawl_observed',
+                },
+            },
+        })
+
+        expect(text).toContain('【22/7 博客｜三雲遥加】心象風景。')
+        expect(text).toContain('22/7官网 博客 抓取于')
+        expect(text).toContain('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/452591')
+        expect(text).not.toContain('ここは本文です')
+        expect(text).not.toContain('Website')
+    })
+
     test('avoids repeating the platform name when no useful display name exists', () => {
         expect(
             formatPlatformTag({
@@ -521,7 +551,6 @@ describe('RenderService text-card', () => {
         )
         expect(normalizedExisting.filter((item: any) => item.media_type === 'video_thumbnail')).toHaveLength(1)
         expect(normalizedExisting.map((item: any) => item.path)).toEqual(['/tmp/video.mp4', '/tmp/thumb-1.jpg'])
-
         ;(service as any).generateSingleVideoThumbnail = () => ({
             path: '/tmp/generated-thumb.jpg',
             media_type: 'video_thumbnail',
@@ -675,6 +704,53 @@ describe('RenderService text-card', () => {
         }
     })
 
+    test('strips nested website album remote images when the card render fallback runs', () => {
+        const service = new RenderService()
+        const article = {
+            id: 20,
+            a_id: 'photo:album:photoga:37071',
+            u_id: '22/7:photo',
+            username: '22/7 Photo',
+            created_at: 1710000000,
+            content: '【说到夏天！】',
+            translation: null,
+            translated_by: null,
+            url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga',
+            type: 'article',
+            ref: null,
+            has_media: true,
+            media: [{ type: 'photo', url: 'https://example.com/root.jpg' }],
+            extra: {
+                extra_type: 'website_meta',
+                data: {
+                    site: '22/7',
+                    feed: 'photo',
+                    title: '说到夏天！',
+                    raw_html: '<p>顶层</p><img src="/images/root.jpg" alt="root">',
+                    entries: [
+                        {
+                            member: '相川奈央',
+                            bodyHtml: '<p>本文</p><img src="//example.com/entry-1.jpg" alt="e1">',
+                            media: [{ type: 'photo', url: 'https://example.com/entry-1.jpg' }],
+                        },
+                    ],
+                },
+            },
+            u_avatar: 'https://example.com/avatar.jpg',
+            platform: Platform.Website,
+        } as any
+
+        const { article: stripped, removed } = (service as any).stripRemoteCardMediaForRender(article)
+
+        expect(removed).toBeGreaterThanOrEqual(4)
+        expect(stripped.media).toHaveLength(0)
+        expect(stripped.u_avatar).toBeNull()
+        expect(stripped.extra.data.raw_html).not.toContain('<img')
+        expect(stripped.extra.data.entries[0].bodyHtml).not.toContain('<img')
+        expect(stripped.extra.data.entries[0].media).toHaveLength(0)
+        expect(article.extra.data.entries[0].bodyHtml).toContain('<img')
+    })
+
     test('tolerates media handlers that return null files', async () => {
         const service = new RenderService()
         ;(service as any).handleMedia = async () => ({
@@ -809,7 +885,9 @@ describe('RenderService text-card', () => {
                 renderCalls.push(article)
                 const meta = JSON.stringify(article.extra?.data || {})
                 if (String(article.u_avatar || '').startsWith('https://') || meta.includes('https://')) {
-                    throw new Error('Image size cannot be determined. Please provide the width and height of the image.')
+                    throw new Error(
+                        'Image size cannot be determined. Please provide the width and height of the image.',
+                    )
                 }
                 return Buffer.from(SAMPLE_PNG_DATA_URL.split(',')[1] || '', 'base64')
             },
@@ -1416,11 +1494,9 @@ describe('RenderService media deduplication', () => {
         ;(service as any).isVideoSilent = () => false
         ;(service as any).isVideoCompletelyStill = () => true
         expect((service as any).shouldTreatVideoAsStaticImage(article, '/tmp/story.mp4', 'video')).toBeFalse()
-
         ;(service as any).isVideoSilent = () => true
         ;(service as any).isVideoCompletelyStill = () => false
         expect((service as any).shouldTreatVideoAsStaticImage(article, '/tmp/story.mp4', 'video')).toBeFalse()
-
         ;(service as any).isVideoSilent = () => true
         ;(service as any).isVideoCompletelyStill = () => true
         expect((service as any).shouldTreatVideoAsStaticImage(article, '/tmp/story.mp4', 'video')).toBeTrue()
@@ -1770,6 +1846,9 @@ describe('RenderService img-tag ordering', () => {
             },
         )
 
+        expect(result.text).toContain('【22/7 PHOTO📷】')
+        expect(result.text).not.toContain('Website 22/7 Photo')
+        expect(result.text).not.toContain('窓開けてみんなでお昼寝')
         expect(result.mediaFiles).toHaveLength(2)
         expect(result.cardMediaFiles).toHaveLength(1)
         expect(result.originalMediaFiles).toHaveLength(1)

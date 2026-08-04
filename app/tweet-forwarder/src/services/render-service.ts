@@ -215,7 +215,10 @@ export class RenderService {
         const generateRenderedImage = async () => {
             // Normalize before hydrate: a malformed media field must not crash the hydrate pass, which runs
             // outside any render-failure retry.
-            const hydratedArticle = this.hydrateArticleMediaForCard(sanitizeArticleForRender(article), maybe_media_files)
+            const hydratedArticle = this.hydrateArticleMediaForCard(
+                sanitizeArticleForRender(article),
+                maybe_media_files,
+            )
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
                 const imgBuffer = await renderArticleImage(hydratedArticle)
@@ -342,7 +345,10 @@ export class RenderService {
             if (article.platform === Platform.Website) {
                 text = formatWebsiteCardText(article)
                 textCollapseMode = 'none'
-            } else if (!LONG_TEXT_CARD_TYPES.has(String(article.type || '')) && text.length > CARD_TEXT_TITLE_THRESHOLD) {
+            } else if (
+                !LONG_TEXT_CARD_TYPES.has(String(article.type || '')) &&
+                text.length > CARD_TEXT_TITLE_THRESHOLD
+            ) {
                 text = extractArticleHeadline(article)
                 textCollapseMode = 'none'
             }
@@ -389,6 +395,9 @@ export class RenderService {
     private formatPlatformFrom(article: Article): string {
         if (article.platform === Platform.X || article.platform === Platform.Twitter) {
             return [article.username?.trim(), formatArticleTimeToken(article.created_at), 'X'].filter(Boolean).join(' ')
+        }
+        if (article.platform === Platform.Website) {
+            return formatWebsiteCardText(article)
         }
         return formatPlatformTag(article, this.log)
     }
@@ -526,24 +535,32 @@ export class RenderService {
                 stripSummaryCardMeta(child)
             }
         }
-        const stripInlineHtmlRemoteImages = (currentArticle: Article | null) => {
-            const rawHtml = (currentArticle?.extra?.data as any)?.raw_html
-            if (typeof rawHtml !== 'string' || !/<img\b/i.test(rawHtml)) {
+        const stripInlineHtmlRemoteImages = (value: unknown) => {
+            if (!value || typeof value !== 'object') {
                 return
             }
-            const nextHtml = rawHtml.replace(/<img\b[^>]*>/gi, (tag: string) => {
-                const srcMatch = tag.match(/\bsrc=(["']?)([^"'\s>]+)\1/i)
-                if (srcMatch && this.isRemoteCardMediaUrl(srcMatch[2])) {
-                    removed += 1
-                    return ''
+            if (Array.isArray(value)) {
+                value.forEach((item) => stripInlineHtmlRemoteImages(item))
+                return
+            }
+            const record = value as Record<string, unknown>
+            for (const [key, child] of Object.entries(record)) {
+                if (typeof child === 'string' && /html$/i.test(key) && /<img\b/i.test(child)) {
+                    record[key] = child.replace(/<img\b[^>]*>/gi, (tag: string) => {
+                        const srcMatch = tag.match(/\bsrc=(["']?)([^"'\s>]+)\1/i)
+                        if (!srcMatch) {
+                            return tag
+                        }
+                        const sourceUrl = this.resolveCardMediaSourceUrl(srcMatch[2], cloned.url)
+                        if (!this.isRemoteCardMediaUrl(sourceUrl)) {
+                            return tag
+                        }
+                        removed += 1
+                        return ''
+                    })
+                    continue
                 }
-                return tag
-            })
-            if (nextHtml !== rawHtml && currentArticle?.extra?.data) {
-                currentArticle.extra.data = {
-                    ...(currentArticle.extra.data as any),
-                    raw_html: nextHtml,
-                }
+                stripInlineHtmlRemoteImages(child)
             }
         }
         const visit = (currentArticle: Article | null) => {
@@ -559,13 +576,13 @@ export class RenderService {
                 currentArticle.media = kept as Article['media']
                 currentArticle.has_media = kept.length > 0
             }
-            stripInlineHtmlRemoteImages(currentArticle)
+            stripInlineHtmlRemoteImages(currentArticle.extra?.data)
             if (currentArticle.ref && typeof currentArticle.ref === 'object') {
                 visit(currentArticle.ref as Article)
             }
         }
         visit(cloned)
-        if ((cloned.extra as any)?.extra_type === 'message_pack_meta') {
+        if (['message_pack_meta', 'website_meta'].includes(String((cloned.extra as any)?.extra_type || ''))) {
             stripSummaryCardMeta((cloned.extra as any).data)
         }
         return { article: cloned, removed }
@@ -786,7 +803,9 @@ export class RenderService {
         if (mediaType !== 'video' || article.platform !== Platform.Instagram) {
             return false
         }
-        const articleType = String(article.type || '').trim().toLowerCase()
+        const articleType = String(article.type || '')
+            .trim()
+            .toLowerCase()
         const articleUrl = String(article.url || '')
         return INSTAGRAM_STILL_VIDEO_ARTICLE_TYPES.has(articleType) || /\/stories\//i.test(articleUrl)
     }
@@ -795,17 +814,7 @@ export class RenderService {
         try {
             const output = execFileSync(
                 process.env.FFPROBE_PATH || 'ffprobe',
-                [
-                    '-v',
-                    'error',
-                    '-select_streams',
-                    'a',
-                    '-show_entries',
-                    'stream=index',
-                    '-of',
-                    'csv=p=0',
-                    filePath,
-                ],
+                ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', filePath],
                 { encoding: 'utf8', timeout: 10_000 },
             )
             if (!output.trim()) {

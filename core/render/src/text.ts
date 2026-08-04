@@ -152,6 +152,13 @@ function formatArticleTimeToken(unix_timestamp: number) {
     return `${formatClock(unix_timestamp)}(${monthDay}${year})`
 }
 
+function formatArticlePlainTimeToken(unix_timestamp: number) {
+    const time = getRenderDate(unix_timestamp)
+    const monthDay = `${pad2(time.getUTCMonth() + 1)}${pad2(time.getUTCDate())}`
+    const year = pad2(time.getUTCFullYear() % 100)
+    return `${formatBareClock(unix_timestamp)}+9(${monthDay}_${year})`
+}
+
 function formatArticleAttributionTimeToken(unix_timestamp: number) {
     return `${formatClock(unix_timestamp)}（${formatDisplayDate(unix_timestamp)}）`
 }
@@ -251,7 +258,7 @@ function formatPassthroughAttributionLine(
     return [
         userId,
         showUsername ? username : '',
-        article.created_at ? formatArticleTimeToken(article.created_at) : '',
+        article.created_at ? formatArticlePlainTimeToken(article.created_at) : '',
         formatArticleSourceActionLabel(article),
     ]
         .filter(Boolean)
@@ -634,10 +641,11 @@ function formatWebsiteCardText(article: Article) {
     const data = article.extra?.extra_type === 'website_meta' ? ((article.extra.data as any) ?? null) : null
     const feed = String(data?.feed || '').trim()
     const label = WEBSITE_FEED_LABELS[feed] || '更新'
+    const headingLabel = feed === 'photo' ? `${label}📷` : label
     const author = String(data?.member || (feed === 'official-blog' ? article.username : '') || '').trim()
     const title = String(data?.title || extractArticleHeadline(article) || '').trim()
     const site = String(data?.site || '22/7').trim()
-    const heading = `【${site} ${[label, author].filter(Boolean).join('｜')}】${title}`
+    const heading = `【${site} ${[headingLabel, author].filter(Boolean).join('｜')}】${title}`
     const attribution = [`${site}官网`, label, formatArticleDisplayAttributionTime(article)].filter(Boolean).join(' ')
     return [heading, '', attribution, article.url].filter((line) => line !== undefined).join('\n')
 }
@@ -663,6 +671,7 @@ export {
     formatArticleAttributionTimeToken,
     formatArticleHeaderLine,
     formatArticlePlatformLabel,
+    formatArticlePlainTimeToken,
     formatArticleSourceActionAttribution,
     formatArticleSourceActionLabel,
     formatArticleTimeToken,
