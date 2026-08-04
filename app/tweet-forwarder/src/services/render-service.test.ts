@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { formatArticleAttributionTimeToken, formatArticleTimeToken, formatTime } from '@idol-bbq-utils/render'
-import { formatPlatformTag, RenderService } from './render-service'
+import { formatPlatformTag, RenderService, shouldRunYtDlpForArticle } from './render-service'
 import { fileURLToPath } from 'url'
 import DB from '@/db'
 import { MediaToolEnum } from '@/types/media'
@@ -146,6 +146,29 @@ describe('formatPlatformTag', () => {
                 username: 'Website',
             }),
         ).toBe('Website')
+    })
+})
+
+describe('shouldRunYtDlpForArticle', () => {
+    test('runs yt-dlp for video posts', () => {
+        expect(
+            shouldRunYtDlpForArticle({
+                media: [{ url: 'https://x', type: 'video_thumbnail' }, { url: 'https://x', type: 'video' }],
+            } as any),
+        ).toBe(true)
+    })
+
+    test('skips yt-dlp for image-only posts to avoid duplicate media', () => {
+        expect(
+            shouldRunYtDlpForArticle({
+                media: [{ url: 'https://x', type: 'photo' }],
+            } as any),
+        ).toBe(false)
+    })
+
+    test('handles null/empty articles', () => {
+        expect(shouldRunYtDlpForArticle(null)).toBe(false)
+        expect(shouldRunYtDlpForArticle({ media: [] } as any)).toBe(false)
     })
 })
 

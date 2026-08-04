@@ -87,6 +87,20 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function shouldRunYtDlpForArticle(
+    article: Pick<Article, 'media' | 'extra'> | null | undefined,
+): boolean {
+    if (!article) {
+        return false
+    }
+    const hasVideoMedia = (item: { type?: unknown } | undefined) => String(item?.type || '').includes('video')
+    if ((article.media || []).some(hasVideoMedia)) {
+        return true
+    }
+    const extraMedia = (article.extra as any)?.media
+    return Array.isArray(extraMedia) && extraMedia.some(hasVideoMedia)
+}
+
 function normalizeMediaDownloadDelayMs(mediaUse: MediaTool | undefined) {
     const fixedDelayMs = Math.floor(Number((mediaUse as any)?.request_interval_ms))
     if (Number.isFinite(fixedDelayMs) && fixedDelayMs > 0) {
@@ -1201,15 +1215,21 @@ export class RenderService {
                         new_files = await _handleMedia(currentArticle.media)
                     }
 
-                    const videoPaths = await ytDlpDownloadMediaFile(
-                        currentArticle.url,
-                        media.use as MediaTool<MediaToolEnum.YT_DLP>,
-                        `${taskId}-${currentArticle.a_id}`,
-                    )
-                    const videoFiles = await Promise.all(
-                        videoPaths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
-                    )
-                    new_files = new_files.concat(videoFiles)
+                    // yt-dlp re-resolves the video page and gets a fresh signed URL, which matters
+                    // when the stored CDN URL (e.g. tiktokcdn) has expired or is session-bound.
+                    // Only run it for articles that actually contain video media; image-only posts
+                    // must not be duplicated by an extra yt-dlp pass.
+                    if (shouldRunYtDlpForArticle(currentArticle)) {
+                        const videoPaths = await ytDlpDownloadMediaFile(
+                            currentArticle.url,
+                            media.use as MediaTool<MediaToolEnum.YT_DLP>,
+                            `${taskId}-${currentArticle.a_id}`,
+                        )
+                        const videoFiles = await Promise.all(
+                            videoPaths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
+                        )
+                        new_files = new_files.concat(videoFiles)
+                    }
 
                     const uniqueExtraMedia = getUniqueExtraMedia()
                     if (uniqueExtraMedia.length > 0) {
@@ -1252,4 +1272,4 @@ export class RenderService {
     }
 }
 
-export { formatPlatformTag }
+export { formatPlatformTag, shouldRunYtDlpForArticle }
