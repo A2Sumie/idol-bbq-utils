@@ -11604,6 +11604,25 @@ function makeContentFingerprintArticle(id: number, aId: string, content: string)
     } as any
 }
 
+function makeShortVideoFingerprintArticle(id: number, aId: string, content: string, platform: Platform) {
+    return {
+        id,
+        a_id: aId,
+        platform,
+        username: 'member',
+        u_id: 'member',
+        content,
+        url: `https://example.com/${aId}`,
+        type: 'post',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    } as any
+}
+
 function makeContentFingerprintPools() {
     return new ForwarderPools(
         {
@@ -11664,6 +11683,62 @@ test('content_fingerprint_dedup skips a same-content article that already sent t
     }
 
     // Only the first identical article reaches the provider; the second is fingerprint-suppressed.
+    expect(target.sent).toHaveLength(1)
+    const outboundRecords = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values())
+    expect(
+        outboundRecords.some(
+            (record) =>
+                record.status === 'skipped' &&
+                record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
+        ),
+    ).toBeTrue()
+})
+
+test('short-video text dedup suppresses identical IG/TikTok copy on the same target', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[] }> = []
+        protected async realSend(texts: string[]): Promise<any> {
+            this.sent.push({ texts })
+            return
+        }
+    }
+
+    const pools = makeContentFingerprintPools()
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '813433032',
+            content_fingerprint_dedup: true,
+        } as any,
+        'target-fp-short-text',
+    )
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => null
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'st-ig-first',
+            [makeShortVideoFingerprintArticle(950, 'st-ig', '【#推しカメラ】 沖縄県出身 #桧山依子', Platform.Instagram)],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+        await (pools as any).sendArticles(
+            undefined,
+            'st-tt-second',
+            [makeShortVideoFingerprintArticle(951, 'st-tt', '【#推しカメラ】 沖縄県出身 #桧山依子', Platform.TikTok)],
+            [{ forwarder: target, runtime_config: undefined }],
+            { render_type: 'text' } as any,
+        )
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
+
+    // Only the first platform's copy reaches the provider; the same text on TikTok is suppressed.
     expect(target.sent).toHaveLength(1)
     const outboundRecords = Array.from(((DB.OutboundMessage as any).__records as Map<string, any>).values())
     expect(

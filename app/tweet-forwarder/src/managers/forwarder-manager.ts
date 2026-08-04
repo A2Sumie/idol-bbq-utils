@@ -53,6 +53,7 @@ import {
     targetRouteKey,
 } from '@/services/outbound-message-service'
 import { resolveSummaryCardConfig, type ResolvedSummaryCardConfig } from '@/services/summary-card-policy'
+import { buildShortVideoTextFingerprint } from '@/services/media-cache-service'
 import {
     isBilibiliVideoPairingHeldResult,
     isXTiktokTeaserArticle,
@@ -2154,8 +2155,11 @@ class ForwarderPools extends BaseCompatibleModel {
                 to.map(async ({ forwarder: target, runtime_config }) => {
                     let visibilityForRelease: MediaVisibilityResult | null = null
                     let targetRenderResultForCleanup: RenderResult | null = null
-                    let contentFingerprintForRelease: { scope: string; targetId: string; fingerprint: string } | null =
-                        null
+                    let contentFingerprintForRelease: Array<{
+                        scope: string
+                        targetId: string
+                        fingerprint: string
+                    }> = []
                     try {
                         if (this.shouldStopForShutdown(log, `sendArticles target ${target.id}`)) {
                             hadNonErrorOutcome = true
@@ -2641,6 +2645,61 @@ class ForwarderPools extends BaseCompatibleModel {
                                 target.getEffectiveConfig(runtime_config),
                             )
                             if (fingerprintConfig) {
+                                const shortVideoTextDedupEligible =
+                                    article.platform === Platform.Instagram || article.platform === Platform.TikTok
+                                if (shortVideoTextDedupEligible) {
+                                    const textScope = this.buildShortVideoTextFingerprintScope(target)
+                                    const textFingerprint = this.buildArticleShortVideoTextFingerprint(article)
+                                    const textClaim = await DB.ContentFingerprint.claim({
+                                        scope: textScope,
+                                        target_id: target.id,
+                                        fingerprint: textFingerprint,
+                                        article_key: articleKey(article),
+                                        platform: target.NAME,
+                                        article_id: Number.isFinite(Number(article.id))
+                                            ? Number(article.id)
+                                            : null,
+                                        windowSeconds: fingerprintConfig.windowSeconds,
+                                    }).catch((error) => {
+                                        log?.warn(
+                                            `Short video text fingerprint claim failed for ${article.a_id} to ${target.id}; proceeding with send: ${
+                                                error instanceof Error ? error.message : String(error)
+                                            }`,
+                                        )
+                                        return null
+                                    })
+                                    if (textClaim && !textClaim.allowed) {
+                                        log?.debug(
+                                            `Skipping article ${article.a_id} for ${target.id}: short video text fingerprint duplicate`,
+                                        )
+                                        await DB.OutboundMessage.markSkipped(
+                                            outboundIdempotencyKey,
+                                            'content_fingerprint_duplicate',
+                                            {
+                                                scope: textScope,
+                                                existing_article_key: textClaim.record.article_key || null,
+                                                existing_article_id: textClaim.record.article_id || null,
+                                                window_seconds: fingerprintConfig.windowSeconds,
+                                            },
+                                        ).catch(() => undefined)
+                                        await DB.ForwardBy.save(article.id, platform, target.id, 'article').catch(
+                                            () => undefined,
+                                        )
+                                        await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(
+                                            () => undefined,
+                                        )
+                                        error_for_all = false
+                                        hadNonErrorOutcome = true
+                                        return
+                                    }
+                                    if (textClaim && textClaim.allowed) {
+                                        contentFingerprintForRelease.push({
+                                            scope: textScope,
+                                            targetId: target.id,
+                                            fingerprint: textFingerprint,
+                                        })
+                                    }
+                                }
                                 const fingerprintScope = this.buildContentFingerprintScope(target)
                                 const fingerprint = this.buildArticleContentFingerprint(text, [
                                     ...mediaFiles,
@@ -2688,11 +2747,11 @@ class ForwarderPools extends BaseCompatibleModel {
                                     return
                                 }
                                 if (claim && claim.allowed) {
-                                    contentFingerprintForRelease = {
+                                    contentFingerprintForRelease.push({
                                         scope: fingerprintScope,
                                         targetId: target.id,
                                         fingerprint,
-                                    }
+                                    })
                                 }
                             }
                         }
@@ -2797,7 +2856,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
                         visibilityForRelease = null
                         // Visible send succeeded: keep the content fingerprint claimed (do not release in finally).
-                        contentFingerprintForRelease = null
+                        contentFingerprintForRelease = []
                         error_for_all = false
                         hadNonErrorOutcome = true
                     } catch (error) {
@@ -2817,7 +2876,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 partialError,
                             )
                             // Partial counts as a visible completion; keep the fingerprint claimed.
-                            contentFingerprintForRelease = null
+                            contentFingerprintForRelease = []
                             await DB.TargetHealth.mark({
                                 target_id: target.id,
                                 provider: target.NAME,
@@ -3918,6 +3977,19 @@ class ForwarderPools extends BaseCompatibleModel {
         return `content-fp:${hashValue({ target_id: target.id }).slice(0, 32)}`
     }
 
+    // Cross-platform short-video text dedup: IG/TikTok carry identical official copy, but per-file
+    // fingerprints never match across platforms (different CDN files, thumbnails, encodings) and can
+    // be unavailable entirely when a video download fails. A text-only fingerprint keyed by the same
+    // target catches those duplicates without any media dependency.
+    private buildShortVideoTextFingerprintScope(target: BaseForwarder) {
+        return `content-fp-short-text:${hashValue({ target_id: target.id }).slice(0, 32)}`
+    }
+
+    private buildArticleShortVideoTextFingerprint(article: ArticleWithId) {
+        const textFingerprint = buildShortVideoTextFingerprint(article)
+        return hashValue({ textKeys: textFingerprint.keys })
+    }
+
     private buildArticleContentFingerprint(text: string | undefined, mediaFiles: Array<RenderedMediaFile>) {
         const normalizedText = String(text || '')
             .replace(/\s+/g, ' ')
@@ -3931,16 +4003,20 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private async releaseContentFingerprintClaim(
-        claim: { scope: string; targetId: string; fingerprint: string } | null | undefined,
+        claims: Array<{ scope: string; targetId: string; fingerprint: string }> | null | undefined,
     ) {
-        if (!claim || isNonLiveOutboundSendMode()) {
+        if (!claims || isNonLiveOutboundSendMode()) {
             return
         }
-        await DB.ContentFingerprint.release({
-            scope: claim.scope,
-            target_id: claim.targetId,
-            fingerprint: claim.fingerprint,
-        }).catch(() => undefined)
+        await Promise.all(
+            claims.map((claim) =>
+                DB.ContentFingerprint.release({
+                    scope: claim.scope,
+                    target_id: claim.targetId,
+                    fingerprint: claim.fingerprint,
+                }).catch(() => undefined),
+            ),
+        )
     }
 
     private async sendSummaryCardRealtimeMedia(
@@ -4084,7 +4160,7 @@ class ForwarderPools extends BaseCompatibleModel {
             extra: { mediaIdentitiesHash: hashValue(mediaIdentities) },
         })
 
-        let contentFingerprintForRelease: { scope: string; targetId: string; fingerprint: string } | null = null
+        let contentFingerprintForRelease: Array<{ scope: string; targetId: string; fingerprint: string }> = []
         try {
             const outbound = await DB.OutboundMessage.claim({
                 idempotency_key: outboundIdempotencyKey,
@@ -4142,6 +4218,55 @@ class ForwarderPools extends BaseCompatibleModel {
             if (!isNonLiveOutboundSendMode()) {
                 const fingerprintConfig = resolveContentFingerprintConfig(target.getEffectiveConfig(runtime_config))
                 if (fingerprintConfig) {
+                    if (article.platform === Platform.Instagram || article.platform === Platform.TikTok) {
+                        const textScope = this.buildShortVideoTextFingerprintScope(target)
+                        const textFingerprint = this.buildArticleShortVideoTextFingerprint(article)
+                        const textClaim = await DB.ContentFingerprint.claim({
+                            scope: textScope,
+                            target_id: target.id,
+                            fingerprint: textFingerprint,
+                            article_key: currentArticleKey,
+                            platform: target.NAME,
+                            article_id: Number.isFinite(Number(article.id)) ? Number(article.id) : null,
+                            windowSeconds: fingerprintConfig.windowSeconds,
+                        }).catch((error) => {
+                            log?.warn(
+                                `Short video text fingerprint claim failed for realtime media ${article.a_id} to ${target.id}; proceeding with send: ${
+                                    error instanceof Error ? error.message : String(error)
+                                }`,
+                            )
+                            return null
+                        })
+                        if (textClaim && !textClaim.allowed) {
+                            log?.debug(
+                                `Skipping summary realtime media for ${article.a_id} to ${target.id}: short video text fingerprint duplicate`,
+                            )
+                            await DB.OutboundMessage.markSkipped(
+                                outboundIdempotencyKey,
+                                'content_fingerprint_duplicate',
+                                {
+                                    scope: textScope,
+                                    existing_article_key: textClaim.record.article_key || null,
+                                    existing_article_id: textClaim.record.article_id || null,
+                                    window_seconds: fingerprintConfig.windowSeconds,
+                                },
+                            ).catch(() => undefined)
+                            await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
+                            return {
+                                hadMedia: true,
+                                handled: true,
+                                visibleMediaSent: false,
+                                skippedDuplicate: true,
+                            }
+                        }
+                        if (textClaim && textClaim.allowed) {
+                            contentFingerprintForRelease.push({
+                                scope: textScope,
+                                targetId: target.id,
+                                fingerprint: textFingerprint,
+                            })
+                        }
+                    }
                     const fingerprintScope = this.buildContentFingerprintScope(target)
                     // Fingerprint the stable source media (plus realtime text), not the visibility-filtered or
                     // locally synthesized files (video thumbnails / translated tail cards), so identical source
@@ -4182,11 +4307,11 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
                     }
                     if (claim && claim.allowed) {
-                        contentFingerprintForRelease = {
+                        contentFingerprintForRelease.push({
                             scope: fingerprintScope,
                             targetId: target.id,
                             fingerprint,
-                        }
+                        })
                     }
                 }
             }
@@ -4276,7 +4401,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 details: summarizeProviderResult(providerResult),
             })
             // Visible send succeeded: keep the content fingerprint claimed (do not release in finally).
-            contentFingerprintForRelease = null
+            contentFingerprintForRelease = []
             return {
                 hadMedia: true,
                 handled: true,
@@ -4301,7 +4426,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     details: summarizeProviderResult(error.partialResults),
                 }).catch(() => undefined)
                 // Partial counts as a visible completion; keep the fingerprint claimed.
-                contentFingerprintForRelease = null
+                contentFingerprintForRelease = []
                 return {
                     hadMedia: true,
                     handled: true,

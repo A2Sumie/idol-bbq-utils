@@ -1079,6 +1079,7 @@ function startMediaCacheCleanupJob(log?: MediaCacheCleanupLogger): MediaCacheCle
 export {
     buildArticleMarker,
     buildShortVideoDedupCandidate,
+    buildShortVideoTextFingerprint,
     buildVideoFingerprintBandKeys,
     buildVideoFingerprintCandidate,
     cleanupMediaCache,
