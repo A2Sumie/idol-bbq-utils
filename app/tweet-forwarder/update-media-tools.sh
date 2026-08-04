@@ -1,6 +1,10 @@
 #!/bin/sh
 set -eu
 
+# Mode: "all" (default) refreshes every toolchain; "yt-dlp" refreshes only the
+# yt-dlp binary for high-frequency scheduled checks (TikTok extractor breaks often).
+MODE="${1:-all}"
+
 TOOLS_DIR="${TOOLS_DIR:-/app/tools}"
 BIN_DIR="${TOOLS_DIR}/bin"
 BILIUP_VENV="${TOOLS_DIR}/biliup-venv"
@@ -14,6 +18,22 @@ UV_PYTHON_INSTALL_DIR="${UV_PYTHON_INSTALL_DIR:-${TOOLS_DIR}/uv-python}"
 mkdir -p "$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
 export UV_PYTHON_INSTALL_DIR
+
+update_yt_dlp() {
+    echo "Updating yt-dlp to stable@latest..."
+    tmp_file="$(mktemp "$BIN_DIR/yt-dlp.XXXXXX")"
+    trap 'rm -f "$tmp_file"' EXIT
+    curl -fsSL "$YT_DLP_URL" -o "$tmp_file"
+    chmod +x "$tmp_file"
+    mv "$tmp_file" "$BIN_DIR/yt-dlp"
+    YT_DLP_VERSION="$("$BIN_DIR/yt-dlp" --version)"
+    printf '%s\n' "$YT_DLP_VERSION"
+}
+
+if [ "$MODE" = "yt-dlp" ]; then
+    update_yt_dlp
+    exit 0
+fi
 
 ensure_uv() {
     if [ ! -x "$BIN_DIR/uv" ]; then
@@ -49,13 +69,7 @@ fi
 "$BIN_DIR/deno" --version | sed -n '1p'
 
 echo "Updating yt-dlp to stable@latest..."
-tmp_file="$(mktemp "$BIN_DIR/yt-dlp.XXXXXX")"
-trap 'rm -f "$tmp_file"' EXIT
-curl -fsSL "$YT_DLP_URL" -o "$tmp_file"
-chmod +x "$tmp_file"
-mv "$tmp_file" "$BIN_DIR/yt-dlp"
-YT_DLP_VERSION="$("$BIN_DIR/yt-dlp" --version)"
-printf '%s\n' "$YT_DLP_VERSION"
+update_yt_dlp
 
 echo "Refreshing gallery-dl toolchain..."
 ensure_tool_venv "$GALLERY_DL_VENV"
