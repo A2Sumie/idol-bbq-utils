@@ -97,6 +97,7 @@ interface BrowserProfileConfig {
     plugins: Array<ProfilePlugin>
     pdfViewerEnabled?: boolean
     userAgentData?: ProfileUserAgentData | null
+    webgl?: ProfileWebGL | null
 }
 
 const CHROME_MAJOR_VERSION = '142'
@@ -334,6 +335,26 @@ interface BrowserProfileOverrides {
     extraHeaders?: Record<string, string>
     locale?: string
     timezone?: string
+    webgl?: ProfileWebGL | null
+}
+
+interface ProfileWebGL {
+    vendor: string
+    renderer: string
+}
+
+const DEFAULT_DESKTOP_WEBGL: ProfileWebGL = {
+    vendor: process.env.BROWSER_WEBGL_VENDOR || 'Google Inc. (NVIDIA)',
+    renderer:
+        process.env.BROWSER_WEBGL_RENDERER ||
+        'ANGLE (NVIDIA, NVIDIA GeForce GTX 1080 (0x1B81) OpenGL 4.6.0 NVIDIA 545.23.08, D3D11)',
+}
+
+const DEFAULT_MOBILE_WEBGL: ProfileWebGL = {
+    vendor: process.env.BROWSER_WEBGL_VENDOR || 'Google Inc. (Qualcomm)',
+    renderer:
+        process.env.BROWSER_WEBGL_RENDERER ||
+        'ANGLE (Qualcomm, Adreno (TM) 730 (0x06050300) OpenGL ES 3.2 V@0481.0 (GIT@K20MA, K20WVE), D3D11)',
 }
 
 function resolveBrowserProfile(
@@ -353,6 +374,7 @@ function resolveBrowserProfile(
             ...(overrides.extraHeaders || {}),
         },
         userAgent: overrides.userAgent || preset.userAgent,
+        webgl: overrides.webgl === undefined ? (preset.isMobile ? DEFAULT_MOBILE_WEBGL : DEFAULT_DESKTOP_WEBGL) : overrides.webgl,
     }
 }
 
@@ -403,6 +425,33 @@ async function applyBrowserProfile(
                         configurable: true,
                         get: getter,
                     })
+                }
+                if (fingerprint.webgl) {
+                    const maskedWebglVendor = fingerprint.webgl.vendor
+                    const maskedWebglRenderer = fingerprint.webgl.renderer
+                    try {
+                        const webglProtos = [WebGLRenderingContext.prototype]
+                        if (typeof WebGL2RenderingContext !== 'undefined') {
+                            webglProtos.push(WebGL2RenderingContext.prototype)
+                        }
+                        for (const glProto of webglProtos) {
+                            const originalGetParameter = glProto.getParameter
+                            glProto.getParameter = patchNativeSource(
+                                function (this: WebGLRenderingContext, pname: number) {
+                                    if (pname === 0x9245) {
+                                        return maskedWebglVendor
+                                    }
+                                    if (pname === 0x9246) {
+                                        return maskedWebglRenderer
+                                    }
+                                    return originalGetParameter.call(this, pname)
+                                },
+                                'function getParameter() { [native code] }',
+                            )
+                        }
+                    } catch {
+                        // Ignore WebGL masking failures.
+                    }
                 }
                 const createNamedArray = (items: Array<Record<string, unknown>>, proto: object, namedKey: string) => {
                     const arrayLike = [] as Array<Record<string, unknown>>
@@ -617,6 +666,17 @@ async function applyBrowserProfile(
                     }
                     defineGetter(window, 'chrome', undefined)
                 }
+                // Puppeteer injects a window.cdc_* marker for DevTools protocol; detection scripts
+                // probe for it as a hard automation signal. Delete it before anything can read it.
+                try {
+                    for (const key of Object.getOwnPropertyNames(window)) {
+                        if (key.startsWith('cdc_')) {
+                            delete (window as Record<string, unknown>)[key]
+                        }
+                    }
+                } catch {
+                    // Ignore cleanup failures.
+                }
                 if (isMobile) {
                     defineGetter(navigator, 'standalone', false)
                     defineGetter(window, 'orientation', 0)
@@ -646,6 +706,7 @@ async function applyBrowserProfile(
             pdfViewerEnabled: profile.pdfViewerEnabled,
             userAgentData: profile.userAgentData,
             locale: profile.locale || 'ja-JP',
+            webgl: profile.webgl || null,
         },
     )
 }

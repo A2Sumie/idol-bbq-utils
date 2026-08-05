@@ -2648,41 +2648,42 @@ class ForwarderPools extends BaseCompatibleModel {
                                 const shortVideoTextDedupEligible =
                                     article.platform === Platform.Instagram || article.platform === Platform.TikTok
                                 if (shortVideoTextDedupEligible) {
-                                    const textScope = this.buildShortVideoTextFingerprintScope(target)
                                     const textFingerprint = this.buildArticleShortVideoTextFingerprint(article)
-                                    const textClaim = await DB.ContentFingerprint.claim({
-                                        scope: textScope,
-                                        target_id: target.id,
-                                        fingerprint: textFingerprint,
-                                        article_key: articleKey(article),
-                                        platform: target.NAME,
-                                        article_id: Number.isFinite(Number(article.id))
-                                            ? Number(article.id)
-                                            : null,
-                                        windowSeconds: fingerprintConfig.windowSeconds,
-                                    }).catch((error) => {
-                                        log?.warn(
-                                            `Short video text fingerprint claim failed for ${article.a_id} to ${target.id}; proceeding with send: ${
-                                                error instanceof Error ? error.message : String(error)
-                                            }`,
-                                        )
-                                        return null
-                                    })
-                                    if (textClaim && !textClaim.allowed) {
-                                        log?.debug(
-                                            `Skipping article ${article.a_id} for ${target.id}: short video text fingerprint duplicate`,
-                                        )
-                                        await DB.OutboundMessage.markSkipped(
-                                            outboundIdempotencyKey,
-                                            'content_fingerprint_duplicate',
-                                            {
-                                                scope: textScope,
-                                                existing_article_key: textClaim.record.article_key || null,
-                                                existing_article_id: textClaim.record.article_id || null,
-                                                window_seconds: fingerprintConfig.windowSeconds,
-                                            },
-                                        ).catch(() => undefined)
-                                        await DB.ForwardBy.save(article.id, platform, target.id, 'article').catch(
+                                    if (textFingerprint) {
+                                        const textScope = this.buildShortVideoTextFingerprintScope(target)
+                                        const textClaim = await DB.ContentFingerprint.claim({
+                                            scope: textScope,
+                                            target_id: target.id,
+                                            fingerprint: textFingerprint,
+                                            article_key: articleKey(article),
+                                            platform: target.NAME,
+                                            article_id: Number.isFinite(Number(article.id))
+                                                ? Number(article.id)
+                                                : null,
+                                            windowSeconds: fingerprintConfig.windowSeconds,
+                                        }).catch((error) => {
+                                            log?.warn(
+                                                `Short video text fingerprint claim failed for ${article.a_id} to ${target.id}; proceeding with send: ${
+                                                    error instanceof Error ? error.message : String(error)
+                                                }`,
+                                            )
+                                            return null
+                                        })
+                                        if (textClaim && !textClaim.allowed) {
+                                            log?.debug(
+                                                `Skipping article ${article.a_id} for ${target.id}: short video text fingerprint duplicate`,
+                                            )
+                                            await DB.OutboundMessage.markSkipped(
+                                                outboundIdempotencyKey,
+                                                'content_fingerprint_duplicate',
+                                                {
+                                                    scope: textScope,
+                                                    existing_article_key: textClaim.record.article_key || null,
+                                                    existing_article_id: textClaim.record.article_id || null,
+                                                    window_seconds: fingerprintConfig.windowSeconds,
+                                                },
+                                            ).catch(() => undefined)
+                                            await DB.ForwardBy.save(article.id, platform, target.id, 'article').catch(
                                             () => undefined,
                                         )
                                         await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(
@@ -2699,6 +2700,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                             fingerprint: textFingerprint,
                                         })
                                     }
+                                        }
                                 }
                                 const fingerprintScope = this.buildContentFingerprintScope(target)
                                 const fingerprint = this.buildArticleContentFingerprint(text, [
@@ -3987,6 +3989,11 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private buildArticleShortVideoTextFingerprint(article: ArticleWithId) {
         const textFingerprint = buildShortVideoTextFingerprint(article)
+        // Stories and media-only posts have no text: an empty keyset would hash identically for
+        // every such article and suppress unrelated media posts on the same target. Skip them.
+        if (textFingerprint.keys.length === 0) {
+            return null
+        }
         return hashValue({ textKeys: textFingerprint.keys })
     }
 
@@ -4219,52 +4226,54 @@ class ForwarderPools extends BaseCompatibleModel {
                 const fingerprintConfig = resolveContentFingerprintConfig(target.getEffectiveConfig(runtime_config))
                 if (fingerprintConfig) {
                     if (article.platform === Platform.Instagram || article.platform === Platform.TikTok) {
-                        const textScope = this.buildShortVideoTextFingerprintScope(target)
                         const textFingerprint = this.buildArticleShortVideoTextFingerprint(article)
-                        const textClaim = await DB.ContentFingerprint.claim({
-                            scope: textScope,
-                            target_id: target.id,
-                            fingerprint: textFingerprint,
-                            article_key: currentArticleKey,
-                            platform: target.NAME,
-                            article_id: Number.isFinite(Number(article.id)) ? Number(article.id) : null,
-                            windowSeconds: fingerprintConfig.windowSeconds,
-                        }).catch((error) => {
-                            log?.warn(
-                                `Short video text fingerprint claim failed for realtime media ${article.a_id} to ${target.id}; proceeding with send: ${
-                                    error instanceof Error ? error.message : String(error)
-                                }`,
-                            )
-                            return null
-                        })
-                        if (textClaim && !textClaim.allowed) {
-                            log?.debug(
-                                `Skipping summary realtime media for ${article.a_id} to ${target.id}: short video text fingerprint duplicate`,
-                            )
-                            await DB.OutboundMessage.markSkipped(
-                                outboundIdempotencyKey,
-                                'content_fingerprint_duplicate',
-                                {
-                                    scope: textScope,
-                                    existing_article_key: textClaim.record.article_key || null,
-                                    existing_article_id: textClaim.record.article_id || null,
-                                    window_seconds: fingerprintConfig.windowSeconds,
-                                },
-                            ).catch(() => undefined)
-                            await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
-                            return {
-                                hadMedia: true,
-                                handled: true,
-                                visibleMediaSent: false,
-                                skippedDuplicate: true,
-                            }
-                        }
-                        if (textClaim && textClaim.allowed) {
-                            contentFingerprintForRelease.push({
+                        if (textFingerprint) {
+                            const textScope = this.buildShortVideoTextFingerprintScope(target)
+                            const textClaim = await DB.ContentFingerprint.claim({
                                 scope: textScope,
-                                targetId: target.id,
+                                target_id: target.id,
                                 fingerprint: textFingerprint,
+                                article_key: currentArticleKey,
+                                platform: target.NAME,
+                                article_id: Number.isFinite(Number(article.id)) ? Number(article.id) : null,
+                                windowSeconds: fingerprintConfig.windowSeconds,
+                            }).catch((error) => {
+                                log?.warn(
+                                    `Short video text fingerprint claim failed for realtime media ${article.a_id} to ${target.id}; proceeding with send: ${
+                                        error instanceof Error ? error.message : String(error)
+                                    }`,
+                                )
+                                return null
                             })
+                            if (textClaim && !textClaim.allowed) {
+                                log?.debug(
+                                    `Skipping summary realtime media for ${article.a_id} to ${target.id}: short video text fingerprint duplicate`,
+                                )
+                                await DB.OutboundMessage.markSkipped(
+                                    outboundIdempotencyKey,
+                                    'content_fingerprint_duplicate',
+                                    {
+                                        scope: textScope,
+                                        existing_article_key: textClaim.record.article_key || null,
+                                        existing_article_id: textClaim.record.article_id || null,
+                                        window_seconds: fingerprintConfig.windowSeconds,
+                                    },
+                                ).catch(() => undefined)
+                                await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
+                                return {
+                                    hadMedia: true,
+                                    handled: true,
+                                    visibleMediaSent: false,
+                                    skippedDuplicate: true,
+                                }
+                            }
+                            if (textClaim && textClaim.allowed) {
+                                contentFingerprintForRelease.push({
+                                    scope: textScope,
+                                    targetId: target.id,
+                                    fingerprint: textFingerprint,
+                                })
+                            }
                         }
                     }
                     const fingerprintScope = this.buildContentFingerprintScope(target)

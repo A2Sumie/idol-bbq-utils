@@ -1880,18 +1880,22 @@ class SpiderPools extends BaseCompatibleModel {
                 await page.mouse.move(targetX, targetY, { steps: 12 }).catch(() => null)
             }
 
+            // Real user scrolling emits wheel events; window.scrollBy() does not and is a detectable
+            // automation marker. Scroll in a few jittered wheel steps, pause, then scroll back a bit.
             const scrollAmount = 160 + Math.floor(Math.random() * 520)
-            await page
-                .evaluate((amount) => {
-                    window.scrollBy({ top: amount, behavior: 'instant' })
-                }, scrollAmount)
-                .catch(() => null)
+            const downSteps = 2 + Math.floor(Math.random() * 2)
+            for (let step = 0; step < downSteps; step += 1) {
+                const stepDelta = Math.floor(scrollAmount / downSteps) * (0.85 + Math.random() * 0.3)
+                await page.mouse.wheel({ deltaY: Math.floor(stepDelta) }).catch(() => null)
+                await delay(90 + Math.floor(Math.random() * 260))
+            }
             await delay(250 + Math.floor(Math.random() * 700))
-            await page
-                .evaluate((amount) => {
-                    window.scrollBy({ top: -Math.floor(amount * 0.4), behavior: 'instant' })
-                }, scrollAmount)
-                .catch(() => null)
+            const upSteps = 1 + Math.floor(Math.random() * 2)
+            for (let step = 0; step < upSteps; step += 1) {
+                const stepDelta = Math.floor((scrollAmount * 0.4) / upSteps) * (0.85 + Math.random() * 0.3)
+                await page.mouse.wheel({ deltaY: -Math.floor(stepDelta) }).catch(() => null)
+                await delay(80 + Math.floor(Math.random() * 220))
+            }
         } catch (error) {
             log?.warn(`Browser session warmup failed for ${url.href}: ${error}`)
         }
