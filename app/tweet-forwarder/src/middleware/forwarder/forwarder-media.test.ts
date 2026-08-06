@@ -1385,6 +1385,58 @@ test('BiliForwarder serializes photo uploads inside one send', async () => {
     expect(sentPicCount).toBe(3)
 })
 
+test('BiliForwarder marks split photo chunks with continue indicators', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-chunk-marker-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).photoUploadGapMs = 0
+    ;(forwarder as any).dynamicDetailValidationRetries = 0
+
+    const sentTexts: string[] = []
+    ;(forwarder as any).uploadPhoto = async () => ({
+        image_url: 'https://i0.hdslb.com/bfs/test/chunk.jpg',
+        image_width: 100,
+        image_height: 100,
+        img_size: 10,
+    })
+    ;(forwarder as any).sendTextWithPhotos = async (text: string, pics: any[]) => {
+        sentTexts.push(text)
+        return { data: { code: 0, message: 'ok', data: { dyn_id_str: `chunk-${sentTexts.length}` } } }
+    }
+    ;(forwarder as any).fetchDynamicDetail = async () => ({
+        data: {
+            code: 0,
+            data: {
+                item: {
+                    modules: {
+                        module_dynamic: {
+                            major: {
+                                type: 'MAJOR_TYPE_DRAW',
+                                draw: { items: Array.from({ length: 10 }, () => ({ src: 'a' })) },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    })
+    ;(forwarder as any).fetchPublicDynamicDetail = async () => ({ data: { code: 0, message: 'OK' } })
+
+    const media = Array.from({ length: 10 }, (_, i) => ({ media_type: 'photo', path: `/tmp/chunk-${i}.jpg` }))
+    await (forwarder as any).sendDynamicContent(['博客正文'], { media })
+
+    expect(sentTexts).toHaveLength(2)
+    expect(sentTexts[0]).toContain('博客正文')
+    expect(sentTexts[0]).toContain('（图片未完，见下条）')
+    expect(sentTexts[1]).toContain('（接上条）')
+    expect(sentTexts[1]).not.toContain('（图片未完，见下条）')
+})
+
 test('BiliForwarder serializes photo uploads across forwarders with the same account', async () => {
     BiliForwarder.resetUploadQueuesForTests()
     const first = new BiliForwarder({ bili_jct: 'shared-csrf', sessdata: 'shared-sess' } as any, 'bili-upload-global-a')

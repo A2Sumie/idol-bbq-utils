@@ -834,7 +834,25 @@ class BiliForwarder extends Forwarder {
 
             for (let i = 0; i < n; i++) {
                 const msgPics = picChunks[i] || [] // Type: BiliImageUploaded[]
-                const text = textChunks[i] || (msgPics.length > 0 ? ' ' : '')
+                let text = textChunks[i] || (msgPics.length > 0 ? ' ' : '')
+
+                // When photos are split across multiple dynamics, mark continuation so viewers
+                // know more pictures follow (non-last chunk) or that this continues an earlier
+                // chunk (non-first chunk). The first photo chunk carries the article text; later
+                // photo chunks get the marker attached to their own text line.
+                if (picChunks.length > 1 && msgPics.length > 0) {
+                    const isFirstPhotoChunk = i === 0
+                    const isLastPhotoChunk = i === picChunks.length - 1
+                    const photoChunkText = text.trim() ? text : ''
+                    if (isFirstPhotoChunk && !isLastPhotoChunk) {
+                        text = photoChunkText ? `${photoChunkText}\n（图片未完，见下条）` : '（图片未完，见下条）'
+                    } else if (!isFirstPhotoChunk && !isLastPhotoChunk) {
+                        const prefix = photoChunkText ? `（接上条）\n${photoChunkText}` : '（接上条）'
+                        text = `${prefix}\n（图片未完，见下条）`
+                    } else if (!isFirstPhotoChunk && isLastPhotoChunk) {
+                        text = photoChunkText ? `（接上条）\n${photoChunkText}` : '（接上条）'
+                    }
+                }
 
                 _log?.debug(`Sending chunk ${i + 1}/${n}: text length ${text.length}, pics count ${msgPics.length}`)
 
