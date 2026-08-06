@@ -5019,6 +5019,131 @@ test('single-item summary-card windows fall back to compact native when uncovere
     expect((pools as any).summaryCardQueues.has(queueKey)).toBeFalse()
 })
 
+test('single-item summary-card windows attach the translated companion card instead of inline translation text', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 8,
+                interval_seconds: 1800,
+                include_original_media: false,
+                send_first_immediately: false,
+                send_first_native: true,
+                translated_card: {
+                    enabled: true,
+                    badge_label: '译文',
+                    processor_id: 'test-processor',
+                },
+            },
+        } as any,
+        'target-summary-card-single-native-companion',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).prepareSummaryCardTranslations = async () => true
+    ;(pools as any).renderService = {
+        process: async (article: any, config: any) => {
+            const isCompanion = String(config?.taskId || '').includes('translated-card')
+            return {
+                text: article.content || '',
+                textCollapseMode: 'article',
+                cardMediaFiles: isCompanion
+                    ? [
+                          {
+                              media_type: 'photo',
+                              path: '/tmp/companion-card.png',
+                              sourceArticleId: article.a_id,
+                          },
+                      ]
+                    : [],
+                originalMediaFiles: isCompanion
+                    ? []
+                    : [
+                          {
+                              media_type: 'photo',
+                              path: '/tmp/single-native-companion.jpg',
+                              sourceArticleId: article.a_id,
+                          },
+                      ],
+                mediaFiles: [
+                    {
+                        media_type: 'photo',
+                        path: isCompanion ? '/tmp/companion-card.png' : '/tmp/single-native-companion.jpg',
+                        sourceArticleId: article.a_id,
+                    },
+                ],
+            }
+        },
+        renderText: (article: any) => `${article.u_id}: ${article.content || ''}`,
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: () => undefined,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'summary-single-native-companion',
+        [
+            {
+                id: 723,
+                a_id: 'summary-single-native-companion',
+                platform: Platform.X,
+                username: 'single native',
+                u_id: 'single_native',
+                content: 'single companion text',
+                translation: '单条翻译文本',
+                translated_by: 'test-processor',
+                url: 'https://x.com/single_native/status/723',
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: true,
+                media: [{ type: 'photo', url: 'https://example.com/single-native-companion.jpg' }],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    const queueKey = Array.from((pools as any).summaryCardQueues.keys())[0]
+    await (pools as any).flushSummaryCardQueue(queueKey, 'interval')
+
+    expect(target.sent).toHaveLength(1)
+    expect(target.sent[0]?.texts[0]).toContain('single companion text')
+    expect(target.sent[0]?.texts[0]).not.toContain('单条翻译文本')
+    const mediaPaths = (target.sent[0]?.props?.media || []).map((media: any) => media.path)
+    expect(mediaPaths).toContain('/tmp/companion-card.png')
+    expect(mediaPaths).toContain('/tmp/single-native-companion.jpg')
+})
+
 test('single-item summary-card windows suppress when realtime media already carried text context', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

@@ -99,6 +99,8 @@ type SummaryCardQueueItem = {
     digestTags: Array<string>
     mediaAlreadyVisible: boolean
     visibleCarriers: Array<SummaryCardVisibleCarrier>
+    /** Render type of the forwarding path that queued the item, used to render the translated companion card. */
+    formatterRenderType?: string
 }
 type SummaryCardVisibleCarrier = {
     kind: 'native' | 'realtime_media' | 'manual' | 'summary_single_native'
@@ -1072,6 +1074,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     digestTags: Array.isArray(payload.digestTags) ? payload.digestTags : [],
                     mediaAlreadyVisible: payload.mediaAlreadyVisible === true,
                     visibleCarriers: this.normalizeSummaryCardVisibleCarriers(payload.visibleCarriers),
+                    formatterRenderType: payload.formatterRenderType ? String(payload.formatterRenderType) : undefined,
                 })
             }
 
@@ -2285,6 +2288,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 target,
                                 runtime_config,
                                 routeKeyForTarget,
+                                cfg_forwarder?.render_type,
                             )
                             if (queuedForSummary) {
                                 hadNonErrorOutcome = true
@@ -3415,6 +3419,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 digestTags: item.digestTags,
                 mediaAlreadyVisible: item.mediaAlreadyVisible,
                 visibleCarriers: item.visibleCarriers,
+                formatterRenderType: item.formatterRenderType || null,
                 runtime_config: queue.runtime_config || null,
                 summaryConfig: queue.config,
             },
@@ -3428,6 +3433,7 @@ class ForwarderPools extends BaseCompatibleModel {
         target: BaseForwarder,
         runtime_config?: ForwardTargetPlatformCommonConfig,
         routeKeyValue?: string,
+        formatterRenderType?: string,
     ) {
         void routeKeyValue
         const effectiveConfig = target.getEffectiveConfig(runtime_config)
@@ -3470,6 +3476,7 @@ class ForwarderPools extends BaseCompatibleModel {
             digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
             mediaAlreadyVisible: false,
             visibleCarriers: [],
+            formatterRenderType: formatterRenderType || undefined,
         }
         if (existingQueue && item.digestTags.length > 0) {
             this.applySummaryCardActiveDigestTags(existingQueue, item.digestTags)
@@ -4705,8 +4712,32 @@ class ForwarderPools extends BaseCompatibleModel {
     ) {
         const hasTranslatedContent =
             queue.config.translatedCard && (await this.prepareSummaryCardTranslations(queue, [item]))
+        let companionMediaFiles: Array<RenderedMediaFile> = []
+        let companionCardMediaFiles: Array<RenderedMediaFile> = []
+        if (hasTranslatedContent && item.formatterRenderType) {
+            const companion = await this.buildTranslatedNativeCompanionCard(
+                item.article,
+                {
+                    cardMediaFiles: item.cardSourceMediaFiles,
+                    originalMediaFiles: item.cardSourceMediaFiles,
+                },
+                { render_type: item.formatterRenderType } as Forwarder['cfg_forwarder'],
+                queue.target,
+                queue.runtime_config,
+                `summary-single-native-${queue.target.id}`,
+                item.cardSourceMediaFiles,
+            )
+            if (companion) {
+                companionMediaFiles = companion.mediaFiles
+                companionCardMediaFiles = companion.cardMediaFiles
+                this.log?.info(
+                    `Prepared native translated companion for ${queue.target.id} ${item.article.a_id}: ` +
+                        `cards=${companion.cardMediaFiles.length} media=${companion.mediaFiles.length}`,
+                )
+            }
+        }
         let text = this.buildSummaryCardSingleNativeText(item, {
-            includeTranslations: Boolean(hasTranslatedContent),
+            includeTranslations: Boolean(hasTranslatedContent) && companionCardMediaFiles.length === 0,
         })
         const sourceMediaFiles = item.mediaAlreadyVisible ? [] : [...item.cardSourceMediaFiles]
         let mediaFiles = sourceMediaFiles
@@ -4723,6 +4754,9 @@ class ForwarderPools extends BaseCompatibleModel {
             if (visibility.policy && visibility.hiddenHashes.size > 0) {
                 text = uniquePreserveOrder([text, this.buildMediaVisibilityTextNotice(visibility.policy)]).join('\n\n')
             }
+        }
+        if (companionCardMediaFiles.length > 0) {
+            mediaFiles = [...mediaFiles, ...companionCardMediaFiles]
         }
 
         const outboundData = this.buildSummarySingleNativeOutboundData(queue, item, reason, text, mediaFiles, {
@@ -4905,6 +4939,10 @@ class ForwarderPools extends BaseCompatibleModel {
                 }).catch(() => undefined)
             }
             return false
+        } finally {
+            if (companionMediaFiles.length > 0) {
+                this.renderService.cleanup(companionMediaFiles)
+            }
         }
     }
 
