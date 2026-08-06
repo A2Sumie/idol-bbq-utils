@@ -467,19 +467,18 @@ test('BiliForwarder uses blank fallback text for photo dynamics without body tex
                         module_dynamic: {
                             major: {
                                 type: 'MAJOR_TYPE_DRAW',
-                draw: {
-                    items: [{ src: 'https://i0.hdslb.com/bfs/test/blank-text.jpg' }],
+                                draw: {
+                                    items: [{ src: 'https://i0.hdslb.com/bfs/test/blank-text.jpg' }],
+                                },
+                            },
+                        },
+                    },
                 },
             },
         },
-    },
-})
+    })
     ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
         data: { code: 0, message: 'OK' },
-    })
-
-    await (forwarder as any).sendDynamicContent([], {
-        media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
     })
 
     await (forwarder as any).sendDynamicContent([], {
