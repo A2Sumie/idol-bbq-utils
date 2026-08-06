@@ -467,19 +467,18 @@ test('BiliForwarder uses blank fallback text for photo dynamics without body tex
                         module_dynamic: {
                             major: {
                                 type: 'MAJOR_TYPE_DRAW',
-                draw: {
-                    items: [{ src: 'https://i0.hdslb.com/bfs/test/blank-text.jpg' }],
+                                draw: {
+                                    items: [{ src: 'https://i0.hdslb.com/bfs/test/blank-text.jpg' }],
+                                },
+                            },
+                        },
+                    },
                 },
             },
         },
-    },
-})
+    })
     ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
         data: { code: 0, message: 'OK' },
-    })
-
-    await (forwarder as any).sendDynamicContent([], {
-        media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
     })
 
     await (forwarder as any).sendDynamicContent([], {
@@ -749,6 +748,41 @@ test('BiliForwarder treats a created photo dynamic that is hidden from the publi
     expect(caught).toBeInstanceOf(PartialForwarderSendError)
     expect((caught as Error).message).toContain('post-validation failed')
     expect(((caught as PartialForwarderSendError).originalError as Error).message).toContain('not publicly visible')
+})
+
+test('BiliForwarder strips external URLs from text so Bilibili does not hide the dynamic', () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-strip-url-test',
+    )
+
+    const [normalized] = (forwarder as any).normalizeTextsForBilibili([
+        '【22/7 博客｜南伊織】じっくり\n\n22/7官网 博客 22:32（08_05）\nhttps://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/452685?ima=3214&cd=official_blog',
+    ])
+
+    expect(normalized).not.toContain('nanabunnonijyuuni-mobile.com')
+    expect(normalized).not.toContain('https://')
+    expect(normalized).toContain('【22/7 博客｜南伊織】じっくり')
+})
+
+test('BiliForwarder keeps Bilibili-owned URLs in the text', () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-keep-bili-url-test',
+    )
+
+    const [normalized] = (forwarder as any).normalizeTextsForBilibili([
+        '看视频 https://www.bilibili.com/video/BV1xx411c7mD b23.tv/abc123',
+    ])
+
+    expect(normalized).toContain('https://www.bilibili.com/video/BV1xx411c7mD')
+    expect(normalized).toContain('b23.tv/abc123')
 })
 
 test('QQForwarder keeps long text as a single payload instead of chunking', async () => {
