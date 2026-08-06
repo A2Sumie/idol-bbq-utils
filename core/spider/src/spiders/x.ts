@@ -1948,6 +1948,39 @@ namespace XApiJsonParser {
         return result?.legacy || result?.tweet?.legacy
     }
 
+    /**
+     * X Premium long-form tweets (>280 chars) are truncated in legacy.full_text and the
+     * timeline shows a "show more" prompt. The full text lives in the note_tweet payload,
+     * present for both Tweet and TweetWithVisibilityResults shapes. The note payload also
+     * carries its own entity_set, since legacy.entities are missing or truncated there.
+     */
+    function getTweetResultNoteTweet(result: any) {
+        const noteTweet = result?.note_tweet || result?.tweet?.note_tweet
+        return noteTweet?.note_tweet_results?.result || null
+    }
+
+    function unescapeHtmlText(text: string) {
+        return text
+            .replaceAll('&amp;', '&')
+            .replaceAll('&lt;', '<')
+            .replaceAll('&gt;', '>')
+            .replaceAll('&quot;', '"')
+    }
+
+    /**
+     * Only treat a tweet as long-form when the note payload actually carries text beyond
+     * the truncated legacy.full_text. Note tweets never appear for regular accounts, so
+     * non-premium posts keep the legacy text untouched. legacy.full_text is HTML-escaped
+     * (e.g. &amp;) while the note text is raw, so compare normalized forms.
+     */
+    function isTweetNoteTruncated(result: any, noteText: string) {
+        const fullText = getTweetResultLegacy(result)?.full_text || ''
+        if (!fullText || !noteText) {
+            return false
+        }
+        return unescapeHtmlText(noteText) !== unescapeHtmlText(fullText)
+    }
+
     function getTweetResultId(result: any) {
         return getTweetResultLegacy(result)?.id_str || null
     }
@@ -2048,7 +2081,10 @@ namespace XApiJsonParser {
         const quotedResult = result.quoted_status_result?.result
         const retweetedResult = result.retweeted_status_result?.result || legacy?.retweeted_status_result?.result
         const replyToId = legacy?.in_reply_to_status_id_str || null
-        let content = legacy?.full_text
+        const noteTweet = getTweetResultNoteTweet(result)
+        const noteText = noteTweet?.text || null
+        const useNoteText = noteText ? isTweetNoteTruncated(result, noteText) : false
+        let content = useNoteText ? noteText : legacy?.full_text
         for (const { url } of legacy?.entities?.media || []) {
             content = content.replace(url, '')
         }
@@ -2060,7 +2096,7 @@ namespace XApiJsonParser {
             u_id: userLegacy?.screen_name,
             username: userLegacy?.name,
             created_at: Math.floor(parseTwitterDate(legacy?.created_at) / 1000),
-            content: legacy?.full_text,
+            content: useNoteText ? noteText : legacy?.full_text,
             url: userLegacy?.screen_name ? `https://x.com/${userLegacy.screen_name}/status/${legacy?.id_str}` : '',
             type: quotedResult
                 ? ArticleTypeEnum.QUOTED
@@ -2087,7 +2123,7 @@ namespace XApiJsonParser {
             tweet.has_media = false
             tweet.extra = null
         }
-        let urls = legacy.entities?.urls || []
+        let urls = [...(useNoteText ? noteTweet?.entity_set?.urls || [] : []), ...(legacy.entities?.urls || [])]
         for (const u of urls) {
             if (u.expanded_url && !u.expanded_url.startsWith('https://x.com/')) {
                 tweet.content = tweet.content?.replace(u.url, u.expanded_url) ?? null
@@ -2095,8 +2131,9 @@ namespace XApiJsonParser {
                 tweet.content = tweet.content?.replace(u.url, '') ?? null
             }
         }
+        const note_media_urls = useNoteText ? noteTweet?.entity_set?.media?.map((m: { url: string }) => m.url) || [] : []
         let media_urls = legacy.entities?.media?.map((m: { url: string }) => m.url) || []
-        for (const url of media_urls) {
+        for (const url of [...note_media_urls, ...media_urls]) {
             tweet.content = tweet.content?.replace(url, '') ?? null
         }
         return tweet as GenericArticle<Platform.X>

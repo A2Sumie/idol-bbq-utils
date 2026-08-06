@@ -420,6 +420,186 @@ test('X old API parser tolerates missing entities', async () => {
     })
 })
 
+test('X parser expands premium long tweets from the note_tweet payload', async () => {
+    const truncated = '【お知らせ】\n桧山依子ですが、体調不良のため下記のスケジュールを欠席とさせていただきます。'
+    const full =
+        '【お知らせ】\n桧山依子ですが、体調不良のため下記のスケジュールを欠席とさせていただきます。\n\n・8/7(金)\n河瀬詩の"うたっけ！" #31\n\nなお、本人の体調は快方に向かっておりますので、8/10(月)以降順次、活動の再開を予定しております。\n\nhttps://t.co/nwSlMQy3jG'
+    const result = buildXTimelineTweetResult('701', '227_staff', truncated)
+    ;(result as any).note_tweet = {
+        note_tweet_results: {
+            result: {
+                id: 'Tm90ZVR3ZWV0OjIwODUzMDUwNTA5ODE5NjU4MjU=',
+                text: full,
+                entity_set: {
+                    hashtags: [],
+                    symbols: [],
+                    urls: [
+                        {
+                            display_url: 'example.com/news/…',
+                            expanded_url: 'https://example.com/news/detail/11404?ima=0018',
+                            indices: [220, 243],
+                            url: 'https://t.co/nwSlMQy3jG',
+                        },
+                    ],
+                    user_mentions: [],
+                },
+            },
+        },
+    }
+    const json = {
+        data: {
+            user: {
+                result: {
+                    timeline_v2: {
+                        timeline: {
+                            instructions: [
+                                {
+                                    type: 'TimelineAddEntries',
+                                    entries: [
+                                        {
+                                            entryId: 'tweet-701',
+                                            content: {
+                                                itemContent: {
+                                                    tweet_results: {
+                                                        result,
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    const tweets = X.XApiJsonParser.tweetsArticleParser(json)
+
+    expect(tweets).toHaveLength(1)
+    expect(tweets[0]?.content).toBe(
+        full.replace('https://t.co/nwSlMQy3jG', 'https://example.com/news/detail/11404?ima=0018'),
+    )
+})
+
+test('X parser keeps legacy text when a note payload carries no overflow', async () => {
+    const text = '普通の長さの投稿。note_tweet が同内容で付いていても、超出部分がなければ legacy.full_text を使う。'
+    const result = buildXTimelineTweetResult('704', 'premium_member', text)
+    ;(result as any).note_tweet = {
+        note_tweet_results: {
+            result: {
+                id: 'note-704',
+                text,
+                entity_set: {
+                    hashtags: [],
+                    symbols: [],
+                    urls: [
+                        {
+                            display_url: 'example.com',
+                            expanded_url: 'https://example.com/',
+                            indices: [0, 23],
+                            url: 'https://t.co/abc123XYZ',
+                        },
+                    ],
+                    user_mentions: [],
+                },
+            },
+        },
+    }
+    const json = {
+        data: {
+            user: {
+                result: {
+                    timeline_v2: {
+                        timeline: {
+                            instructions: [
+                                {
+                                    type: 'TimelineAddEntries',
+                                    entries: [
+                                        {
+                                            entryId: 'tweet-704',
+                                            content: {
+                                                itemContent: {
+                                                    tweet_results: {
+                                                        result,
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                },
+            },
+        },
+    }
+
+    const tweets = X.XApiJsonParser.tweetsArticleParser(json)
+
+    expect(tweets).toHaveLength(1)
+    expect(tweets[0]?.content).toBe(text)
+})
+
+test('X parser expands premium long tweets under TweetWithVisibilityResults', async () => {
+    const truncated = '長い投稿の冒頭部分だけがlegacy.full_textに入っている'
+    const full =
+        '長い投稿の冒頭部分だけがlegacy.full_textに入っている。そしてnote_tweetに全文が含まれている。これはX Premiumの投稿で、タイムライン上では"さらに表示"のリンクが付く。'
+    const quotedResult = buildXTimelineTweetResult('703', 'premium_member', truncated)
+    ;(quotedResult as any).note_tweet = {
+        note_tweet_results: {
+            result: {
+                id: 'note-703',
+                text: full,
+            },
+        },
+    }
+    const result = buildXTimelineTweetResult('702', 'member_account', 'quotes a long post')
+    ;(result as any).__typename = 'Tweet'
+    ;(result as any).quoted_status_result = {
+        result: {
+            __typename: 'TweetWithVisibilityResults',
+            tweet: quotedResult,
+        },
+    }
+    ;(result.legacy as any).is_quote_status = true
+
+    const tweet = X.XApiJsonParser.tweetDetailParser(
+        {
+            data: {
+                threaded_conversation_with_injections_v2: {
+                    instructions: [
+                        {
+                            type: 'TimelineAddEntries',
+                            entries: [
+                                {
+                                    entryId: 'tweet-702',
+                                    content: {
+                                        itemContent: {
+                                            tweet_results: {
+                                                result,
+                                            },
+                                        },
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+        },
+        '702',
+    )
+
+    expect(tweet?.content).toBe('quotes a long post')
+    expect(tweet?.type).toBe(X.ArticleTypeEnum.QUOTED)
+    expect((tweet?.ref as any)?.a_id).toBe('703')
+    expect((tweet?.ref as any)?.content).toBe(full)
+})
+
 test('X unified list hydration keeps member slots when active users fill the limit', () => {
     const spider = new X.XListSpider()
 
