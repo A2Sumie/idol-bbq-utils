@@ -21,9 +21,10 @@ const SHORT_VIDEO_TEXT_KEY_LIMIT = 6
 const SHORT_VIDEO_TEXT_MIN_COMPACT_LENGTH = 8
 const SHORT_VIDEO_SHARED_PHRASE_MIN_LENGTH = 8
 const SHORT_VIDEO_INSTAGRAM_TIKTOK_FALLBACK_KEY = 'p:instagram-tiktok'
-// Shared namespace for Instagram <-> TikTok video dedup. Same fan video posted on both
-// platforms is stored under different per-account groups (e.g. nijigram vs 227-official),
-// so the fingerprint must also be visible in a platform-pair namespace.
+// Shared namespaces for cross-platform short-video dedup (Instagram / TikTok / YouTube Shorts).
+// The same fan video posted on both platforms is stored under different per-account groups
+// (e.g. nijigram vs 227-official), so the fingerprint must also be visible in a platform-pair
+// namespace. Names kept for backward compatibility with existing rows.
 const CROSS_PLATFORM_VIDEO_FINGERPRINT_STORAGE = 'cross-video-fingerprint:ig-tt'
 const CROSS_PLATFORM_SHORT_VIDEO_STORAGE = 'cross-short-video:ig-tt'
 const VIDEO_FINGERPRINT_SAMPLE_RATIOS = [0.12, 0.3, 0.5, 0.7, 0.88]
@@ -228,15 +229,24 @@ function isSupportedShortVideoPlatform(article: Pick<Article, 'platform' | 'type
     return false
 }
 
-function isInstagramTikTokShortVideoPlatform(platform: Platform) {
-    return platform === Platform.Instagram || platform === Platform.TikTok
+const CROSS_PLATFORM_SHORT_VIDEO_PLATFORMS = new Set([Platform.Instagram, Platform.TikTok, Platform.YouTube])
+
+/**
+ * Platforms that cross-post the same short video and therefore share a dedup namespace:
+ * Instagram, TikTok, and YouTube Shorts.
+ */
+function isCrossPlatformShortVideoPlatform(article: Pick<Article, 'platform' | 'type'>) {
+    if (article.platform === Platform.Instagram || article.platform === Platform.TikTok) {
+        return true
+    }
+    return article.platform === Platform.YouTube && article.type === 'shorts'
 }
 
-function isInstagramTikTokShortVideoPair(left: Platform, right: Platform) {
-    return (
-        (left === Platform.Instagram && right === Platform.TikTok) ||
-        (left === Platform.TikTok && right === Platform.Instagram)
-    )
+function isCrossPlatformShortVideoPair(left: Platform, right: Platform) {
+    if (left === right) {
+        return false
+    }
+    return CROSS_PLATFORM_SHORT_VIDEO_PLATFORMS.has(left) && CROSS_PLATFORM_SHORT_VIDEO_PLATFORMS.has(right)
 }
 
 function buildShortVideoTimeBuckets(createdAt: number) {
@@ -493,7 +503,7 @@ function buildShortVideoDedupCandidate(
     }
 
     const text = buildShortVideoTextFingerprint(article)
-    const coarseFallbackKeys = isInstagramTikTokShortVideoPlatform(article.platform)
+    const coarseFallbackKeys = isCrossPlatformShortVideoPlatform(article)
         ? [SHORT_VIDEO_INSTAGRAM_TIKTOK_FALLBACK_KEY]
         : []
     if (text.keys.length === 0 && coarseFallbackKeys.length === 0) {
@@ -518,7 +528,7 @@ function buildShortVideoDedupCandidate(
             coarseFallbackKeys.map((textKey) => buildShortVideoSignature(timeBucket, durationBucket, textKey)),
         ),
     )
-    const isIgTtPair = isInstagramTikTokShortVideoPlatform(article.platform)
+    const isIgTtPair = isCrossPlatformShortVideoPlatform(article)
 
     return {
         storagePlatform: `cross-short-video:${group}`,
@@ -576,7 +586,7 @@ async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupC
             const isCoarseFallbackSignature = coarseFallbackSignatures.has(signature)
             if (
                 isCoarseFallbackSignature &&
-                !isInstagramTikTokShortVideoPair(candidateMarker.platform, existingMarker.platform)
+                !isCrossPlatformShortVideoPair(candidateMarker.platform, existingMarker.platform)
             ) {
                 continue
             }
@@ -586,6 +596,12 @@ async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupC
                 existingMarker.platform,
             )
             if (!existingArticle) {
+                continue
+            }
+            if (
+                existingMarker.platform === Platform.YouTube &&
+                String(existingArticle.type || '').toLocaleLowerCase() !== 'shorts'
+            ) {
                 continue
             }
 
@@ -710,7 +726,7 @@ function buildVideoFingerprintCandidate(
     if (bandKeys.length < VIDEO_FINGERPRINT_MIN_BAND_MATCHES) {
         return null
     }
-    const isIgTtPair = isInstagramTikTokShortVideoPlatform(article.platform)
+    const isIgTtPair = isCrossPlatformShortVideoPlatform(article)
 
     return {
         storagePlatform: `${VIDEO_FINGERPRINT_PLATFORM_PREFIX}:${group}`,

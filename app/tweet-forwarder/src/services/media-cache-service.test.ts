@@ -432,6 +432,85 @@ test('video fingerprint cross-platform namespace is skipped for non IG/TT platfo
     expect(store.has('cross-video-fingerprint:ig-tt:exact:40:1234abcd5678ef90:2345bcde6789f0a1:3456cdef7890a1b2:4567def08901b2c3:5678ef019012c3d4')).toBe(false)
 })
 
+test('video fingerprint dedup matches YouTube Shorts against the same IG video', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+
+    const igFrameHashes = [
+        'ff07a0f0780880ff',
+        'a0f0780880ffc9a1',
+        '780880ffc9a160c1',
+        '880ffc9a160c130bf',
+        'ffc9a160c130bfff1',
+    ]
+    const igCandidate: VideoFingerprintCandidate = {
+        storagePlatform: 'cross-video-fingerprint:nijigram',
+        articleMarker: `${Platform.Instagram}:ig-short`,
+        signature: `exact:27:${igFrameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(27, igFrameHashes),
+        duration_seconds: 13.5,
+        group: 'nijigram',
+        crossPlatformStoragePlatform: 'cross-video-fingerprint:ig-tt',
+        crossPlatformBandKeys: buildVideoFingerprintBandKeys(27, igFrameHashes),
+    }
+    await markVideoFingerprintSeen(igCandidate)
+
+    const ytShortsFrameHashes = [
+        'ff07a0f0780880ff',
+        'a0f0780880ff9849',
+        '780880ff9849d8d9',
+        '880ff9849d8d900ff',
+        'ff9849d8d900fff3',
+    ]
+    const ytCandidate: VideoFingerprintCandidate = {
+        storagePlatform: 'cross-video-fingerprint:227-official',
+        articleMarker: `${Platform.YouTube}:yt-short`,
+        signature: `exact:27:${ytShortsFrameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(27, ytShortsFrameHashes),
+        duration_seconds: 13.6,
+        group: '227-official',
+        crossPlatformStoragePlatform: 'cross-video-fingerprint:ig-tt',
+        crossPlatformBandKeys: buildVideoFingerprintBandKeys(27, ytShortsFrameHashes),
+    }
+
+    const duplicate = await checkVideoFingerprintDuplicate(ytCandidate)
+    expect(duplicate?.a_id).toBe(`${Platform.Instagram}:ig-short`)
+})
+
+test('video fingerprint cross-platform namespace is skipped for YouTube long videos', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+
+    const frameHashes = [
+        '1234abcd5678ef90',
+        '2345bcde6789f0a1',
+        '3456cdef7890a1b2',
+        '4567def08901b2c3',
+        '5678ef019012c3d4',
+    ]
+    const ytLongCandidate: VideoFingerprintCandidate = {
+        storagePlatform: 'cross-video-fingerprint:227-official',
+        articleMarker: `${Platform.YouTube}:yt-long`,
+        signature: `exact:40:${frameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(40, frameHashes),
+        duration_seconds: 20.1,
+        group: '227-official',
+    }
+    await markVideoFingerprintSeen(ytLongCandidate)
+
+    expect(store.has('cross-video-fingerprint:ig-tt:exact:40:1234abcd5678ef90:2345bcde6789f0a1:3456cdef7890a1b2:4567def08901b2c3:5678ef019012c3d4')).toBe(false)
+})
+
 test('short-video IG/TT fallback signature is shared across account groups', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
@@ -481,6 +560,58 @@ test('short-video IG/TT fallback signature is shared across account groups', asy
     expect(ttCandidate?.crossPlatformStoragePlatform).toBe('cross-short-video:ig-tt')
 
     const duplicate = await checkShortVideoCrossPlatformDuplicate(ttCandidate!)
+    DB.Article.getSingleArticleByArticleCode = originalGetArticle
+    expect(duplicate?.a_id).toBe('2:ig-fancam')
+})
+
+test('short-video fallback signature dedups YouTube Shorts against an IG video', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+    const originalGetArticle = DB.Article.getSingleArticleByArticleCode
+    DB.Article.getSingleArticleByArticleCode = (async () => ({
+        platform: Platform.Instagram,
+        a_id: 'ig-fancam',
+        u_id: 'nananijigram22_7',
+        username: '22/7(ナナブンノニジュウニ)',
+        created_at: 1780826818,
+        content: '推しカメラ 何でも全力投球！ 南伊織 小田原大合戦 ナナニジ',
+        type: 'post',
+    })) as any
+
+    const igCandidate = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'post',
+            a_id: 'ig-fancam',
+            created_at: 1780827000,
+            u_id: 'nananijigram22_7',
+            username: '22/7(ナナブンノニジュウニ)',
+            content: '推しカメラ 何でも全力投球！ 南伊織 小田原大合戦 ナナニジ',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 13.5 }],
+    )
+    await markShortVideoCrossPlatformSeen(igCandidate!)
+
+    const ytCandidate = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.YouTube,
+            type: 'shorts',
+            a_id: 'yt-fancam',
+            created_at: 1780827010,
+            u_id: '227SMEJ',
+            username: '22/7 OFFICIAL',
+            content: '推しカメラ 何でも全力投球！ 南伊織 小田原大合戦 ナナニジ',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 13.6 }],
+    )
+    expect(ytCandidate?.crossPlatformStoragePlatform).toBe('cross-short-video:ig-tt')
+
+    const duplicate = await checkShortVideoCrossPlatformDuplicate(ytCandidate!)
     DB.Article.getSingleArticleByArticleCode = originalGetArticle
     expect(duplicate?.a_id).toBe('2:ig-fancam')
 })
