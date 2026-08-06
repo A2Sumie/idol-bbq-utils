@@ -5,6 +5,7 @@ import { XListSpider, XStatusSpider, XUserTimeLineSpider } from './x'
 import { TiktokSpider } from './tiktok'
 import { YoutubeSpider } from './youtube'
 import { NanabunnonijyuuniWebsiteSpider } from './website'
+import { LeapProjectsSpider } from './leap'
 
 const XUserTimelinePlugin: SpiderPlugin = {
     id: 'x-timeline',
@@ -68,6 +69,15 @@ const WebsitePlugin: SpiderPlugin = {
     extractBasicInfo: (url) => NanabunnonijyuuniWebsiteSpider.extractBasicInfo(url),
 }
 
+const LeapWebsitePlugin: SpiderPlugin = {
+    id: 'website-leap',
+    platform: Platform.Website,
+    priority: SpiderPriority.HIGH,
+    urlPattern: LeapProjectsSpider._VALID_URL,
+    create: (log) => new LeapProjectsSpider(log).init(),
+    extractBasicInfo: (url) => LeapProjectsSpider.extractBasicInfo(url),
+}
+
 const spiderRegistry = SpiderRegistry.getInstance()
     .register(XStatusPlugin)
     .register(XUserTimelinePlugin)
@@ -76,6 +86,7 @@ const spiderRegistry = SpiderRegistry.getInstance()
     .register(TiktokPlugin)
     .register(YoutubePlugin)
     .register(WebsitePlugin)
+    .register(LeapWebsitePlugin)
 
 namespace Spider {
     export interface SpiderConstructor {
@@ -92,6 +103,7 @@ namespace Spider {
         TiktokSpider,
         YoutubeSpider,
         NanabunnonijyuuniWebsiteSpider,
+        LeapProjectsSpider,
     ]
 
     /** @deprecated Use spiderRegistry.findByUrl() instead */
@@ -117,3 +129,4 @@ export * as Instagram from './instagram'
 export * as Tiktok from './tiktok'
 export * as Youtube from './youtube'
 export * as Website from './website'
+export * as Leap from './leap'
