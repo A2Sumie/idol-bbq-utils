@@ -391,6 +391,9 @@ test('BiliForwarder compresses oversized dynamic images before upload', async ()
                 },
             }
         }
+        ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
+            data: { code: 0, message: 'OK' },
+        })
 
         await (forwarder as any).realSend(['dynamic text'], {
             media: [{ media_type: 'photo', path: sourcePath }],
@@ -464,15 +467,19 @@ test('BiliForwarder uses blank fallback text for photo dynamics without body tex
                         module_dynamic: {
                             major: {
                                 type: 'MAJOR_TYPE_DRAW',
-                                draw: {
-                                    items: [{ src: 'https://i0.hdslb.com/bfs/test/blank-text.jpg' }],
-                                },
-                            },
-                        },
-                    },
+                draw: {
+                    items: [{ src: 'https://i0.hdslb.com/bfs/test/blank-text.jpg' }],
                 },
             },
         },
+    },
+})
+    ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
+        data: { code: 0, message: 'OK' },
+    })
+
+    await (forwarder as any).sendDynamicContent([], {
+        media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
     })
 
     await (forwarder as any).sendDynamicContent([], {
@@ -562,6 +569,9 @@ test('BiliForwarder verifies Bilibili photo dynamic detail after posting', async
             },
         }
     }
+    ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
+        data: { code: 0, message: 'OK' },
+    })
 
     await (forwarder as any).realSend(['dynamic text'], {
         media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
@@ -611,6 +621,9 @@ test('BiliForwarder treats code-zero photo dynamics without visible detail media
             },
         },
     })
+    ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
+        data: { code: 0, message: 'OK' },
+    })
 
     let caught: unknown
     try {
@@ -658,6 +671,9 @@ test('BiliForwarder post-validation partial failure is not retried by the whole-
     ;(forwarder as any).fetchDynamicDetail = async () => ({
         data: { code: 0, data: { item: { modules: { module_dynamic: { major: null } } } } },
     })
+    ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
+        data: { code: 0, message: 'OK' },
+    })
 
     await expect(
         (forwarder as any).sendPrepared(['dynamic text'], {
@@ -669,6 +685,70 @@ test('BiliForwarder post-validation partial failure is not retried by the whole-
     // dynamic, producing a duplicate. The whole-send pRetry must treat partial as terminal.
     expect(uploadCount).toBe(1)
     expect(createCount).toBe(1)
+})
+
+test('BiliForwarder treats a created photo dynamic that is hidden from the public as a partial failure', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            media_check_level: 'strict',
+            require_media: true,
+        } as any,
+        'bili-photo-hidden-public-test',
+    )
+    ;(forwarder as any).minInterval = 0
+    ;(forwarder as any).dynamicDetailValidationRetries = 0
+    ;(forwarder as any).uploadPhoto = async () => ({
+        image_url: 'https://i0.hdslb.com/bfs/test/hidden-public.jpg',
+        image_width: 900,
+        image_height: 1200,
+        img_size: 188,
+    })
+    ;(forwarder as any).sendTextWithPhotos = async () => ({
+        data: {
+            code: 0,
+            message: 'OK',
+            data: {
+                dyn_id_str: 'dynamic-hidden-from-public',
+            },
+        },
+    })
+    ;(forwarder as any).fetchDynamicDetail = async () => ({
+        data: {
+            code: 0,
+            data: {
+                item: {
+                    modules: {
+                        module_dynamic: {
+                            major: {
+                                type: 'MAJOR_TYPE_DRAW',
+                                draw: {
+                                    items: [{ src: 'https://i0.hdslb.com/bfs/test/hidden-public.jpg' }],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    })
+    ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
+        data: { code: 4101152, message: '动态不可见' },
+    })
+
+    let caught: unknown
+    try {
+        await (forwarder as any).realSend(['dynamic text'], {
+            media: [{ media_type: 'photo', path: '/tmp/source.jpg' }],
+        })
+    } catch (error) {
+        caught = error
+    }
+
+    expect(caught).toBeInstanceOf(PartialForwarderSendError)
+    expect((caught as Error).message).toContain('post-validation failed')
+    expect(((caught as PartialForwarderSendError).originalError as Error).message).toContain('not publicly visible')
 })
 
 test('QQForwarder keeps long text as a single payload instead of chunking', async () => {
@@ -1289,6 +1369,9 @@ test('BiliForwarder serializes photo uploads inside one send', async () => {
             },
         },
     })
+    ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
+        data: { code: 0, message: 'OK' },
+    })
 
     await (forwarder as any).sendDynamicContent(['paced text'], {
         media: [
@@ -1351,6 +1434,8 @@ test('BiliForwarder serializes photo uploads across forwarders with the same acc
     })
     ;(first as any).fetchDynamicDetail = async () => dynamicDetail('a')
     ;(second as any).fetchDynamicDetail = async () => dynamicDetail('b')
+    ;(first as any).fetchPublicDynamicDetail = async () => ({ data: { code: 0, message: 'OK' } })
+    ;(second as any).fetchPublicDynamicDetail = async () => ({ data: { code: 0, message: 'OK' } })
 
     await Promise.all([
         (first as any).sendDynamicContent(['a'], { media: [{ media_type: 'photo', path: '/tmp/global-a.jpg' }] }),

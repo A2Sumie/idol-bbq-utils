@@ -639,6 +639,20 @@ class BiliForwarder extends Forwarder {
         return this.api.fetchDynamicDetail(dynamicId)
     }
 
+    private async fetchPublicDynamicDetail(dynamicId: string) {
+        return this.api.fetchPublicDynamicDetail(dynamicId)
+    }
+
+    /**
+     * Post-send visibility validation for a created photo dynamic.
+     *
+     * Bilibili's authenticated detail API returns the author's own draw dynamics with code 0 even
+     * when the provider has hidden them from the public (content audit / review, observed as public
+     * code 4101152 动态不可见). Without a public check, a hidden photo chunk was marked as fully
+     * "sent" while viewers could not see it. This validates both the authenticated image count and
+     * the anonymous (no-auth) visibility so a hidden chunk surfaces as a PartialForwarderSendError
+     * instead of silently succeeding.
+     */
     private async assertPhotoDynamicVisible(res: BiliCreateDynamicResponse, expectedPicCount: number) {
         const dynamicId = this.extractDynamicId(res)
         if (!dynamicId) {
@@ -656,6 +670,13 @@ class BiliForwarder extends Forwarder {
                 if (!major || imageCount < expectedPicCount) {
                     throw new Error(
                         `Bilibili photo dynamic ${dynamicId} has invalid detail major: major=${major ? JSON.stringify(Object.keys(major)) : 'null'} image_count=${imageCount} expected=${expectedPicCount}`,
+                    )
+                }
+                const publicDetail = await this.fetchPublicDynamicDetail(dynamicId)
+                if (publicDetail.data?.code !== 0) {
+                    throw new Error(
+                        `Bilibili photo dynamic ${dynamicId} is not publicly visible: ` +
+                            `public_code=${publicDetail.data?.code} message=${publicDetail.data?.message || 'unknown'}`,
                     )
                 }
             },

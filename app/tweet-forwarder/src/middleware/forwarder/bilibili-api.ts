@@ -246,6 +246,27 @@ class BilibiliApiClient {
         return parts.join('; ')
     }
 
+    /**
+     * Cookie header that deliberately excludes account auth cookies (SESSDATA/bili_jct/DedeUserID/sid).
+     * Used for post-send visibility checks: Bilibili's authenticated detail API still returns a draw
+     * dynamic to its author even when the provider has hidden it from the public (content audit/review,
+     * observed as public code 4101152 动态不可见). Querying the same endpoint without auth cookies
+     * reflects what an actual viewer sees, so a hidden chunk is no longer silently marked as sent.
+     */
+    get publicCookieHeader(): string {
+        this.ensureStaticWafCookies()
+        this.refreshVolatileWafCookies()
+        const authCookies = new Set(['SESSDATA', 'bili_jct', 'DedeUserID', 'DedeUserID__ckMd5', 'sid'])
+        const parts: string[] = []
+        for (const [name, value] of this.cookieJar) {
+            if (authCookies.has(name) || !value) {
+                continue
+            }
+            parts.push(`${name}=${value}`)
+        }
+        return parts.join('; ')
+    }
+
     /** Fetch an anonymous buvid3/buvid4 pair from the SPI endpoint (no auth cookies required). */
     async fetchAnonymousBuvid(): Promise<{ buvid3: string; buvid4: string } | null> {
         const res = await axios.get(BILI_ENDPOINTS.finger, {
@@ -345,6 +366,19 @@ class BilibiliApiClient {
         return axios.get(BILI_ENDPOINTS.dynamicDetail, {
             params: { id: dynamicId },
             headers: { ...this.headers, Cookie: this.cookieHeader },
+            timeout: BILI_REQUEST_TIMEOUT_MS,
+        })
+    }
+
+    /**
+     * Fetch a dynamic's detail as an anonymous viewer sees it (no auth cookies). Bilibili's
+     * authenticated detail returns the author's own hidden/audit dynamics with code 0, so this
+     * anonymous variant is the source of truth for whether a posted photo chunk is actually public.
+     */
+    async fetchPublicDynamicDetail(dynamicId: string): Promise<AxiosResponse> {
+        return axios.get(BILI_ENDPOINTS.dynamicDetail, {
+            params: { id: dynamicId },
+            headers: { ...this.headers, Cookie: this.publicCookieHeader },
             timeout: BILI_REQUEST_TIMEOUT_MS,
         })
     }
