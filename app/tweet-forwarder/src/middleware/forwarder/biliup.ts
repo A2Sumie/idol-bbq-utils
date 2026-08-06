@@ -514,6 +514,8 @@ function resolveBiliupMemberFactIndex(): BiliupMemberFactIndex | null {
 
     const candidates = [
         path.join(process.cwd(), 'assets/knowledge/22_7/facts/members.json'),
+        // Repo-root assets when running from app/tweet-forwarder (local tests, host tooling).
+        path.join(process.cwd(), '../../assets/knowledge/22_7/facts/members.json'),
         '/app/assets/knowledge/22_7/facts/members.json',
     ]
     const sourcePath = candidates.find((candidate) => fs.existsSync(candidate))
@@ -1404,12 +1406,13 @@ function buildBiliupMetadataGenerationPrompt(
     return (
         cfgProcessor?.prompt ||
         [
-            '你是B站投稿元数据助手。请为22/7相关视频补充搜索友好的中文/日文标签，并在信息足够时给出克制的中文标题。',
-            `固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"],"title_zh":"中文标题或空字符串"}。`,
+            '你是B站投稿元数据助手。请为22/7相关视频生成搜索友好的中文/日文标签与中文标题。',
+            '固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"],"title_zh":"中文标题"}。',
             '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
             '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
             '输入JSON中的title_candidates和evidence是标题依据；优先使用source=translation_first_line/original_first_line/detected_member_facts的高置信事实。',
-            `title_zh应为${titleMinChars}到${titleMaxChars}个中文字符，基于原文事实，不夸张、不偏颇、不脑补；信息不足则返回空字符串。`,
+            `title_zh应为${titleMinChars}到${titleMaxChars}个中文字符，基于原文事实，具体描述视频内容或事件本身（例如“北原実咲介绍自己养的兔子”“推しカメラ：强肩偶像把签名球送到2层观众席”），不夸张、不偏颇、不脑补。`,
+            '禁止把成员名、日期、时间、账号名或平台名作为标题主体（例如“北原実咲 26.08.06”这类仅成员名加日期的标题）；只要输入包含可描述的事实就必须给出能反映内容的标题，不得用空字符串或缩略概括替代。',
             'title_zh会放在固定账号/来源前缀之后作为主标题；原标题会单独放进简介，不要重复账号名、平台名、日期、原标题或搬运属性词。',
         ].join('\n')
     )

@@ -459,6 +459,65 @@ test('buildBiliupUploadCandidate falls back from empty-shell metadata titles', (
     expect(candidate?.title).not.toBe('【】[TT]')
 })
 
+test('title generation prompt forbids name+date over-simplification', async () => {
+    const originalCreate = (processorRegistry as any).create
+    let prompt: string | undefined
+    ;(processorRegistry as any).create = async (provider: string, apiKey: string, log: unknown, config: any) => ({
+        process: async () => JSON.stringify({ tags: [], title_zh: '北原実咲介绍自己养的兔子' }),
+        drop: async () => undefined,
+        capturedPrompt: (prompt = config?.prompt),
+    })
+
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'post',
+            u_id: 'nananijigram22_7',
+            username: '22/7(ナナブンノニジュウニ)',
+            a_id: 'ig-kitahara-rabbit',
+            content: '【#推しカメラ】 関西メンバー 京都出身 うさぎの「石」と「つゆ」を飼ってます！ #北原実咲',
+            created_at: 1781320000,
+            url: 'https://www.instagram.com/p/ig-kitahara-rabbit/',
+        } as any,
+        ['【#推しカメラ】 関西メンバー 京都出身 うさぎの「石」と「つゆ」を飼ってます！ #北原実咲'],
+        [{ media_type: 'video', path: '/tmp/kitahara-rabbit.mp4' }],
+        {
+            enabled: true,
+            tag_generation: {
+                enabled: true,
+                provider: 'Hy3Free',
+                api_key: 'test-key',
+                target_count: 10,
+            },
+        },
+    )
+
+    try {
+        await completeBiliupUploadCandidateTags(
+            {
+                platform: Platform.Instagram,
+                type: 'post',
+                u_id: 'nananijigram22_7',
+                username: '22/7(ナナブンノニジュウニ)',
+                a_id: 'ig-kitahara-rabbit',
+                content: '【#推しカメラ】 関西メンバー 京都出身 うさぎの「石」と「つゆ」を飼ってます！ #北原実咲',
+                created_at: 1781320000,
+                url: 'https://www.instagram.com/p/ig-kitahara-rabbit/',
+            } as any,
+            ['【#推しカメラ】 関西メンバー 京都出身 うさぎの「石」と「つゆ」を飼ってます！ #北原実咲'],
+            candidate!,
+        )
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(prompt).toBeDefined()
+    expect(prompt).not.toContain('信息不足则返回空字符串')
+    expect(prompt).toContain('禁止把成员名、日期、时间、账号名或平台名作为标题主体')
+    expect(prompt).toContain('具体描述视频内容或事件本身')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[ins] 介绍自己养的兔子')
+})
+
 test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', () => {
     const candidate = buildBiliupUploadCandidate(
         {

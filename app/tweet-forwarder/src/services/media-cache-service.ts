@@ -21,6 +21,11 @@ const SHORT_VIDEO_TEXT_KEY_LIMIT = 6
 const SHORT_VIDEO_TEXT_MIN_COMPACT_LENGTH = 8
 const SHORT_VIDEO_SHARED_PHRASE_MIN_LENGTH = 8
 const SHORT_VIDEO_INSTAGRAM_TIKTOK_FALLBACK_KEY = 'p:instagram-tiktok'
+// Shared namespace for Instagram <-> TikTok video dedup. Same fan video posted on both
+// platforms is stored under different per-account groups (e.g. nijigram vs 227-official),
+// so the fingerprint must also be visible in a platform-pair namespace.
+const CROSS_PLATFORM_VIDEO_FINGERPRINT_STORAGE = 'cross-video-fingerprint:ig-tt'
+const CROSS_PLATFORM_SHORT_VIDEO_STORAGE = 'cross-short-video:ig-tt'
 const VIDEO_FINGERPRINT_SAMPLE_RATIOS = [0.12, 0.3, 0.5, 0.7, 0.88]
 const VIDEO_FINGERPRINT_BAND_SIZE = 4
 const VIDEO_FINGERPRINT_MIN_BAND_MATCHES = 8
@@ -65,6 +70,10 @@ interface ShortVideoDedupCandidate {
     duration_seconds: number
     group: string
     text: ShortVideoTextFingerprint
+    /** Shared IG/TT namespace carrying only the coarse cross-platform fallback signature. */
+    crossPlatformStoragePlatform?: string
+    crossPlatformFallbackSignaturesToStore?: Array<string>
+    crossPlatformFallbackSignaturesToCheck?: Array<string>
 }
 
 interface ShortVideoTextFingerprint {
@@ -82,6 +91,9 @@ interface VideoFingerprintCandidate {
     bandKeys: Array<string>
     duration_seconds: number
     group: string
+    /** IG/TT cross-platform namespace and its band keys, deduplicating the same video across platforms. */
+    crossPlatformStoragePlatform?: string
+    crossPlatformBandKeys?: Array<string>
 }
 
 interface MediaCacheCleanupOptions {
@@ -506,6 +518,7 @@ function buildShortVideoDedupCandidate(
             coarseFallbackKeys.map((textKey) => buildShortVideoSignature(timeBucket, durationBucket, textKey)),
         ),
     )
+    const isIgTtPair = isInstagramTikTokShortVideoPlatform(article.platform)
 
     return {
         storagePlatform: `cross-short-video:${group}`,
@@ -517,6 +530,17 @@ function buildShortVideoDedupCandidate(
         duration_seconds: videoFile.duration_seconds,
         group,
         text,
+        ...(isIgTtPair && coarseFallbackKeys.length > 0
+            ? {
+                  crossPlatformStoragePlatform: CROSS_PLATFORM_SHORT_VIDEO_STORAGE,
+                  crossPlatformFallbackSignaturesToStore: Array.from(
+                      new Set(coarseFallbackSignaturesToStore),
+                  ).sort(),
+                  crossPlatformFallbackSignaturesToCheck: Array.from(
+                      new Set(coarseFallbackSignaturesToCheck),
+                  ).sort(),
+              }
+            : {}),
     }
 }
 
@@ -527,38 +551,51 @@ async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupC
     }
 
     const coarseFallbackSignatures = new Set(candidate.coarseFallbackSignaturesToCheck)
-    for (const signature of Array.from(new Set(candidate.signaturesToCheck))) {
-        const existing = await DB.MediaHash.checkExist(candidate.storagePlatform, signature)
-        if (!existing || existing.a_id === candidate.articleMarker) {
-            continue
-        }
+    const namespaces: Array<{ storagePlatform: string; signatures: Array<string> }> = [
+        { storagePlatform: candidate.storagePlatform, signatures: candidate.signaturesToCheck },
+        ...(candidate.crossPlatformStoragePlatform && candidate.crossPlatformFallbackSignaturesToCheck
+            ? [
+                  {
+                      storagePlatform: candidate.crossPlatformStoragePlatform,
+                      signatures: candidate.crossPlatformFallbackSignaturesToCheck,
+                  },
+              ]
+            : []),
+    ]
+    for (const { storagePlatform, signatures } of namespaces) {
+        for (const signature of Array.from(new Set(signatures))) {
+            const existing = await DB.MediaHash.checkExist(storagePlatform, signature)
+            if (!existing || existing.a_id === candidate.articleMarker) {
+                continue
+            }
 
-        const existingMarker = parseArticleMarker(existing.a_id)
-        if (!existingMarker || existingMarker.platform === candidateMarker.platform) {
-            continue
-        }
-        const isCoarseFallbackSignature = coarseFallbackSignatures.has(signature)
-        if (
-            isCoarseFallbackSignature &&
-            !isInstagramTikTokShortVideoPair(candidateMarker.platform, existingMarker.platform)
-        ) {
-            continue
-        }
+            const existingMarker = parseArticleMarker(existing.a_id)
+            if (!existingMarker || existingMarker.platform === candidateMarker.platform) {
+                continue
+            }
+            const isCoarseFallbackSignature = coarseFallbackSignatures.has(signature)
+            if (
+                isCoarseFallbackSignature &&
+                !isInstagramTikTokShortVideoPair(candidateMarker.platform, existingMarker.platform)
+            ) {
+                continue
+            }
 
-        const existingArticle = await DB.Article.getSingleArticleByArticleCode(
-            existingMarker.a_id,
-            existingMarker.platform,
-        )
-        if (!existingArticle) {
-            continue
-        }
+            const existingArticle = await DB.Article.getSingleArticleByArticleCode(
+                existingMarker.a_id,
+                existingMarker.platform,
+            )
+            if (!existingArticle) {
+                continue
+            }
 
-        const existingText = buildShortVideoTextFingerprint(existingArticle as any)
-        if (isCoarseFallbackSignature && (candidate.text.keys.length === 0 || existingText.keys.length === 0)) {
-            return existing
-        }
-        if (isLikelySameShortVideoText(candidate.text, existingText)) {
-            return existing
+            const existingText = buildShortVideoTextFingerprint(existingArticle as any)
+            if (isCoarseFallbackSignature && (candidate.text.keys.length === 0 || existingText.keys.length === 0)) {
+                return existing
+            }
+            if (isLikelySameShortVideoText(candidate.text, existingText)) {
+                return existing
+            }
         }
     }
 
@@ -571,6 +608,17 @@ async function markShortVideoCrossPlatformSeen(candidate: ShortVideoDedupCandida
             DB.MediaHash.save(candidate.storagePlatform, signature, candidate.articleMarker),
         ),
     )
+    if (candidate.crossPlatformStoragePlatform && candidate.crossPlatformFallbackSignaturesToStore) {
+        await Promise.all(
+            Array.from(new Set(candidate.crossPlatformFallbackSignaturesToStore)).map((signature) =>
+                DB.MediaHash.save(
+                    candidate.crossPlatformStoragePlatform as string,
+                    signature,
+                    candidate.articleMarker,
+                ),
+            ),
+        )
+    }
 }
 
 function sampleVideoFrameHash(filePath: string, durationSeconds: number, ratio: number) {
@@ -662,6 +710,7 @@ function buildVideoFingerprintCandidate(
     if (bandKeys.length < VIDEO_FINGERPRINT_MIN_BAND_MATCHES) {
         return null
     }
+    const isIgTtPair = isInstagramTikTokShortVideoPlatform(article.platform)
 
     return {
         storagePlatform: `${VIDEO_FINGERPRINT_PLATFORM_PREFIX}:${group}`,
@@ -670,16 +719,51 @@ function buildVideoFingerprintCandidate(
         bandKeys,
         duration_seconds: mediaFile.duration_seconds,
         group,
+        ...(isIgTtPair
+            ? {
+                  crossPlatformStoragePlatform: CROSS_PLATFORM_VIDEO_FINGERPRINT_STORAGE,
+                  crossPlatformBandKeys: bandKeys,
+              }
+            : {}),
     }
 }
 
 async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandidate) {
-    const candidateBandKeys = Array.from(new Set(candidate.bandKeys))
+    const namespaces: Array<{ storagePlatform: string; bandKeys: Array<string> }> = [
+        { storagePlatform: candidate.storagePlatform, bandKeys: candidate.bandKeys },
+        ...(candidate.crossPlatformStoragePlatform && candidate.crossPlatformBandKeys
+            ? [
+                  {
+                      storagePlatform: candidate.crossPlatformStoragePlatform,
+                      bandKeys: candidate.crossPlatformBandKeys,
+                  },
+              ]
+            : []),
+    ]
+    for (const { storagePlatform, bandKeys } of namespaces) {
+        const existing = await checkVideoFingerprintDuplicateInNamespace(
+            candidate,
+            storagePlatform,
+            bandKeys,
+        )
+        if (existing) {
+            return existing
+        }
+    }
+    return null
+}
+
+async function checkVideoFingerprintDuplicateInNamespace(
+    candidate: VideoFingerprintCandidate,
+    storagePlatform: string,
+    bandKeys: Array<string>,
+) {
+    const candidateBandKeys = Array.from(new Set(bandKeys))
     if (candidateBandKeys.length < VIDEO_FINGERPRINT_MIN_BAND_MATCHES) {
         return null
     }
 
-    const exact = await DB.MediaHash.checkExist(candidate.storagePlatform, candidate.signature)
+    const exact = await DB.MediaHash.checkExist(storagePlatform, candidate.signature)
     if (exact && exact.a_id !== candidate.articleMarker) {
         return exact
     }
@@ -689,7 +773,7 @@ async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandida
         { count: number; existing: Awaited<ReturnType<typeof DB.MediaHash.checkExist>> }
     >()
     for (const bandKey of candidateBandKeys) {
-        const existing = await DB.MediaHash.checkExist(candidate.storagePlatform, bandKey)
+        const existing = await DB.MediaHash.checkExist(storagePlatform, bandKey)
         if (!existing || existing.a_id === candidate.articleMarker) {
             continue
         }
@@ -712,10 +796,25 @@ async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandida
 }
 
 async function markVideoFingerprintSeen(candidate: VideoFingerprintCandidate) {
-    await DB.MediaHash.save(candidate.storagePlatform, candidate.signature, candidate.articleMarker)
+    await markVideoFingerprintSeenInNamespace(candidate, candidate.storagePlatform, candidate.bandKeys)
+    if (candidate.crossPlatformStoragePlatform && candidate.crossPlatformBandKeys) {
+        await markVideoFingerprintSeenInNamespace(
+            candidate,
+            candidate.crossPlatformStoragePlatform,
+            candidate.crossPlatformBandKeys,
+        )
+    }
+}
+
+async function markVideoFingerprintSeenInNamespace(
+    candidate: VideoFingerprintCandidate,
+    storagePlatform: string,
+    bandKeys: Array<string>,
+) {
+    await DB.MediaHash.save(storagePlatform, candidate.signature, candidate.articleMarker)
     await Promise.all(
-        Array.from(new Set(candidate.bandKeys)).map((bandKey) =>
-            DB.MediaHash.save(candidate.storagePlatform, bandKey, candidate.articleMarker),
+        Array.from(new Set(bandKeys)).map((bandKey) =>
+            DB.MediaHash.save(storagePlatform, bandKey, candidate.articleMarker),
         ),
     )
 }

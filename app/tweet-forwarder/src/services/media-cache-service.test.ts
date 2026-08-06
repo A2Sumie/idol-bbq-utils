@@ -351,6 +351,140 @@ test('video fingerprint dedup matches re-encoded short videos by frame bands', a
     expect(duplicate?.a_id).toBe(`${Platform.TikTok}:tt-short-1`)
 })
 
+test('video fingerprint dedup matches the same IG/TT video across different account groups', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+
+    // IG version posted by the nijigram account group.
+    const igFrameHashes = [
+        'ff07a0f0780880ff',
+        'a0f0780880ffc9a1',
+        '780880ffc9a160c1',
+        '880ffc9a160c130bf',
+        'ffc9a160c130bfff1',
+    ]
+    const igCandidate: VideoFingerprintCandidate = {
+        storagePlatform: 'cross-video-fingerprint:nijigram',
+        articleMarker: `${Platform.Instagram}:ig-fancam`,
+        signature: `exact:27:${igFrameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(27, igFrameHashes),
+        duration_seconds: 13.5,
+        group: 'nijigram',
+        crossPlatformStoragePlatform: 'cross-video-fingerprint:ig-tt',
+        crossPlatformBandKeys: buildVideoFingerprintBandKeys(27, igFrameHashes),
+    }
+    await markVideoFingerprintSeen(igCandidate)
+
+    // Same video on TikTok under the official account group: frame 0 identical, rest slightly re-encoded.
+    const ttFrameHashes = [
+        'ff07a0f0780880ff',
+        'a0f0780880ff9849',
+        '780880ff9849d8d9',
+        '880ff9849d8d900ff',
+        'ff9849d8d900fff3',
+    ]
+    const ttCandidate: VideoFingerprintCandidate = {
+        storagePlatform: 'cross-video-fingerprint:227-official',
+        articleMarker: `${Platform.TikTok}:tt-fancam`,
+        signature: `exact:27:${ttFrameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(27, ttFrameHashes),
+        duration_seconds: 13.6,
+        group: '227-official',
+        crossPlatformStoragePlatform: 'cross-video-fingerprint:ig-tt',
+        crossPlatformBandKeys: buildVideoFingerprintBandKeys(27, ttFrameHashes),
+    }
+
+    const duplicate = await checkVideoFingerprintDuplicate(ttCandidate)
+    expect(duplicate?.a_id).toBe(`${Platform.Instagram}:ig-fancam`)
+})
+
+test('video fingerprint cross-platform namespace is skipped for non IG/TT platforms', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+
+    const frameHashes = [
+        '1234abcd5678ef90',
+        '2345bcde6789f0a1',
+        '3456cdef7890a1b2',
+        '4567def08901b2c3',
+        '5678ef019012c3d4',
+    ]
+    const xCandidate: VideoFingerprintCandidate = {
+        storagePlatform: 'cross-video-fingerprint:227-official',
+        articleMarker: `${Platform.X}:x-teaser`,
+        signature: `exact:40:${frameHashes.join(':')}`,
+        bandKeys: buildVideoFingerprintBandKeys(40, frameHashes),
+        duration_seconds: 20.1,
+        group: '227-official',
+    }
+    await markVideoFingerprintSeen(xCandidate)
+
+    expect(store.has('cross-video-fingerprint:ig-tt:exact:40:1234abcd5678ef90:2345bcde6789f0a1:3456cdef7890a1b2:4567def08901b2c3:5678ef019012c3d4')).toBe(false)
+})
+
+test('short-video IG/TT fallback signature is shared across account groups', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+    const originalGetArticle = DB.Article.getSingleArticleByArticleCode
+    DB.Article.getSingleArticleByArticleCode = (async () => ({
+        platform: Platform.TikTok,
+        a_id: 'tt-fancam',
+        u_id: '227official',
+        username: '22/7(ナナブンノニジュウニ)',
+        created_at: 1780826818,
+        content: '#推しカメラ 何でも全力投球！ #南伊織 #小田原大合戦 #ナナニジ',
+        type: 'post',
+    })) as any
+
+    const igCandidate = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.Instagram,
+            type: 'post',
+            a_id: 'ig-fancam',
+            created_at: 1780827000,
+            u_id: 'nananijigram22_7',
+            username: '22/7(ナナブンノニジュウニ)',
+            content: '推しカメラ 何でも全力投球！ 南伊織 小田原大合戦 ナナニジ',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 13.5 }],
+    )
+    expect(igCandidate?.crossPlatformStoragePlatform).toBe('cross-short-video:ig-tt')
+    await markShortVideoCrossPlatformSeen(igCandidate!)
+
+    const ttCandidate = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.TikTok,
+            type: 'post',
+            a_id: 'tt-fancam',
+            created_at: 1780827010,
+            u_id: '227official',
+            username: '22/7(ナナブンノニジュウニ)',
+            content: '#推しカメラ 何でも全力投球！ #南伊織 #小田原大合戦 #ナナニジ',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 13.6 }],
+    )
+    expect(ttCandidate?.crossPlatformStoragePlatform).toBe('cross-short-video:ig-tt')
+
+    const duplicate = await checkShortVideoCrossPlatformDuplicate(ttCandidate!)
+    DB.Article.getSingleArticleByArticleCode = originalGetArticle
+    expect(duplicate?.a_id).toBe('2:ig-fancam')
+})
+
 test('video fingerprint dedup ignores low-information repeated frame bands', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
