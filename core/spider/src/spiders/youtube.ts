@@ -639,7 +639,21 @@ namespace YoutubeApiJsonParser {
         }
 
         const articlesById = new Map(baseArticles.map((article) => [article.a_id, article]))
-        const hydrateQueue = baseArticles.filter((article) => !knownIds.has(article.a_id)).slice(0, hydrateLimit)
+        const hydrateQueue = baseArticles
+            .filter((article) => !knownIds.has(article.a_id))
+            .sort((a, b) => {
+                // Items without a usable list timestamp need the detail page most: the shorts tab
+                // markup no longer exposes a published time, so shorts carry created_at=0 from the
+                // list and would otherwise sink to the back of the queue and starve under a tight
+                // hydrate limit. Hydrate time-less items first, then newest-first.
+                const aNeedsTime = a.created_at > 0 ? 0 : 1
+                const bNeedsTime = b.created_at > 0 ? 0 : 1
+                if (aNeedsTime !== bNeedsTime) {
+                    return bNeedsTime - aNeedsTime
+                }
+                return b.created_at - a.created_at
+            })
+            .slice(0, hydrateLimit)
         for (let index = 0; index < hydrateQueue.length; index += hydrateConcurrency) {
             const chunk = hydrateQueue.slice(index, index + hydrateConcurrency)
             const hydrated = await Promise.allSettled(

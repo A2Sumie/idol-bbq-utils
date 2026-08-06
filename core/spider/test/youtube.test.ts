@@ -303,6 +303,43 @@ test('YouTube grabArticles bounds detail hydration to the newest configured limi
     }
 })
 
+test('YouTube grabArticles prioritizes time-less shorts for detail hydration', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const detailRequests: Array<string> = []
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        if (url.includes('/videos?')) {
+            return new Response(buildYoutubeInitialData(videosFixture))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData(shortsFixture))
+        }
+        detailRequests.push(url)
+        return new Response(buildYoutubeDetailHtml(url.split('/').pop() || 'x'))
+    }
+
+    try {
+        const articles = await YoutubeApiJsonParser.grabArticles(
+            buildYoutubePage(),
+            'https://www.youtube.com/@anime-english-club',
+            {
+                hydrate_limit: 1,
+                hydrate_concurrency: 1,
+            },
+        )
+
+        expect(detailRequests).toHaveLength(1)
+        expect(detailRequests[0]).toContain('/shorts/')
+        const shorts = articles.find((article) => article.type === ArticleTypeEnum.SHORTS)
+        expect(shorts?.content?.startsWith('Hydrated ')).toBeTrue()
+        expect(shorts?.created_at).toBeGreaterThan(0)
+        const video = articles.find((article) => article.type === ArticleTypeEnum.VIDEO)
+        expect(video?.content?.startsWith('Hydrated ')).toBeFalse()
+        expect(video?.created_at).toBeGreaterThan(0)
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
 test('YouTube detail parser marks upcoming premieres and scheduled start', () => {
     const detailHtml = `<script>var ytInitialPlayerResponse = ${JSON.stringify({
         playabilityStatus: {
