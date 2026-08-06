@@ -234,30 +234,11 @@ class BiliForwarder extends Forwarder {
 
     private normalizeTextsForBilibili(texts: string[]) {
         return texts.map((text) =>
-            text
-                .replace(
-                    /^((?:@\S+\s+)?\d{4}[\u00b9\u00b2\u00b3\u2070-\u2079\u207a\u207b]*\s+X(?:发推|引用|回复|转推))\n{2,}/mu,
-                    '$1:\n',
-                )
-                .replace(/https?:\/\/[^\s]+/g, (url) => this.keepBilibiliUrl(url)),
+            text.replace(
+                /^((?:@\S+\s+)?\d{4}[\u00b9\u00b2\u00b3\u2070-\u2079\u207a\u207b]*\s+X(?:发推|引用|回复|转推))\n{2,}/mu,
+                '$1:\n',
+            ),
         )
-    }
-
-    /**
-     * Bilibili hides draw/text dynamics that contain external URLs (content audit, observed as public
-     * code 4101152 动态不可见). The website card text appends the source article.url, and the content
-     * may embed links too, so any http(s) URL outside Bilibili's own domains is removed from the text
-     * sent here. Bilibili-owned hosts are kept so legitimate in-platform links still work.
-     */
-    private keepBilibiliUrl(url: string) {
-        try {
-            const hostname = new URL(url).hostname.replace(/^www\./, '').toLocaleLowerCase()
-            return hostname === 'bilibili.com' || hostname.endsWith('.bilibili.com') || hostname === 'b23.tv'
-                ? url
-                : ''
-        } catch {
-            return ''
-        }
     }
 
     private isRootArticleMedia(item: NonNullable<SendProps['media']>[number], props?: SendProps) {
