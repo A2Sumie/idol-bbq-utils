@@ -242,11 +242,13 @@ function formatArticleAttributionLine(article: Article) {
 
 const PASSTHROUGH_CARD_DEFERRED_MARKER = '---（余下见卡片）---'
 
-function formatPassthroughTitleLine(article: Pick<Article, 'u_id' | 'username' | 'a_id' | 'created_at'>) {
+function formatPassthroughTitleLine(
+    article: Pick<Article, 'u_id' | 'username' | 'a_id' | 'created_at' | 'platform'>,
+) {
     const username = String(article.username || '').trim()
     const name = username || formatArticleUserId(article)
     const timeToken = article.created_at ? formatArticleTimeToken(article.created_at) : ''
-    return [name, timeToken].filter(Boolean).join(' ').trim()
+    return [name, timeToken, formatArticlePlatformLabel(article)].filter(Boolean).join(' ').trim()
 }
 
 function formatPassthroughAttributionLine(
