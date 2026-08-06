@@ -993,7 +993,9 @@ export class RenderService {
         let rootDuplicateMediaCount = 0
         let rootDuplicateMediaReason: string | undefined
         let articleDepth = 0
-
+        const isRootNewTweet =
+            article.platform === Platform.X &&
+            String(article.type || '').trim().toLocaleLowerCase() === 'tweet'
         // Dynamic imports to avoid top-level issues during hot-reload or circular deps, and purely for this logic
         const DB = (await import('@/db')).default
 
@@ -1052,6 +1054,16 @@ export class RenderService {
                                     this.log?.debug(
                                         `Media hash ${hash.substring(0, 8)} already recorded for article ${articleId}, keeping file for another formatter/target.`,
                                     )
+                                } else if (currentIsRootArticle && isRootNewTweet) {
+                                    // A fresh tweet (not a retweet/quote/reply) can legitimately reuse an
+                                    // image from an earlier post (e.g. the same release artwork in a new
+                                    // announcement). Media dedup exists to avoid forwarding identical
+                                    // content, but a new tweet with reused artwork is a new message: keep
+                                    // the image and post it.
+                                    this.log?.info(
+                                        `Media hash ${hash.substring(0, 8)} reused by a new tweet ${articleId}; keeping media for the fresh post.`,
+                                    )
+                                    await DB.MediaHash.save(platformStr, hash, articleId)
                                 } else {
                                     this.log?.info(
                                         `Duplicate media detected (Hash: ${hash.substring(0, 8)}...), skipping.`,
@@ -1068,7 +1080,7 @@ export class RenderService {
                                 hash,
                                 articleMarker,
                             )
-                            if (exactMediaDuplicate) {
+                            if (exactMediaDuplicate && !(currentIsRootArticle && isRootNewTweet)) {
                                 const duplicateKind = effectiveMediaType === 'video' ? 'video' : 'media'
                                 markDuplicate(
                                     `Cross-platform exact ${duplicateKind} duplicate matched ${exactMediaDuplicate.a_id}`,
@@ -1269,6 +1281,7 @@ export class RenderService {
         if (
             !skipReason &&
             deduplication &&
+            !isRootNewTweet &&
             rootProcessedMediaCount > 0 &&
             rootDuplicateMediaCount === rootProcessedMediaCount
         ) {

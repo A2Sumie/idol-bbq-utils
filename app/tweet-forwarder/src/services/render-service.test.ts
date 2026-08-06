@@ -1378,6 +1378,60 @@ describe('RenderService media deduplication', () => {
         DB.MediaHash.save = originalSave
     })
 
+    test('keeps reused media for a fresh tweet even when the same image was posted before', async () => {
+        const hashStore = new Map<string, { platform: string; hash: string; a_id: string }>()
+        DB.MediaHash.checkExist = async (platform: string, hash: string) => hashStore.get(`${platform}:${hash}`) as any
+        DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+            const value = { platform, hash, a_id }
+            hashStore.set(`${platform}:${hash}`, value)
+            return value as any
+        }
+
+        const service = new RenderService()
+        const buildTweet = (a_id: string) => ({
+            id: 200,
+            a_id,
+            u_id: '227_staff',
+            username: '22/7',
+            created_at: 1710000000,
+            content: '🎪北海道リリースイベント開催決定！',
+            translation: null,
+            translated_by: null,
+            url: `https://x.com/227_staff/status/${a_id}`,
+            type: 'tweet',
+            ref: null,
+            has_media: true,
+            media: [{ type: 'photo' as const, url: SAMPLE_PNG_DATA_URL }],
+            extra: null,
+            u_avatar: null,
+            platform: Platform.X,
+        })
+        const config = {
+            taskId: 'test-tweet-reuse',
+            render_type: 'text-compact',
+            mediaConfig: {
+                type: 'no-storage' as const,
+                use: { tool: MediaToolEnum.DEFAULT },
+            },
+            deduplication: true,
+        }
+
+        const first = await service.process(buildTweet('tweet-a') as any, config)
+        const second = await service.process(buildTweet('tweet-b') as any, {
+            ...config,
+            taskId: 'test-tweet-reuse-2',
+        })
+
+        expect(first.mediaFiles).toHaveLength(1)
+        expect(second.mediaFiles).toHaveLength(1)
+        expect(second.shouldSkipSend).toBe(false)
+
+        service.cleanup(first.mediaFiles)
+        service.cleanup(second.mediaFiles)
+        DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.save = originalSave
+    })
+
     test('downgrades silent still Instagram story videos to photo media', async () => {
         const service = new RenderService()
         const tempDir = mkdtempSync(path.join(os.tmpdir(), 'render-static-ig-video-'))
