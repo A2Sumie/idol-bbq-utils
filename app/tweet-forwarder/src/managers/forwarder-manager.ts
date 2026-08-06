@@ -2,7 +2,7 @@ import { Logger } from '@idol-bbq-utils/log'
 import { spiderRegistry } from '@idol-bbq-utils/spider'
 import { CronJob } from 'cron'
 import EventEmitter from 'events'
-import { BaseCompatibleModel, sanitizeWebsites, TaskScheduler } from '@/utils/base'
+import { BaseCompatibleModel, sanitizeWebsites, stripUrlsFromText, TaskScheduler } from '@/utils/base'
 import type { AppConfig, Processor } from '@/types'
 import { Platform, type MediaType, type TaskType } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
@@ -342,16 +342,6 @@ function stripHashtagsFromText(text?: string | null) {
         .replace(HASHTAG_REGEX, ' ')
         .replace(/[ \t]+/g, ' ')
         .replace(/\s*\n\s*/g, '\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim()
-}
-
-function stripUrlsFromText(text: string) {
-    return text
-        .split('\n')
-        .map((line) => line.replace(/https?:\/\/\S+/gi, '').replace(/[ \t]+$/g, ''))
-        .filter((line, index, lines) => !(line === '' && lines[index - 1] === ''))
-        .join('\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim()
 }

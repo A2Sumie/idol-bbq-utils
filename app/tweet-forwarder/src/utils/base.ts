@@ -141,4 +141,18 @@ function sanitizeWebsites({
     return uniq(res)
 }
 
-export { TaskScheduler, BaseCompatibleModel, sanitizeWebsites }
+/**
+ * Remove http(s) URLs from each line of the text (used for Bilibili posts that must not
+ * carry source links), collapsing the blank lines left behind.
+ */
+function stripUrlsFromText(text: string) {
+    return text
+        .split('\n')
+        .map((line) => line.replace(/https?:\/\/\S+/gi, '').replace(/[ \t]+$/g, ''))
+        .filter((line, index, lines) => !(line === '' && lines[index - 1] === ''))
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
+export { TaskScheduler, BaseCompatibleModel, sanitizeWebsites, stripUrlsFromText }

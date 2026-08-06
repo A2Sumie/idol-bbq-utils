@@ -518,6 +518,62 @@ test('BiliForwarder suppresses pure video-thumbnail dynamics when visible media 
     expect(sent).toBeFalse()
 })
 
+test('BiliForwarder strips source URLs from all dynamic text before posting', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-url-strip-test',
+    )
+    ;(forwarder as any).minInterval = 0
+
+    const url = 'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/452719?ima=0032&cd=official_blog'
+    let sentText = ''
+    ;(forwarder as any).uploadPhoto = async () => ({
+        image_url: 'https://i0.hdslb.com/bfs/test/url-strip.jpg',
+        image_width: 900,
+        image_height: 1200,
+        img_size: 12345,
+    })
+    ;(forwarder as any).sendTextWithPhotos = async (text: string) => {
+        sentText = text
+        return { data: { code: 0, message: 'ok', data: { dyn_id_str: 'url-strip-dynamic' } } }
+    }
+    ;(forwarder as any).fetchDynamicDetail = async () => ({
+        data: {
+            code: 0,
+            data: {
+                item: {
+                    modules: {
+                        module_dynamic: {
+                            major: {
+                                type: 'MAJOR_TYPE_DRAW',
+                                draw: {
+                                    items: [{ src: 'https://i0.hdslb.com/bfs/test/url-strip.jpg' }],
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    })
+    ;(forwarder as any).fetchPublicDynamicDetail = async () => ({
+        data: { code: 0, message: 'OK' },
+    })
+
+    await (forwarder as any).realSend(
+        [`【22/7 博客｜南伊織】南風はどこから。\n\n22/7官网 博客 抓取于 2211⁺⁹（260806）\n${url}`],
+        { media: [{ media_type: 'photo', path: '/tmp/source.jpg' }] },
+    )
+
+    expect(sentText).not.toContain(url)
+    expect(sentText).not.toContain('nanabunnonijyuuni-mobile.com')
+    expect(sentText).toContain('【22/7 博客｜南伊織】南風はどこから。')
+    expect(sentText).toContain('抓取于 2211⁺⁹（260806）')
+})
+
 test('BiliForwarder verifies Bilibili photo dynamic detail after posting', async () => {
     const forwarder = new BiliForwarder(
         {

@@ -1,6 +1,7 @@
 import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, type SendProps } from './base'
 import { pRetry } from '@idol-bbq-utils/utils'
 import { delay } from '@/utils/time'
+import { stripUrlsFromText } from '@/utils/base'
 import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 import { buildBiliupUploadCandidate, completeBiliupUploadCandidateTags, runBiliupUpload } from './biliup'
@@ -207,7 +208,11 @@ class BiliForwarder extends Forwarder {
 
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
         const normalizedTexts = this.normalizeTextsForBilibili(texts)
-        const videoUploadResult = await this.tryVideoUpload(normalizedTexts, props)
+        // Bilibili posts must never carry source links (blog/official requests): strip URLs from
+        // every text path (article sends, summary cards, digests, passthroughs) at the sender gate,
+        // not only in the forwarder-manager article path.
+        const urlStrippedTexts = normalizedTexts.map((text) => stripUrlsFromText(text))
+        const videoUploadResult = await this.tryVideoUpload(urlStrippedTexts, props)
         if (videoUploadResult) {
             return [
                 {
@@ -229,7 +234,7 @@ class BiliForwarder extends Forwarder {
             )
             return [{ ok: true, mode: 'dynamic_media_required_suppressed' }]
         }
-        return this.sendDynamicContent(normalizedTexts, props)
+        return this.sendDynamicContent(urlStrippedTexts, props)
     }
 
     private normalizeTextsForBilibili(texts: string[]) {
