@@ -319,7 +319,9 @@ export function buildMessageBoardArticle(message: MessageBoardMessage): GenericA
         `希望回复: ${message.replyCode ? '是' : '否'}`,
         ...(!message.anonymous && message.name ? [`署名: ${String(message.name).trim()}`] : []),
         ...(!message.anonymous && contactParts.length > 0 ? [`联系方式: ${contactParts.join(' / ')}`] : []),
-        message.replyCode ? `追踪: ${message.replyBiscuit ? `饼干=${message.replyBiscuit} ` : ''}代码=${message.replyCode} 累计提交=${message.replyCount ?? 0}次` : '',
+        message.replyCode
+            ? `追踪: ${message.replyBiscuit ? `饼干=${message.replyBiscuit} ` : ''}累计提交=${message.replyCount ?? 0}次`
+            : '',
         rawBody ? `正文:\n${rawBody}` : '正文: (空)',
     ].join('\n')
 

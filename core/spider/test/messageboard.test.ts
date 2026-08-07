@@ -90,7 +90,8 @@ test('buildMessageBoardArticle maps message fields into a website article', () =
     expect(article.content).toContain('希望回复: 是')
     expect(article.content).toContain('署名: 坂本')
     expect(article.content).toContain('联系方式: qq / 123456')
-    expect(article.content).toContain('追踪: 饼干=bk-igopfr-LAhchEipT 代码=k2x9vQnTzRwA 累计提交=3次')
+    expect(article.content).toContain('追踪: 饼干=bk-igopfr-LAhchEipT 累计提交=3次')
+    expect(article.content).not.toContain('k2x9vQnTzRwA')
     expect(article.content).toContain('正文:\nお願いします！')
     const data = (article.extra as any).data
     expect(data).toMatchObject({
