@@ -48,9 +48,10 @@ services:
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
       - TENCENT_HUNYUAN_API_KEY=${TENCENT_HUNYUAN_API_KEY:-}
-      # uie encrypted message reader (X570 FileDrop internal). Off by default; enable only on
-      # operator-controlled deployments by setting both IDOL_BBQ_UIE_ENABLED=1 and UIE_PASSWORD.
-      - IDOL_BBQ_UIE_ENABLED=${IDOL_BBQ_UIE_ENABLED:-0}
+      # X570 FileDrop encrypted message board reader. Off by default; enable only on
+      # operator-controlled deployments by setting both IDOL_BBQ_MESSAGEBOARD_ENABLED=1 and
+      # UIE_PASSWORD (the uie identity credential, full verbena).
+      - IDOL_BBQ_MESSAGEBOARD_ENABLED=${IDOL_BBQ_MESSAGEBOARD_ENABLED:-0}
       - UIE_PASSWORD=${UIE_PASSWORD:-}
       # Hunyuan (hy3) circuit breaker tuning (defaults: threshold=10, no auto-unfreeze).
       - HY3_FAILURE_THRESHOLD=${HY3_FAILURE_THRESHOLD:-}

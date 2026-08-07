@@ -1,15 +1,15 @@
 import { afterEach, expect, test } from 'bun:test'
-import { UieSpider, buildUieArticle, readUieMessages, UIE_ENABLED_FLAG, UIE_PASSWORD_ENV, type UieMessage } from '../src/spiders/uie'
+import { MessageBoardSpider, buildMessageBoardArticle, readMessageBoardMessages, MESSAGEBOARD_ENABLED_FLAG, UIE_PASSWORD_ENV, type MessageBoardMessage } from '../src/spiders/messageboard'
 import { Platform } from '../src/types'
 
-const ORIGINAL_ENV_FLAG = process.env[UIE_ENABLED_FLAG]
+const ORIGINAL_ENV_FLAG = process.env[MESSAGEBOARD_ENABLED_FLAG]
 const ORIGINAL_ENV_PASSWORD = process.env[UIE_PASSWORD_ENV]
 
 afterEach(() => {
     if (ORIGINAL_ENV_FLAG === undefined) {
-        delete process.env[UIE_ENABLED_FLAG]
+        delete process.env[MESSAGEBOARD_ENABLED_FLAG]
     } else {
-        process.env[UIE_ENABLED_FLAG] = ORIGINAL_ENV_FLAG
+        process.env[MESSAGEBOARD_ENABLED_FLAG] = ORIGINAL_ENV_FLAG
     }
     if (ORIGINAL_ENV_PASSWORD === undefined) {
         delete process.env[UIE_PASSWORD_ENV]
@@ -39,25 +39,25 @@ function concatBytes(...parts: Array<Uint8Array>): Uint8Array<ArrayBuffer> {
     return out
 }
 
-test('UieSpider is disabled by default and throws a clear error', async () => {
-    delete process.env[UIE_ENABLED_FLAG]
+test('MessageBoardSpider is disabled by default and throws a clear error', async () => {
+    delete process.env[MESSAGEBOARD_ENABLED_FLAG]
     delete process.env[UIE_PASSWORD_ENV]
 
-    expect(UieSpider.isEnabled()).toBeFalse()
-    const spider = new UieSpider().init()
+    expect(MessageBoardSpider.isEnabled()).toBeFalse()
+    const spider = new MessageBoardSpider().init()
     await expect(
-        (spider as any)._crawl('uie://read', undefined, { task_type: 'article', crawl_engine: 'api' }),
-    ).rejects.toThrow('UIE reader disabled')
+        (spider as any)._crawl('messageboard://read', undefined, { task_type: 'article', crawl_engine: 'api' }),
+    ).rejects.toThrow('留言板 reader disabled')
 })
 
-test('UieSpider matches only the uie://read url and extracts the message identity', () => {
-    expect(UieSpider._VALID_URL.test('uie://read')).toBeTrue()
-    expect(UieSpider._VALID_URL.test('https://drop.n2nj.moe/ws')).toBeFalse()
-    expect(UieSpider.extractBasicInfo('uie://read')).toEqual({ u_id: 'uie:message', platform: Platform.Website })
+test('MessageBoardSpider matches only the messageboard://read url and extracts the message identity', () => {
+    expect(MessageBoardSpider._VALID_URL.test('messageboard://read')).toBeTrue()
+    expect(MessageBoardSpider._VALID_URL.test('https://drop.n2nj.moe/ws')).toBeFalse()
+    expect(MessageBoardSpider.extractBasicInfo('messageboard://read')).toEqual({ u_id: 'messageboard:message', platform: Platform.Website })
 })
 
-test('buildUieArticle maps message fields into a website article', () => {
-    const article = buildUieArticle({
+test('buildMessageBoardArticle maps message fields into a website article', () => {
+    const article = buildMessageBoardArticle({
         id: '20260807120000_a1b2c3',
         ts: '2026-08-07T12:00:00+09:00',
         to: 'uie',
@@ -75,12 +75,12 @@ test('buildUieArticle maps message fields into a website article', () => {
     expect(article).toMatchObject({
         platform: Platform.Website,
         a_id: '20260807120000_a1b2c3',
-        u_id: 'uie:message',
+        u_id: 'messageboard:message',
         username: '坂本',
         type: 'article',
         url: 'https://drop.n2nj.moe/',
     })
-    expect(article.content).toContain('【UIE留言 20260807120000_a1b2c3】')
+    expect(article.content).toContain('【留言板 20260807120000_a1b2c3】')
     expect(article.content).toContain('时间: 2026-08-07T12:00:00+09:00')
     expect(article.content).toContain('匿名: 否')
     expect(article.content).toContain('署名: 坂本')
@@ -89,9 +89,9 @@ test('buildUieArticle maps message fields into a website article', () => {
     expect(article.content).toContain('正文:\nお願いします！')
     const data = (article.extra as any).data
     expect(data).toMatchObject({
-        site: 'UIE',
+        site: '留言板',
         host: 'drop.n2nj.moe',
-        feed: 'uie',
+        feed: 'messageboard',
         category: 'message',
         anonymous: false,
         public_reply: true,
@@ -102,8 +102,8 @@ test('buildUieArticle maps message fields into a website article', () => {
     expect(article.created_at).toBeGreaterThan(0)
 })
 
-test('buildUieArticle handles anonymous messages', () => {
-    const article = buildUieArticle({
+test('buildMessageBoardArticle handles anonymous messages', () => {
+    const article = buildMessageBoardArticle({
         id: '20260807120001_ff00',
         ts: '2026-08-07T12:00:01+09:00',
         to: 'uie',
@@ -119,7 +119,7 @@ test('buildUieArticle handles anonymous messages', () => {
     })
 
     expect(article.username).toBe('匿名留言')
-    expect(article.content).toContain('【UIE留言 20260807120001_ff00】')
+    expect(article.content).toContain('【留言板 20260807120001_ff00】')
     expect(article.content).toContain('匿名: 是')
     expect(article.content).toContain('署名: 无')
     expect(article.content).toContain('允许公开: 否')
@@ -129,7 +129,7 @@ test('buildUieArticle handles anonymous messages', () => {
     expect(data.contact).toBeNull()
 })
 
-test('readUieMessages completes the full sealed handshake against a local server', async () => {
+test('readMessageBoardMessages completes the full sealed handshake against a local server', async () => {
     const serverKeyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
         'deriveBits',
     ])
@@ -137,7 +137,7 @@ test('readUieMessages completes the full sealed handshake against a local server
 
     let clientSessionKey: CryptoKey | null = null
     const receivedClientMessages: Array<any> = []
-    const serverMessages: Array<UieMessage> = [
+    const serverMessages: Array<MessageBoardMessage> = [
         {
             id: '20260807120000_a1b2c3',
             ts: '2026-08-07T12:00:00+09:00',
@@ -262,7 +262,7 @@ test('readUieMessages completes the full sealed handshake against a local server
 
     try {
         const wsUrl = `ws://127.0.0.1:${server.port}/ws`
-        const messages = await readUieMessages({
+        const messages = await readMessageBoardMessages({
             wsUrl,
             verbena: 'stpuie12qwaszx34$',
             timeoutMs: 15000,

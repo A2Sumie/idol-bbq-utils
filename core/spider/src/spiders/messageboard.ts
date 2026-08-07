@@ -3,7 +3,7 @@ import type { CrawlEngine, GenericArticle, TaskType, TaskTypeResult } from '@/ty
 import { BaseSpider } from './base'
 
 /**
- * uie encrypted message reader (X570 FileDrop internal service).
+ * encrypted message board reader (X570 FileDrop internal service).
  *
  * Protocol (see tools/x570-filedrop/UIE-READ-API.md):
  *  - wss://drop.n2nj.moe/ws, full TLS via cloudflared
@@ -12,7 +12,7 @@ import { BaseSpider } from './base'
  *  - auth: daikon {verbena: "stp<id><password>"} (password mode; no clock drift)
  *  - read: narcissus -> marmot {tangerine: [...]} (<=200, newest first); opossum marks read
  *
- * Gated by IDOL_BBQ_UIE_ENABLED=1 (off by default; idol-bbq is public). The credential comes
+ * Gated by IDOL_BBQ_MESSAGEBOARD_ENABLED=1 (off by default; idol-bbq is public). The credential comes
  * from the UIE_PASSWORD env (full verbena string) and must never be committed.
  */
 
@@ -20,19 +20,19 @@ export enum ArticleTypeEnum {
     ARTICLE = 'article',
 }
 
-export const UIE_ENABLED_FLAG = 'IDOL_BBQ_UIE_ENABLED'
+export const MESSAGEBOARD_ENABLED_FLAG = 'IDOL_BBQ_MESSAGEBOARD_ENABLED'
 export const UIE_PASSWORD_ENV = 'UIE_PASSWORD'
-export const UIE_WS_URL = 'wss://drop.n2nj.moe/ws'
-export const UIE_KDF_INFO = '3f9a2c7e'
+export const MESSAGEBOARD_WS_URL = 'wss://drop.n2nj.moe/ws'
+export const MESSAGEBOARD_KDF_INFO = '3f9a2c7e'
 export const UIE_AUTH_PREFIX = 'stp'
-export const UIE_READ_TIMEOUT_MS = 20000
+export const MESSAGEBOARD_READ_TIMEOUT_MS = 20000
 // Cloudflare edge rejects the WS upgrade without a browser-ish UA / matching Origin.
-export const UIE_WS_HEADERS: Record<string, string> = {
+export const MESSAGEBOARD_WS_HEADERS: Record<string, string> = {
     'User-Agent': 'N2NJ-Stream-Bot/1.0',
     Origin: 'https://drop.n2nj.moe',
 }
 
-export interface UieMessage {
+export interface MessageBoardMessage {
     id: string
     ts: string
     to?: string
@@ -47,7 +47,7 @@ export interface UieMessage {
     remoteIp?: string
 }
 
-export interface UieReadOptions {
+export interface MessageBoardReadOptions {
     wsUrl?: string
     verbena?: string
     timeoutMs?: number
@@ -98,7 +98,7 @@ async function deriveUieSessionKey(
     const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey'])
     const salt = concatBytes(clientPublicRaw, serverPublicRaw)
     return crypto.subtle.deriveKey(
-        { name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode(UIE_KDF_INFO) },
+        { name: 'HKDF', hash: 'SHA-256', salt, info: new TextEncoder().encode(MESSAGEBOARD_KDF_INFO) },
         hkdfKey,
         { name: 'AES-GCM', length: 256 },
         false,
@@ -106,7 +106,7 @@ async function deriveUieSessionKey(
     )
 }
 
-async function sealUieMessage(sessionKey: CryptoKey, plain: unknown): Promise<string> {
+async function sealMessageBoardMessage(sessionKey: CryptoKey, plain: unknown): Promise<string> {
     const nonce = crypto.getRandomValues(new Uint8Array(12))
     const ciphertext = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv: nonce },
@@ -120,10 +120,10 @@ async function sealUieMessage(sessionKey: CryptoKey, plain: unknown): Promise<st
     })
 }
 
-async function unsealUieMessage<T>(sessionKey: CryptoKey, raw: string): Promise<T> {
+async function unsealMessageBoardMessage<T>(sessionKey: CryptoKey, raw: string): Promise<T> {
     const sealed = JSON.parse(raw) as { type?: string; radish?: string; saffron?: string }
     if (sealed?.type !== 'flannel' || !sealed.radish || !sealed.saffron) {
-        throw new Error(`UIE unexpected message: ${raw.slice(0, 120)}`)
+        throw new Error(`留言板 unexpected message: ${raw.slice(0, 120)}`)
     }
     const plaintext = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: base64urlDecode(sealed.radish) },
@@ -137,19 +137,19 @@ async function unsealUieMessage<T>(sessionKey: CryptoKey, raw: string): Promise<
  * Connect, handshake, authenticate and pull messages. Returns the marmot list and marks
  * messages read (opossum) before closing, matching the recommended read-then-consume flow.
  */
-export async function readUieMessages(options: UieReadOptions = {}): Promise<Array<UieMessage>> {
-    const wsUrl = options.wsUrl || UIE_WS_URL
+export async function readMessageBoardMessages(options: MessageBoardReadOptions = {}): Promise<Array<MessageBoardMessage>> {
+    const wsUrl = options.wsUrl || MESSAGEBOARD_WS_URL
     const verbena = options.verbena || process.env[UIE_PASSWORD_ENV] || ''
     if (!verbena) {
-        throw new Error('UIE reader requires UIE_PASSWORD')
+        throw new Error('留言板 reader requires UIE_PASSWORD')
     }
-    const timeoutMs = Math.max(5000, Number(options.timeoutMs) || UIE_READ_TIMEOUT_MS)
+    const timeoutMs = Math.max(5000, Number(options.timeoutMs) || MESSAGEBOARD_READ_TIMEOUT_MS)
     const connectImpl =
         options.connectImpl ||
-        ((url: string) => new WebSocket(url, { headers: UIE_WS_HEADERS } as any))
+        ((url: string) => new WebSocket(url, { headers: MESSAGEBOARD_WS_HEADERS } as any))
     const ws = connectImpl(wsUrl)
 
-    const messages: Array<UieMessage> = []
+    const messages: Array<MessageBoardMessage> = []
     let sessionKey: CryptoKey | null = null
     let handshakeDone = false
     let authed = false
@@ -172,8 +172,8 @@ export async function readUieMessages(options: UieReadOptions = {}): Promise<Arr
 
     await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
-            settle(new Error(`UIE read timed out after ${timeoutMs}ms`))
-            reject(new Error(`UIE read timed out after ${timeoutMs}ms`))
+            settle(new Error(`留言板 read timed out after ${timeoutMs}ms`))
+            reject(new Error(`留言板 read timed out after ${timeoutMs}ms`))
         }, timeoutMs)
 
         ws.onopen = () => {
@@ -212,7 +212,7 @@ export async function readUieMessages(options: UieReadOptions = {}): Promise<Arr
                 if (frame.type === 'cranberry') {
                     handshakeDone = true
                     ws.send(
-                        await sealUieMessage(sessionKey!, {
+                        await sealMessageBoardMessage(sessionKey!, {
                             type: 'daikon',
                             verbena,
                         }),
@@ -220,15 +220,15 @@ export async function readUieMessages(options: UieReadOptions = {}): Promise<Arr
                     return
                 }
                 if (frame.type === 'flannel') {
-                    const plain = await unsealUieMessage<Record<string, any>>(sessionKey!, raw)
+                    const plain = await unsealMessageBoardMessage<Record<string, any>>(sessionKey!, raw)
                     if (plain.type === 'lattice') {
-                        settle(new Error(`UIE auth rejected: ${String(plain.albacore || 'Bad code')}`))
-                        reject(new Error(`UIE auth rejected: ${String(plain.albacore || 'Bad code')}`))
+                        settle(new Error(`留言板 auth rejected: ${String(plain.albacore || 'Bad code')}`))
+                        reject(new Error(`留言板 auth rejected: ${String(plain.albacore || 'Bad code')}`))
                         return
                     }
                     if (plain.type === 'egret') {
                         authed = true
-                        ws.send(await sealUieMessage(sessionKey!, { type: 'narcissus' }))
+                        ws.send(await sealMessageBoardMessage(sessionKey!, { type: 'narcissus' }))
                         return
                     }
                     if (plain.type === 'marmot') {
@@ -236,11 +236,11 @@ export async function readUieMessages(options: UieReadOptions = {}): Promise<Arr
                         const items = Array.isArray(plain.tangerine) ? plain.tangerine : []
                         for (const item of items) {
                             if (item && typeof item === 'object' && typeof (item as any).id === 'string') {
-                                messages.push(item as UieMessage)
+                                messages.push(item as MessageBoardMessage)
                             }
                         }
                         if (options.markRead !== false) {
-                            ws.send(await sealUieMessage(sessionKey!, { type: 'opossum' }))
+                            ws.send(await sealMessageBoardMessage(sessionKey!, { type: 'opossum' }))
                             // Let the server observe opossum before we close: wait for the server
                             // to close the socket (protocol behavior) or a short grace period.
                             await delay(500)
@@ -260,14 +260,14 @@ export async function readUieMessages(options: UieReadOptions = {}): Promise<Arr
         ws.onerror = (error) => {
             clearTimeout(timer)
             const message = error instanceof Error ? error.message : String(error)
-            settle(new Error(`UIE websocket error: ${message}`))
-            reject(new Error(`UIE websocket error: ${message}`))
+            settle(new Error(`留言板 websocket error: ${message}`))
+            reject(new Error(`留言板 websocket error: ${message}`))
         }
 
         ws.onclose = () => {
             clearTimeout(timer)
             if (!settled && !listed) {
-                const error = new Error('UIE connection closed before marmot')
+                const error = new Error('留言板 connection closed before marmot')
                 settle(error)
                 reject(error)
             }
@@ -280,7 +280,7 @@ export async function readUieMessages(options: UieReadOptions = {}): Promise<Arr
     return messages
 }
 
-export function buildUieArticle(message: UieMessage): GenericArticle<Platform.Website> {
+export function buildMessageBoardArticle(message: MessageBoardMessage): GenericArticle<Platform.Website> {
     const rawBody = String(message.body || '').trim()
     const title = message.anonymous || !message.name ? '匿名留言' : String(message.name).trim()
     const createdAt = Date.parse(message.ts || '')
@@ -290,7 +290,7 @@ export function buildUieArticle(message: UieMessage): GenericArticle<Platform.We
         .map((part) => String(part || '').trim())
         .filter(Boolean)
     const content = [
-        `【UIE留言 ${message.id}】`,
+        `【留言板 ${message.id}】`,
         `时间: ${message.ts || '未知'}`,
         `目标: ${message.to || 'uie'}`,
         `匿名: ${message.anonymous === true ? '是' : '否'}`,
@@ -303,7 +303,7 @@ export function buildUieArticle(message: UieMessage): GenericArticle<Platform.We
     return {
         platform: Platform.Website,
         a_id: String(message.id),
-        u_id: 'uie:message',
+        u_id: 'messageboard:message',
         username: title,
         created_at: validCreatedAt || crawledAt,
         content,
@@ -314,9 +314,9 @@ export function buildUieArticle(message: UieMessage): GenericArticle<Platform.We
         media: null,
         extra: {
             data: {
-                site: 'UIE',
+                site: '留言板',
                 host: 'drop.n2nj.moe',
-                feed: 'uie',
+                feed: 'messageboard',
                 title,
                 category: 'message',
                 summary: null,
@@ -340,22 +340,22 @@ export function buildUieArticle(message: UieMessage): GenericArticle<Platform.We
     }
 }
 
-class UieSpider extends BaseSpider {
-    static _VALID_URL = /^uie:\/\/read$/i
+class MessageBoardSpider extends BaseSpider {
+    static _VALID_URL = /^messageboard:\/\/read$/i
     static _PLATFORM = Platform.Website
-    BASE_URL = 'uie://read'
-    NAME = 'UIE Message Spider'
+    BASE_URL = 'messageboard://read'
+    NAME = 'Message Board Spider'
 
     static isEnabled(): boolean {
-        return process.env[UIE_ENABLED_FLAG] === '1'
+        return process.env[MESSAGEBOARD_ENABLED_FLAG] === '1'
     }
 
     static extractBasicInfo(url: string) {
-        if (!UieSpider._VALID_URL.test(url)) {
+        if (!MessageBoardSpider._VALID_URL.test(url)) {
             return undefined
         }
         return {
-            u_id: 'uie:message',
+            u_id: 'messageboard:message',
             platform: Platform.Website,
         }
     }
@@ -371,17 +371,17 @@ class UieSpider extends BaseSpider {
         },
     ): Promise<TaskTypeResult<T, Platform.Website>> {
         if (config.task_type !== 'article') {
-            throw new Error('UIE spider only supports article tasks')
+            throw new Error('留言板 spider only supports article tasks')
         }
-        if (!UieSpider.isEnabled()) {
+        if (!MessageBoardSpider.isEnabled()) {
             throw new Error(
-                `UIE reader disabled: set ${UIE_ENABLED_FLAG}=1 and ${UIE_PASSWORD_ENV} to enable`,
+                `留言板 reader disabled: set ${MESSAGEBOARD_ENABLED_FLAG}=1 and ${UIE_PASSWORD_ENV} to enable`,
             )
         }
-        const messages = await readUieMessages()
-        this.log?.info?.(`UIE read ${messages.length} message(s)`)
-        return messages.map(buildUieArticle) as TaskTypeResult<T, Platform.Website>
+        const messages = await readMessageBoardMessages()
+        this.log?.info?.(`留言板 read ${messages.length} message(s)`)
+        return messages.map(buildMessageBoardArticle) as TaskTypeResult<T, Platform.Website>
     }
 }
 
-export { UieSpider }
+export { MessageBoardSpider }

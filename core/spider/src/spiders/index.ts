@@ -6,7 +6,7 @@ import { TiktokSpider } from './tiktok'
 import { YoutubeSpider } from './youtube'
 import { NanabunnonijyuuniWebsiteSpider } from './website'
 import { LeapProjectsSpider } from './leap'
-import { UieSpider } from './uie'
+import { MessageBoardSpider } from './messageboard'
 
 const XUserTimelinePlugin: SpiderPlugin = {
     id: 'x-timeline',
@@ -79,13 +79,13 @@ const LeapWebsitePlugin: SpiderPlugin = {
     extractBasicInfo: (url) => LeapProjectsSpider.extractBasicInfo(url),
 }
 
-const UiePlugin: SpiderPlugin = {
-    id: 'uie-reader',
+const MessageBoardPlugin: SpiderPlugin = {
+    id: 'messageboard-reader',
     platform: Platform.Website,
     priority: SpiderPriority.HIGH,
-    urlPattern: UieSpider._VALID_URL,
-    create: (log) => new UieSpider(log).init(),
-    extractBasicInfo: (url) => UieSpider.extractBasicInfo(url),
+    urlPattern: MessageBoardSpider._VALID_URL,
+    create: (log) => new MessageBoardSpider(log).init(),
+    extractBasicInfo: (url) => MessageBoardSpider.extractBasicInfo(url),
 }
 
 const spiderRegistry = SpiderRegistry.getInstance()
@@ -97,7 +97,7 @@ const spiderRegistry = SpiderRegistry.getInstance()
     .register(YoutubePlugin)
     .register(WebsitePlugin)
     .register(LeapWebsitePlugin)
-    .register(UiePlugin)
+    .register(MessageBoardPlugin)
 
 namespace Spider {
     export interface SpiderConstructor {
@@ -115,7 +115,7 @@ namespace Spider {
         YoutubeSpider,
         NanabunnonijyuuniWebsiteSpider,
         LeapProjectsSpider,
-        UieSpider,
+        MessageBoardSpider,
     ]
 
     /** @deprecated Use spiderRegistry.findByUrl() instead */
@@ -142,4 +142,4 @@ export * as Tiktok from './tiktok'
 export * as Youtube from './youtube'
 export * as Website from './website'
 export * as Leap from './leap'
-export * as Uie from './uie'
+export * as MessageBoard from './messageboard'
