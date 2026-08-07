@@ -93,3 +93,18 @@ services:
       - '/var/cache/fontconfig:/var/cache/fontconfig:ro'
       # 9. 挂载直播录制存档目录（容器重建不丢录制）
       - './assets/tiktok-live-archive:/app/archive/tiktok-live'
+  # TikTok 直播录制专用容器：与 spider 服务解耦，常规部署（up -d spider）不会重建/杀掉它，
+  # 录制中的 watcher 进程不会因 forwarder 部署而中断。
+  tiktok-live-watch:
+    image: idol-bbq-utils-spider:latest
+    container_name: tiktok-live-watch
+    network_mode: 'host'
+    restart: 'always'
+    command: ['sh', '-c', 'trap "exit 0" TERM INT; while true; do sleep 3600; done']
+    environment:
+      - TZ=Asia/Tokyo
+    volumes:
+      - './assets/tiktok-live-archive:/app/archive/tiktok-live'
+      - './assets/cookies:/app/assets/cookies'
+      - '/usr/share/fonts:/usr/share/fonts:ro'
+      - '/var/cache/fontconfig:/var/cache/fontconfig:ro'

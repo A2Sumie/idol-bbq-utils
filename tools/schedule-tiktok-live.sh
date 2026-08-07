@@ -16,7 +16,7 @@ set -Eeuo pipefail
 # invokes this with --once (or --until) at the desired JST time.
 
 REMOTE_HOST="${REMOTE_HOST:-3020e}"
-CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
+CONTAINER_NAME="${CONTAINER_NAME:-tiktok-live-watch}"
 WATCHER_LOCAL="${WATCHER_LOCAL:-}"
 HANDLE=""
 UNTIL=""
@@ -37,6 +37,8 @@ Usage:
 
 Notes:
   - No upload. Captures to /app/archive/tiktok-live/<handle>-<ts>/<handle>-<ts>.mkv on the remote host.
+  - The watcher runs inside the dedicated `tiktok-live-watch` container, which forwarder
+    deploys (up -d spider) never recreate, so an active capture survives routine deploys.
   - 麻丘真央's current live handle is: mao_asaoka  (NOT mao_asaoka_227).
   - --once: check now; capture until the live ends; then exit.
   - --until HH:MM (JST): poll until that time, capturing whenever live.
