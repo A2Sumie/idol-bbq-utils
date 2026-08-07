@@ -164,6 +164,7 @@ process.on('exit', () => {
   cleanupProfiles()
   releaseLock()
   if (cleanupChild && !cleanupChild.killed) { try { cleanupChild.kill('SIGTERM') } catch {} }
+  if (persistentBrowser) { try { persistentBrowser.close() } catch {} }
 })
 
 function parseCookies(fp: string) {
@@ -213,6 +214,79 @@ function rank(c: { quality: string; kind: string }) {
 
 type Candidate = { quality: string; kind: string; url: string }
 type Probe = { handle: string; roomId: string; status: number; candidates: Candidate[] } | { handle: string; roomId: null; status: number | null; candidates: [] }
+
+// Persistent browser session reused across probes: the WAF challenge is passed once
+// and its cookies survive in the fixed profile, so every later probe is a cheap
+// navigation instead of a fresh browser launch + challenge. Falls back to a fresh
+// browser when the persistent one crashes.
+const persistentProfileDir = `/tmp/tt-watch-${process.pid}-profile`
+let persistentBrowser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null
+let persistentPage: any = null
+async function ensurePersistentBrowser() {
+  if (persistentBrowser && persistentBrowser.isConnected()) {
+    return persistentBrowser
+  }
+  if (persistentBrowser) {
+    await persistentBrowser.close().catch(() => {})
+    persistentBrowser = null
+    persistentPage = null
+  }
+  persistentBrowser = await puppeteer.launch({
+    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable',
+    headless: true,
+    userDataDir: persistentProfileDir,
+    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+  })
+  persistentPage = await persistentBrowser.newPage()
+  await persistentPage.setExtraHTTPHeaders({ 'accept-language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7' })
+  const cookies = parseCookies(cookiePath)
+  if (cookies.length) await persistentPage.setCookie(...cookies)
+  return persistentBrowser
+}
+
+async function persistentBrowserProbe(): Promise<Probe> {
+  try {
+    await ensurePersistentBrowser()
+    await persistentPage
+      .goto(`https://www.tiktok.com/@${handle}/live`, { waitUntil: 'domcontentloaded', timeout: 45000 })
+      .catch(() => {})
+    await new Promise((r) => setTimeout(r, 4000))
+    const roomId = await persistentPage
+      .evaluate(() => {
+        const s = (window as any).SIGI_STATE
+        const room = s?.LiveRoom?.liveRoomUserInfo?.liveRoom
+        const user = s?.LiveRoom?.liveRoomUserInfo?.user
+        return user?.roomId || room?.roomId || null
+      })
+      .catch(() => null)
+    if (!roomId) {
+      log('no roomId found (user not live / not found)')
+      return { handle, roomId: null, status: null, candidates: [] }
+    }
+    const api = await persistentPage
+      .evaluate(async (rid) => {
+        const url = `https://webcast.tiktok.com/webcast/room/info/?aid=1988&app_language=ja&room_id=${rid}`
+        const r = await fetch(url, { credentials: 'include' })
+        return { status: r.status, text: await r.text() }
+      }, roomId)
+      .catch((e) => ({ status: 0, text: String(e) }))
+    let roomData: any = null
+    try {
+      roomData = JSON.parse(api.text)?.data
+    } catch {}
+    const status = roomData?.status ?? null
+    log(`roomId=${roomId} api=${api.status} room.status=${status} (2=living,4=ended)`)
+    if (status !== 2) return { handle, roomId, status, candidates: [] }
+    const candidates = pickPullUrls(roomData).sort((a, b) => rank(b) - rank(a))
+    return { handle, roomId, status, candidates }
+  } catch (e) {
+    log(`persistent probe error: ${e instanceof Error ? e.message : String(e)}`)
+    await persistentBrowser?.close().catch(() => {})
+    persistentBrowser = null
+    persistentPage = null
+    return { handle, roomId: null, status: null, candidates: [] }
+  }
+}
 
 async function probeLive(): Promise<Probe> {
   const userDataDir = `/tmp/tt-watch-${handle}-${process.pid}-${Date.now()}`
@@ -473,7 +547,7 @@ function extractRoomIdFromHtml(html: string): string | null {
       httpProbes += 1
     }
     if (!probe || (probe.status === 2 && probe.candidates.length === 0)) {
-      probe = await probeLive()
+      probe = await persistentBrowserProbe()
       browserProbes += 1
     }
     if (probe.status === 2 && probe.roomId && probe.candidates.length) {
