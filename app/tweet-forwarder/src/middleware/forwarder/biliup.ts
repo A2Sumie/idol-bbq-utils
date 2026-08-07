@@ -1466,7 +1466,8 @@ async function completeBiliupUploadCandidateTags(
     candidate.config.tags = uniqueBiliupTags(candidate.config.tags, targetCount)
 
     const needTags = Boolean(article && tagGeneration && candidate.config.tags.length < targetCount)
-    const needTitle = Boolean(article && titleGeneration)
+    const hasTranslatableMetadata = article ? collectTextBlocks(article, texts).length > 0 : false
+    const needTitle = Boolean(article && titleGeneration && hasTranslatableMetadata)
 
     if (article && (needTags || needTitle)) {
         const tagProcessor = tagGeneration

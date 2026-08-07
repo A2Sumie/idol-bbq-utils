@@ -2151,6 +2151,64 @@ test('title_generation with separate credentials runs separately from tag_genera
     expect(candidate?.title).not.toContain('不应使用标签模型标题')
 })
 
+
+test('title_generation is skipped when the article has no translatable metadata', async () => {
+    const originalCreate = (processorRegistry as any).create
+    const calls: Array<{ provider: string }> = []
+    ;(processorRegistry as any).create = async (provider: string) => ({
+        process: async () => {
+            calls.push({ provider })
+            return JSON.stringify({ tags: ['月城咲舞'], title_zh: '不应被采用的标题' })
+        },
+        drop: async () => undefined,
+    })
+
+    const article = {
+        platform: Platform.TikTok,
+        type: 'video',
+        u_id: 'emma_tsukishiro',
+        username: '月城咲舞',
+        a_id: 'no-metadata-tt',
+        content: '',
+        created_at: 1781694017,
+        url: 'https://www.tiktok.com/@emma_tsukishiro/video/no-metadata-tt',
+    } as any
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/no-metadata-tt.mp4' }],
+        {
+            enabled: true,
+            tag_generation: {
+                enabled: true,
+                provider: 'TagProvider' as any,
+                api_key: 'tag-key',
+                target_count: 10,
+            },
+            title_generation: {
+                enabled: true,
+                provider: 'TitleProvider',
+                api_key: 'title-key',
+            },
+        },
+    )
+    const deterministicTitle = candidate?.title
+
+    try {
+        expect(candidate).toBeTruthy()
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    // Tag generation still ran, but the title model was never invoked: nothing exists to translate,
+    // so the deterministic template title is kept as-is instead of inventing a "XX发布于…" title.
+    expect(calls.map((call) => call.provider)).toEqual(['TagProvider'])
+    expect(candidate?.title).toBe(deterministicTitle)
+    expect(candidate?.title).not.toContain('不应被采用的标题')
+    expect(candidate?.config.tags).toContain('月城咲舞')
+})
+
 test('resolveVideoUploadConfig reuses tag_generation creds for title_generation by default', () => {
     const resolved = resolveVideoUploadConfig({
         enabled: true,
