@@ -91,3 +91,5 @@ services:
       # 8. 挂载宿主机字体（只读），浏览器字体指纹与真实机器一致
       - '/usr/share/fonts:/usr/share/fonts:ro'
       - '/var/cache/fontconfig:/var/cache/fontconfig:ro'
+      # 9. 挂载直播录制存档目录（容器重建不丢录制）
+      - './assets/tiktok-live-archive:/app/archive/tiktok-live'
