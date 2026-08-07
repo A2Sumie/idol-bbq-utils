@@ -292,7 +292,7 @@ test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 椎名桜月 26.03.20')
+    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 椎名桜月 03.20_26')
     expect(candidate?.description).toContain('来源平台: Instagram投稿')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: satsuki_shiina')
@@ -322,7 +322,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7 TikTok Member】[TT] TikTok Member 26.03.20 TT短视频正文')
+    expect(candidate?.title).toBe('【22/7 TikTok Member】[TT] TikTok Member 03.20_26 TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).not.toContain('TikTok')
@@ -336,7 +336,7 @@ test('completeBiliupUploadCandidateTags replaces title payload without appending
             calls.push({ provider, text })
             return JSON.stringify({
                 tags: ['ライブ配信', '京都出身', '三期生', '搬运', 'X'],
-                title_zh: '北原実咲 26.06.13 直播后的感谢',
+                title_zh: '北原実咲 06.13_26 直播后的感谢',
             })
         },
         drop: async () => undefined,
@@ -413,8 +413,8 @@ test('completeBiliupUploadCandidateTags replaces title payload without appending
         source_url: 'https://x.com/kitahara_misaki/status/1',
         original_first_line: '今日は配信ありがとうございました',
     })
-    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 直播后的感谢')
-    expect(candidate?.title).not.toContain('26.06.13 今日は')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 06.13_26 直播后的感谢')
+    expect(candidate?.title).not.toContain('06.13_26 今日は')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
         '22/7',
@@ -455,7 +455,7 @@ test('buildBiliupUploadCandidate falls back from empty-shell metadata titles', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 Unknown】[TT] Unknown 26.03.20')
+    expect(candidate?.title).toBe('【22/7 Unknown】[TT] Unknown 03.20_26')
     expect(candidate?.title).not.toBe('【】[TT]')
 })
 
@@ -515,7 +515,7 @@ test('title generation prompt forbids name+date over-simplification', async () =
     expect(prompt).not.toContain('信息不足则返回空字符串')
     expect(prompt).toContain('禁止把成员名、日期、时间、账号名或平台名作为标题主体')
     expect(prompt).toContain('具体描述视频内容或事件本身')
-    expect(candidate?.title).toBe('【22/7 北原実咲】[ins] 介绍自己养的兔子')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[ins] 06.13_26 介绍自己养的兔子')
 })
 
 test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', () => {
@@ -537,7 +537,7 @@ test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7】[X] 22/7 26.06.07 22/7_the 3rd')
+    expect(candidate?.title).toBe('【22/7】[X] 22/7 06.07_26 22/7_the 3rd')
 })
 
 test('buildBiliupUploadCandidate uses detected members instead of collection account names', () => {
@@ -560,7 +560,7 @@ test('buildBiliupUploadCandidate uses detected members instead of collection acc
     )
 
     expect(candidate?.title).toBe(
-        '【22/7 北原実咲 黒崎ありす】[ins] 北原実咲 黒崎ありす 26.03.20 北原実咲 黒崎ありす',
+        '【22/7 北原実咲 黒崎ありす】[ins] 北原実咲 黒崎ありす 03.20_26 北原実咲 黒崎ありす',
     )
     expect(candidate?.title).not.toContain('THE 3RD')
     expect(candidate?.description).toContain('来源账号: 北原実咲 黒崎ありす')
@@ -590,7 +590,7 @@ test('buildBiliupUploadCandidate resolves staff posts to mentioned members when 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 北原実咲 26.03.20 北原実咲の紹介動画')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 北原実咲 03.20_26 北原実咲の紹介動画')
     expect(candidate?.title).not.toContain('22/7(ナナブンノニジュウニ)')
     expect(candidate?.description).toContain('来源账号: 北原実咲')
     expect(candidate?.config.tags).toContain('北原実咲')
@@ -617,7 +617,7 @@ test('buildBiliupUploadCandidate maps decorative X nicknames to canonical member
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 望月りの】[X] 望月りの 26.03.20 本日18:00〜 もぐもぐ配信します')
+    expect(candidate?.title).toBe('【22/7 望月りの】[X] 望月りの 03.20_26 本日18:00〜 もぐもぐ配信します')
     expect(candidate?.description).toContain('来源账号: 望月りの')
 })
 
@@ -640,7 +640,7 @@ test('buildBiliupUploadCandidate maps configured Instagram handles to canonical 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 椎名桜月 26.03.20')
+    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 椎名桜月 03.20_26')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: shiina_satsuki227')
 })
@@ -667,7 +667,7 @@ test('buildBiliupUploadCandidate maps TikTok 22/7-prefixed nicknames to canonica
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 月城咲舞】[TT] 月城咲舞 26.03.20 TikTok本文')
+    expect(candidate?.title).toBe('【22/7 月城咲舞】[TT] 月城咲舞 03.20_26 TikTok本文')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
@@ -973,7 +973,7 @@ test('BiliForwarder applies runtime video upload metadata overrides', async () =
         })
 
         expect(result).toEqual([{ ok: true, mode: 'biliup' }])
-        expect(uploadedTitle).toBe('NEW TT TikTok Member 26.03.20 TT短视频正文')
+        expect(uploadedTitle).toBe('NEW TT TikTok Member 03.20_26 TT短视频正文')
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist

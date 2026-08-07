@@ -741,6 +741,7 @@ function formatDateTimeParts(timestampSeconds: number, timeZone: string) {
     return {
         date,
         date_short: dateShort,
+        date_code: `${parts.month}.${parts.day}_${String(parts.year || '').slice(-2)}`,
         time,
         datetime: `${date} ${time}`,
     }
@@ -754,8 +755,8 @@ function resolveUploadSummary(
 ) {
     const summary = primaryLine.trim()
     if ([Platform.Instagram, Platform.TikTok, Platform.X].includes(article.platform)) {
-        const prefix = [displayName, dateTime.date_short].filter(Boolean).join(' ').trim()
-        return [prefix, summary].filter(Boolean).join(' ').trim() || `${displayName} ${dateTime.datetime}`.trim()
+        const prefix = [displayName, dateTime.date_code].filter(Boolean).join(' ').trim()
+        return [prefix, summary].filter(Boolean).join(' ').trim() || `${displayName} ${dateTime.date_code}`.trim()
     }
     return summary || `${displayName} ${dateTime.datetime}`.trim()
 }
@@ -802,6 +803,7 @@ function buildTemplateContext(
         body_or_summary: body || summary,
         date: dateTime.date,
         date_short: dateTime.date_short,
+        date_code: dateTime.date_code,
         datetime: dateTime.datetime,
         display_name: displayName,
         platform_label: resolvePlatformLabel(article),
@@ -1354,8 +1356,14 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(
 
     const structuredMatch = currentTitle.match(/^(【[^】]+】(?:\[[^\]]+\])?\s*)(.+)$/)
     const fixedPrefix = structuredMatch?.[1] || ''
+    let payload = generatedTitle
+    // Guarantee the MM.DD_YY posting-date code survives LLM title replacement (social platforms).
+    const dateCode = currentTitle.match(/(\d{2}\.\d{2}_\d{2})/)?.[1]
+    if (dateCode && !payload.includes(dateCode)) {
+        payload = `${dateCode} ${payload}`.trim()
+    }
     if (!fixedPrefix) {
-        candidate.title = buildGeneratedBiliupTitlePayload(generatedTitle, MAX_BILIUP_TITLE_CHARS)
+        candidate.title = buildGeneratedBiliupTitlePayload(payload, MAX_BILIUP_TITLE_CHARS)
         return true
     }
 
@@ -1363,7 +1371,7 @@ function replaceBiliupTitlePayloadWithGeneratedChinese(
     if (availableTitleLength < 4) {
         return false
     }
-    candidate.title = `${fixedPrefix}${buildGeneratedBiliupTitlePayload(generatedTitle, availableTitleLength)}`
+    candidate.title = `${fixedPrefix}${buildGeneratedBiliupTitlePayload(payload, availableTitleLength)}`
     return true
 }
 
