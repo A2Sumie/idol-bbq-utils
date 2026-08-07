@@ -127,7 +127,7 @@ test('QQForwarder rejects OneBot failed JSON responses even when HTTP succeeds',
             url: 'http://127.0.0.1:3001',
             token: '',
         } as any,
-        'qq-onebot-response-test',
+        'qq-reject-test',
     )
 
     expect(() =>
@@ -214,6 +214,85 @@ test('QQForwarder can package text and media as OneBot merged-forward nodes', as
         { type: 'image', data: { file: 'file:///tmp/card.png' } },
         { type: 'video', data: { file: 'file:///tmp/source.mp4' } },
     ])
+})
+
+test('QQForwarder sends private messages to a user_id target', async () => {
+    const forwarder = new QQForwarder(
+        {
+            user_id: '1591192669',
+            url: 'http://127.0.0.1:3001',
+            token: '',
+        } as any,
+        'qq-private-test',
+    )
+    const payloads: any[] = []
+    ;(forwarder as any).sendWithPayload = async (segments: any) => {
+        payloads.push(segments)
+        return { ok: true }
+    }
+
+    await (forwarder as any).realSend(['private hello'], {
+        media: [{ media_type: 'photo', path: '/tmp/private.png' }],
+    })
+
+    expect(payloads).toEqual([
+        [
+            { type: 'text', data: { text: 'private hello' } },
+            { type: 'image', data: { file: 'file:///tmp/private.png' } },
+        ],
+    ])
+})
+
+test('QQForwarder private targets use send_private_msg over the OneBot API', async () => {
+    const forwarder = new QQForwarder(
+        {
+            user_id: '1591192669',
+            url: 'http://127.0.0.1:3001',
+            token: 'tok',
+        } as any,
+        'qq-private-api-test',
+    )
+    const calls: Array<{ path: string; body: any; headers: any }> = []
+    const originalPost = axios.post
+    ;(axios as any).post = async (path: string, body: any, options: any) => {
+        calls.push({ path, body, headers: options.headers })
+        return { data: { status: 'ok', retcode: 0 } }
+    }
+    try {
+        await (forwarder as any).sendWithPayload([{ type: 'text', data: { text: 'hi' } }])
+    } finally {
+        ;(axios as any).post = originalPost
+    }
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.path).toContain('/send_private_msg')
+    expect(calls[0]?.body).toMatchObject({ user_id: '1591192669', message: [{ type: 'text', data: { text: 'hi' } }] })
+    expect(calls[0]?.headers.Authorization).toBe('Bearer tok')
+})
+
+test('QQForwarder requires exactly one of group_id or user_id', () => {
+    expect(
+        () =>
+            new QQForwarder(
+                {
+                    url: 'http://127.0.0.1:3001',
+                    token: '',
+                } as any,
+                'qq-neither-test',
+            ),
+    ).toThrow(/exactly one of group_id or user_id/)
+    expect(
+        () =>
+            new QQForwarder(
+                {
+                    group_id: '123',
+                    user_id: '456',
+                    url: 'http://127.0.0.1:3001',
+                    token: '',
+                } as any,
+                'qq-both-test',
+            ),
+    ).toThrow(/exactly one of group_id or user_id/)
 })
 
 test('QQForwarder keeps media order inside merged-forward nodes', async () => {

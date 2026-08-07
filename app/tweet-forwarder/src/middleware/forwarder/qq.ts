@@ -39,7 +39,8 @@ type MergedForwardRuntimeConfig = {
 
 class QQForwarder extends Forwarder {
     static _PLATFORM = ForwardTargetPlatformEnum.QQ
-    private group_id: string
+    private group_id?: string
+    private user_id?: string
     private url: string
     private token: string
     NAME = 'qq'
@@ -48,13 +49,21 @@ class QQForwarder extends Forwarder {
     constructor(...[config, ...rest]: [...ConstructorParameters<typeof Forwarder>]) {
         super(config, ...rest)
         this.minInterval = 1000 // 1s
-        const { group_id, url, token } = config as ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.QQ>
-        if (!group_id || !url) {
-            throw new Error(`forwarder ${this.NAME} group_id and url is required`)
+        const { group_id, user_id, url, token } = config as ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.QQ>
+        if (!url) {
+            throw new Error(`forwarder ${this.NAME} url is required`)
         }
-        this.group_id = group_id
+        if (Boolean(group_id) === Boolean(user_id)) {
+            throw new Error(`forwarder ${this.NAME} requires exactly one of group_id or user_id`)
+        }
+        this.group_id = group_id ? String(group_id) : undefined
+        this.user_id = user_id ? String(user_id) : undefined
         this.url = url
         this.token = token
+    }
+
+    private isPrivateChat() {
+        return Boolean(this.user_id)
     }
 
     private normalizeMergedForwardConfig(props?: SendProps): MergedForwardRuntimeConfig {
@@ -259,6 +268,20 @@ class QQForwarder extends Forwarder {
     }
 
     async sendWithPayload(arr_of_segments: OneBotMessageSegment[]) {
+        if (this.isPrivateChat()) {
+            const res = await axios.post(
+                `${this.url}/send_private_msg`,
+                {
+                    user_id: this.user_id,
+                    message: arr_of_segments,
+                },
+                {
+                    headers: this.buildHeaders(),
+                },
+            )
+            this.assertOneBotResponseOk(res, 'send_private_msg')
+            return res
+        }
         const res = await axios.post(
             `${this.url}/send_group_msg`,
             {
@@ -282,6 +305,20 @@ class QQForwarder extends Forwarder {
                 content,
             },
         }))
+        if (this.isPrivateChat()) {
+            const res = await axios.post(
+                `${this.url}/send_private_forward_msg`,
+                {
+                    user_id: this.user_id,
+                    messages: nodes,
+                },
+                {
+                    headers: this.buildHeaders(),
+                },
+            )
+            this.assertOneBotResponseOk(res, 'send_private_forward_msg')
+            return res
+        }
         const res = await axios.post(
             `${this.url}/send_group_forward_msg`,
             {

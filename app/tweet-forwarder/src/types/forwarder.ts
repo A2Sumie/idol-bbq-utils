@@ -106,7 +106,15 @@ type PlatformConfigMap = {
      */
     [ForwardTargetPlatformEnum.QQ]: {
         url: string
-        group_id: string
+        /**
+         * Group chat target. Exactly one of group_id / user_id must be set.
+         */
+        group_id?: string
+        /**
+         * Private chat target (send_private_msg to an individual). Exactly one of
+         * group_id / user_id must be set.
+         */
+        user_id?: string
         token: string
         /**
          * Default is normal OneBot /send_group_msg. Set send_mode to merged_forward,

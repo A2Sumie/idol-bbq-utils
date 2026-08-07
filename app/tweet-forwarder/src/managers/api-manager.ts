@@ -740,6 +740,7 @@ export class APIManager extends BaseCompatibleModel {
         if (req.method === 'POST' && url.pathname === '/api/actions/articles/resend')
             return this.handleArticleResend(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/qq/x-link') return this.handleQqXLink(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/qq/send') return this.handleQqSend(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/processors/run') return this.handleProcessorRun(req)
 
         return new Response(`Not Found: ${req.method} ${url.pathname}`, { status: 404 })
@@ -2452,10 +2453,95 @@ export class APIManager extends BaseCompatibleModel {
         }
     }
 
+    /**
+     * Convenience backup interface to send a QQ message through the configured OneBot/NapCat
+     * endpoint. Requires exactly one of user_id (private) / group_id (group). The endpoint and
+     * token default to the first configured QQ forward target and can be overridden per request.
+     */
+    private async handleQqSend(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('QQ send')
+        if (disabled) return disabled
+
+        const body = (await req.json()) as {
+            user_id?: string | number
+            group_id?: string | number
+            message?: unknown
+            url?: string
+            token?: string
+        }
+        const message = body.message
+        if (message === undefined || message === null || message === '') {
+            return jsonResponse({ success: false, error: 'message_required' }, 400)
+        }
+        const userId = body.user_id !== undefined && body.user_id !== null
+            ? String(body.user_id).trim()
+            : ''
+        const groupId = body.group_id !== undefined && body.group_id !== null
+            ? String(body.group_id).trim()
+            : ''
+        if (Boolean(userId) === Boolean(groupId)) {
+            return jsonResponse({ success: false, error: 'exactly_one_of_user_id_group_id_required' }, 400)
+        }
+
+        const qqTarget = (this.config.forward_targets || []).find(
+            (target) => target.platform === ForwardTargetPlatformEnum.QQ,
+        )
+        const targetPlatform = (qqTarget?.cfg_platform || {}) as {
+            url?: string
+            token?: string
+        }
+        const endpoint = String(body.url?.trim() || targetPlatform.url || '').replace(/\/+$/, '')
+        const token = String(body.token?.trim() || targetPlatform.token || '').trim()
+        if (!endpoint) {
+            return jsonResponse({ success: false, error: 'qq_endpoint_required' }, 400)
+        }
+
+        const segments =
+            typeof message === 'string'
+                ? [{ type: 'text', data: { text: message } }]
+                : Array.isArray(message)
+                  ? (message as Array<Record<string, any>>)
+                  : null
+        if (!segments || segments.length === 0) {
+            return jsonResponse({ success: false, error: 'invalid_message' }, 400)
+        }
+
+        const path = userId ? 'send_private_msg' : 'send_group_msg'
+        const payload = userId ? { user_id: userId, message: segments } : { group_id: groupId, message: segments }
+        try {
+            const res = await axios.post(`${endpoint}/${path}`, payload, {
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+                timeout: 15000,
+            })
+            const data = res?.data
+            const status = String(data?.status || '')
+                .trim()
+                .toLowerCase()
+            const retcode = data?.retcode
+            if ((status && status !== 'ok') || (retcode !== undefined && Number(retcode) !== 0)) {
+                return jsonResponse(
+                    {
+                        success: false,
+                        error: 'onebot_rejected',
+                        detail: String(data?.message || data?.wording || data?.msg || res?.statusText || ''),
+                    },
+                    502,
+                )
+            }
+            return jsonResponse({ success: true, path, data })
+        } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            this.log?.error(`QQ send failed: ${detail}`)
+            return jsonResponse({ success: false, error: 'qq_send_failed', detail }, 502)
+        }
+    }
+
     private async handleQqXLink(req: Request): Promise<Response> {
         const disabled = this.rejectUnlessOnline('QQ X link immediate send')
         if (disabled) return disabled
-
         const body = (await req.json()) as {
             post_type?: string
             url?: string
