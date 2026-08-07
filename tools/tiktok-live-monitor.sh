@@ -94,7 +94,11 @@ watcher_alive() {
 }
 
 echo "[monitor] start handle=$HANDLE until=$UNTIL deadline=$(date -d @"$DEADLINE" '+%F %T %Z') check_every=${CHECK_EVERY}s"
-relaunch || echo "[monitor] initial launch failed" >&2
+if watcher_alive; then
+  echo "[monitor] watcher already alive; not relaunching"
+else
+  relaunch || echo "[monitor] initial launch failed" >&2
+fi
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   sleep "$CHECK_EVERY"
