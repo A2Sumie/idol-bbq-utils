@@ -70,6 +70,7 @@ test('buildMessageBoardArticle maps message fields into a website article', () =
         platform: '',
         body: 'お願いします！',
         remoteIp: '1.2.3.4',
+        replyBiscuit: 'bk-igopfr-LAhchEipT',
         replyCode: 'k2x9vQnTzRwA',
         replyCount: 3,
     })
@@ -89,7 +90,7 @@ test('buildMessageBoardArticle maps message fields into a website article', () =
     expect(article.content).toContain('希望回复: 是')
     expect(article.content).toContain('署名: 坂本')
     expect(article.content).toContain('联系方式: qq / 123456')
-    expect(article.content).toContain('追踪: 代码=k2x9vQnTzRwA 累计提交=3次')
+    expect(article.content).toContain('追踪: 饼干=bk-igopfr-LAhchEipT 代码=k2x9vQnTzRwA 累计提交=3次')
     expect(article.content).toContain('正文:\nお願いします！')
     const data = (article.extra as any).data
     expect(data).toMatchObject({
@@ -102,6 +103,7 @@ test('buildMessageBoardArticle maps message fields into a website article', () =
         contact_type: 'qq',
         contact: '123456',
         time_source: 'explicit',
+        reply_biscuit: 'bk-igopfr-LAhchEipT',
         reply_code: 'k2x9vQnTzRwA',
         reply_count: 3,
     })
@@ -136,6 +138,7 @@ test('buildMessageBoardArticle handles anonymous messages', () => {
     const data = (article.extra as any).data
     expect(data.anonymous).toBeTrue()
     expect(data.contact).toBeNull()
+    expect(data.reply_biscuit).toBeNull()
     expect(data.reply_code).toBeNull()
     expect(data.reply_count).toBeNull()
 })
