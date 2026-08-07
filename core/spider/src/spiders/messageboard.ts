@@ -154,6 +154,8 @@ export async function readMessageBoardMessages(options: MessageBoardReadOptions 
     let handshakeDone = false
     let authed = false
     let listed = false
+    let seenSealedFrame = false
+    let thisPollUnread = 0
     let settleError: unknown = null
     let settled = false
 
@@ -220,6 +222,7 @@ export async function readMessageBoardMessages(options: MessageBoardReadOptions 
                     return
                 }
                 if (frame.type === 'flannel') {
+                    seenSealedFrame = true
                     const plain = await unsealMessageBoardMessage<Record<string, any>>(sessionKey!, raw)
                     if (plain.type === 'lattice') {
                         settle(new Error(`留言板 auth rejected: ${String(plain.albacore || 'Bad code')}`))
@@ -228,6 +231,21 @@ export async function readMessageBoardMessages(options: MessageBoardReadOptions 
                     }
                     if (plain.type === 'egret') {
                         authed = true
+                        // Poll first: cheap unread hint (a few dozen bytes) instead of always
+                        // transferring the full list. Only pull the list when there is anything new.
+                        ws.send(await sealMessageBoardMessage(sessionKey!, { type: 'quail' }))
+                        return
+                    }
+                    if (plain.type === 'raccoon') {
+                        const unread = Number(plain.unread)
+                        if (!(unread > 0)) {
+                            // Nothing new: disconnect without transferring any message bodies.
+                            thisPollUnread = 0
+                            settle()
+                            resolve()
+                            return
+                        }
+                        thisPollUnread = unread
                         ws.send(await sealMessageBoardMessage(sessionKey!, { type: 'narcissus' }))
                         return
                     }
@@ -266,7 +284,7 @@ export async function readMessageBoardMessages(options: MessageBoardReadOptions 
 
         ws.onclose = () => {
             clearTimeout(timer)
-            if (!settled && !listed) {
+            if (!settled && !listed && !seenSealedFrame) {
                 const error = new Error('留言板 connection closed before marmot')
                 settle(error)
                 reject(error)

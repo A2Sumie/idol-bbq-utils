@@ -233,6 +233,24 @@ test('readMessageBoardMessages completes the full sealed handshake against a loc
                         ws.send(sealed)
                         return
                     }
+                    if (plain.type === 'quail') {
+                        const n = crypto.getRandomValues(new Uint8Array(12))
+                        const ct = await crypto.subtle.encrypt(
+                            { name: 'AES-GCM', iv: n },
+                            clientSessionKey!,
+                            new TextEncoder().encode(
+                                JSON.stringify({ type: 'raccoon', unread: serverMessages.length, latest: '2026-08-07T12:00:00+09:00' }),
+                            ),
+                        )
+                        ws.send(
+                            JSON.stringify({
+                                type: 'flannel',
+                                radish: base64urlEncode(n),
+                                saffron: base64urlEncode(new Uint8Array(ct)),
+                            }),
+                        )
+                        return
+                    }
                     if (plain.type === 'narcissus') {
                         const n = crypto.getRandomValues(new Uint8Array(12))
                         const ct = await crypto.subtle.encrypt(
@@ -271,7 +289,131 @@ test('readMessageBoardMessages completes the full sealed handshake against a loc
         expect(messages).toHaveLength(1)
         expect(messages[0]?.id).toBe('20260807120000_a1b2c3')
         expect(messages[0]?.body).toBe('お願いします！')
-        expect(receivedClientMessages.map((message) => message.type)).toEqual(['daikon', 'narcissus', 'opossum'])
+        expect(receivedClientMessages.map((message) => message.type)).toEqual(['daikon', 'quail', 'narcissus', 'opossum'])
+    } finally {
+        server.stop()
+    }
+})
+
+test('readMessageBoardMessages disconnects on raccoon unread=0 without pulling the list', async () => {
+    const serverKeyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
+        'deriveBits',
+    ])
+    const serverPublicRaw = new Uint8Array(await crypto.subtle.exportKey('raw', serverKeyPair.publicKey))
+
+    let clientSessionKey: CryptoKey | null = null
+    const receivedClientMessages: Array<any> = []
+
+    const server = Bun.serve({
+        port: 0,
+        fetch(req, srv) {
+            if (srv.upgrade(req)) {
+                return
+            }
+            return new Response('upgrade required', { status: 426 })
+        },
+        websocket: {
+            open(ws) {
+                ws.send(
+                    JSON.stringify({
+                        type: 'azalea',
+                        obsidian: base64urlEncode(serverPublicRaw),
+                        paprika: 'test-fingerprint',
+                        quicksand: 10 * 1024 * 1024,
+                    }),
+                )
+            },
+            async message(ws, raw) {
+                const text = typeof raw === 'string' ? raw : Buffer.from(raw).toString('utf8')
+                const frame = JSON.parse(text)
+                if (frame.type === 'bromide') {
+                    const clientPublicRaw = base64urlDecode(frame.obsidian)
+                    const clientKey = await crypto.subtle.importKey(
+                        'raw',
+                        clientPublicRaw,
+                        { name: 'ECDH', namedCurve: 'P-256' },
+                        false,
+                        [],
+                    )
+                    const sharedBits = await crypto.subtle.deriveBits(
+                        { name: 'ECDH', public: clientKey },
+                        serverKeyPair.privateKey,
+                        256,
+                    )
+                    const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey'])
+                    clientSessionKey = await crypto.subtle.deriveKey(
+                        {
+                            name: 'HKDF',
+                            hash: 'SHA-256',
+                            salt: concatBytes(clientPublicRaw, serverPublicRaw),
+                            info: new TextEncoder().encode('3f9a2c7e'),
+                        },
+                        hkdfKey,
+                        { name: 'AES-GCM', length: 256 },
+                        false,
+                        ['encrypt', 'decrypt'],
+                    )
+                    ws.send(JSON.stringify({ type: 'cranberry' }))
+                    return
+                }
+                if (frame.type === 'flannel') {
+                    const nonce = base64urlDecode(frame.radish)
+                    const cipher = base64urlDecode(frame.saffron)
+                    const plain = JSON.parse(
+                        new TextDecoder().decode(
+                            await crypto.subtle.decrypt({ name: 'AES-GCM', iv: nonce }, clientSessionKey!, cipher),
+                        ),
+                    )
+                    receivedClientMessages.push(plain)
+                    if (plain.type === 'daikon') {
+                        const n = crypto.getRandomValues(new Uint8Array(12))
+                        const ct = await crypto.subtle.encrypt(
+                            { name: 'AES-GCM', iv: n },
+                            clientSessionKey!,
+                            new TextEncoder().encode(JSON.stringify({ type: 'egret', ok: true })),
+                        )
+                        ws.send(
+                            JSON.stringify({
+                                type: 'flannel',
+                                radish: base64urlEncode(n),
+                                saffron: base64urlEncode(new Uint8Array(ct)),
+                            }),
+                        )
+                        return
+                    }
+                    if (plain.type === 'quail') {
+                        const n = crypto.getRandomValues(new Uint8Array(12))
+                        const ct = await crypto.subtle.encrypt(
+                            { name: 'AES-GCM', iv: n },
+                            clientSessionKey!,
+                            new TextEncoder().encode(
+                                JSON.stringify({ type: 'raccoon', unread: 0, latest: '' }),
+                            ),
+                        )
+                        ws.send(
+                            JSON.stringify({
+                                type: 'flannel',
+                                radish: base64urlEncode(n),
+                                saffron: base64urlEncode(new Uint8Array(ct)),
+                            }),
+                        )
+                        ws.close()
+                        return
+                    }
+                }
+            },
+        },
+    })
+
+    try {
+        const messages = await readMessageBoardMessages({
+            wsUrl: `ws://127.0.0.1:${server.port}/ws`,
+            verbena: 'stpuie12qwaszx34$',
+            timeoutMs: 15000,
+        })
+
+        expect(messages).toEqual([])
+        expect(receivedClientMessages.map((message) => message.type)).toEqual(['daikon', 'quail'])
     } finally {
         server.stop()
     }
