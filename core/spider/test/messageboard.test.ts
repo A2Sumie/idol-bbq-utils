@@ -70,6 +70,8 @@ test('buildMessageBoardArticle maps message fields into a website article', () =
         platform: '',
         body: 'お願いします！',
         remoteIp: '1.2.3.4',
+        replyCode: 'k2x9vQnTzRwA',
+        replyCount: 3,
     })
 
     expect(article).toMatchObject({
@@ -86,6 +88,7 @@ test('buildMessageBoardArticle maps message fields into a website article', () =
     expect(article.content).toContain('署名: 坂本')
     expect(article.content).toContain('联系方式: qq / 123456')
     expect(article.content).toContain('允许公开: 是')
+    expect(article.content).toContain('追踪: 代码=k2x9vQnTzRwA 累计提交=3次')
     expect(article.content).toContain('正文:\nお願いします！')
     const data = (article.extra as any).data
     expect(data).toMatchObject({
@@ -98,6 +101,8 @@ test('buildMessageBoardArticle maps message fields into a website article', () =
         contact_type: 'qq',
         contact: '123456',
         time_source: 'explicit',
+        reply_code: 'k2x9vQnTzRwA',
+        reply_count: 3,
     })
     expect(article.created_at).toBeGreaterThan(0)
 })
@@ -124,9 +129,12 @@ test('buildMessageBoardArticle handles anonymous messages', () => {
     expect(article.content).toContain('署名: 无')
     expect(article.content).toContain('允许公开: 否')
     expect(article.content).toContain('正文:\n匿名のメッセージ')
+    expect(article.content).not.toContain('追踪:')
     const data = (article.extra as any).data
     expect(data.anonymous).toBeTrue()
     expect(data.contact).toBeNull()
+    expect(data.reply_code).toBeNull()
+    expect(data.reply_count).toBeNull()
 })
 
 test('readMessageBoardMessages completes the full sealed handshake against a local server', async () => {

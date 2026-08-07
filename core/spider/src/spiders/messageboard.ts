@@ -45,6 +45,8 @@ export interface MessageBoardMessage {
     platform?: string
     body?: string
     remoteIp?: string
+    replyCode?: string | null
+    replyCount?: number | null
 }
 
 export interface MessageBoardReadOptions {
@@ -315,6 +317,7 @@ export function buildMessageBoardArticle(message: MessageBoardMessage): GenericA
         `署名: ${message.anonymous || !message.name ? '无' : String(message.name).trim()}`,
         `联系方式: ${contactParts.length > 0 ? contactParts.join(' / ') : '无'}`,
         `允许公开: ${message.publicReply === true ? '是' : '否'}`,
+        message.replyCode ? `追踪: 代码=${message.replyCode} 累计提交=${message.replyCount ?? 0}次` : '',
         rawBody ? `正文:\n${rawBody}` : '正文: (空)',
     ].join('\n')
 
@@ -349,6 +352,8 @@ export function buildMessageBoardArticle(message: MessageBoardMessage): GenericA
                 contact_type: message.contactType || null,
                 contact: message.contact || null,
                 platform: message.platform || null,
+                reply_code: message.replyCode || null,
+                reply_count: message.replyCount ?? null,
             },
             content: title || undefined,
             media: undefined,
