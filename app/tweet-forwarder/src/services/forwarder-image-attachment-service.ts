@@ -7,7 +7,9 @@ import fs from 'fs'
 import path from 'path'
 
 const DEFAULT_FORWARDER_IMAGE_MAX_BYTES = 4_000_000
-const DEFAULT_FORWARDER_IMAGE_MAX_EDGE_PX = 30_000
+// 30000px cards (13-photo blog renders) exceed QQ rich media transfer limits (~25600px longest edge)
+// and are rejected with -1 rich media transfer failed; keep chunks well under QQ/Bilibili caps.
+const DEFAULT_FORWARDER_IMAGE_MAX_EDGE_PX = 10_000
 const DEFAULT_FORWARDER_IMAGE_MAX_PIXELS = 40_000_000
 const COMPRESSED_IMAGE_DIR = path.join(CACHE_DIR_ROOT, 'media', 'forwarder-compressed')
 
