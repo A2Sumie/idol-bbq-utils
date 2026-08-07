@@ -266,6 +266,18 @@ function buildHeaders(): string {
   return `User-Agent: ${ua}\r\nReferer: https://www.tiktok.com/@${handle}/live\r\nOrigin: https://www.tiktok.com\r\nCookie: ${cookieHeader}\r\n`
 }
 
+function buildFetchHeaders(): Record<string, string> {
+  const cookies = parseCookies(cookiePath)
+  const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+  return {
+    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36',
+    Referer: `https://www.tiktok.com/@${handle}/live`,
+    Origin: 'https://www.tiktok.com',
+    'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
+    Cookie: cookieHeader,
+  }
+}
+
 function probeMedia(file: string): Record<string, any> {
   try {
     const res = spawnSync(ffprobeBin, ['-v', 'error', '-show_entries', 'format=duration,size:stream=index,codec_name,codec_type,width,height,avg_frame_rate,sample_rate,channels', '-of', 'json', file], { encoding: 'utf8' })
@@ -374,18 +386,77 @@ async function captureSegment(probe: Extract<Probe, { candidates: Candidate[] }>
   return false
 }
 
-// Probe cadence: base poll plus jitter, with idle backoff once the room has been
-// non-live for a while. A rigid 15s cycle on tiktok.com (especially on the same
-// handle the social crawler also visits) triggers 429 rate limiting that poisons
-// the regular TikTok detection; jitter + backoff keeps pressure human-like while
-// still catching the live start within ~90s worst case.
-function nextProbeDelayMs(idleStreak: number) {
+// Probe cadence: tight with jitter so the live start is always caught within a few
+// seconds, while the random walk keeps the pattern human-like. Idle probes are served
+// by the lightweight HTTP path (probeLiveHttp) instead of a full browser page load,
+// so frequent probing never hammers the shared IP the regular TikTok crawler uses.
+function nextProbeDelayMs() {
     const base = Math.max(1, pollSeconds) * 1000
-    let delay = base + Math.floor(Math.random() * base)
-    if (idleStreak >= 8) {
-        delay = Math.max(delay, 45_000 + Math.floor(Math.random() * 45_000))
+    return base + Math.floor(Math.random() * Math.min(base, 8_000))
+}
+
+async function probeLiveHttp(): Promise<Probe | null> {
+    const headers = buildFetchHeaders()
+    let res: Response
+    try {
+        res = await fetch(`https://www.tiktok.com/@${handle}/live`, {
+            headers,
+            redirect: 'follow',
+            signal: AbortSignal.timeout(15_000),
+        })
+    } catch {
+        return null
     }
-    return Math.min(120_000, delay)
+    if (!res.ok) {
+        return null
+    }
+    const html = await res.text()
+    if (html.length < 5_000 || !html.includes('liveRoomUserInfo')) {
+        return null
+    }
+    const roomId = extractRoomIdFromHtml(html)
+    if (!roomId) {
+        return { handle, roomId: null, status: null, candidates: [] }
+    }
+    let api: Response
+    try {
+        api = await fetch(
+            `https://webcast.tiktok.com/webcast/room/info/?aid=1988&app_language=ja&room_id=${roomId}`,
+            { headers, signal: AbortSignal.timeout(10_000) },
+        )
+    } catch {
+        return { handle, roomId, status: null, candidates: [] }
+    }
+    let roomData: any = null
+    try {
+        roomData = JSON.parse(await api.text())?.data
+    } catch {
+        return { handle, roomId, status: null, candidates: [] }
+    }
+    const status = roomData?.status ?? null
+    if (status !== 2) {
+        return { handle, roomId, status, candidates: [] }
+    }
+    return { handle, roomId, status, candidates: pickPullUrls(roomData) }
+}
+
+function extractRoomIdFromHtml(html: string): string | null {
+    const section = html.slice(html.indexOf('liveRoomUserInfo'), html.indexOf('liveRoomUserInfo') + 20_000)
+    const candidates = [
+        /(?:roomId|room_id)["']?\s*[:=]\s*["']?(\d+)/g,
+        /"roomId":"(\d+)"/g,
+    ]
+    for (const pattern of candidates) {
+        const match = section.match(pattern)
+        if (match) {
+            const first = match[0]
+            const number = first.match(/(\d+)/)?.[1]
+            if (number) {
+                return number
+            }
+        }
+    }
+    return null
 }
 
 ;(async () => {
@@ -394,11 +465,18 @@ function nextProbeDelayMs(idleStreak: number) {
   log(`watch start handle=${handle} until=${untilHHMM || '(max-minutes)'} deadline=${new Date(deadlineMs).toISOString()} poll=${pollSeconds}s once=${once}`)
   let endedStreak = 0
   let firstEndedAt = 0
-  let idleStreak = 0
+  let httpProbes = 0
+  let browserProbes = 0
   while (Date.now() < deadlineMs && !stopping) {
-    const probe = await probeLive()
+    let probe = await probeLiveHttp()
+    if (probe) {
+      httpProbes += 1
+    }
+    if (!probe || (probe.status === 2 && probe.candidates.length === 0)) {
+      probe = await probeLive()
+      browserProbes += 1
+    }
     if (probe.status === 2 && probe.roomId && probe.candidates.length) {
-      idleStreak = 0
       endedStreak = 0
       firstEndedAt = 0
       const wrote = await captureSegment(probe as any)
@@ -408,12 +486,10 @@ function nextProbeDelayMs(idleStreak: number) {
         continue
       }
     } else if (session && probe.status === 4) {
-      idleStreak += 1
       endedStreak += 1
       if (!firstEndedAt) firstEndedAt = Date.now()
       log(`ended confirmation ${endedStreak}/3; elapsed=${Math.floor((Date.now() - firstEndedAt) / 1000)}s/300s`)
     } else {
-      idleStreak += 1
       endedStreak = 0
       firstEndedAt = 0
     }
@@ -426,7 +502,7 @@ function nextProbeDelayMs(idleStreak: number) {
     }
     if (once && !session) { log('once mode: not live now, exiting'); break }
     if (stopping) break
-    await new Promise((r) => setTimeout(r, nextProbeDelayMs(idleStreak)))
+    await new Promise((r) => setTimeout(r, nextProbeDelayMs()))
   }
   if (session) writeManifest(session)
   log(`watch end (${stopping ? 'stopped' : 'deadline reached or once'})`)
