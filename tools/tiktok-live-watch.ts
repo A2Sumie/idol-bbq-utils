@@ -374,15 +374,31 @@ async function captureSegment(probe: Extract<Probe, { candidates: Candidate[] }>
   return false
 }
 
+// Probe cadence: base poll plus jitter, with idle backoff once the room has been
+// non-live for a while. A rigid 15s cycle on tiktok.com (especially on the same
+// handle the social crawler also visits) triggers 429 rate limiting that poisons
+// the regular TikTok detection; jitter + backoff keeps pressure human-like while
+// still catching the live start within ~90s worst case.
+function nextProbeDelayMs(idleStreak: number) {
+    const base = Math.max(1, pollSeconds) * 1000
+    let delay = base + Math.floor(Math.random() * base)
+    if (idleStreak >= 8) {
+        delay = Math.max(delay, 45_000 + Math.floor(Math.random() * 45_000))
+    }
+    return Math.min(120_000, delay)
+}
+
 ;(async () => {
   if (!acquireLock()) { log(`another watcher holds ${lockPath}; exiting`); process.exit(0) }
   startCleanupMonitor()
   log(`watch start handle=${handle} until=${untilHHMM || '(max-minutes)'} deadline=${new Date(deadlineMs).toISOString()} poll=${pollSeconds}s once=${once}`)
   let endedStreak = 0
   let firstEndedAt = 0
+  let idleStreak = 0
   while (Date.now() < deadlineMs && !stopping) {
     const probe = await probeLive()
     if (probe.status === 2 && probe.roomId && probe.candidates.length) {
+      idleStreak = 0
       endedStreak = 0
       firstEndedAt = 0
       const wrote = await captureSegment(probe as any)
@@ -392,10 +408,12 @@ async function captureSegment(probe: Extract<Probe, { candidates: Candidate[] }>
         continue
       }
     } else if (session && probe.status === 4) {
+      idleStreak += 1
       endedStreak += 1
       if (!firstEndedAt) firstEndedAt = Date.now()
       log(`ended confirmation ${endedStreak}/3; elapsed=${Math.floor((Date.now() - firstEndedAt) / 1000)}s/300s`)
-    } else if (session) {
+    } else {
+      idleStreak += 1
       endedStreak = 0
       firstEndedAt = 0
     }
@@ -408,7 +426,7 @@ async function captureSegment(probe: Extract<Probe, { candidates: Candidate[] }>
     }
     if (once && !session) { log('once mode: not live now, exiting'); break }
     if (stopping) break
-    await new Promise((r) => setTimeout(r, pollSeconds * 1000))
+    await new Promise((r) => setTimeout(r, nextProbeDelayMs(idleStreak)))
   }
   if (session) writeManifest(session)
   log(`watch end (${stopping ? 'stopped' : 'deadline reached or once'})`)
