@@ -356,6 +356,11 @@ export class RenderService {
         } else if (render_type === 'text-compact') {
             text = this.renderText(article, config)
             textCollapseMode = 'compact-article'
+        } else if (render_type === 'raw-text') {
+            // Internal/tool surfaces: send the article content verbatim, no header, no card, no
+            // attribution. The content is expected to be a self-contained formatted message.
+            text = String(article.content || '').trim()
+            textCollapseMode = 'none'
         } else {
             // Case 5: Standard Text
             text = this.renderText(article, config)

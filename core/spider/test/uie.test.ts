@@ -80,9 +80,13 @@ test('buildUieArticle maps message fields into a website article', () => {
         type: 'article',
         url: 'https://drop.n2nj.moe/',
     })
-    expect(article.content).toContain('【坂本】')
-    expect(article.content).toContain('お願いします！')
+    expect(article.content).toContain('【UIE留言 20260807120000_a1b2c3】')
+    expect(article.content).toContain('时间: 2026-08-07T12:00:00+09:00')
+    expect(article.content).toContain('匿名: 否')
+    expect(article.content).toContain('署名: 坂本')
     expect(article.content).toContain('联系方式: qq / 123456')
+    expect(article.content).toContain('允许公开: 是')
+    expect(article.content).toContain('正文:\nお願いします！')
     const data = (article.extra as any).data
     expect(data).toMatchObject({
         site: 'UIE',
@@ -115,7 +119,11 @@ test('buildUieArticle handles anonymous messages', () => {
     })
 
     expect(article.username).toBe('匿名留言')
-    expect(article.content).toContain('【匿名留言】')
+    expect(article.content).toContain('【UIE留言 20260807120001_ff00】')
+    expect(article.content).toContain('匿名: 是')
+    expect(article.content).toContain('署名: 无')
+    expect(article.content).toContain('允许公开: 否')
+    expect(article.content).toContain('正文:\n匿名のメッセージ')
     const data = (article.extra as any).data
     expect(data.anonymous).toBeTrue()
     expect(data.contact).toBeNull()

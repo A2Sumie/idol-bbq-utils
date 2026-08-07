@@ -203,6 +203,47 @@ describe('shouldRunYtDlpForArticle', () => {
 })
 
 describe('RenderService text-compact', () => {
+    test('raw-text sends the article content verbatim without header or cards', async () => {
+        const service = new RenderService()
+        const content = [
+            '【UIE留言 20260807031746_0af01814】',
+            '时间: 2026-08-07T03:17:46.403Z',
+            '目标: uie',
+            '匿名: 是',
+            '允许公开: 否',
+            '正文:',
+            'test2',
+        ].join('\n')
+        const result = await service.process(
+            {
+                id: 3,
+                a_id: '20260807031746_0af01814',
+                u_id: 'uie:message',
+                username: '匿名留言',
+                created_at: 1710000000,
+                content,
+                translation: null,
+                translated_by: null,
+                url: 'https://drop.n2nj.moe/',
+                type: 'article',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+                platform: Platform.Website,
+            },
+            {
+                taskId: 'test-uie-raw',
+                render_type: 'raw-text',
+            },
+        )
+
+        expect(result.text).toBe(content)
+        expect(result.cardMediaFiles).toEqual([])
+        expect(result.textCollapseMode).toBe('none')
+    })
+
     test('shortens X quote metadata without losing the quote signal', async () => {
         const service = new RenderService()
         const expectedTime = formatArticleTimeToken(1710000000)

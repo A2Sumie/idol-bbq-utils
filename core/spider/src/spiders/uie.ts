@@ -289,9 +289,16 @@ export function buildUieArticle(message: UieMessage): GenericArticle<Platform.We
     const contactParts = [message.contactType, message.contact, message.platform]
         .map((part) => String(part || '').trim())
         .filter(Boolean)
-    const content = [title ? `【${title}】` : '', rawBody, contactParts.length > 0 ? `联系方式: ${contactParts.join(' / ')}` : '']
-        .filter(Boolean)
-        .join('\n\n')
+    const content = [
+        `【UIE留言 ${message.id}】`,
+        `时间: ${message.ts || '未知'}`,
+        `目标: ${message.to || 'uie'}`,
+        `匿名: ${message.anonymous === true ? '是' : '否'}`,
+        `署名: ${message.anonymous || !message.name ? '无' : String(message.name).trim()}`,
+        `联系方式: ${contactParts.length > 0 ? contactParts.join(' / ') : '无'}`,
+        `允许公开: ${message.publicReply === true ? '是' : '否'}`,
+        rawBody ? `正文:\n${rawBody}` : '正文: (空)',
+    ].join('\n')
 
     return {
         platform: Platform.Website,
@@ -299,8 +306,8 @@ export function buildUieArticle(message: UieMessage): GenericArticle<Platform.We
         u_id: 'uie:message',
         username: title,
         created_at: validCreatedAt || crawledAt,
-        content: content || title || null,
-        url: `https://drop.n2nj.moe/` ,
+        content,
+        url: `https://drop.n2nj.moe/`,
         type: ArticleTypeEnum.ARTICLE,
         ref: null,
         has_media: false,
