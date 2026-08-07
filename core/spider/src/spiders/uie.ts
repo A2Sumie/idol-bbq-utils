@@ -26,6 +26,11 @@ export const UIE_WS_URL = 'wss://drop.n2nj.moe/ws'
 export const UIE_KDF_INFO = '3f9a2c7e'
 export const UIE_AUTH_PREFIX = 'stp'
 export const UIE_READ_TIMEOUT_MS = 20000
+// Cloudflare edge rejects the WS upgrade without a browser-ish UA / matching Origin.
+export const UIE_WS_HEADERS: Record<string, string> = {
+    'User-Agent': 'N2NJ-Stream-Bot/1.0',
+    Origin: 'https://drop.n2nj.moe',
+}
 
 export interface UieMessage {
     id: string
@@ -139,7 +144,9 @@ export async function readUieMessages(options: UieReadOptions = {}): Promise<Arr
         throw new Error('UIE reader requires UIE_PASSWORD')
     }
     const timeoutMs = Math.max(5000, Number(options.timeoutMs) || UIE_READ_TIMEOUT_MS)
-    const connectImpl = options.connectImpl || ((url: string) => new WebSocket(url))
+    const connectImpl =
+        options.connectImpl ||
+        ((url: string) => new WebSocket(url, { headers: UIE_WS_HEADERS } as any))
     const ws = connectImpl(wsUrl)
 
     const messages: Array<UieMessage> = []
