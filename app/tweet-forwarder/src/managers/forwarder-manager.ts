@@ -4066,13 +4066,11 @@ class ForwarderPools extends BaseCompatibleModel {
                 skippedDuplicate: false,
             }
         }
-        if (log?.debug) {
-            log.debug(
-                `Summary realtime media origin for ${article.a_id} to ${target.id}: ${mediaFiles
-                    .map((file) => `${file.media_type}:${file.sourceUrl || file.path}`)
-                    .join(',')}`,
-            )
-        }
+        log?.warn(
+            `Summary realtime media origin for ${article.a_id} to ${target.id}: ${mediaFiles
+                .map((file) => `${file.media_type}:${file.sourceUrl || file.path}`)
+                .join(',')}`,
+        )
         const cardRenderResult = await this.buildSummaryRealtimeCardRenderResultForTarget(
             article,
             target,
