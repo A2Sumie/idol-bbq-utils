@@ -832,6 +832,15 @@ class BiliForwarder extends Forwarder {
             const MAX_PICS = 9
             const picChunks = chunk(pics, MAX_PICS)
 
+            // If the final payload has no successfully uploaded NEW image at all, do not post a
+            // separate text-only dynamic (reposts/quotes and throttled-away photos included).
+            if (pics.length === 0) {
+                this.log?.warn(
+                    `Suppressing text-only Bilibili dynamic for ${props?.article?.a_id || 'unknown'}: no new image produced`,
+                )
+                return [{ ok: true, mode: 'no_new_image_suppressed' }]
+            }
+
             const textChunks = missingPhotoDueToThrottle ? this.markTextWithMissingMedia(texts) : texts.length > 0 ? texts : []
 
             const n = Math.max(picChunks.length, textChunks.length)
