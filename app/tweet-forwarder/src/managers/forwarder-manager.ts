@@ -4055,6 +4055,24 @@ class ForwarderPools extends BaseCompatibleModel {
         const mediaFiles = rawMediaFiles.filter((file) =>
             this.isSummaryRealtimeMediaEligible(target, file, rawMediaFiles),
         )
+        if (mediaFiles.length === 0) {
+            log?.debug(
+                `Skipping summary realtime media for ${article.a_id} to ${target.id}: article produced no original photo/video media (originalMediaFiles=${renderResult.originalMediaFiles.length})`,
+            )
+            return {
+                hadMedia: false,
+                handled: true,
+                visibleMediaSent: false,
+                skippedDuplicate: false,
+            }
+        }
+        if (log?.debug) {
+            log.debug(
+                `Summary realtime media origin for ${article.a_id} to ${target.id}: ${mediaFiles
+                    .map((file) => `${file.media_type}:${file.sourceUrl || file.path}`)
+                    .join(',')}`,
+            )
+        }
         const cardRenderResult = await this.buildSummaryRealtimeCardRenderResultForTarget(
             article,
             target,
