@@ -250,18 +250,25 @@ async function persistentBrowserProbe(): Promise<Probe> {
     await persistentPage
       .goto(`https://www.tiktok.com/@${handle}/live`, { waitUntil: 'domcontentloaded', timeout: 45000 })
       .catch(() => {})
-    await new Promise((r) => setTimeout(r, 4000))
-    const roomId = await persistentPage
+    await new Promise((r) => setTimeout(r, 2000))
+    const room = await persistentPage
       .evaluate(() => {
         const s = (window as any).SIGI_STATE
-        const room = s?.LiveRoom?.liveRoomUserInfo?.liveRoom
+        const liveRoom = s?.LiveRoom?.liveRoomUserInfo?.liveRoom
         const user = s?.LiveRoom?.liveRoomUserInfo?.user
-        return user?.roomId || room?.roomId || null
+        const roomId = user?.roomId || liveRoom?.roomId || null
+        const status = liveRoom?.status ?? null
+        return { roomId, status }
       })
       .catch(() => null)
+    const roomId = room?.roomId || null
     if (!roomId) {
       log('no roomId found (user not live / not found)')
       return { handle, roomId: null, status: null, candidates: [] }
+    }
+    // Skip the webcast API call when SIGI_STATE already says the room is not live.
+    if (room.status !== null && room.status !== 2) {
+      return { handle, roomId, status: Number(room.status), candidates: [] }
     }
     const api = await persistentPage
       .evaluate(async (rid) => {
@@ -492,6 +499,12 @@ async function probeLiveHttp(): Promise<Probe | null> {
     if (!roomId) {
         return { handle, roomId: null, status: null, candidates: [] }
     }
+    // The page embeds the current room status; skip the webcast API call entirely when
+    // the room is not live (status 4/null) to halve idle probe pressure.
+    const htmlStatus = extractRoomStatusFromHtml(html)
+    if (htmlStatus !== null && htmlStatus !== 2) {
+        return { handle, roomId, status: htmlStatus, candidates: [] }
+    }
     let api: Response
     try {
         api = await fetch(
@@ -512,6 +525,16 @@ async function probeLiveHttp(): Promise<Probe | null> {
         return { handle, roomId, status, candidates: [] }
     }
     return { handle, roomId, status, candidates: pickPullUrls(roomData) }
+}
+
+function extractRoomStatusFromHtml(html: string): number | null {
+    const section = html.slice(html.indexOf('liveRoomUserInfo'), html.indexOf('liveRoomUserInfo') + 20_000)
+    const match = section.match(/"status"\s*:\s*(\d+)/)
+    if (!match) {
+        return null
+    }
+    const value = Number(match[1])
+    return Number.isFinite(value) ? value : null
 }
 
 function extractRoomIdFromHtml(html: string): string | null {
