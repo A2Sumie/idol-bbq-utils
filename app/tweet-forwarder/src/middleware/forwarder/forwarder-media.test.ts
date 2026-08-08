@@ -1662,7 +1662,7 @@ test('BiliForwarder fails the whole send when a non-summary photo upload stays t
     expect(sendCalled).toBeFalse()
 })
 
-test('BiliForwarder suppresses the dynamic when the final payload has no new image (throttled uploads)', async () => {
+test('BiliForwarder marks summary text with missing-media marker when upload stays throttled', async () => {
     BiliForwarder.resetUploadQueuesForTests()
     const forwarder = new BiliForwarder(
         {
@@ -1695,18 +1695,17 @@ test('BiliForwarder suppresses the dynamic when the final payload has no new ima
             return { data: { code: 0, message: 'ok' } }
         }
 
-        const result = await (forwarder as any).sendDynamicContent(['summary text'], {
+        await (forwarder as any).sendDynamicContent(['summary text'], {
             media: [{ media_type: 'photo', path: photoPath }],
             runtime_config: { summary_card_task_kind: 'summary_card' },
         })
-        expect(result).toEqual([{ ok: true, mode: 'no_new_image_suppressed' }])
     } finally {
         await rm(tempDir, { recursive: true, force: true })
     }
 
     expect(sendTextWithPhotosCalled).toBeFalse()
-    // No new image was produced, so no separate text-only dynamic may go out.
-    expect(sentText).toBe('')
+    expect(sentText).toContain('[缺图]')
+    expect(sentText).toContain('summary text')
 })
 
 test('BiliUploadThrottledError is non-retryable so the whole-send layer does not re-upload', async () => {
