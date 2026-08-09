@@ -48,8 +48,10 @@ RUN wget --no-verbose -O /tmp/chrome.deb https://dl.google.com/linux/chrome/deb/
     && apt install -y /tmp/chrome.deb \
     && rm /tmp/chrome.deb
 
-# yt-dlp (self-contained binary) for on-demand live capture (twitch/showroom) and media downloads.
-RUN curl -sL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+# yt-dlp (self-contained pyinstaller binary) for on-demand live capture (twitch/showroom)
+# and media downloads. Note: the plain `yt-dlp` release asset is a python source zip
+# requiring python >= 3.10; `yt-dlp_linux` is the standalone binary.
+RUN curl -sL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
     && chmod +x /usr/local/bin/yt-dlp
 
 WORKDIR /app
