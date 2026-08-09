@@ -19,7 +19,7 @@ fail=0
 
 for name in "Instagram Live 抢抓 - 相川奈央" "Instagram Live 抢抓 - 椎名桜月"; do
   grep_esc="Crawler schedule created for ${name// /_}: source=[^ ]* slots=[0-9]*"
-  slot_line="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker logs --since 3m $CONTAINER_NAME 2>&1 | grep -o '$grep_esc' | tail -1" || true)"
+  slot_line="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker logs --since 30m $CONTAINER_NAME 2>&1 | grep -o '$grep_esc' | tail -1" || true)"
   if [ -z "$slot_line" ]; then
     echo "WARN: no schedule line yet for $name (container may have just started)" >&2
     continue
