@@ -4765,14 +4765,17 @@ class ForwarderPools extends BaseCompatibleModel {
             const companion = await this.buildTranslatedNativeCompanionCard(
                 item.article,
                 {
-                    cardMediaFiles: originalCardRender.cardMediaFiles,
+                    cardMediaFiles:
+                        originalCardRender.cardMediaFiles.length > 0
+                            ? originalCardRender.cardMediaFiles
+                            : item.cardSourceMediaFiles,
                     originalMediaFiles: item.cardSourceMediaFiles,
                 },
                 { render_type: item.formatterRenderType } as Forwarder['cfg_forwarder'],
                 queue.target,
                 queue.runtime_config,
                 `summary-single-native-${queue.target.id}`,
-                originalCardRender.cardMediaFiles,
+                originalCardRender.cardMediaFiles.length > 0 ? originalCardRender.cardMediaFiles : item.cardSourceMediaFiles,
             )
             if (companion) {
                 companionMediaFiles = companion.mediaFiles
