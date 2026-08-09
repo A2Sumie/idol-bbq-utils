@@ -4738,20 +4738,41 @@ class ForwarderPools extends BaseCompatibleModel {
     ) {
         const hasTranslatedContent =
             queue.config.translatedCard && (await this.prepareSummaryCardTranslations(queue, [item]))
+        const sourceMediaFiles = item.mediaAlreadyVisible ? [] : [...item.cardSourceMediaFiles]
+
+        // The original card (原文卡) is rendered fresh at flush time: the transient render from the
+        // main article send is cleaned before the summary flush consumes it, so referencing it here
+        // silently drops the card. Text-only tweets must still get a rendered card.
+        let originalCardRender: RenderResult | null = null
+        if (item.formatterRenderType) {
+            originalCardRender = await this.renderService.process(stripArticleTranslations(item.article), {
+                taskId: `summary-single-original-card-${queue.target.id}`,
+                render_type: item.formatterRenderType,
+                render_features: queue.config && (queue.config as any).renderFeatures,
+                card_features: queue.config && (queue.config as any).cardFeatures,
+                preloadedMediaFiles: item.cardSourceMediaFiles,
+                deduplication: false,
+            })
+            originalCardRender.mediaFiles ||= []
+            originalCardRender.cardMediaFiles ||= []
+            originalCardRender.originalMediaFiles ||= []
+        }
+        const originalCardMediaFiles = originalCardRender?.cardMediaFiles || []
+
         let companionMediaFiles: Array<RenderedMediaFile> = []
         let companionCardMediaFiles: Array<RenderedMediaFile> = []
-        if (hasTranslatedContent && item.formatterRenderType) {
+        if (hasTranslatedContent && item.formatterRenderType && originalCardRender) {
             const companion = await this.buildTranslatedNativeCompanionCard(
                 item.article,
                 {
-                    cardMediaFiles: item.cardSourceMediaFiles,
+                    cardMediaFiles: originalCardRender.cardMediaFiles,
                     originalMediaFiles: item.cardSourceMediaFiles,
                 },
                 { render_type: item.formatterRenderType } as Forwarder['cfg_forwarder'],
                 queue.target,
                 queue.runtime_config,
                 `summary-single-native-${queue.target.id}`,
-                item.cardSourceMediaFiles,
+                originalCardRender.cardMediaFiles,
             )
             if (companion) {
                 companionMediaFiles = companion.mediaFiles
@@ -4762,25 +4783,13 @@ class ForwarderPools extends BaseCompatibleModel {
                 )
             }
         }
+        const originalOnly =
+            ((queue.target.getEffectiveConfig(queue.runtime_config) as any)?.text_original_only ?? false) === true
         let text = this.buildSummaryCardSingleNativeText(item, {
-            includeTranslations: Boolean(hasTranslatedContent) && companionCardMediaFiles.length === 0,
+            includeTranslations: originalOnly
+                ? false
+                : Boolean(hasTranslatedContent) && companionCardMediaFiles.length === 0,
         })
-        const sourceMediaFiles = item.mediaAlreadyVisible ? [] : [...item.cardSourceMediaFiles]
-        let originalCardMediaFiles: Array<RenderedMediaFile> = []
-        if (item.formatterRenderType && item.cardSourceMediaFiles.length > 0) {
-            const originalCard = await this.renderService.process(stripArticleTranslations(item.article), {
-                taskId: `summary-single-original-card-${queue.target.id}`,
-                render_type: item.formatterRenderType,
-                render_features: queue.config && (queue.config as any).renderFeatures,
-                card_features: queue.config && (queue.config as any).cardFeatures,
-                preloadedMediaFiles: item.cardSourceMediaFiles,
-                deduplication: false,
-            })
-            originalCard.mediaFiles ||= []
-            originalCard.cardMediaFiles ||= []
-            originalCard.originalMediaFiles ||= []
-            originalCardMediaFiles = originalCard.cardMediaFiles
-        }
         let mediaFiles = [...sourceMediaFiles, ...originalCardMediaFiles]
         let visibilityForRelease: MediaVisibilityResult | null = null
         if (sourceMediaFiles.length > 0) {
@@ -4791,7 +4800,10 @@ class ForwarderPools extends BaseCompatibleModel {
                 sourceMediaFiles,
             )
             visibilityForRelease = visibility
-            mediaFiles = this.filterMediaFilesByVisibility(sourceMediaFiles, visibility)
+            mediaFiles = [
+                ...this.filterMediaFilesByVisibility(sourceMediaFiles, visibility),
+                ...originalCardMediaFiles,
+            ]
             if (visibility.policy && visibility.hiddenHashes.size > 0) {
                 text = uniquePreserveOrder([text, this.buildMediaVisibilityTextNotice(visibility.policy)]).join('\n\n')
             }
