@@ -4,6 +4,7 @@ type SummaryCardWindowAlignment = 'none' | 'hour' | 'interval'
 type SummaryCardSingleItemBehavior = 'native_if_uncovered' | 'summary_card' | 'drop'
 
 type ResolvedSummaryCardConfig = {
+    noAggregation: boolean
     intervalSeconds: number
     threshold: number
     maxItems: number
@@ -26,6 +27,7 @@ type ResolvedSummaryCardConfig = {
 
 type SummaryCardRoutePolicy = {
     enabled: boolean
+    no_aggregation: boolean
     interval_seconds: number
     threshold: number
     max_items: number
@@ -145,6 +147,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
     )
 
     return {
+        noAggregation: (objectConfig as any).no_aggregation === true,
         intervalSeconds,
         threshold,
         maxItems,

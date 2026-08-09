@@ -3489,6 +3489,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         if (
+            !summaryConfig.noAggregation &&
             !existingQueue &&
             summaryConfig.sendFirstImmediately &&
             (await this.canSendSummaryCardNow(queueKey, summaryConfig, now, target.id))
@@ -3614,6 +3615,9 @@ class ForwarderPools extends BaseCompatibleModel {
             this.canFlushSummaryCardThreshold(queueKey, queue, now)
         ) {
             await this.flushSummaryCardQueue(queueKey, 'threshold')
+        }
+        if (summaryConfig.noAggregation) {
+            await this.flushSummaryCardQueue(queueKey, 'interval')
         }
         return true
     }
