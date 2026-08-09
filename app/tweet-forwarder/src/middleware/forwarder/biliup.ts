@@ -12,7 +12,7 @@ import { createHash } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 
-const DEFAULT_BILIUP_TID = 171
+const DEFAULT_BILIUP_TID = 160
 const DEFAULT_BILIUP_THREADS = 3
 const DEFAULT_BILIUP_SUBMIT_API = 'web'
 const DEFAULT_BILIUP_LINE = 'AUTO'

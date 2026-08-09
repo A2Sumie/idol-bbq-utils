@@ -52,7 +52,7 @@ def parse_args():
     parser.add_argument("--cover", default="")
     parser.add_argument("--submit-api", default="web")
     parser.add_argument("--line", default="AUTO")
-    parser.add_argument("--tid", type=int, default=171)
+    parser.add_argument("--tid", type=int, default=160)
     parser.add_argument("--threads", type=int, default=3)
     parser.add_argument("--copyright", type=int, choices=(1, 2), default=2)
     parser.add_argument("--tag", action="append", default=[])

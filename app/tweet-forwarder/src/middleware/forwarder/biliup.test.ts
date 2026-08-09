@@ -837,7 +837,7 @@ test('resolveVideoUploadConfig falls back from invalid numeric control values', 
         },
     })
 
-    expect(config?.tid).toBe(171)
+    expect(config?.tid).toBe(160)
     expect(config?.threads).toBe(3)
     expect((config as any).collision_placeholder_part).toBeUndefined()
 })
@@ -863,7 +863,7 @@ test('prepareUploadVideoParts ignores deprecated collision placeholder video whe
                 working_dir: tempRoot,
                 submit_api: 'web',
                 line: 'AUTO',
-                tid: 171,
+                tid: 160,
                 threads: 3,
                 copyright: 2,
                 tags: [],
