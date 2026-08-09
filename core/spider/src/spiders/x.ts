@@ -14,7 +14,7 @@ import { Page } from 'puppeteer-core'
 import { JSONPath } from 'jsonpath-plus'
 import type { Logger } from '@idol-bbq-utils/log'
 import { waitForResponse } from '@/spiders/base'
-import { UserAgent } from '@/utils'
+import { SimpleExpiringCache, UserAgent } from '@/utils'
 import { v4 as uuidv4 } from 'uuid'
 import { noop } from 'puppeteer-core/lib/esm/third_party/rxjs/rxjs.js'
 
@@ -74,6 +74,12 @@ const X_UNIFIED_LIST_DEFAULT_CONCURRENCY = 2
 const X_UNIFIED_LIST_MAX_CONCURRENCY = 4
 const X_UNIFIED_LIST_MEMBER_CURSORS = new Map<string, number>()
 const X_FETCH_TIMEOUT_MS = 20_000
+// Cross-crawl cache TTLs. X operation profiles (query ids + headers) and rest ids are
+// stable for long periods; caching them on the spider instance removes the per-crawl
+// browser navigations and UserByScreenName lookups that were the request-budget driver.
+const X_CACHE_OPERATION_PROFILE_TTL_S = 12 * 60 * 60
+const X_CACHE_REST_ID_TTL_S = 24 * 60 * 60
+const X_CACHE_LIST_VIEWPORT_TTL_S = 10 * 60
 
 interface XOperationProfile {
     queryId: string
@@ -195,7 +201,7 @@ class XUserTimeLineSpider extends BaseSpider {
         }
 
         const { crawl_engine, task_type, sub_task_type, cookieString, requestHeaders } = config
-        const apiClient = new XApiClient(requestHeaders, page, this.log)
+        const apiClient = new XApiClient(requestHeaders, page, this.log, this.cache)
         let apiError: unknown
 
         if (crawl_engine === 'api') {
@@ -337,13 +343,11 @@ class XStatusSpider extends BaseSpider {
             throw new Error('Cookie string is required for X status hydrate')
         }
 
-        const apiClient = new XApiClient(config.requestHeaders, page, this.log)
+        const apiClient = new XApiClient(config.requestHeaders, page, this.log, this.cache)
         const article = await apiClient.grabTweetDetail(id, statusId, cookieString)
         return (article ? [article] : []) as TaskTypeResult<T, Platform.X>
     }
-}
-
-class XListSpider extends BaseSpider {
+}class XListSpider extends BaseSpider {
     static _VALID_URL = new RegExp(X_BASE_VALID_URL.source + /\i\/lists\/(?<id>\d+)/.source)
     static _PLATFORM = Platform.X
     BASE_URL: string = 'https://x.com/'
@@ -390,7 +394,7 @@ class XListSpider extends BaseSpider {
             hydrate_concurrency,
             hydrate_interval_time,
         } = config
-        const graphqlClient = new XApiClient(requestHeaders, page, this.log)
+        const graphqlClient = new XApiClient(requestHeaders, page, this.log, this.cache)
         let cookie_string = cookieString
         if (!cookie_string && page) {
             cookie_string = (await page.browserContext().cookies()).map((c) => `${c.name}=${c.value}`).join('; ')
@@ -918,14 +922,16 @@ class XApiClient {
     name_to_rest_id: Record<string, string>
     operationProfiles: Partial<Record<XApis, XOperationProfile>>
     listViewportUsers: Map<string, Array<string>>
+    cache?: SimpleExpiringCache
     page?: Page
     log?: Logger
 
-    constructor(requestHeaders?: Record<string, string>, page?: Page, log?: Logger) {
+    constructor(requestHeaders?: Record<string, string>, page?: Page, log?: Logger, cache?: SimpleExpiringCache) {
         this.api_with_queryid = {}
         this.name_to_rest_id = {}
         this.operationProfiles = {}
         this.listViewportUsers = new Map()
+        this.cache = cache
         this.page = page
         this.log = log?.child({ subservice: 'XApiClient' })
         this.BASE_HEADER = {
@@ -935,6 +941,46 @@ class XApiClient {
             ...normalizeRequestHeaders(requestHeaders),
             authorization: this.PUBLIC_TOKEN,
         }
+        // Hydrate cached operation profiles (query ids + captured headers) so crawl
+        // rounds after the first need no browser navigation at all.
+        for (const operation of DEFAULT_QUERY_APIS) {
+            const cached = this.cache?.get(this.operationProfileCacheKey(operation))
+            if (cached && typeof cached === 'object' && (cached as XOperationProfile)?.queryId) {
+                this.operationProfiles[operation] = cached as XOperationProfile
+                this.api_with_queryid[operation] = (cached as XOperationProfile).queryId
+            }
+        }
+    }
+
+    private operationProfileCacheKey(operation: XApis) {
+        return `x-op:${operation}`
+    }
+
+    private invalidateOperationProfile(operation: XApis) {
+        this.cache?.set(this.operationProfileCacheKey(operation), null, 0)
+        this.operationProfiles[operation] = undefined
+        this.api_with_queryid[operation] = undefined
+    }
+
+    private assertOkOrInvalidate(
+        res: Response,
+        context: string,
+        operation: XApis,
+        userId?: string,
+    ): void {
+        if (res.ok) {
+            return
+        }
+        if (res.status === 404 || res.status === 403) {
+            // Stale cached query id / profile (X rotates them on app updates) or a
+            // deleted account: drop the cache so the next crawl re-captures fresh.
+            this.invalidateOperationProfile(operation)
+            if (userId) {
+                this.cache?.set(`x-restid:${userId}`, null, 0)
+            }
+            this.log?.warn(`Invalidated cached X operation profile ${operation} after ${res.status}`)
+        }
+        assertXResponseOk(res, context)
     }
 
     async prepareUserOperations(
@@ -991,7 +1037,24 @@ class XApiClient {
     }
 
     private async captureOperationsFromPage(targetUrl: string, expectedOperations: Array<XApis>) {
-        const missingOperations = expectedOperations.filter((operation) => !this.operationProfiles[operation])
+        let missingOperations = expectedOperations.filter((operation) => !this.operationProfiles[operation])
+        if (missingOperations.length === 0) {
+            return
+        }
+
+        // Serve as many operations as possible from the cross-crawl cache: only the
+        // operations never captured before need a browser visit.
+        const stillMissing: Array<XApis> = []
+        for (const operation of missingOperations) {
+            const cached = this.cache?.get(this.operationProfileCacheKey(operation))
+            if (cached && typeof cached === 'object' && (cached as XOperationProfile)?.queryId) {
+                this.operationProfiles[operation] = cached as XOperationProfile
+                this.api_with_queryid[operation] = (cached as XOperationProfile).queryId
+            } else {
+                stillMissing.push(operation)
+            }
+        }
+        missingOperations = stillMissing
         if (!this.page || missingOperations.length === 0) {
             return
         }
@@ -1052,6 +1115,14 @@ class XApiClient {
 
     private async captureListViewportUsers(listId: string) {
         if (!this.page) {
+            return
+        }
+
+        // Viewport sampling is a browser-interaction cost; cache it per list so the
+        // twice-per-crawl sampling (list tweets + list members) does not repeat it.
+        const cached = this.cache?.get(`x-viewport:${listId}`)
+        if (Array.isArray(cached) && cached.length > 0) {
+            this.listViewportUsers.set(listId, cached as Array<string>)
             return
         }
 
@@ -1130,11 +1201,14 @@ class XApiClient {
         if (sampledUsers.size > 0) {
             const users = Array.from(sampledUsers)
             this.listViewportUsers.set(listId, users)
+            if (this.cache) {
+                this.cache.set(`x-viewport:${listId}`, users, X_CACHE_LIST_VIEWPORT_TTL_S)
+            }
             this.log?.debug(`List viewport sampled ${users.length} accounts for ${listId}: ${users.join(', ')}`)
         }
     }
 
-    private storeOperationProfile(url: string, headers: Record<string, string>) {
+    private async storeOperationProfile(url: string, headers: Record<string, string>) {
         const parsed = this.parseCapturedOperation(url)
         if (!parsed) {
             return
@@ -1148,6 +1222,9 @@ class XApiClient {
             capturedAt: Date.now(),
         }
         this.api_with_queryid[parsed.operationName] = parsed.queryId
+        if (this.cache) {
+            this.cache.set(this.operationProfileCacheKey(parsed.operationName), this.operationProfiles[parsed.operationName], X_CACHE_OPERATION_PROFILE_TTL_S)
+        }
     }
 
     private parseCapturedOperation(url: string) {
@@ -1348,7 +1425,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/${id}`,
             }),
         })
-        assertXResponseOk(res, `user info (${id})`)
+        this.assertOkOrInvalidate(res, `user info (${id})`, XApis.UserByScreenName, id)
         const json = await res.json()
         return json
     }
@@ -1356,6 +1433,11 @@ class XApiClient {
     async getRestId(id: string, cookie: string) {
         if (this.name_to_rest_id[id]) {
             return this.name_to_rest_id[id]
+        }
+        const cached = this.cache?.get(`x-restid:${id}`)
+        if (cached) {
+            this.name_to_rest_id[id] = String(cached)
+            return String(cached)
         }
         const user_info = await this.getRawUserInfo(id, cookie)
         if (!user_info) {
@@ -1366,6 +1448,9 @@ class XApiClient {
             throw new Error(`Failed to fetch rest id for ${id}`)
         }
         this.name_to_rest_id[id] = String(rest_id)
+        if (this.cache) {
+            this.cache.set(`x-restid:${id}`, String(rest_id), X_CACHE_REST_ID_TTL_S)
+        }
         return String(rest_id)
     }
 
@@ -1459,7 +1544,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/${id}`,
             }),
         })
-        assertXResponseOk(res, 'tweets')
+        this.assertOkOrInvalidate(res, 'tweets', XApis.UserTweets, id)
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)
@@ -1527,7 +1612,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/${id}/with_replies`,
             }),
         })
-        assertXResponseOk(res, 'replies')
+        this.assertOkOrInvalidate(res, 'replies', XApis.UserTweetsAndReplies, id)
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch replies: ${json.errors[0].message}`)
@@ -1602,7 +1687,7 @@ class XApiClient {
                 referer,
             }),
         })
-        assertXResponseOk(res, 'tweet detail')
+        this.assertOkOrInvalidate(res, 'tweet detail', XApis.TweetDetail, screenName)
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch tweet detail: ${json.errors[0].message}`)
@@ -1670,7 +1755,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/i/lists/${list_id}`,
             }),
         })
-        assertXResponseOk(res, 'tweets')
+        this.assertOkOrInvalidate(res, 'tweets', XApis.ListLatestTweetsTimeline)
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)
@@ -1730,7 +1815,7 @@ class XApiClient {
                 referer: `${this.BASE_URL}/i/lists/${list_id}`,
             }),
         })
-        assertXResponseOk(res, 'tweets')
+        this.assertOkOrInvalidate(res, 'tweets', XApis.ListMembers)
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)

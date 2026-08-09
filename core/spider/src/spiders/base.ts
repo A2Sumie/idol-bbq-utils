@@ -1,6 +1,7 @@
 import { Platform, type CrawlEngine, type TaskType, type TaskTypeResult } from '@/types'
 import { Logger } from '@idol-bbq-utils/log'
 import { Page, type PageEvents } from 'puppeteer-core'
+import { SimpleExpiringCache } from '@/utils'
 type PageEvent = 'response' | 'request' | 'domcontentloaded' | 'load'
 
 export enum SpiderPriority {
@@ -85,6 +86,13 @@ abstract class BaseSpider {
     abstract BASE_URL: string
     NAME: string = 'Base Spider'
     log?: Logger
+
+    /**
+     * Per-spider-instance cache for cross-crawl request budgets (rest ids, operation
+     * profiles, query ids, viewport samples). Spider instances persist across crawl
+     * rounds in the spider-manager, so cache entries survive between rounds.
+     */
+    protected cache: SimpleExpiringCache = new SimpleExpiringCache()
 
     public crawl<T extends TaskType>(
         url: string,
