@@ -262,7 +262,7 @@ def main():
     parser.add_argument('--handles', default=','.join(DEFAULT_HANDLES))
     parser.add_argument('--once', action='store_true')
     parser.add_argument('--interval', type=int, default=1800)
-    parser.add_argument('--out-dir', default='/tmp/tweet-forwarder/ig-replays')
+    parser.add_argument('--out-dir', default='/app/ig-probe/replays')
     args = parser.parse_args()
 
     handles = [h.strip() for h in args.handles.split(',') if h.strip()]
