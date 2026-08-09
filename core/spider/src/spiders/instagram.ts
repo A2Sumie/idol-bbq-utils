@@ -678,8 +678,38 @@ namespace InsApiJsonParser {
     }
 
     export async function grabProfileStatus(page: Page, url: string): Promise<InstagramProfileStatus> {
-        const profile_json = await grabProfileUserPayload(page, url)
+        let profile_json: unknown
+        try {
+            profile_json = await grabProfileUserPayload(page, url)
+        } catch (error) {
+            // The web profile GraphQL (PolarisProfilePageContentQuery) has been flaky lately
+            // (rate-limit 429 / challenge redirects). Fall back to the profile page meta tag
+            // (instagram://user?id=...) so username resolution keeps working.
+            profile_json = await grabProfileUserPayloadFromPageMeta(page, url)
+            if (!profile_json) {
+                throw error
+            }
+        }
         return profileStatusParser(profile_json)
+    }
+
+    async function grabProfileUserPayloadFromPageMeta(page: Page, url: string): Promise<unknown> {
+        const html = await page.content().catch(() => '')
+        const idMatch = html.match(/instagram:\/\/user\?id=(\d+)/)
+        const handleMatch = url.match(/instagram\.com\/([^/?#]+)/)
+        if (!idMatch || !handleMatch) {
+            return null
+        }
+        return {
+            data: {
+                user: {
+                    id: idMatch[1],
+                    username: handleMatch[1],
+                    full_name: '',
+                    hd_profile_pic_url_info: null,
+                },
+            },
+        }
     }
 
     async function grabProfileUserPayload(page: Page, url: string) {

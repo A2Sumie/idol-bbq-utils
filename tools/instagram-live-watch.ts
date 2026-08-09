@@ -174,7 +174,11 @@ async function probeLive(): Promise<{ live: boolean; status: string | null; user
   let status: string | null = null
   try {
     const html = await page.content()
-    const pkMatch = html.match(/"pk":"(\d{6,})"/) || html.match(/"user_id":"(\d{6,})"/)
+    const pkMatch =
+      html.match(/instagram:\/\/user\?id=(\d+)/) ||
+      html.match(/"pk":"(\d{6,})"/) ||
+      html.match(/"user_id":"(\d{6,})"/) ||
+      html.match(/"id":"(\d{6,})"[^}]{0,120}nao_aikawa227/i)
     userId = pkMatch?.[1] || null
     const appId = html.match(/"APP_ID"\s*:\s*"(\d+)"/)?.[1] || '936619743392459'
     if (userId) {
