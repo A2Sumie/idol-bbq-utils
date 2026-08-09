@@ -247,6 +247,15 @@ printf 'build_dir=%s\n' "$BUILD_DIR"
 printf 'compose_file=%s\n' "$BUILD_DIR/docker-compose.yaml"
 printf 'compose_project_directory=%s\n' "$repo"
 REMOTE
+
+# Post-recreate guard: the IG live probe windows are persisted in the config, but a
+# broken/reverted config or a scheduler rebuild can silently drop them (the 2026-08-09
+# missed-live incident). Re-verify after the online start command is run.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/verify-ig-live-schedule.sh" ]; then
+  echo 'verify-ig-live-schedule: run after the online start:'
+  echo "  bash $SCRIPT_DIR/verify-ig-live-schedule.sh"
+fi
 }
 
 main "$@"
