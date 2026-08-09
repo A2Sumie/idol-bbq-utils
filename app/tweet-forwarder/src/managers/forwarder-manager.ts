@@ -95,6 +95,7 @@ type SummaryCardQueueItem = {
     article: ArticleWithId
     queuedAt: number
     cardSourceMediaFiles: Array<RenderResult['originalMediaFiles'][number]>
+    cardRenderMediaFiles: Array<RenderResult['cardMediaFiles'][number]>
     originalMediaFiles: Array<RenderResult['originalMediaFiles'][number]>
     digestTags: Array<string>
     mediaAlreadyVisible: boolean
@@ -1070,6 +1071,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     cardSourceMediaFiles: Array.isArray(payload.cardSourceMediaFiles)
                         ? payload.cardSourceMediaFiles
                         : [],
+                    cardRenderMediaFiles: Array.isArray(payload.cardRenderMediaFiles) ? payload.cardRenderMediaFiles : [],
                     originalMediaFiles: Array.isArray(payload.originalMediaFiles) ? payload.originalMediaFiles : [],
                     digestTags: Array.isArray(payload.digestTags) ? payload.digestTags : [],
                     mediaAlreadyVisible: payload.mediaAlreadyVisible === true,
@@ -3421,6 +3423,7 @@ class ForwarderPools extends BaseCompatibleModel {
             payload: {
                 queuedAt: item.queuedAt,
                 cardSourceMediaFiles: item.cardSourceMediaFiles,
+                cardRenderMediaFiles: item.cardRenderMediaFiles,
                 originalMediaFiles: item.originalMediaFiles,
                 digestTags: item.digestTags,
                 mediaAlreadyVisible: item.mediaAlreadyVisible,
@@ -3478,6 +3481,7 @@ class ForwarderPools extends BaseCompatibleModel {
             article: cloneDeep(article),
             queuedAt: now,
             cardSourceMediaFiles: [...renderResult.originalMediaFiles],
+            cardRenderMediaFiles: [...renderResult.cardMediaFiles],
             originalMediaFiles: summaryConfig.includeOriginalMedia ? [...renderResult.originalMediaFiles] : [],
             digestTags: this.resolveActiveTagDigestsForArticle(target.id, article, effectiveConfig),
             mediaAlreadyVisible: false,
@@ -4766,7 +4770,7 @@ class ForwarderPools extends BaseCompatibleModel {
             includeTranslations: Boolean(hasTranslatedContent) && companionCardMediaFiles.length === 0,
         })
         const sourceMediaFiles = item.mediaAlreadyVisible ? [] : [...item.cardSourceMediaFiles]
-        let mediaFiles = sourceMediaFiles
+        let mediaFiles = [...sourceMediaFiles, ...item.cardRenderMediaFiles]
         let visibilityForRelease: MediaVisibilityResult | null = null
         if (sourceMediaFiles.length > 0) {
             const visibility = await this.applyTargetMediaVisibility(
