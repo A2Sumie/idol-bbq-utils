@@ -971,9 +971,13 @@ class XApiClient {
         if (res.ok) {
             return
         }
-        if (res.status === 404 || res.status === 403) {
-            // Stale cached query id / profile (X rotates them on app updates) or a
-            // deleted account: drop the cache so the next crawl re-captures fresh.
+        // 403 always indicates auth/rate trouble worth re-capturing; 404 only when the
+        // cached profile is old — a fresh capture (this crawl round) 404ing is usually
+        // account-specific (e.g. replies unavailable for one account), and invalidating
+        // it would force a wasteful mid-crawl re-capture navigation.
+        const profile = this.operationProfiles[operation]
+        const capturedRecently = Boolean(profile && Date.now() - profile.capturedAt < 30 * 60 * 1000)
+        if (res.status === 403 || (res.status === 404 && !capturedRecently)) {
             this.invalidateOperationProfile(operation)
             if (userId) {
                 this.cache?.set(`x-restid:${userId}`, null, 0)
