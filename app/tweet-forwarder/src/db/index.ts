@@ -840,6 +840,39 @@ namespace DB {
             })
         }
 
+        /** Executor-facing query: due tasks of a type in the given statuses. */
+        export async function getDue(type: string, statuses: Array<string>, now: number) {
+            return await prisma.task_queue.findMany({
+                where: {
+                    type,
+                    status: { in: statuses },
+                    execute_at: { lte: now },
+                },
+                orderBy: {
+                    execute_at: 'asc',
+                },
+            })
+        }
+
+        /** Executor-facing status transition (claims, completes, fails). */
+        export async function updateTaskStatus(
+            id: number,
+            data: {
+                status: string
+                payload?: any
+                last_error?: string | null
+            },
+        ) {
+            const now = Math.floor(Date.now() / 1000)
+            return await prisma.task_queue.update({
+                where: { id },
+                data: {
+                    ...data,
+                    updated_at: now,
+                },
+            })
+        }
+
         export async function updatePlanned(
             id: number,
             type: string,

@@ -1,6 +1,6 @@
 const LIVE_CAPTURE_PLAN_SCHEMA_VERSION = 1
 const LIVE_CAPTURE_PLAN_MAX_TIMESTAMP = 2_147_483_647
-const LIVE_CAPTURE_PLATFORMS = ['tiktok', 'instagram', 'youtube', 'showroom', 'openrec', 'other'] as const
+const LIVE_CAPTURE_PLATFORMS = ['tiktok', 'instagram', 'youtube', 'twitch', 'showroom', 'openrec', 'other'] as const
 const LIVE_CAPTURE_SOURCE_KINDS = ['manual', 'social_post', 'webpage', 'llm_extraction', 'other'] as const
 const LIVE_CAPTURE_QUALITY_OPTIONS = ['origin_rtmp', 'hd_flv', 'hd_hls'] as const
 const LIVE_CAPTURE_PLAN_JSON_SCHEMA = {

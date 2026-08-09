@@ -42,6 +42,15 @@ interface AppConfig {
     forwarders?: Array<Forwarder<TaskType>>
     cfg_forwarder?: ForwarderConfig
     connections?: ConnectionMap
+    live_capture?: {
+        enabled?: boolean
+        archive_root?: string
+        yt_dlp_path?: string
+        scan_interval_seconds?: number
+        max_concurrent_sessions?: number
+        capture_grace_seconds?: number
+        probe_timeout_seconds?: number
+    }
     api?: {
         port?: number
         secret?: string

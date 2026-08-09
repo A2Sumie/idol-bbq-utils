@@ -91,6 +91,7 @@ export interface ApiRuntimeDeps {
     forwarderPools?: ForwarderPools
     spiderPools?: SpiderPools
     spiderTaskScheduler?: SpiderTaskScheduler
+    liveCaptureExecutor?: { enabled: boolean } | null
 }
 
 export interface ApiRuntimeMeta {
@@ -1656,12 +1657,17 @@ export class APIManager extends BaseCompatibleModel {
         return Number.isInteger(id) && id > 0 ? id : null
     }
 
+    private liveCapturePlanExecutable() {
+        return Boolean(this.deps?.liveCaptureExecutor?.enabled)
+    }
+
     private liveCapturePlanResponse(task: any) {
+        const executable = this.liveCapturePlanExecutable()
         return {
             id: task.id,
             status: task.status,
-            scheduled: false,
-            executable: false,
+            scheduled: executable,
+            executable,
             created_at: task.created_at,
             updated_at: task.updated_at,
             plan: task.payload as LiveCapturePlanPayload,
@@ -1685,13 +1691,14 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private handleLiveCapturePlanSchema(): Response {
+        const executable = this.liveCapturePlanExecutable()
         return jsonResponse({
             schema_version: LIVE_CAPTURE_PLAN_SCHEMA_VERSION,
             purpose: 'Store structured live capture plans for later scheduling',
             execution: {
-                scheduled: false,
-                executable: false,
-                activation_endpoint: null,
+                scheduled: executable,
+                executable,
+                activation_endpoint: executable ? '/api/live-capture-plans' : null,
             },
             input_schema: LIVE_CAPTURE_PLAN_JSON_SCHEMA,
             required: ['target.platform', 'target.handle', 'event.starts_at'],
@@ -1719,8 +1726,8 @@ export class APIManager extends BaseCompatibleModel {
             const { plan, idempotencyKey } = await this.parseLiveCapturePlanRequest(req)
             return jsonResponse({
                 valid: true,
-                scheduled: false,
-                executable: false,
+                scheduled: this.liveCapturePlanExecutable(),
+                executable: this.liveCapturePlanExecutable(),
                 idempotencyKey,
                 plan,
             })
@@ -1748,7 +1755,7 @@ export class APIManager extends BaseCompatibleModel {
                 return true
             })
             .map((task) => this.liveCapturePlanResponse(task))
-        return jsonResponse({ success: true, scheduled: false, executable: false, plans })
+        return jsonResponse({ success: true, scheduled: this.liveCapturePlanExecutable(), executable: this.liveCapturePlanExecutable(), plans })
     }
 
     private async handleLiveCapturePlanGet(value: string): Promise<Response> {
@@ -1820,7 +1827,13 @@ export class APIManager extends BaseCompatibleModel {
         if (!id) return new Response('Invalid live capture plan id', { status: 400 })
         const task = await DB.TaskQueue.deletePlanned(id, DB.TaskQueue.TYPE.LiveCapturePlan)
         if (!task) return new Response('Live capture plan not found', { status: 404 })
-        return jsonResponse({ success: true, id, deleted: true, scheduled: false, executable: false })
+        return jsonResponse({
+            success: true,
+            id,
+            deleted: true,
+            scheduled: this.liveCapturePlanExecutable(),
+            executable: this.liveCapturePlanExecutable(),
+        })
     }
 
     private async handleCrawlerScheduleList(): Promise<Response> {

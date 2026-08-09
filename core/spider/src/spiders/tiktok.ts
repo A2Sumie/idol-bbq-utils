@@ -7,8 +7,10 @@ import { JSONPath } from 'jsonpath-plus'
 import { getCookieString, HTTPClient, SimpleExpiringCache } from '@/utils'
 
 const TIKTOK_HTTP_TIMEOUT_MS = 15000
-const TIKTOK_BROWSER_HYDRATE_ATTEMPTS = 4
+const TIKTOK_BROWSER_HYDRATE_ATTEMPTS = 3
 const TIKTOK_BROWSER_HYDRATE_POLL_MS = 5000
+const TIKTOK_HYDRATE_BACKOFF_MS = [5000, 12000, 30000]
+const TIKTOK_SECUID_CACHE_TTL_S = 6 * 60 * 60
 
 enum ArticleTypeEnum {
     /**
@@ -62,7 +64,7 @@ class TiktokSpider extends BaseSpider {
             this.log?.info(videoUrl ? 'Trying to grab video.' : 'Trying to grab posts.')
             const res = videoUrl
                 ? await TiktokApiJsonParser.grabVideo(videoUrl, page, cookieString)
-                : await TiktokApiJsonParser.grabPosts(_url, random_hex7, Number(device_id), page, cookieString)
+                : await TiktokApiJsonParser.grabPosts(_url, random_hex7, Number(device_id), page, cookieString, this.cache)
             return res as TaskTypeResult<T, Platform.TikTok>
         }
 
@@ -165,6 +167,11 @@ namespace TiktokApiJsonParser {
                 return browserContent
             }
             await checkSomethingWrong(page)
+            if (attempt < TIKTOK_BROWSER_HYDRATE_ATTEMPTS - 1) {
+                // Backoff between hydration polls instead of hammering: the hydration
+                // script may be delayed by rate-limiting; linear retries feed the 429s.
+                await new Promise((resolve) => setTimeout(resolve, TIKTOK_HYDRATE_BACKOFF_MS[attempt]))
+            }
         }
 
         throw new Error('Cannot find user data (browser hydration missing)')
@@ -392,7 +399,22 @@ namespace TiktokApiJsonParser {
         device_id: number,
         page?: Page,
         cookieString?: string,
+        cache?: SimpleExpiringCache,
     ): Promise<Array<GenericArticle<Platform.TikTok>>> {
+        const handle = url.match(/\/\@([^/?]+)/)?.[1] || ''
+        const secUidKey = `secuid:${handle.toLowerCase()}`
+        const cachedSecUid = cache?.get(secUidKey)
+
+        // API-first: with a cached secUid the whole crawl is a single unsigned API
+        // request (mirrors yt-dlp's tiktok extractor); the heavy browser navigation
+        // is reserved for secUid resolution and API-rejection fallback.
+        if (cachedSecUid) {
+            const api = await callCreatorApi(String(cachedSecUid), url, device_id, random_hex7, cookieString)
+            if (api.ok) {
+                return api.posts
+            }
+        }
+
         let browserPosts: Array<GenericArticle<Platform.TikTok>> = []
         if (page) {
             const { cleanup, promise: waitForPosts } = waitForResponse(
@@ -437,7 +459,6 @@ namespace TiktokApiJsonParser {
             throw error
         }
         const universalData = JSON.parse(content)
-        const handle = url.match(/\/\@([^/?]+)/)?.[1] || ''
         const userInfo = findUserInfoForHandle(universalData, handle)
         const userItems = Array.isArray(userInfo?.itemList) ? userInfo.itemList : []
         const fallbackItems = userItems.length > 0 ? [] : itemModuleValues(universalData)
@@ -446,11 +467,29 @@ namespace TiktokApiJsonParser {
             postsParser({ itemList: userItems.length > 0 ? userItems : fallbackItems }),
         )
         const secUid = userInfo?.user?.secUid
+        if (secUid && cache) {
+            cache.set(secUidKey, secUid, TIKTOK_SECUID_CACHE_TTL_S)
+        }
         if (!secUid) {
             return pagePosts
         }
-        let apiFailure: unknown
-        let apiPosts: Array<GenericArticle<Platform.TikTok>> = []
+        const api = await callCreatorApi(String(secUid), url, device_id, random_hex7, cookieString)
+        if (api.ok) {
+            return mergePostsById(pagePosts, api.posts)
+        }
+        if (pagePosts.length === 0 && api.error) {
+            throw api.error
+        }
+        return pagePosts
+    }
+
+    async function callCreatorApi(
+        secUid: string,
+        url: string,
+        device_id: number,
+        random_hex7: string,
+        cookieString?: string,
+    ): Promise<{ ok: true; posts: Array<GenericArticle<Platform.TikTok>> } | { ok: false; error: unknown }> {
         try {
             const query_obj = _build_web_query(secUid, Date.now(), device_id, random_hex7)
             // @ts-ignore
@@ -462,22 +501,17 @@ namespace TiktokApiJsonParser {
             )
             const json = await res.json()
             if (Array.isArray(json?.itemList)) {
-                apiPosts = postsParser(json)
-            } else {
-                apiFailure = new Error(
+                return { ok: true, posts: postsParser(json) }
+            }
+            return {
+                ok: false,
+                error: new Error(
                     `TikTok creator API returned no itemList (statusCode=${json?.statusCode ?? 'unknown'}); the unsigned API likely rejected the request`,
-                )
+                ),
             }
         } catch (error) {
-            apiFailure = error
+            return { ok: false, error }
         }
-        if (apiPosts.length === 0) {
-            if (pagePosts.length === 0 && apiFailure) {
-                throw apiFailure
-            }
-            return pagePosts
-        }
-        return mergePostsById(pagePosts, apiPosts)
     }
 
     function hasPlayableVideo(articles: Array<GenericArticle<Platform.TikTok>>): boolean {

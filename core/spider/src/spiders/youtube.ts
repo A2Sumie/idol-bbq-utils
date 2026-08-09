@@ -582,13 +582,20 @@ namespace YoutubeApiJsonParser {
         let [videosText, shortsText] = await Promise.all([videosPage.text(), shortsPage.text()])
         let videosJson = extractAssignedObject<any>(videosText, 'ytInitialData')
         let shortsJson = extractAssignedObject<any>(shortsText, 'ytInitialData')
-        if (!videosJson && !shortsJson) {
-            const [curlVideosPage, curlShortsPage] = await Promise.all([
-                HTTPClient.download_webpage_curl(videosUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
-                HTTPClient.download_webpage_curl(shortsUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
-            ])
-            ;[videosText, shortsText] = await Promise.all([curlVideosPage.text(), curlShortsPage.text()])
+        // Per-page fallback: only re-fetch the list(s) that actually lacked initial data,
+        // instead of doubling the request count for both tabs on every failure.
+        if (!videosJson) {
+            const curlPage = await HTTPClient.download_webpage_curl(videosUrl, headers, {
+                timeout: YOUTUBE_LIST_TIMEOUT_MS,
+            })
+            videosText = await curlPage.text()
             videosJson = extractAssignedObject<any>(videosText, 'ytInitialData')
+        }
+        if (!shortsJson) {
+            const curlPage = await HTTPClient.download_webpage_curl(shortsUrl, headers, {
+                timeout: YOUTUBE_LIST_TIMEOUT_MS,
+            })
+            shortsText = await curlPage.text()
             shortsJson = extractAssignedObject<any>(shortsText, 'ytInitialData')
         }
         if (!videosJson && !shortsJson) {

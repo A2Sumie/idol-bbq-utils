@@ -95,6 +95,8 @@ services:
       - './assets/tiktok-live-archive:/app/archive/tiktok-live'
       # 10. IG 直播 MPD 探针目录（venv+脚本+回放存档，容器重建不丢）
       - './assets/ig-probe:/app/ig-probe'
+      # 11. on-demand 直播抓取存档目录（twitch/showroom，容器重建不丢）
+      - './assets/live-capture-archive:/app/archive/live-capture'
   # TikTok 直播录制专用容器：与 spider 服务解耦，常规部署（up -d spider）不会重建/杀掉它，
   # 录制中的 watcher 进程不会因 forwarder 部署而中断。
   tiktok-live-watch:

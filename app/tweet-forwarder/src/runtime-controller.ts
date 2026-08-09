@@ -16,6 +16,7 @@ import {
     type ApiRuntimeReloadResult,
 } from './managers/api-manager'
 import { startMediaCacheCleanupJob, type MediaCacheCleanupJob } from './services/media-cache-service'
+import { LiveCaptureExecutor } from './services/live-capture-executor-service'
 import { buildRouteGraph } from './services/route-graph-service'
 import { buildRuntimeManifest } from './services/runtime-manifest-service'
 import { reconcileBilibiliSubmissionsAfterDbRecovery } from './services/bilibili-recovery-reconciliation-service'
@@ -29,6 +30,7 @@ interface RuntimeSnapshot {
     spiderPools?: SpiderPools
     spiderTaskScheduler?: SpiderTaskScheduler
     forwarderPools?: ForwarderPools
+    liveCaptureExecutor?: LiveCaptureExecutor
     createdAt: number
     manifest: ReturnType<typeof buildRuntimeManifest>
 }
@@ -177,6 +179,9 @@ export class RuntimeController {
             forwarderPools: this.runtime?.forwarderPools,
             spiderPools: this.runtime?.spiderPools,
             spiderTaskScheduler: this.runtime?.spiderTaskScheduler,
+            liveCaptureExecutor: this.runtime?.liveCaptureExecutor
+                ? { enabled: this.runtime.liveCaptureExecutor.enabled }
+                : null,
         }
     }
 
@@ -318,6 +323,15 @@ export class RuntimeController {
             compatibleModels.push(new TaskManager(forwarderPools, { processors: config.processors }, log))
         }
 
+        let liveCaptureExecutor: LiveCaptureExecutor | undefined
+        if (config.live_capture && this.runtimeMode === 'online') {
+            liveCaptureExecutor = new LiveCaptureExecutor({
+                config: config.live_capture,
+                log,
+            })
+            compatibleModels.push(liveCaptureExecutor)
+        }
+
         this.log.info(`[Trace] Check forwarders: ${forwarders?.length}, crawlers: ${crawlers?.length}`)
         if (forwarderPools && ((forwarders && forwarders.length > 0) || (crawlers && crawlers.length > 0))) {
             taskSchedulers.push(
@@ -354,6 +368,7 @@ export class RuntimeController {
             spiderPools,
             spiderTaskScheduler,
             forwarderPools,
+            liveCaptureExecutor,
             createdAt: Date.now(),
             manifest: buildRuntimeManifest(this.configPath, config),
         }

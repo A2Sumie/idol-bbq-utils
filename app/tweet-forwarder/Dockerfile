@@ -48,6 +48,10 @@ RUN wget --no-verbose -O /tmp/chrome.deb https://dl.google.com/linux/chrome/deb/
     && apt install -y /tmp/chrome.deb \
     && rm /tmp/chrome.deb
 
+# yt-dlp (self-contained binary) for on-demand live capture (twitch/showroom) and media downloads.
+RUN curl -sL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+    && chmod +x /usr/local/bin/yt-dlp
+
 WORKDIR /app
 COPY app/tweet-forwarder/update-media-tools.sh /app/tools/update-media-tools.sh
 COPY app/tweet-forwarder/scripts/biliup-upload.py /app/tools/biliup-upload.py

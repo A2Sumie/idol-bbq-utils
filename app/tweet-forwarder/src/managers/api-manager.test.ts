@@ -1859,7 +1859,7 @@ test('APIManager exposes a machine-readable non-executable live capture plan sch
             properties: {
                 target: {
                     properties: {
-                        platform: { enum: ['tiktok', 'instagram', 'youtube', 'showroom', 'openrec', 'other'] },
+                        platform: { enum: ['tiktok', 'instagram', 'youtube', 'twitch', 'showroom', 'openrec', 'other'] },
                     },
                 },
                 capture: {
@@ -1869,6 +1869,26 @@ test('APIManager exposes a machine-readable non-executable live capture plan sch
                 },
             },
         },
+    })
+})
+
+test('APIManager reports live capture plans as executable when the executor is online', async () => {
+    const manager = new APIManager({
+        getConfig: () => ({ api: { secret: 'test-secret' } }) as any,
+        getDeps: () => ({ liveCaptureExecutor: { enabled: true } }) as any,
+    })
+    const response = await (manager as any).dispatchApiRequest(
+        new Request('http://localhost/api/live-capture-plans/schema', {
+            headers: { Authorization: 'Bearer test-secret' },
+        }),
+        { timeout: () => {} },
+        'test-secret',
+    )
+    const payload = await response.json()
+    expect(payload.execution).toMatchObject({
+        scheduled: true,
+        executable: true,
+        activation_endpoint: '/api/live-capture-plans',
     })
 })
 
