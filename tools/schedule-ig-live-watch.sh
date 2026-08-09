@@ -94,8 +94,8 @@ if crawler is None:
     raise SystemExit(f"crawler not found for handle {handle}")
 crawler.setdefault("cfg_crawler", {})["schedule"] = {
     "timezone": "Asia/Tokyo",
-    "windows": [{"start": start, "end": end, "every_minutes": 1}],
-    "min_gap_seconds": 45,
+    "windows": [{"start": start, "end": end, "every_minutes": 3}],
+    "min_gap_seconds": 120,
     "tick_seconds": 10,
 }
 open(p, "w", encoding="utf-8").write(yaml.safe_dump(cfg, allow_unicode=True, default_flow_style=False, sort_keys=False))
@@ -116,7 +116,7 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" \
 set -Eeuo pipefail
 docker exec -e AUTH_PASSWORD="$AUTH_PASSWORD" "$CONTAINER_NAME" sh -lc \
   "rm -f /app/archive/instagram-live/watch-$HANDLE.lock; mkdir -p /app/archive/instagram-live; \
-   nohup bun /app/instagram-live-watch.ts $HANDLE --until $UNTIL --poll 30 \
+   nohup bun /app/instagram-live-watch.ts $HANDLE --until $UNTIL --poll 90 \
      --player-id \"$PLAYER_ID\" --player-name \"$PLAYER_NAME\" --live-player-url https://tv.n2nj.moe \
      --auth-username sumie --auth-password \"\$AUTH_PASSWORD\" --waf-header \"$WAF_HEADER\" \
      --cookie /app/assets/cookies/inscks0318.txt $([ "$ARCHIVE" = 1 ] && echo --archive) \

@@ -681,7 +681,6 @@ class InstagramLiveRelayService {
             if (shouldCapture) {
                 nextCache.package = await this.captureEchoPackage({
                     page: options.page,
-                    profileUrl: options.profileUrl,
                     liveUrl: status.live_url,
                     userId: status.numeric_id,
                     cookieString: options.cookieString,
@@ -1270,7 +1269,6 @@ class InstagramLiveRelayService {
 
     private async captureEchoPackage({
         page,
-        profileUrl,
         liveUrl,
         userId,
         cookieString,
@@ -1278,7 +1276,6 @@ class InstagramLiveRelayService {
         log,
     }: {
         page: Page
-        profileUrl: string
         liveUrl: string
         userId?: string | null
         cookieString?: string
@@ -1318,29 +1315,27 @@ class InstagramLiveRelayService {
         page.on('response', responseListener)
 
         try {
-            for (const targetUrl of [liveUrl, profileUrl]) {
-                try {
-                    await page.goto(targetUrl, {
-                        waitUntil: 'domcontentloaded',
-                        timeout: 30000,
-                    })
-                } catch (error) {
-                    log?.warn(`Instagram live capture navigation failed for ${targetUrl}: ${error}`)
-                    continue
-                }
+            // Single navigation: the live page emits manifest + web_info requests.
+            // (The old profileUrl second navigation was a redundant fallback —
+            // the direct web_info fetch below covers stream discovery with one
+            // cheap XHR instead of a full page load.)
+            try {
+                await page.goto(liveUrl, {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 30000,
+                })
+            } catch (error) {
+                log?.warn(`Instagram live capture navigation failed for ${liveUrl}: ${error}`)
+            }
 
-                await page.waitForSelector('video', { timeout: 5000 }).catch(() => null)
+            await page.waitForSelector('video', { timeout: 5000 }).catch(() => null)
 
-                const deadline = Date.now() + STREAM_CAPTURE_TIMEOUT_MS
-                while (Date.now() < deadline) {
-                    if (capturedStreams.size > 0) {
-                        break
-                    }
-                    await sleep(500)
-                }
+            const deadline = Date.now() + STREAM_CAPTURE_TIMEOUT_MS
+            while (Date.now() < deadline) {
                 if (capturedStreams.size > 0) {
                     break
                 }
+                await sleep(500)
             }
 
             if (capturedStreams.size === 0 && userId) {
@@ -1446,10 +1441,21 @@ class InstagramLiveRelayService {
     }
 
     private async fetchLiveWebInfo(page: Page, liveUrl: string, userId: string) {
-        await page.goto(liveUrl, {
-            waitUntil: 'domcontentloaded',
-            timeout: 30000,
-        })
+        // The page is normally already on the live URL from captureEchoPackage —
+        // only re-navigate when the previous goto failed (e.g. about:blank).
+        const currentUrl = (() => {
+            try {
+                return page.url()
+            } catch {
+                return ''
+            }
+        })()
+        if (!currentUrl || !/instagram\.com/.test(currentUrl)) {
+            await page.goto(liveUrl, {
+                waitUntil: 'domcontentloaded',
+                timeout: 30000,
+            }).catch(() => {})
+        }
         const html = await page.content().catch(() => '')
         const appId = extractInstagramAppIdFromHtml(html)
 

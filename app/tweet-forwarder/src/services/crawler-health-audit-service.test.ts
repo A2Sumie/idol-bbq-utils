@@ -169,7 +169,7 @@ test('buildCrawlerLiveHealthAudit probes Instagram configured usernames', async 
             {
                 fetch: (async (url: string, init?: RequestInit) => {
                     requests.push({ url, headers: init?.headers as Record<string, string> })
-                    return new Response(JSON.stringify({ data: { user: { username: 'shiina_satsuki227' } } }), {
+                    return new Response(JSON.stringify({ user: { username: 'shiina_satsuki227' } }), {
                         status: 200,
                         headers: { 'content-type': 'application/json' },
                     })
@@ -194,8 +194,8 @@ test('buildCrawlerLiveHealthAudit probes Instagram configured usernames', async 
             },
         })
         expect(requests).toHaveLength(1)
-        expect(requests[0]?.url).toContain('username=shiina_satsuki227')
-        expect(requests[0]?.headers.referer).toBe('https://www.instagram.com/shiina_satsuki227/')
+        expect(requests[0]?.url).toContain('/users/shiina_satsuki227/username_info/')
+        expect(requests[0]?.headers['user-agent']).toContain('iPhone')
     } finally {
         rmSync(dir, { recursive: true, force: true })
     }
@@ -422,7 +422,7 @@ test('buildCrawlerLiveHealthAudit reuses live probes for shared cookie files', a
             {
                 fetch: (async () => {
                     fetchCalls += 1
-                    return new Response(JSON.stringify({ data: { user: { username: 'instagram' } } }), {
+                    return new Response(JSON.stringify({ user: { username: 'instagram' } }), {
                         status: 200,
                         headers: { 'content-type': 'application/json' },
                     })

@@ -210,6 +210,14 @@ def replay_dash_url(broadcast):
     return None
 
 
+def is_rate_limited(exc):
+    response = getattr(exc, 'response', None)
+    status = getattr(response, 'status_code', None)
+    if status == 429:
+        return True
+    return '429' in str(exc)
+
+
 def resolve_uid_cached(cl, handle):
     uids = {}
     if os.path.exists(UID_CACHE):
@@ -220,8 +228,12 @@ def resolve_uid_cached(cl, handle):
     if handle in uids:
         return str(uids[handle])
     try:
-        uid = str(cl.user_id_from_username(handle))
+        # Private API only (i.instagram.com/api/v1) — skips instagrapi's fallback
+        # to the 429-prone public web profile endpoint entirely.
+        uid = str(cl.user_info_by_username_v1(handle).pk)
     except Exception as exc:
+        if is_rate_limited(exc):
+            raise
         print(f'[probe] username resolution failed for {handle}: {exc}')
         return None
     uids[handle] = uid
@@ -283,6 +295,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     import datetime as _dt
+    consecutive_429 = 0
     while True:
         jst_hour = int(_dt.datetime.now(_dt.timezone(_dt.timedelta(hours=9))).strftime('%H'))
         if jst_hour < 12:
@@ -293,12 +306,34 @@ def main():
             continue
         started = time.time()
         print(f'[probe] pass start {time.strftime("%F %T")} handles={handles}')
+        pass_rate_limited = False
         try:
             cl = get_client()
             for handle in handles:
-                process_handle(cl, handle, out_dir)
+                try:
+                    process_handle(cl, handle, out_dir)
+                except Exception as exc:
+                    if is_rate_limited(exc):
+                        pass_rate_limited = True
+                        print(f'[probe] 429 hit while processing {handle}: {exc}')
+                    else:
+                        print(f'[probe] handle error {handle}: {exc}')
         except Exception as exc:
-            print(f'[probe] pass error: {exc}')
+            if is_rate_limited(exc):
+                pass_rate_limited = True
+                print(f'[probe] pass 429: {exc}')
+            else:
+                print(f'[probe] pass error: {exc}')
+        if pass_rate_limited:
+            consecutive_429 += 1
+            # 429 backoff: stretch the pause, then keep doubling up to 60 min.
+            backoff = min(3600, 1800 * (1 << min(consecutive_429 - 1, 1)))
+            print(f'[probe] rate-limited; backing off {backoff}s (streak={consecutive_429})')
+            if args.once:
+                break
+            time.sleep(backoff)
+            continue
+        consecutive_429 = 0
         if args.once:
             break
         elapsed = time.time() - started

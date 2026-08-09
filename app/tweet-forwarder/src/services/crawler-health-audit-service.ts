@@ -616,18 +616,23 @@ async function probeInstagram(
     const cookie = getCookieString(cookies)
     const csrf = cookieValue(cookies, 'csrftoken')
     const username = target?.username || 'instagram'
+    // Private mobile API (i.instagram.com/api/v1) is far more tolerant than the
+    // public web_profile_info endpoint (which the community consistently hits 429
+    // on). The web cookies are shared across instagram.com hosts, so the same
+    // sessionid works here — this is the endpoint instagrapi/instaloader-style
+    // clients prefer for cookie validation.
     const response = await fetchWithTimeout(
         fetchImpl,
-        `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`,
+        `https://i.instagram.com/api/v1/users/${encodeURIComponent(username)}/username_info/`,
         {
             method: 'GET',
             headers: {
                 cookie,
                 'x-csrftoken': csrf,
                 'x-ig-app-id': '936619743392459',
-                referer: `https://www.instagram.com/${username}/`,
+                accept: '*/*',
                 'user-agent':
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
+                    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
                 'accept-language': 'en-US,en;q=0.9',
             },
         },
@@ -646,7 +651,7 @@ async function probeInstagram(
     }
     try {
         const json = await response.json()
-        const returnedUsername = String(json?.data?.user?.username || '').trim()
+        const returnedUsername = String(json?.user?.username || '').trim()
         if (!returnedUsername) {
             return {
                 status: 'warn',

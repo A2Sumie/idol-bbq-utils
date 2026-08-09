@@ -349,7 +349,7 @@ function buildCounts(rows: Array<ArticleDistributionRow>) {
 
 function platformEveryMinutes(platform: string, dense: boolean) {
     if (platform === 'x') return dense ? 4 : 8
-    if (platform === 'instagram') return dense ? 5 : 10
+    if (platform === 'instagram') return dense ? 8 : 15
     if (platform === 'tiktok') return dense ? 8 : 15
     if (platform === 'youtube') return dense ? 10 : 30
     if (platform === 'website') return dense ? 10 : 30

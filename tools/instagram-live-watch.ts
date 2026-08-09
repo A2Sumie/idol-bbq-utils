@@ -27,7 +27,7 @@ if (!handle) {
   process.exit(2)
 }
 const untilHHMM = arg('--until')
-const pollSeconds = Number(arg('--poll', '30'))
+const pollSeconds = Number(arg('--poll', '90'))
 const playerId = arg('--player-id', 'relay')
 const playerName = arg('--player-name', `【IG Live】${handle}`)
 const livePlayerUrl = (arg('--live-player-url', 'https://tv.n2nj.moe') || '').replace(/\/+$/, '')
@@ -119,8 +119,54 @@ function captureStreamsFromWebInfo(json: any) {
 }
 
 const persistentProfileDir = `/tmp/ig-watch-${process.pid}-profile`
+const uidCachePath = `${archiveRoot}/uids.json`
 let browser: Awaited<ReturnType<typeof puppeteer.launch>> | null = null
 let page: any = null
+
+// IG request budget (mirrors the RE-community approach: private API XHR is cheap,
+// full browser navigations are the 429 driver — use one only when needed):
+//   probe = 1 web_info XHR (no navigation) once the numeric uid is cached;
+//   full page load happens only on first probe (uid lookup) or when live is detected.
+const DEFAULT_IG_APP_ID = '936619743392459'
+const WEB_INFO_RATE_LIMITED_MS = 10 * 60 * 1000
+
+function loadUidCache(): Record<string, string> {
+  try {
+    return JSON.parse(fs.readFileSync(uidCachePath, 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function saveUidCache(cache: Record<string, string>) {
+  try {
+    fs.mkdirSync(path.dirname(uidCachePath), { recursive: true })
+    fs.writeFileSync(uidCachePath, JSON.stringify(cache))
+  } catch {}
+}
+
+async function fetchWebInfoInPage(uid: string): Promise<{ ok: boolean; status: number; json: any } | null> {
+  if (!page) return null
+  const result = await page
+    .evaluate(
+      async (targetUserId: string, igAppId: string) => {
+        const r = await fetch(`/api/v1/live/web_info/?target_user_id=${encodeURIComponent(targetUserId)}`, {
+          credentials: 'include',
+          headers: { accept: '*/*', 'x-requested-with': 'XMLHttpRequest', 'x-ig-app-id': igAppId },
+        })
+        return { ok: r.ok, status: r.status, text: await r.text() }
+      },
+      uid,
+      DEFAULT_IG_APP_ID,
+    )
+    .catch(() => null)
+  if (!result) return null
+  try {
+    return { ok: result.ok, status: result.status, json: JSON.parse(result.text) }
+  } catch {
+    return { ok: result.ok, status: result.status, json: null }
+  }
+}
 
 async function ensureBrowser() {
   if (browser && browser.isConnected()) return
@@ -141,75 +187,87 @@ async function ensureBrowser() {
   if (cookies.length) await page.setCookie(...cookies)
 }
 
-async function probeLive(): Promise<{ live: boolean; status: string | null; userId: string | null }> {
+async function probeLive(): Promise<{ live: boolean; status: string | null; userId: string | null; rateLimited: boolean }> {
   capturedStreams.clear()
   await ensureBrowser()
-  const listener = async (res: any) => {
-    const url = String(res.url() || '')
-    if (url.includes('.m3u8') || url.includes('.mpd')) {
-      captureStream(url, {
-        Referer: liveUrl,
-        'User-Agent': requestUa,
-        Cookie: cookieHeader,
-      })
-      return
-    }
-    if (url.includes('/api/v1/live/web_info/')) {
-      try {
-        const json = await res.json()
-        captureStreamsFromWebInfo(json)
-      } catch {}
-    }
-  }
-  page.on('response', listener)
-  try {
-    await page
-      .goto(liveUrl, { waitUntil: 'domcontentloaded', timeout: 30000 })
-      .catch(() => {})
-    await new Promise((r) => setTimeout(r, 3500))
-  } catch {}
-  page.off('response', listener)
 
-  let userId: string | null = null
-  let status: string | null = null
-  try {
-    const html = await page.content()
-    const pkMatch =
-      html.match(/instagram:\/\/user\?id=(\d+)/) ||
-      html.match(/"pk":"(\d{6,})"/) ||
-      html.match(/"user_id":"(\d{6,})"/) ||
-      html.match(/"id":"(\d{6,})"[^}]{0,120}nao_aikawa227/i)
-    userId = pkMatch?.[1] || null
-    const appId = html.match(/"APP_ID"\s*:\s*"(\d+)"/)?.[1] || '936619743392459'
-    if (userId) {
-      const wid = await page
-        .evaluate(
-          async (uid: string, aid: string) => {
-            const r = await fetch(
-              `/api/v1/live/web_info/?target_user_id=${encodeURIComponent(uid)}`,
-              {
-                credentials: 'include',
-                headers: { accept: '*/*', 'x-requested-with': 'XMLHttpRequest', 'x-ig-app-id': aid },
-              },
-            )
-            return { ok: r.ok, text: await r.text() }
-          },
-          userId,
-          appId,
-        )
-        .catch(() => null)
-      if (wid?.ok) {
+  const uids = loadUidCache()
+  let userId = uids[handle] || null
+
+  if (!userId) {
+    const listener = async (res: any) => {
+      const url = String(res.url() || '')
+      if (url.includes('.m3u8') || url.includes('.mpd')) {
+        captureStream(url, {
+          Referer: liveUrl,
+          'User-Agent': requestUa,
+          Cookie: cookieHeader,
+        })
+        return
+      }
+      if (url.includes('/api/v1/live/web_info/')) {
         try {
-          status = captureStreamsFromWebInfo(JSON.parse(wid.text))
+          const json = await res.json()
+          captureStreamsFromWebInfo(json)
         } catch {}
       }
     }
-  } catch {}
+    page.on('response', listener)
+    try {
+      await page.goto(liveUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+      await new Promise((r) => setTimeout(r, 3500))
+    } catch {}
+    page.off('response', listener)
+
+    try {
+      const html = await page.content()
+      const pkMatch = html.match(/instagram:\/\/user\?id=(\d+)/) || html.match(/"pk":"(\d{6,})"/)
+      userId = pkMatch?.[1] || null
+      if (userId) {
+        uids[handle] = userId
+        saveUidCache(uids)
+      }
+    } catch {}
+  }
+
+  let status: string | null = null
+  if (userId) {
+    const wid = await fetchWebInfoInPage(userId)
+    if (wid?.status === 429) {
+      log(`web_info 429 for handle=${handle} — backing off ${WEB_INFO_RATE_LIMITED_MS / 60000} min`)
+      return { live: false, status: null, userId, rateLimited: true }
+    }
+    if (wid?.ok && wid.json) {
+      status = captureStreamsFromWebInfo(wid.json)
+      const liveStates = ['live', 'post_live']
+      if (capturedStreams.size === 0 && (status && liveStates.includes(status))) {
+        // Live confirmed but no manifest surfaced in the XHR — a full page load is
+        // justified now (the page emits the manifest network requests).
+        const listener = async (res: any) => {
+          const url = String(res.url() || '')
+          if (url.includes('.m3u8') || url.includes('.mpd')) {
+            captureStream(url, {
+              Referer: liveUrl,
+              'User-Agent': requestUa,
+              Cookie: cookieHeader,
+            })
+          }
+        }
+        page.on('response', listener)
+        try {
+          await page.goto(liveUrl, { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+          await new Promise((r) => setTimeout(r, 3500))
+        } catch {}
+        page.off('response', listener)
+      }
+    }
+  }
+
   const live = capturedStreams.size > 0
   log(
-    `probe handle=${handle} live=${live} status=${status || 'unknown'} streams=${capturedStreams.size} userId=${userId || '?'}`,
+    `probe handle=${handle} live=${live} status=${status || 'unknown'} streams=${capturedStreams.size} userId=${userId || '?'} navigations=${userId ? 'xhr-only' : 'first-load'}`,
   )
-  return { live, status, userId }
+  return { live, status, userId, rateLimited: false }
 }
 
 async function login(): Promise<string> {
@@ -366,13 +424,23 @@ process.on('exit', () => {
 
 log(`watch start handle=${handle} until=${untilHHMM || '(12h)'} deadline=${new Date(deadlineMs).toISOString()} poll=${pollSeconds}s`)
 let idleStreak = 0
+let rateLimitUntil = 0
 while (Date.now() < deadlineMs) {
-  let probe: { live: boolean; status: string | null; userId: string | null }
+  if (Date.now() < rateLimitUntil) {
+    const pause = Math.min(60_000, rateLimitUntil - Date.now())
+    await new Promise((r) => setTimeout(r, pause))
+    continue
+  }
+  let probe: { live: boolean; status: string | null; userId: string | null; rateLimited: boolean }
   try {
     probe = await probeLive()
   } catch (e) {
     log(`probe error: ${e instanceof Error ? e.message : String(e)}`)
     await new Promise((r) => setTimeout(r, pollSeconds * 1000))
+    continue
+  }
+  if (probe.rateLimited) {
+    rateLimitUntil = Date.now() + WEB_INFO_RATE_LIMITED_MS
     continue
   }
   if (probe.live) {
@@ -383,6 +451,7 @@ while (Date.now() < deadlineMs) {
       await syncRelay()
       lastSyncAt = Date.now()
     }
+    await new Promise((r) => setTimeout(r, pollSeconds * 1000))
   } else {
     if (sessionActive) {
       await stopRelay()
@@ -390,9 +459,16 @@ while (Date.now() < deadlineMs) {
     } else {
       idleStreak += 1
     }
+    // Idle backoff: after 3 consecutive idle probes, stretch the gap to 3-5 min
+    // (jittered) — a quiet window does not need dense probing.
+    let wait = pollSeconds * 1000
+    if (idleStreak >= 3) {
+      wait = 180_000 + Math.floor(Math.random() * 120_000)
+    } else if (idleStreak >= 1) {
+      wait += Math.floor(Math.random() * 30_000)
+    }
+    await new Promise((r) => setTimeout(r, wait))
   }
-  const wait = pollSeconds * 1000 + (idleStreak >= 5 ? Math.min(30_000, Math.floor(Math.random() * 15_000)) : 0)
-  await new Promise((r) => setTimeout(r, wait))
 }
 await stopRelay()
 log('watch end')
