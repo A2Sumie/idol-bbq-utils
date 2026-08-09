@@ -32,7 +32,8 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 COOKIE_FILE = '/app/assets/cookies/inscks0318.txt'
-SESSION_CACHE = '/tmp/tweet-forwarder/ig-probe-session.json'
+SESSION_CACHE = '/app/ig-probe/session.json'
+UID_CACHE = '/app/ig-probe/uids.json'
 DEFAULT_HANDLES = ['nao_aikawa227', 'shiina_satsuki227']
 
 
@@ -59,15 +60,10 @@ def get_client():
     sid = cookies.get('sessionid', '')
     if not sid:
         raise RuntimeError('no sessionid in cookie file')
-    try:
-        cl.login_by_sessionid(sid)
-        cl.dump_settings(SESSION_CACHE)
-    except Exception:
-        if os.path.exists(SESSION_CACHE):
-            cl.load_settings(SESSION_CACHE)
-            cl.login_by_sessionid(sid)
-        else:
-            raise
+    if os.path.exists(SESSION_CACHE):
+        cl.load_settings(SESSION_CACHE)
+    cl.login_by_sessionid(sid)
+    cl.dump_settings(SESSION_CACHE)
     return cl
 
 
@@ -214,11 +210,28 @@ def replay_dash_url(broadcast):
     return None
 
 
-def process_handle(cl, handle, out_dir):
+def resolve_uid_cached(cl, handle):
+    uids = {}
+    if os.path.exists(UID_CACHE):
+        try:
+            uids = json.loads(open(UID_CACHE, encoding='utf-8').read())
+        except Exception:
+            uids = {}
+    if handle in uids:
+        return str(uids[handle])
     try:
-        uid = cl.user_id_from_username(handle)
+        uid = str(cl.user_id_from_username(handle))
     except Exception as exc:
         print(f'[probe] username resolution failed for {handle}: {exc}')
+        return None
+    uids[handle] = uid
+    Path(UID_CACHE).write_text(json.dumps(uids), encoding='utf-8')
+    return uid
+
+
+def process_handle(cl, handle, out_dir):
+    uid = resolve_uid_cached(cl, handle)
+    if uid is None:
         return
     broadcasts = collect_broadcasts(cl, uid)
     if not broadcasts:
@@ -269,7 +282,15 @@ def main():
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    import datetime as _dt
     while True:
+        jst_hour = int(_dt.datetime.now(_dt.timezone(_dt.timedelta(hours=9))).strftime('%H'))
+        if jst_hour < 12:
+            print(f'[probe] pass skipped (JST hour {jst_hour} < 12, no probing 00-12h)')
+            if args.once:
+                return
+            time.sleep(1800)
+            continue
         started = time.time()
         print(f'[probe] pass start {time.strftime("%F %T")} handles={handles}')
         try:
