@@ -307,6 +307,11 @@ interface ForwardTargetPlatformCommonConfig {
      */
     suppress_translations?: boolean
     /**
+     * When set, the forwarded text contains the original text only — no translation
+     * block (the translation still ships as the separate translated card, if enabled).
+     */
+    text_original_only?: boolean
+    /**
      * Suppress provider sends that would have no visible media. Use for media-only
      * destinations where text-only fallback is more harmful than dropping the send.
      */

@@ -2401,6 +2401,12 @@ class ForwarderPools extends BaseCompatibleModel {
                               )
                         visibilityForRelease = visibility
                         let text = baseText
+                        if ((target.getEffectiveConfig(runtime_config) as any)?.text_original_only === true) {
+                            text = this.renderService.renderText(targetArticle, {
+                                render_type: cfg_forwarder?.render_type,
+                                textOriginalOnly: true,
+                            })
+                        }
                         let mediaFiles = targetRenderResult.mediaFiles
                         let cardMediaFiles = targetRenderResult.cardMediaFiles
                         let contentMediaFiles = targetRenderResult.originalMediaFiles

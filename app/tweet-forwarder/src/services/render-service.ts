@@ -412,10 +412,12 @@ export class RenderService {
         config: {
             render_type?: string
             collapsedArticleIds?: Set<string | number>
+            textOriginalOnly?: boolean
         } = {},
     ) {
         const textOptions: ArticleTextOptions = {
             collapsedArticleIds: config.collapsedArticleIds,
+            textOriginalOnly: config.textOriginalOnly === true,
         }
         return config.render_type === 'text-compact' || config.render_type === 'text-compact-card'
             ? compactArticleToText(article, textOptions)

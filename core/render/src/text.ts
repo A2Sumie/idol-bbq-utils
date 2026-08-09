@@ -9,6 +9,8 @@ type Follows = GenericFollows & {
 
 type ArticleTextOptions = {
     collapsedArticleIds?: Set<string | number>
+    /** When set, the rendered text omits the translation block and keeps the original text only. */
+    textOriginalOnly?: boolean
 }
 
 const RENDER_TIMEZONE_OFFSET_MINUTES = 9 * 60
@@ -531,7 +533,7 @@ function articleToText(article: Article, options?: ArticleTextOptions) {
         }
         const segmentStart = format_article.length
         format_article += formatArticleHeaderLine(currentArticle)
-        if (currentArticle.translated_by) {
+        if (currentArticle.translated_by && !options?.textOriginalOnly) {
             let translation = parseTranslationContent(currentArticle)
             format_article += `\n\n${translation}\n${'-'.repeat(6)}↑译文--↓原文${'-'.repeat(6)}\n`
         }
@@ -574,7 +576,7 @@ function compactArticleToText(article: Article, options?: ArticleTextOptions) {
         }
         const segmentStart = format_article.length
         format_article += formatArticleHeaderLine(currentArticle)
-        if (currentArticle.translated_by) {
+        if (currentArticle.translated_by && !options?.textOriginalOnly) {
             const translation = parseTranslationContent(currentArticle)
             format_article += `\n\n${translation}\n${'-'.repeat(6)}↑译文--↓原文${'-'.repeat(6)}\n`
         }
