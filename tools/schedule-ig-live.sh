@@ -114,12 +114,12 @@ api_secret="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["s
 api_base="http://${API_HOST}:${api_port}"
 auth="Authorization: Bearer ${api_secret}"
 
-crawler_exists="$(docker exec "$CONTAINER_NAME" bun -e '
+crawler_exists="$(docker exec -e CRAWLER_NAME="$CRAWLER_NAME" "$CONTAINER_NAME" bun -e '
   const fs=require("fs"), YAML=require("yaml")
   const cfg=YAML.parse(fs.readFileSync("/app/config.yaml","utf8"))||{}
-  const name=process.argv[2]
+  const name=process.env.CRAWLER_NAME
   console.log((cfg.crawlers||[]).some(c=>c.name===name)?"yes":"no")
-' -- "$CRAWLER_NAME" 2>/dev/null)"
+' 2>/dev/null)"
 if [ "$crawler_exists" != "yes" ]; then
   echo "crawler not present in runtime config: $CRAWLER_NAME" >&2
   echo "deploy/reload config with the IG live crawler before relying on schedule." >&2
