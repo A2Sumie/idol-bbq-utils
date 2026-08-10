@@ -198,6 +198,26 @@ test('BrowserSessionPool evicts a session when the browser disconnects', async (
     expect(launched).toHaveLength(2)
 })
 
+test('BrowserSessionPool force-kills an orphan when graceful close fails', async () => {
+    const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
+    const browser = makeFakeBrowser({ connected: true })
+    let killSignal = ''
+    browser.close = async () => {
+        throw new Error('CDP disconnected')
+    }
+    browser.process = () => ({
+        kill(signal: string) {
+            killSignal = signal
+        },
+    })
+    stubLaunch(pool, [browser])
+
+    await pool.createPage({ session_profile: 'x-main', browser_mode: 'headed-xvfb' })
+    await pool.closeAll()
+
+    expect(killSignal).toBe('SIGKILL')
+})
+
 test('BrowserSessionPool keeps the browser pooled but closes the page when profile setup fails', async () => {
     const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
     let pageClosed = 0

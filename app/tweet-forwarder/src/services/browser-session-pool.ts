@@ -35,6 +35,7 @@ interface BrowserRuntimeSession {
  * enough to recover from a stale handle without risking an infinite crash loop.
  */
 const CREATE_PAGE_MAX_ATTEMPTS = 2
+const BROWSER_CLOSE_TIMEOUT_MS = 5_000
 
 function sanitizeSessionId(value?: string) {
     return (value || 'default').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'default'
@@ -116,11 +117,7 @@ export class BrowserSessionPool {
         await Promise.allSettled(Array.from(this.pendingLaunches.values()))
         await Promise.all(
             Array.from(this.sessions.values()).map(async (session) => {
-                try {
-                    await session.browser.close()
-                } catch (error) {
-                    this.log?.warn(`Failed to close browser session ${session.sessionId}: ${error}`)
-                }
+                await this.closeBrowser(session, `closeAll:${session.sessionId}`)
             }),
         )
         this.sessions.clear()
@@ -204,9 +201,31 @@ export class BrowserSessionPool {
         if (this.sessions.get(sessionKey) === session) {
             this.sessions.delete(sessionKey)
         }
-        // Best-effort teardown of the (likely dead) browser to release its resources. Closing a
-        // browser whose connection is already gone can reject, so failures are intentionally ignored.
-        await session.browser.close().catch(() => null)
+        await this.closeBrowser(session, `evict:${session.sessionId}`)
+    }
+
+    private async closeBrowser(session: BrowserRuntimeSession, reason: string) {
+        const process = session.browser.process?.()
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+            await Promise.race([
+                session.browser.close(),
+                new Promise<void>((_, reject) => {
+                    timer = setTimeout(() => reject(new Error(`browser close timed out after ${BROWSER_CLOSE_TIMEOUT_MS}ms`)), BROWSER_CLOSE_TIMEOUT_MS)
+                }),
+            ])
+        } catch (error) {
+            this.log?.warn(`Failed to close browser session ${session.sessionId} (${reason}): ${error}`)
+            // CDP may already be disconnected while the OS process remains alive.
+            // Kill only this pooled browser's root process; its zygote children follow.
+            try {
+                process?.kill('SIGKILL')
+            } catch (killError) {
+                this.log?.warn(`Failed to SIGKILL browser session ${session.sessionId}: ${killError}`)
+            }
+        } finally {
+            if (timer) clearTimeout(timer)
+        }
     }
 
     private async launchBrowser(
