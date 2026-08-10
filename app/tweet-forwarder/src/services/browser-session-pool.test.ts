@@ -103,6 +103,34 @@ test('BrowserSessionPool reuses a live pooled browser across createPage calls', 
     expect(browser._state.closeCalls).toBe(0)
 })
 
+test('BrowserSessionPool serializes concurrent launches for the same session profile', async () => {
+    const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
+    const browser = makeFakeBrowser({ connected: true })
+    let launchCalls = 0
+    let releaseLaunch!: () => void
+    const launchGate = new Promise<void>((resolve) => {
+        releaseLaunch = resolve
+    })
+    ;(pool as any).launchBrowser = async () => {
+        launchCalls += 1
+        await launchGate
+        return browser
+    }
+
+    const pages = [
+        pool.createPage({ session_profile: 'x-main', browser_mode: 'headed-xvfb' }),
+        pool.createPage({ session_profile: 'x-main', browser_mode: 'headed-xvfb' }),
+        pool.createPage({ session_profile: 'x-main', browser_mode: 'headed-xvfb' }),
+    ]
+    await Promise.resolve()
+    expect(launchCalls).toBe(1)
+    releaseLaunch()
+    await Promise.all(pages)
+
+    expect(launchCalls).toBe(1)
+    expect((pool as any).sessions.size).toBe(1)
+})
+
 test('BrowserSessionPool relaunches when the cached browser is no longer connected', async () => {
     const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
     const dead = makeFakeBrowser({ connected: true })

@@ -42,6 +42,12 @@ function sanitizeSessionId(value?: string) {
 
 export class BrowserSessionPool {
     private readonly sessions = new Map<string, BrowserRuntimeSession>()
+    // In-flight launches keyed by sessionKey. Concurrent createPage() calls for the
+    // same profile (common at cold start when several crawlers share e.g. x-main)
+    // must await one launch instead of each racing to spawn a browser and orphaning
+    // the losers of the Map.set() race — that leak stacked dozens of Chrome instances
+    // per profile and drove the host into OOM.
+    private readonly pendingLaunches = new Map<string, Promise<BrowserRuntimeSession>>()
     private readonly browserRoot: string
     private readonly log?: Logger
 
@@ -105,6 +111,9 @@ export class BrowserSessionPool {
     }
 
     async closeAll() {
+        // Wait for in-flight launches to settle so closeAll cannot miss a browser that
+        // is about to enter the pool during runtime reload/shutdown.
+        await Promise.allSettled(Array.from(this.pendingLaunches.values()))
         await Promise.all(
             Array.from(this.sessions.values()).map(async (session) => {
                 try {
@@ -134,6 +143,32 @@ export class BrowserSessionPool {
             await this.evictSession(sessionKey, existing)
         }
 
+        // Another caller may already be launching this exact profile. Await it; do not
+        // race a second Chrome against the same userDataDir and leak the first process.
+        const inFlight = this.pendingLaunches.get(sessionKey)
+        if (inFlight) {
+            return await inFlight
+        }
+        const replacement = this.sessions.get(sessionKey)
+        if (replacement && this.isSessionAlive(replacement)) {
+            return replacement
+        }
+
+        const launchPromise = this.launchSession(sessionKey, sessionId, browserMode, profile).finally(() => {
+            if (this.pendingLaunches.get(sessionKey) === launchPromise) {
+                this.pendingLaunches.delete(sessionKey)
+            }
+        })
+        this.pendingLaunches.set(sessionKey, launchPromise)
+        return await launchPromise
+    }
+
+    private async launchSession(
+        sessionKey: string,
+        sessionId: string,
+        browserMode: BrowserMode,
+        profile: BrowserProfileConfig,
+    ): Promise<BrowserRuntimeSession> {
         const userDataDir = path.join(this.browserRoot, sessionId)
         ensureDirectoryExists(userDataDir)
         const browser = await this.launchBrowser(browserMode, userDataDir, profile)
