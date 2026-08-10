@@ -244,6 +244,15 @@ namespace InsApiJsonParser {
     }
 
     function parseEdges(json: any): any {
+        // Prefer the target user's own timeline edges when the payload exposes them
+        // scoped (classic profile graphql shape). A document-wide $..edges lookup can
+        // match a different section (viewer feed, reels tray) whose nodes carry no
+        // owner, which previously produced posts with an empty u_id (and later an
+        // "@<shortcode>" notification handle).
+        const scoped = JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json })[0]
+        if (Array.isArray(scoped) && scoped.length > 0) {
+            return scoped
+        }
         const edges_json = JSONPath({ path: '$..edges', json })[0]
         if (!edges_json) {
             throw new Error('Edges json format may have changed')
@@ -431,7 +440,12 @@ namespace InsApiJsonParser {
     export function postsParser(json: any): Array<GenericArticle<Platform.Instagram>> {
         let edges = parseEdges(json)
         const crawledProfile = profileContextFromUser(json?.data?.user)
-        return edges.map((edge: any) => postParser(edge, crawledProfile))
+        return edges
+            .map((edge: any) => postParser(edge, crawledProfile))
+            // Drop posts whose owner cannot be identified (no node user/owner and no
+            // crawled profile context): they would otherwise be saved with an empty
+            // u_id and surface as "@<shortcode>" in forwarded notifications.
+            .filter((article: GenericArticle<Platform.Instagram>) => Boolean(article.u_id))
     }
 
     export function followsParser(json: any): GenericFollows {

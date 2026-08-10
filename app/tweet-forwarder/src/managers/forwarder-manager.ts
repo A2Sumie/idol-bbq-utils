@@ -5754,7 +5754,10 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private formatSummaryCardSendTextUser(article: ArticleWithId | Article | null | undefined) {
-        const value = String(article?.u_id || article?.username || article?.a_id || 'unknown').trim()
+        // a_id must never masquerade as a handle: for Instagram it is the post
+        // shortcode (e.g. Db28RJECR7m), which surfaced as "@<shortcode>" in
+        // forwarded notifications when u_id was missing.
+        const value = String(article?.u_id || article?.username || 'unknown').trim()
         return value.replace(/^@+/, '') || 'unknown'
     }
 
