@@ -93,20 +93,34 @@ test('probeShowroomDetail returns the room id alongside live state', async () =>
     expect(noRoom).toEqual({ isLive: true, roomId: null })
 })
 
-test('fetchShowroomStreamingUrl resolves the hls_all playlist', async () => {
+test('fetchShowroomStreamingUrl resolves the master playlist from streaming_url_list', async () => {
     const m3u8 = 'https://hls.example.com/master.m3u8?expire=1\\u0026token=abc'
     const url = await fetchShowroomStreamingUrl(
         564018,
         (async (u: string) => {
-            expect(u).toContain('/api/live/streaming_url?room_id=564018&abr_available=1')
-            return new Response(JSON.stringify({ hls_all: m3u8, is_live: true }), { status: 200 })
+            expect(u).toContain('/api/live/streaming_url?room_id=564018&')
+            return new Response(
+                JSON.stringify({
+                    streaming_url_list: [
+                        { type: 'hls', url: 'https://hls.example.com/sub.m3u8' },
+                        { type: 'hls_all', url: m3u8 },
+                    ],
+                }),
+                { status: 200 },
+            )
         }) as any,
         5000,
     )
     expect(url).toBe('https://hls.example.com/master.m3u8?expire=1&token=abc')
+    const noList = await fetchShowroomStreamingUrl(
+        564018,
+        (async () => new Response(JSON.stringify({ streaming_url_list: [] }), { status: 200 })) as any,
+        5000,
+    )
+    expect(noList).toBeNull()
     const offline = await fetchShowroomStreamingUrl(
         564018,
-        (async () => new Response(JSON.stringify({ is_live: false }), { status: 200 })) as any,
+        (async () => new Response(JSON.stringify({ streaming_url_list: false }), { status: 200 })) as any,
         5000,
     )
     expect(offline).toBeNull()

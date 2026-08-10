@@ -117,7 +117,7 @@ export async function fetchShowroomStreamingUrl(
     fetchImpl: typeof fetch = fetch,
     timeoutMs = DEFAULT_PROBE_TIMEOUT_SECONDS * 1000,
 ): Promise<string | null> {
-    const url = `${SHOWROOM_STREAMING_URL}?room_id=${encodeURIComponent(roomId)}&abr_available=1`
+    const url = `${SHOWROOM_STREAMING_URL}?room_id=${encodeURIComponent(roomId)}&_=${Date.now()}&abr_available=1`
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     try {
@@ -131,11 +131,17 @@ export async function fetchShowroomStreamingUrl(
         if (!response.ok) {
             return null
         }
-        const json = (await response.json()) as { hls_all?: unknown }
-        if (json?.is_live === false) {
+        const json = (await response.json()) as {
+            streaming_url_list?: Array<{ type?: string; url?: string }>
+        }
+        if (json?.streaming_url_list === false) {
             return null
         }
-        const hls = typeof json?.hls_all === 'string' ? json.hls_all : null
+        const list = Array.isArray(json?.streaming_url_list) ? json.streaming_url_list : []
+        // Prefer the master playlist (hls_all), then plain hls — same order as StreamServ.
+        const entry =
+            list.find((item) => item?.type === 'hls_all') || list.find((item) => item?.type === 'hls') || null
+        const hls = entry?.url || null
         return hls?.replace(/\\u0026/g, '&') || null
     } catch {
         return null
