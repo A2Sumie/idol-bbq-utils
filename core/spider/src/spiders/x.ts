@@ -503,7 +503,7 @@ class XStatusSpider extends BaseSpider {
         }).filter(isAllowedMember)
         const listContextUserIds = this.sanitizeUserIds([
             ...configuredUsers,
-            ...sampledViewportUsers,
+            ...sampledViewportUsers.filter(isAllowedMember),
             ...activeUserIds,
             ...listMemberUserIds,
             ...selectedUserIds,

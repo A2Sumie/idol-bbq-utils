@@ -152,6 +152,47 @@ test('SpiderTaskScheduler dispatches due non-Cron crawler slots', async () => {
     }
 })
 
+test('SpiderTaskScheduler soft-start caps crawler dispatch per tick', async () => {
+    const originalRecover = DB.TaskQueue.recoverStaleProcessing
+    const originalGetPending = DB.TaskQueue.getPending
+    ;(DB.TaskQueue as any).recoverStaleProcessing = async () => ({ count: 0 })
+    ;(DB.TaskQueue as any).getPending = async () => []
+
+    try {
+        const emitter = new EventEmitter()
+        const dispatched: any[] = []
+        emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => {
+            dispatched.push(payload)
+            emitter.emit(`spider:${TaskScheduler.TaskEvent.UPDATE_STATUS}`, {
+                taskId: payload.taskId,
+                status: TaskScheduler.TaskStatus.COMPLETED,
+            })
+        })
+        const makeCrawler = (name: string) => ({
+            name,
+            websites: ['https://example.com/feed'],
+            cfg_crawler: { schedule: { slots: ['18:20'], timezone: 'Asia/Tokyo', min_gap_seconds: 0 } },
+        })
+        const scheduler = new SpiderTaskScheduler(
+            { crawlers: [makeCrawler('Crawler A'), makeCrawler('Crawler B'), makeCrawler('Crawler C')] },
+            emitter,
+            undefined,
+            { warmupUntilMs: Date.now() + 60_000, warmupMaxDispatchPerTick: 1 },
+        )
+        await scheduler.init()
+        const now = Date.UTC(2026, 5, 12, 9, 20, 0) / 1000
+        for (const name of ['Crawler A', 'Crawler B', 'Crawler C']) {
+            ;(scheduler as any).runtimeSchedules.get(name).nextRunAt = now
+        }
+        await (scheduler as any).runScheduleTick(now)
+
+        expect(dispatched).toHaveLength(1)
+    } finally {
+        ;(DB.TaskQueue as any).recoverStaleProcessing = originalRecover
+        ;(DB.TaskQueue as any).getPending = originalGetPending
+    }
+})
+
 test('SpiderTaskScheduler claims due scheduled crawler queue tasks', async () => {
     const originalRecover = DB.TaskQueue.recoverStaleProcessing
     const originalGetPending = DB.TaskQueue.getPending

@@ -403,6 +403,8 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
     private scheduleTimer?: ReturnType<typeof setInterval>
     private scheduleTickSeconds = DEFAULT_TICK_SECONDS
     private runningScheduleTick = false
+    private warmupUntilMs = 0
+    private warmupMaxDispatchPerTick = 1
 
     constructor(
         props: Pick<
@@ -411,14 +413,22 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         >,
         emitter: EventEmitter,
         log?: Logger,
+        options: { warmupUntilMs?: number; warmupMaxDispatchPerTick?: number } = {},
     ) {
         super(emitter)
         this.props = props
         this.log = log?.child({ subservice: this.NAME })
+        this.warmupUntilMs = Math.max(0, Number(options.warmupUntilMs) || 0)
+        this.warmupMaxDispatchPerTick = Math.max(1, Math.floor(Number(options.warmupMaxDispatchPerTick) || 1))
     }
 
     async init() {
         this.log?.info('Manager initializing...')
+        if (Date.now() < this.warmupUntilMs) {
+            this.log?.warn(
+                `Soft-start active until ${new Date(this.warmupUntilMs).toISOString()}; max ${this.warmupMaxDispatchPerTick} crawler dispatch(es) per tick`,
+            )
+        }
 
         if (!this.props.crawlers) {
             this.log?.warn('Crawler not found, skipping...')
@@ -716,8 +726,13 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
     }
 
     private async runConfiguredSchedules(now = Math.floor(Date.now() / 1000)) {
+        const warmupActive = Date.now() < this.warmupUntilMs
+        let dispatchedThisTick = 0
         for (const runtimeSchedule of this.runtimeSchedules.values()) {
             if (!runtimeSchedule.nextRunAt || runtimeSchedule.nextRunAt > now) {
+                continue
+            }
+            if (warmupActive && dispatchedThisTick >= this.warmupMaxDispatchPerTick) {
                 continue
             }
             const crawler = this.crawlersByName.get(runtimeSchedule.crawlerName)
@@ -730,11 +745,14 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 )
                 continue
             }
-            await this.dispatchCrawlerTask(crawler, {
+            const dispatched = await this.dispatchCrawlerTask(crawler, {
                 source: runtimeSchedule.schedule.source,
                 taskIdPrefix: 'schedule',
                 scheduledAt: runtimeSchedule.nextRunAt,
             })
+            if (dispatched) {
+                dispatchedThisTick += 1
+            }
             runtimeSchedule.lastRunAt = now
             runtimeSchedule.nextRunAt = nextCrawlerRunAt(
                 runtimeSchedule.schedule,

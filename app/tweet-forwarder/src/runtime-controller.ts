@@ -16,6 +16,7 @@ import {
     type ApiRuntimeReloadResult,
 } from './managers/api-manager'
 import { startMediaCacheCleanupJob, type MediaCacheCleanupJob } from './services/media-cache-service'
+import { startRuntimeHeartbeatJob, type RuntimeHeartbeatJob } from './services/runtime-heartbeat-service'
 import { LiveCaptureExecutor } from './services/live-capture-executor-service'
 import { buildRouteGraph } from './services/route-graph-service'
 import { buildRuntimeManifest } from './services/runtime-manifest-service'
@@ -69,6 +70,7 @@ export class RuntimeController {
     private reloadPromise: Promise<ApiRuntimeReloadResult> | null = null
     private shuttingDown = false
     private mediaCacheCleanupJob?: MediaCacheCleanupJob
+    private runtimeHeartbeatJob?: RuntimeHeartbeatJob
 
     constructor(
         configPath = './config.yaml',
@@ -94,6 +96,9 @@ export class RuntimeController {
         await this.failInterruptedInlineApiTasks()
         if (this.runtimeMode === 'online') {
             this.mediaCacheCleanupJob = startMediaCacheCleanupJob(this.log)
+            // Cold-start detection: a long downtime (real outage) triggers a soft-start
+            // that staggers the first crawler dispatch cycle; a short deploy restart does not.
+            this.runtimeHeartbeatJob = startRuntimeHeartbeatJob({ log: this.log })
         } else {
             this.log.warn('Runtime mode api-only: media cache cleanup and all dispatch/send workers are disabled')
         }
@@ -148,6 +153,8 @@ export class RuntimeController {
 
         this.mediaCacheCleanupJob?.stop()
         this.mediaCacheCleanupJob = undefined
+        this.runtimeHeartbeatJob?.stop()
+        this.runtimeHeartbeatJob = undefined
 
         this.log.info('Cleanup completed')
     }
@@ -296,6 +303,9 @@ export class RuntimeController {
                 },
                 emitter,
                 log,
+                this.runtimeHeartbeatJob?.state.softStart
+                    ? { warmupUntilMs: this.runtimeHeartbeatJob.state.warmupUntilMs || 0, warmupMaxDispatchPerTick: 1 }
+                    : undefined,
             )
             taskSchedulers.push(spiderTaskScheduler)
         }
