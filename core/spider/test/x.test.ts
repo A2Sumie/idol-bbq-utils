@@ -616,6 +616,23 @@ test('X unified list hydration keeps member slots when active users fill the lim
     expect(selected.some((userId: string) => userId.startsWith('member'))).toBe(true)
 })
 
+test('X unified list hydration never selects non-member activity authors', () => {
+    const spider = new X.XListSpider()
+    const selected = (spider as any).selectHydrationUsers({
+        listId: 'member-filter-list',
+        configuredUsers: ['configured_user'],
+        activeUserIds: ['member2', 'retweet_original', 'recommended_author'],
+        listMemberUserIds: ['member1', 'member2', 'member3'],
+        hydrateLimit: 4,
+    })
+
+    expect(selected).toContain('configured_user')
+    expect(selected).toContain('member2')
+    expect(selected).not.toContain('retweet_original')
+    expect(selected).not.toContain('recommended_author')
+    expect(selected.every((id: string) => ['configured_user', 'member1', 'member2', 'member3'].includes(id))).toBe(true)
+})
+
 test('X unified list hydration rotates list members across rounds', () => {
     const spider = new X.XListSpider()
     const options = {

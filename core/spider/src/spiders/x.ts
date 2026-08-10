@@ -471,13 +471,9 @@ class XStatusSpider extends BaseSpider {
             }
         },
     ): Promise<Array<GenericArticle<Platform.X>>> {
-        const discoveryTweets = await client.grabTweetsFromList(list_id, cookie)
+        const discoveryTweetsRaw = await client.grabTweetsFromList(list_id, cookie)
         const configuredUsers = this.sanitizeUserIds(options.hydrateUsers)
         const sampledViewportUsers = client.getSampledListUsers(list_id)
-        const activeUserIds = this.sanitizeUserIds([
-            ...(discoveryTweets.map((tweet) => tweet?.u_id?.trim()).filter(Boolean) as Array<string>),
-            ...sampledViewportUsers,
-        ])
         const listMemberUserIds = await client
             .grabFollowsFromList(list_id, cookie)
             .then((follows) => this.sanitizeUserIds(follows.map((follow) => follow?.u_id)))
@@ -485,13 +481,26 @@ class XStatusSpider extends BaseSpider {
                 this.log?.warn(`Unified list crawl failed to expand list members for ${list_id}: ${error}`)
                 return [] as Array<string>
             })
+        // Only confirmed list members (plus explicitly configured users) are valid
+        // monitoring targets. The list timeline and viewport sampling can surface
+        // non-members (retweet original authors, recommended posts); hydrating or
+        // forwarding those produced duplicate, unmarked, off-target tweets.
+        const memberAllowSet = new Set<string>([...configuredUsers, ...listMemberUserIds])
+        const restrictToMembers = memberAllowSet.size > 0
+        const isAllowedMember = (userId?: string | null) =>
+            !restrictToMembers || (typeof userId === 'string' && memberAllowSet.has(userId.trim().replace(/^@+/, '')))
+        const discoveryTweets = discoveryTweetsRaw.filter((tweet) => isAllowedMember(tweet?.u_id))
+        const activeUserIds = this.sanitizeUserIds([
+            ...(discoveryTweets.map((tweet) => tweet?.u_id?.trim()).filter(Boolean) as Array<string>),
+            ...sampledViewportUsers,
+        ]).filter(isAllowedMember)
         const selectedUserIds = this.selectHydrationUsers({
             listId: list_id,
             configuredUsers,
             activeUserIds,
             listMemberUserIds,
             hydrateLimit: options.hydrateLimit,
-        })
+        }).filter(isAllowedMember)
         const listContextUserIds = this.sanitizeUserIds([
             ...configuredUsers,
             ...sampledViewportUsers,
@@ -717,10 +726,16 @@ class XStatusSpider extends BaseSpider {
         )
         const configuredUsers = this.sanitizeUserIds(options.configuredUsers).slice(0, effectiveLimit)
         const configuredSet = new Set(configuredUsers)
-        const activePool = this.sanitizeUserIds(options.activeUserIds).filter((userId) => !configuredSet.has(userId))
         const memberPool = this.sanitizeUserIds(options.listMemberUserIds).filter((userId) => !configuredSet.has(userId))
+        const memberSet = new Set(memberPool)
+        // Activity samples are ranking hints only, never authorization to monitor a
+        // new account. Non-members (often retweet original authors) must not enter
+        // the hydration pool.
+        const activePool = this.sanitizeUserIds(options.activeUserIds).filter(
+            (userId) => memberSet.has(userId) && !configuredSet.has(userId),
+        )
         if (memberPool.length === 0) {
-            return [...configuredUsers, ...activePool].slice(0, effectiveLimit)
+            return configuredUsers
         }
 
         const remaining = Math.max(0, effectiveLimit - configuredUsers.length)
