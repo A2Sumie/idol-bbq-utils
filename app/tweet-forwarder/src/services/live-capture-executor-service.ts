@@ -52,6 +52,7 @@ const DEFAULT_CAPTURE_GRACE_SECONDS = 120
 const DEFAULT_PROBE_TIMEOUT_SECONDS = 30
 
 const SHOWROOM_STATUS_URL = 'https://www.showroom-live.com/api/room/status'
+const SHOWROOM_STREAMING_URL = 'https://www.showroom-live.com/api/live/streaming_url'
 const SHOWROOM_UA =
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36'
 
@@ -70,6 +71,16 @@ export async function probeShowroomLive(
     fetchImpl: typeof fetch = fetch,
     timeoutMs = DEFAULT_PROBE_TIMEOUT_SECONDS * 1000,
 ): Promise<boolean> {
+    const detail = await probeShowroomDetail(handle, fetchImpl, timeoutMs)
+    return detail.isLive
+}
+
+/** Probe a showroom room and also return its numeric room id (for streaming_url). */
+export async function probeShowroomDetail(
+    handle: string,
+    fetchImpl: typeof fetch = fetch,
+    timeoutMs = DEFAULT_PROBE_TIMEOUT_SECONDS * 1000,
+): Promise<{ isLive: boolean; roomId: number | null }> {
     const url = `${SHOWROOM_STATUS_URL}?room_url_key=${encodeURIComponent(handle)}`
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -82,14 +93,78 @@ export async function probeShowroomLive(
             },
         })
         if (!response.ok) {
-            return false
+            return { isLive: false, roomId: null }
         }
-        const json = (await response.json()) as { is_live?: unknown }
-        return json?.is_live === true
+        const json = (await response.json()) as { is_live?: unknown; room_id?: unknown }
+        return {
+            isLive: json?.is_live === true,
+            roomId: Number(json?.room_id) > 0 ? Number(json.room_id) : null,
+        }
     } catch {
-        return false
+        return { isLive: false, roomId: null }
     } finally {
         clearTimeout(timer)
+    }
+}
+
+/**
+ * Resolve the master HLS playlist for a live showroom room via the native
+ * streaming_url API (same endpoint StreamServ uses on X570). Returns null when
+ * the room is not streaming.
+ */
+export async function fetchShowroomStreamingUrl(
+    roomId: number,
+    fetchImpl: typeof fetch = fetch,
+    timeoutMs = DEFAULT_PROBE_TIMEOUT_SECONDS * 1000,
+): Promise<string | null> {
+    const url = `${SHOWROOM_STREAMING_URL}?room_id=${encodeURIComponent(roomId)}&abr_available=1`
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    try {
+        const response = await fetchImpl(url, {
+            signal: controller.signal,
+            headers: {
+                accept: 'application/json',
+                'user-agent': SHOWROOM_UA,
+            },
+        })
+        if (!response.ok) {
+            return null
+        }
+        const json = (await response.json()) as { hls_all?: unknown }
+        if (json?.is_live === false) {
+            return null
+        }
+        const hls = typeof json?.hls_all === 'string' ? json.hls_all : null
+        return hls?.replace(/\\u0026/g, '&') || null
+    } catch {
+        return null
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
+/** Build the ffmpeg HLS-copy capture command for a showroom room (native, mirrors StreamServ). */
+export function buildShowroomCaptureCommand(
+    archiveDir: string,
+    m3u8Url: string,
+    stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19),
+): { bin: string; args: Array<string> } {
+    const output = path.join(archiveDir, `${stamp}.mkv`)
+    return {
+        bin: 'ffmpeg',
+        args: [
+            '-y',
+            '-headers',
+            `User-Agent: ${SHOWROOM_UA}\r\n`,
+            '-i',
+            m3u8Url,
+            '-c',
+            'copy',
+            '-movflags',
+            '+faststart',
+            output,
+        ],
     }
 }
 
@@ -152,7 +227,7 @@ function stopChildGracefully(child: ChildProcess, timeoutMs = 10_000) {
 
 interface CaptureSessionDeps {
     fetchImpl?: typeof fetch
-    probeShowroom?: typeof probeShowroomLive
+    probeShowroom?: typeof probeShowroomDetail
 }
 
 class CaptureSession {
@@ -167,6 +242,7 @@ class CaptureSession {
     private readonly deps: CaptureSessionDeps
     private capturing: { child: ChildProcess; startedAt: number; captureCount: number } | null = null
     private stopping = false
+    private lastRoomId: number | null = null
     private result: { captured: boolean; files: Array<string>; duration_seconds: number; last_error?: string } = {
         captured: false,
         files: [],
@@ -220,7 +296,8 @@ class CaptureSession {
             }
             let live = false
             try {
-                live = await this.probeOnce()
+                const probe = await this.probeOnce()
+                live = probe.live
             } catch (error) {
                 this.log?.warn(
                     `[live-capture ${this.id}] probe error: ${error instanceof Error ? error.message : String(error)}`,
@@ -245,10 +322,14 @@ class CaptureSession {
         await this.finish()
     }
 
-    private async probeOnce(): Promise<boolean> {
+    private async probeOnce(): Promise<{ live: boolean }> {
         if (this.plan.target.platform === 'showroom') {
-            const probe = this.deps.probeShowroom || probeShowroomLive
-            return await probe(this.plan.target.handle, this.deps.fetchImpl)
+            const probe = this.deps.probeShowroom || probeShowroomDetail
+            const detail = await probe(this.plan.target.handle, this.deps.fetchImpl)
+            if (detail.isLive && detail.roomId) {
+                this.lastRoomId = detail.roomId
+            }
+            return { live: detail.isLive }
         }
         if (this.plan.target.platform === 'twitch') {
             // yt-dlp --dump-single-json is the probe: one lightweight run that reports
@@ -287,23 +368,45 @@ class CaptureSession {
             })
             const lastLine = text.trim().split('\n').pop() || '{}'
             try {
-                return parseTwitchLiveDump(JSON.parse(lastLine))
+                return { live: parseTwitchLiveDump(JSON.parse(lastLine)) }
             } catch {
-                return false
+                return { live: false }
             }
         }
         this.log?.warn(`[live-capture ${this.id}] unsupported platform ${this.plan.target.platform}`)
-        return false
+        return { live: false }
     }
 
-    private startCapture() {
+    private async startCapture() {
         if (this.capturing) {
             return
         }
         fs.mkdirSync(this.archiveDir, { recursive: true })
+        if (this.plan.target.platform === 'showroom') {
+            // Native path (mirrors StreamServ on X570): streaming_url API -> HLS -> ffmpeg copy.
+            // yt-dlp's ShowRoomLive extractor is marked broken upstream, so it is not used.
+            if (!this.lastRoomId) {
+                this.log?.warn(`[live-capture ${this.id}] showroom live without a room id; skip capture`)
+                return
+            }
+            const m3u8 = await fetchShowroomStreamingUrl(this.lastRoomId, this.deps.fetchImpl)
+            if (!m3u8) {
+                this.log?.warn(`[live-capture ${this.id}] showroom streaming_url returned no HLS; will retry`)
+                return
+            }
+            const { bin, args } = buildShowroomCaptureCommand(this.archiveDir, m3u8)
+            this.log?.info(`[live-capture ${this.id}] capturing showroom room=${this.lastRoomId} ${bin} -> mkv`)
+            const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+            this.attachCaptureProcess(child)
+            return
+        }
         const { bin, args } = buildCaptureCommand(this.plan, this.archiveDir, this.ytDlpPath)
         this.log?.info(`[live-capture ${this.id}] capturing: ${bin} ${args.slice(0, 3).join(' ')} ...`)
         const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+        this.attachCaptureProcess(child)
+    }
+
+    private attachCaptureProcess(child: ChildProcess) {
         let stderrTail = ''
         child.stderr.on('data', (chunk) => {
             stderrTail = (stderrTail + String(chunk)).slice(-400)
