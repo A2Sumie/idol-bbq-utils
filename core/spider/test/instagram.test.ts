@@ -343,6 +343,27 @@ test('Instagram parser records crawled profile context for collaboration posts',
     })
 })
 
+test('Instagram posts parser never attributes fallback edges to the crawled profile', () => {
+    const posts = InsApiJsonParser.postsParser({
+        data: {
+            user: { username: 'nao_aikawa227', full_name: '相川奈央' },
+            recommendations: {
+                edges: [
+                    {
+                        node: {
+                            code: 'UNRELATED',
+                            taken_at: 1773845200,
+                            caption: { text: 'recommended post' },
+                            image_versions2: { candidates: [{ width: 720, url: 'https://example.com/x.jpg' }] },
+                        },
+                    },
+                ],
+            },
+        },
+    })
+    expect(posts).toEqual([])
+})
+
 test('Instagram stories drop accessibility summaries', async () => {
     const page = {
         goto: async () => undefined,

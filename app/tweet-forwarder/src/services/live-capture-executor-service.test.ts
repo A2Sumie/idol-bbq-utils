@@ -78,19 +78,25 @@ test('probeShowroomDetail returns the room id alongside live state', async () =>
         (async () => new Response(JSON.stringify({ is_live: true, room_id: 564018 }), { status: 200 })) as any,
         5000,
     )
-    expect(ok).toEqual({ isLive: true, roomId: 564018 })
+    expect(ok).toEqual({ status: 'live', roomId: 564018 })
     const offline = await probeShowroomDetail(
         'nanabun3rd',
         (async () => new Response(JSON.stringify({ is_live: false, room_id: 564018 }), { status: 200 })) as any,
         5000,
     )
-    expect(offline).toEqual({ isLive: false, roomId: 564018 })
+    expect(offline).toEqual({ status: 'offline', roomId: 564018 })
     const noRoom = await probeShowroomDetail(
         'nanabun3rd',
         (async () => new Response(JSON.stringify({ is_live: true }), { status: 200 })) as any,
         5000,
     )
-    expect(noRoom).toEqual({ isLive: true, roomId: null })
+    expect(noRoom).toEqual({ status: 'live', roomId: null })
+    const failed = await probeShowroomDetail(
+        'nanabun3rd',
+        (async () => new Response('', { status: 429 })) as any,
+        5000,
+    )
+    expect(failed).toEqual({ status: 'unknown', roomId: null })
 })
 
 test('fetchShowroomStreamingUrl resolves the master playlist from streaming_url_list', async () => {

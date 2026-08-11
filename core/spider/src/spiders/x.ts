@@ -73,6 +73,7 @@ const X_UNIFIED_LIST_MAX_HYDRATED_USERS = 10
 const X_UNIFIED_LIST_DEFAULT_CONCURRENCY = 2
 const X_UNIFIED_LIST_MAX_CONCURRENCY = 4
 const X_UNIFIED_LIST_MEMBER_CURSORS = new Map<string, number>()
+const X_UNIFIED_LIST_MEMBER_CACHE = new Map<string, Array<string>>()
 const X_FETCH_TIMEOUT_MS = 20_000
 // Cross-crawl cache TTLs. X operation profiles (query ids + headers) and rest ids are
 // stable for long periods; caching them on the spider instance removes the per-crawl
@@ -123,6 +124,12 @@ function formatHydrationError(error: unknown) {
 
 function isTooManyRequestsError(error: unknown) {
     return /too many requests|(^|\s)429(\s|$)/i.test(formatHydrationError(error))
+}
+
+function isAuthOrRateLimitError(error: unknown) {
+    return /(^|\s)(401|403|429)(\s|$)|too many requests|auth(?:entication|orization)?/i.test(
+        formatHydrationError(error),
+    )
 }
 
 function isNotFoundError(error: unknown) {
@@ -474,21 +481,44 @@ class XStatusSpider extends BaseSpider {
         const discoveryTweetsRaw = await client.grabTweetsFromList(list_id, cookie)
         const configuredUsers = this.sanitizeUserIds(options.hydrateUsers)
         const sampledViewportUsers = client.getSampledListUsers(list_id)
-        const listMemberUserIds = await client
+        let membersResolved = true
+        let listMemberUserIds = await client
             .grabFollowsFromList(list_id, cookie)
             .then((follows) => this.sanitizeUserIds(follows.map((follow) => follow?.u_id)))
             .catch((error) => {
                 this.log?.warn(`Unified list crawl failed to expand list members for ${list_id}: ${error}`)
+                membersResolved = false
                 return [] as Array<string>
             })
+        // A failed ListMembers must never be read as "no members" — that either
+        // re-opened the door to non-member accounts (lists without hydrate_users) or
+        // silently dropped every real member's discovery tweet (lists with
+        // hydrate_users). Reuse the last known-good membership; only if we have never
+        // resolved it do we fall back to configured users for this degraded round.
+        if (membersResolved) {
+            X_UNIFIED_LIST_MEMBER_CACHE.set(list_id, listMemberUserIds)
+        } else {
+            const cached = X_UNIFIED_LIST_MEMBER_CACHE.get(list_id)
+            if (cached && cached.length > 0) {
+                listMemberUserIds = cached
+                this.log?.warn(`Unified list crawl reused ${cached.length} cached members for ${list_id} after member lookup failure`)
+            } else {
+                this.log?.warn(`Unified list crawl has no member cache for ${list_id}; restricting to configured users this round`)
+            }
+        }
         // Only confirmed list members (plus explicitly configured users) are valid
         // monitoring targets. The list timeline and viewport sampling can surface
         // non-members (retweet original authors, recommended posts); hydrating or
         // forwarding those produced duplicate, unmarked, off-target tweets.
-        const memberAllowSet = new Set<string>([...configuredUsers, ...listMemberUserIds])
-        const restrictToMembers = memberAllowSet.size > 0
+        const memberAllowSet = new Set<string>(
+            [...configuredUsers, ...listMemberUserIds].map((userId) => userId.toLowerCase()),
+        )
+        // Restrict whenever we have any allow-list, OR whenever membership could not be
+        // resolved (degraded round): never fail open to non-members on a lookup error.
+        const restrictToMembers = memberAllowSet.size > 0 || !membersResolved
         const isAllowedMember = (userId?: string | null) =>
-            !restrictToMembers || (typeof userId === 'string' && memberAllowSet.has(userId.trim().replace(/^@+/, '')))
+            !restrictToMembers ||
+            (typeof userId === 'string' && memberAllowSet.has(userId.trim().replace(/^@+/, '').toLowerCase()))
         const discoveryTweets = discoveryTweetsRaw.filter((tweet) => isAllowedMember(tweet?.u_id))
         const activeUserIds = this.sanitizeUserIds([
             ...(discoveryTweets.map((tweet) => tweet?.u_id?.trim()).filter(Boolean) as Array<string>),
@@ -573,7 +603,7 @@ class XStatusSpider extends BaseSpider {
                             userArticles.push(...(await client.grabTweets(userId, cookie)))
                         } catch (error) {
                             failures.push({ scope: 'tweets', error })
-                            if (isTooManyRequestsError(error)) {
+                            if (isAuthOrRateLimitError(error)) {
                                 return { userId, articles: userArticles, failures, rateLimited: true }
                             }
                         }
@@ -583,7 +613,7 @@ class XStatusSpider extends BaseSpider {
                             userArticles.push(...(await client.grabReplies(userId, cookie)))
                         } catch (error) {
                             failures.push({ scope: 'replies', error })
-                            if (isTooManyRequestsError(error)) {
+                            if (isAuthOrRateLimitError(error)) {
                                 return { userId, articles: userArticles, failures, rateLimited: true }
                             }
                         }
@@ -605,7 +635,7 @@ class XStatusSpider extends BaseSpider {
                     return
                 }
                 this.log?.warn(`Unified list hydration failed for @${userId}: ${result.reason}`)
-                if (isTooManyRequestsError(result.reason)) {
+                if (isAuthOrRateLimitError(result.reason)) {
                     rateLimited = true
                 }
             })
@@ -986,18 +1016,28 @@ class XApiClient {
         if (res.ok) {
             return
         }
-        // 403 always indicates auth/rate trouble worth re-capturing; 404 only when the
-        // cached profile is old — a fresh capture (this crawl round) 404ing is usually
-        // account-specific (e.g. replies unavailable for one account), and invalidating
-        // it would force a wasteful mid-crawl re-capture navigation.
-        const profile = this.operationProfiles[operation]
-        const capturedRecently = Boolean(profile && Date.now() - profile.capturedAt < 30 * 60 * 1000)
-        if (res.status === 403 || (res.status === 404 && !capturedRecently)) {
-            this.invalidateOperationProfile(operation)
+        // A 404 on an account-scoped op is almost always the account (deleted/renamed/
+        // no replies), not a stale shared query id — drop only that user's rest id so we
+        // never clear the shared operation profile and force the whole batch to
+        // re-navigate. 403/429 are auth/rate signals handled by the caller's early stop;
+        // they must not evict the query-id cache either. Only an old profile 404 (>30min)
+        // is treated as a genuinely stale query id worth re-capturing.
+        const accountScopedOps = new Set<XApis>([
+            XApis.UserTweets,
+            XApis.UserTweetsAndReplies,
+            XApis.UserByScreenName,
+            XApis.TweetDetail,
+        ])
+        if (res.status === 404) {
             if (userId) {
                 this.cache?.set(`x-restid:${userId}`, null, 0)
             }
-            this.log?.warn(`Invalidated cached X operation profile ${operation} after ${res.status}`)
+            const profile = this.operationProfiles[operation]
+            const capturedRecently = Boolean(profile && Date.now() - profile.capturedAt < 30 * 60 * 1000)
+            if (!accountScopedOps.has(operation) && !capturedRecently) {
+                this.invalidateOperationProfile(operation)
+                this.log?.warn(`Invalidated cached X operation profile ${operation} after stale 404`)
+            }
         }
         assertXResponseOk(res, context)
     }

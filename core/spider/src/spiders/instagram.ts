@@ -243,7 +243,7 @@ namespace InsApiJsonParser {
         }
     }
 
-    function parseEdges(json: any): any {
+    function parseEdges(json: any): { edges: any; scoped: boolean } {
         // Prefer the target user's own timeline edges when the payload exposes them
         // scoped (classic profile graphql shape). A document-wide $..edges lookup can
         // match a different section (viewer feed, reels tray) whose nodes carry no
@@ -251,13 +251,13 @@ namespace InsApiJsonParser {
         // "@<shortcode>" notification handle).
         const scoped = JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json })[0]
         if (Array.isArray(scoped) && scoped.length > 0) {
-            return scoped
+            return { edges: scoped, scoped: true }
         }
         const edges_json = JSONPath({ path: '$..edges', json })[0]
         if (!edges_json) {
             throw new Error('Edges json format may have changed')
         }
-        return edges_json
+        return { edges: edges_json, scoped: false }
     }
 
     function fallbackUsername(...candidates: Array<string | null | undefined>) {
@@ -431,16 +431,16 @@ namespace InsApiJsonParser {
         json: any,
         observedAt = Math.floor(Date.now() / 1000),
     ): Array<GenericArticle<Platform.Instagram>> {
-        const edges = parseEdges(json)
+        const { edges } = parseEdges(json)
         return edges
             .map((edge: any) => highlightParser(edge, observedAt))
             .filter((article: GenericArticle<Platform.Instagram>) => article.a_id && article.u_id)
     }
 
     export function postsParser(json: any): Array<GenericArticle<Platform.Instagram>> {
-        let edges = parseEdges(json)
-        const crawledProfile = profileContextFromUser(json?.data?.user)
-        return edges
+        const parsed = parseEdges(json)
+        const crawledProfile = parsed.scoped ? profileContextFromUser(json?.data?.user) : null
+        return parsed.edges
             .map((edge: any) => postParser(edge, crawledProfile))
             // Drop posts whose owner cannot be identified (no node user/owner and no
             // crawled profile context): they would otherwise be saved with an empty

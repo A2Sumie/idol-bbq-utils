@@ -65,6 +65,8 @@ function boundedPositive(value: number | undefined, fallback: number) {
     return Number.isFinite(normalized) && normalized > 0 ? normalized : fallback
 }
 
+type ProbeStatus = 'live' | 'offline' | 'unknown'
+
 /** Probe a showroom room via the native status API (single request, StreamServ-proven). */
 export async function probeShowroomLive(
     handle: string,
@@ -72,15 +74,20 @@ export async function probeShowroomLive(
     timeoutMs = DEFAULT_PROBE_TIMEOUT_SECONDS * 1000,
 ): Promise<boolean> {
     const detail = await probeShowroomDetail(handle, fetchImpl, timeoutMs)
-    return detail.isLive
+    return detail.status === 'live'
 }
 
-/** Probe a showroom room and also return its numeric room id (for streaming_url). */
+/**
+ * Probe a showroom room and return its numeric room id (for streaming_url).
+ * status distinguishes a confirmed offline (`is_live:false`) from a probe failure
+ * (`unknown`): a 429/timeout/network error must not be treated as "stream ended",
+ * otherwise a live broadcast gets stopped mid-way during a transient API blip.
+ */
 export async function probeShowroomDetail(
     handle: string,
     fetchImpl: typeof fetch = fetch,
     timeoutMs = DEFAULT_PROBE_TIMEOUT_SECONDS * 1000,
-): Promise<{ isLive: boolean; roomId: number | null }> {
+): Promise<{ status: ProbeStatus; roomId: number | null }> {
     const url = `${SHOWROOM_STATUS_URL}?room_url_key=${encodeURIComponent(handle)}`
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -93,15 +100,13 @@ export async function probeShowroomDetail(
             },
         })
         if (!response.ok) {
-            return { isLive: false, roomId: null }
+            return { status: 'unknown', roomId: null }
         }
         const json = (await response.json()) as { is_live?: unknown; room_id?: unknown }
-        return {
-            isLive: json?.is_live === true,
-            roomId: Number(json?.room_id) > 0 ? Number(json.room_id) : null,
-        }
+        const roomId = Number(json?.room_id) > 0 ? Number(json.room_id) : null
+        return { status: json?.is_live === true ? 'live' : 'offline', roomId }
     } catch {
-        return { isLive: false, roomId: null }
+        return { status: 'unknown', roomId: null }
     } finally {
         clearTimeout(timer)
     }
@@ -247,7 +252,9 @@ class CaptureSession {
     private readonly log?: Logger
     private readonly deps: CaptureSessionDeps
     private capturing: { child: ChildProcess; startedAt: number; captureCount: number } | null = null
+    private captureStarting = false
     private stopping = false
+    private shuttingDown = false
     private lastRoomId: number | null = null
     private result: { captured: boolean; files: Array<string>; duration_seconds: number; last_error?: string } = {
         captured: false,
@@ -280,9 +287,9 @@ class CaptureSession {
 
     async stop() {
         this.stopping = true
+        this.shuttingDown = true
         if (this.capturing) {
-            await stopChildGracefully(this.capturing.child)
-            this.recordStop('forced-stop')
+            await this.recordStop('shutdown')
         }
     }
 
@@ -300,42 +307,49 @@ class CaptureSession {
             if (current > closesAt) {
                 break
             }
-            let live = false
+            let status: ProbeStatus = 'unknown'
             try {
                 const probe = await this.probeOnce()
-                live = probe.live
+                status = probe.status
             } catch (error) {
                 this.log?.warn(
                     `[live-capture ${this.id}] probe error: ${error instanceof Error ? error.message : String(error)}`,
                 )
             }
-            if (live) {
+            if (status === 'live') {
                 liveStreak = 0
-                if (!this.capturing) {
-                    this.startCapture()
+                if (!this.capturing && !this.captureStarting) {
+                    await this.startCapture()
                 }
-            } else {
+            } else if (status === 'offline') {
                 liveStreak += 1
-                if (this.capturing && liveStreak >= 2) {
-                    this.recordStop('offline')
+                if (this.capturing && liveStreak >= 3) {
+                    await this.recordStop('offline')
                 }
             }
+            // Unknown probe results do not advance the offline streak.
             await sleep(this.pollMs)
         }
         if (this.capturing) {
-            this.recordStop('window-end')
+            await this.recordStop(this.shuttingDown ? 'shutdown' : 'window-end')
+        }
+        if (this.shuttingDown) {
+            // Preserve pending status so the next process reclaims the still-open
+            // window instead of treating a deploy/restart as successful completion.
+            this.finished = true
+            return
         }
         await this.finish()
     }
 
-    private async probeOnce(): Promise<{ live: boolean }> {
+    private async probeOnce(): Promise<{ status: ProbeStatus }> {
         if (this.plan.target.platform === 'showroom') {
             const probe = this.deps.probeShowroom || probeShowroomDetail
             const detail = await probe(this.plan.target.handle, this.deps.fetchImpl)
-            if (detail.isLive && detail.roomId) {
+            if (detail.status === 'live' && detail.roomId) {
                 this.lastRoomId = detail.roomId
             }
-            return { live: detail.isLive }
+            return { status: detail.status }
         }
         if (this.plan.target.platform === 'twitch') {
             // yt-dlp --dump-single-json is the probe: one lightweight run that reports
@@ -374,42 +388,47 @@ class CaptureSession {
             })
             const lastLine = text.trim().split('\n').pop() || '{}'
             try {
-                return { live: parseTwitchLiveDump(JSON.parse(lastLine)) }
+                return { status: parseTwitchLiveDump(JSON.parse(lastLine)) ? 'live' : 'offline' }
             } catch {
-                return { live: false }
+                return { status: 'unknown' }
             }
         }
         this.log?.warn(`[live-capture ${this.id}] unsupported platform ${this.plan.target.platform}`)
-        return { live: false }
+        return { status: 'unknown' }
     }
 
     private async startCapture() {
-        if (this.capturing) {
+        if (this.capturing || this.captureStarting) {
             return
         }
-        fs.mkdirSync(this.archiveDir, { recursive: true })
-        if (this.plan.target.platform === 'showroom') {
-            // Native path (mirrors StreamServ on X570): streaming_url API -> HLS -> ffmpeg copy.
-            // yt-dlp's ShowRoomLive extractor is marked broken upstream, so it is not used.
-            if (!this.lastRoomId) {
-                this.log?.warn(`[live-capture ${this.id}] showroom live without a room id; skip capture`)
+        this.captureStarting = true
+        try {
+            fs.mkdirSync(this.archiveDir, { recursive: true })
+            if (this.plan.target.platform === 'showroom') {
+                // Native path (mirrors StreamServ on X570): streaming_url API -> HLS -> ffmpeg copy.
+                // yt-dlp's ShowRoomLive extractor is marked broken upstream, so it is not used.
+                if (!this.lastRoomId) {
+                    this.log?.warn(`[live-capture ${this.id}] showroom live without a room id; skip capture`)
+                    return
+                }
+                const m3u8 = await fetchShowroomStreamingUrl(this.lastRoomId, this.deps.fetchImpl)
+                if (!m3u8) {
+                    this.log?.warn(`[live-capture ${this.id}] showroom streaming_url returned no HLS; will retry`)
+                    return
+                }
+                const { bin, args } = buildShowroomCaptureCommand(this.archiveDir, m3u8)
+                this.log?.info(`[live-capture ${this.id}] capturing showroom room=${this.lastRoomId} ${bin} -> mkv`)
+                const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+                this.attachCaptureProcess(child)
                 return
             }
-            const m3u8 = await fetchShowroomStreamingUrl(this.lastRoomId, this.deps.fetchImpl)
-            if (!m3u8) {
-                this.log?.warn(`[live-capture ${this.id}] showroom streaming_url returned no HLS; will retry`)
-                return
-            }
-            const { bin, args } = buildShowroomCaptureCommand(this.archiveDir, m3u8)
-            this.log?.info(`[live-capture ${this.id}] capturing showroom room=${this.lastRoomId} ${bin} -> mkv`)
+            const { bin, args } = buildCaptureCommand(this.plan, this.archiveDir, this.ytDlpPath)
+            this.log?.info(`[live-capture ${this.id}] capturing: ${bin} ${args.slice(0, 3).join(' ')} ...`)
             const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
             this.attachCaptureProcess(child)
-            return
+        } finally {
+            this.captureStarting = false
         }
-        const { bin, args } = buildCaptureCommand(this.plan, this.archiveDir, this.ytDlpPath)
-        this.log?.info(`[live-capture ${this.id}] capturing: ${bin} ${args.slice(0, 3).join(' ')} ...`)
-        const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-        this.attachCaptureProcess(child)
     }
 
     private attachCaptureProcess(child: ChildProcess) {
@@ -418,24 +437,27 @@ class CaptureSession {
             stderrTail = (stderrTail + String(chunk)).slice(-400)
         })
         child.once('exit', (code) => {
-            if (!this.capturing) {
+            const active = this.capturing
+            if (!active || active.child !== child) {
                 return
             }
             this.log?.info(
                 `[live-capture ${this.id}] capture process exit=${code} ${code === 0 ? '' : `stderr=${stderrTail}`}`,
             )
+            this.result.duration_seconds += Math.round((Date.now() - active.startedAt) / 1000)
             // Let the poll loop decide whether to restart; clear the slot.
             this.capturing = null
         })
         this.capturing = { child, startedAt: Date.now(), captureCount: 1 }
     }
 
-    private recordStop(reason: string) {
+    private async recordStop(reason: string) {
         if (!this.capturing) {
             return
         }
-        const { startedAt } = this.capturing
+        const { child, startedAt } = this.capturing
         this.capturing = null
+        await stopChildGracefully(child)
         this.result.duration_seconds += Math.round((Date.now() - startedAt) / 1000)
         this.log?.info(`[live-capture ${this.id}] capture stop reason=${reason}`)
     }
@@ -444,7 +466,7 @@ class CaptureSession {
         const files: Array<string> = []
         try {
             for (const entry of fs.readdirSync(this.archiveDir)) {
-                if (/\.(mp4|mkv|ts|webm|part)$/.test(entry)) {
+                if (/\.(mp4|mkv|ts|webm)$/.test(entry)) {
                     files.push(entry)
                 }
             }
