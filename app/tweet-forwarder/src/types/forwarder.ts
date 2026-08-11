@@ -99,6 +99,8 @@ type PlatformConfigMap = {
         media_check_level?: 'strict' | 'loose' | 'none'
         image_max_edge_px?: number
         image_max_pixels?: number
+        suppress_media_uids?: Array<string>
+        suppress_members_only_media?: boolean
         video_upload?: BiliupVideoUploadConfig
     }
     /**

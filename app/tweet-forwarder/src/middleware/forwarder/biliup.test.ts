@@ -1754,6 +1754,108 @@ test('BiliForwarder suppresses media-required dynamic posts without uploadable i
     expect(dynamicCalls).toBe(0)
 })
 
+test('BiliForwarder suppresses configured source media with an explicit notice', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            suppress_media_uids: ['22/7:photo', '22/7:movie', '22/7:radio'],
+            video_upload: { enabled: false },
+        } as any,
+        'bili-source-exclude-test',
+    )
+
+    let videoCalls = 0
+    let dynamicCall: any = null
+    ;(forwarder as any).tryVideoUpload = async () => {
+        videoCalls += 1
+        return false
+    }
+    ;(forwarder as any).sendDynamicContent = async (texts: string[], props: any) => {
+        dynamicCall = { texts, props }
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const result = await (forwarder as any).realSend(['photo feed body'], {
+        article: { a_id: '1', u_id: '22/7:photo', platform: Platform.Website, content: 'x' },
+        media: [{ media_type: 'photo', path: '/tmp/a.jpg' }],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(videoCalls).toBe(0)
+    expect(dynamicCall.texts).toEqual(['【媒体未转载：FC photo 内容】', 'photo feed body'])
+    expect(dynamicCall.props.media).toEqual([])
+    expect(dynamicCall.props.runtime_config.require_media).toBe(false)
+})
+
+test('BiliForwarder suppresses members-only articles when configured', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            suppress_members_only_media: true,
+            video_upload: { enabled: false },
+        } as any,
+        'bili-members-only-test',
+    )
+
+    let dynamicCall: any = null
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async (texts: string[], props: any) => {
+        dynamicCall = { texts, props }
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const result = await (forwarder as any).realSend(['members clip'], {
+        article: {
+            a_id: 'mo',
+            u_id: 'sallyamakiofficial',
+            platform: Platform.YouTube,
+            content: 'members clip',
+            extra: { data: { members_only: true } },
+        },
+        media: [{ media_type: 'video_thumbnail', path: '/tmp/thumb.jpg' }],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(dynamicCall.texts[0]).toBe('【媒体未转载：会员限定内容】')
+    expect(dynamicCall.props.media).toEqual([])
+})
+
+test('BiliForwarder keeps public articles from non-suppressed sources', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            suppress_media_uids: ['22/7:photo', '22/7:movie', '22/7:radio'],
+            suppress_members_only_media: true,
+            video_upload: { enabled: false },
+        } as any,
+        'bili-public-keep-test',
+    )
+
+    let dynamicCalls = 0
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async () => {
+        dynamicCalls += 1
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const result = await (forwarder as any).realSend(['public news'], {
+        article: {
+            a_id: 'pub',
+            u_id: '22/7:official-news',
+            platform: Platform.Website,
+            content: 'public news',
+            extra: { data: {} },
+        },
+        media: [{ media_type: 'photo', path: '/tmp/news.jpg' }],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(dynamicCalls).toBe(1)
+})
+
 test('BiliForwarder lets rendered card media satisfy media-required dynamic posts', async () => {
     const forwarder = new BiliForwarder(
         {

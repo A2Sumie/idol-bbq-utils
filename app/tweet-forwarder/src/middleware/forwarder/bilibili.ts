@@ -207,11 +207,27 @@ class BiliForwarder extends Forwarder {
     }
 
     protected async realSend(texts: string[], props?: SendProps): Promise<any> {
+        const mediaSuppressionNotice = this.resolveMediaSuppressionNotice(texts, props)
         const normalizedTexts = this.normalizeTextsForBilibili(texts)
         // Bilibili posts must never carry source links (blog/official requests): strip URLs from
         // every text path (article sends, summary cards, digests, passthroughs) at the sender gate,
         // not only in the forwarder-manager article path.
         const urlStrippedTexts = normalizedTexts.map((text) => stripUrlsFromText(text))
+        if (mediaSuppressionNotice) {
+            const noticeTexts = [`【媒体未转载：${mediaSuppressionNotice}】`, ...urlStrippedTexts]
+            const textOnlyProps = {
+                ...props,
+                media: [],
+                contentMedia: [],
+                cardMedia: [],
+                videoUploadMedia: [],
+                runtime_config: {
+                    ...(props?.runtime_config || {}),
+                    require_media: false,
+                },
+            }
+            return this.sendDynamicContent(noticeTexts, textOnlyProps)
+        }
         const videoUploadResult = await this.tryVideoUpload(urlStrippedTexts, props)
         if (videoUploadResult) {
             return [
@@ -235,6 +251,37 @@ class BiliForwarder extends Forwarder {
             return [{ ok: true, mode: 'dynamic_media_required_suppressed' }]
         }
         return this.sendDynamicContent(urlStrippedTexts, props)
+    }
+
+    private resolveMediaSuppressionNotice(texts: string[], props?: SendProps) {
+        const article = props?.article
+        if (!article) {
+            return null
+        }
+        const config = this.getEffectiveConfig(props?.runtime_config) as any
+        const suppressedUids = new Set(
+            (config.suppress_media_uids || []).map((value: unknown) => String(value).trim()),
+        )
+        if (suppressedUids.has(article.u_id)) {
+            const label = article.u_id.split(':').pop() || article.u_id
+            this.log?.info(`Suppressing Bilibili media for ${article.a_id}: source ${article.u_id}`)
+            return `FC ${label} 内容`
+        }
+        if (!config.suppress_members_only_media) {
+            return null
+        }
+        const extra = article.extra?.data as any
+        const haystack = [article.content || '', article.translation || '', ...texts].join('\n')
+        const membersOnly =
+            extra?.members_only === true ||
+            /会员限定|会員限定|メンバー限定|メン限|メンシプ|members?[-\s]?only|subscribers?[-\s]?only/i.test(
+                haystack,
+            )
+        if (membersOnly) {
+            this.log?.info(`Suppressing Bilibili media for ${article.a_id}: members-only source`)
+            return '会员限定内容'
+        }
+        return null
     }
 
     private normalizeTextsForBilibili(texts: string[]) {

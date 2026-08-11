@@ -338,9 +338,22 @@ namespace YoutubeApiJsonParser {
             ref: null,
             has_media: media.length > 0,
             media,
-            extra: null,
+            extra: buildMembersOnlyExtra(item),
             u_avatar: channelMeta.avatar,
         }
+    }
+
+    function isMembersOnlyItem(item: any): boolean {
+        const badges = JSONPath({ path: '$..badgeViewModel', json: item }) as Array<any>
+        return badges.some((badge) => {
+            const style = String(badge?.badgeStyle || '').toUpperCase()
+            const text = String(badge?.badgeText || '').toLowerCase()
+            return style.includes('MEMBER') || text.includes('members only')
+        })
+    }
+
+    function buildMembersOnlyExtra(item: any): any {
+        return isMembersOnlyItem(item) ? { data: { members_only: true } } : null
     }
 
     function lockupMetadataTextParts(item: any): Array<string> {
@@ -390,7 +403,7 @@ namespace YoutubeApiJsonParser {
             ref: null,
             has_media: media.length > 0,
             media,
-            extra: null,
+            extra: buildMembersOnlyExtra(item),
             u_avatar: channelMeta.avatar,
         }
     }

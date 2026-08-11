@@ -226,6 +226,22 @@ test('YouTube videos parser extracts current lockup view model videos', () => {
     })
 })
 
+test('YouTube videos parser marks members-only lockups', () => {
+    const fixture = structuredClone(lockupVideosFixture)
+    const lockup = fixture.richGridRenderer.contents[0].richItemRenderer.content.lockupViewModel
+    lockup.contentId = 'members-only-video'
+    lockup.metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows.push({
+        badges: [{ badgeViewModel: { badgeText: 'Members only', badgeStyle: 'BADGE_MEMBERS_ONLY' } }],
+    })
+
+    const channelMeta = YoutubeApiJsonParser.channelMetaParser(fixture, '@fallback')
+    const videos = YoutubeApiJsonParser.videosParser(fixture, channelMeta)
+
+    expect(videos).toHaveLength(1)
+    expect(videos[0]?.a_id).toBe('members-only-video')
+    expect(videos[0]?.extra).toEqual({ data: { members_only: true } })
+})
+
 test('YouTube shorts parser extracts channel shorts', () => {
     const channelMeta = YoutubeApiJsonParser.channelMetaParser(shortsFixture, '@fallback')
     const shorts = YoutubeApiJsonParser.shortsParser(shortsFixture, channelMeta)
