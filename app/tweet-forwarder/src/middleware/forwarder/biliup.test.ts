@@ -455,7 +455,8 @@ test('buildBiliupUploadCandidate falls back from empty-shell metadata titles', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 Unknown】[TT] Unknown 03.20_26')
+    expect(candidate?.title).toBe('[TT] 03.20_26')
+    expect(candidate?.title).not.toContain('Unknown')
     expect(candidate?.title).not.toBe('【】[TT]')
 })
 

@@ -646,7 +646,7 @@ function resolveFallbackDisplayName(article: Pick<Article, 'username' | 'u_id'>)
         resolveMappedBiliupDisplayName(article) ||
         cleanupBiliupDisplayName(article.username) ||
         cleanupBiliupDisplayName(article.u_id) ||
-        'Unknown'
+        ''
     )
 }
 
@@ -762,6 +762,9 @@ function resolveUploadSummary(
 }
 
 function resolveBiliupAccountTitle(displayName: string) {
+    if (!displayName) {
+        return ''
+    }
     return displayName.startsWith('22/7') ? displayName : `22/7 ${displayName}`
 }
 
@@ -820,7 +823,20 @@ function buildTemplateContext(
 }
 
 function renderTemplate(template: string, context: TemplateContext) {
-    return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key: string) => context[key] || '')
+    const rendered = template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key: string) => context[key] || '')
+    return stripEmptyRenderedBrackets(rendered)
+}
+
+function stripEmptyRenderedBrackets(value: string) {
+    return value
+        .replace(/【\s*】/g, '')
+        .replace(/「\s*」/g, '')
+        .replace(/『\s*』/g, '')
+        .replace(/（\s*）/g, '')
+        .replace(/\(\s*\)/g, '')
+        .replace(/\[\s*\]/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim()
 }
 
 function cleanupTemplateOutput(value: string) {
@@ -857,7 +873,9 @@ function buildTitleFallback(context: TemplateContext, article: Pick<Article, 'pl
         context.article_id || 'Bilibili upload',
     )
     return normalizeBiliupMainTitleText(
-        `【${context.account_title}】${context.source_tag ? `[${context.source_tag}]` : ''} ${context.upload_summary}`,
+        stripEmptyRenderedBrackets(
+            `【${context.account_title}】${context.source_tag ? `[${context.source_tag}]` : ''} ${context.upload_summary}`,
+        ),
         hardFallback,
     )
 }
@@ -974,7 +992,7 @@ function deriveDescription(
     const sections = [
         body,
         `来源平台: ${context.platform_type_label}`,
-        `来源账号: ${context.display_name}`,
+        context.display_name ? `来源账号: ${context.display_name}` : '',
         context.user_id ? `账号标识: ${context.user_id}` : '',
         `发布时间: ${context.datetime}`,
         context.url ? `原链接: ${context.url}` : '',
