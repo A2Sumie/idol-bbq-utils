@@ -198,6 +198,32 @@ test('BrowserSessionPool evicts a session when the browser disconnects', async (
     expect(launched).toHaveLength(2)
 })
 
+test('BrowserSessionPool rejects new pages after closeAll begins', async () => {
+    const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
+    stubLaunch(pool, [makeFakeBrowser({ connected: true })])
+    await pool.createPage({ session_profile: 'x-main', browser_mode: 'headed-xvfb' })
+    await pool.closeAll()
+
+    await expect(pool.createPage({ session_profile: 'x-main', browser_mode: 'headed-xvfb' })).rejects.toThrow(
+        'Browser session pool is closing',
+    )
+})
+
+test('BrowserSessionPool isolates profile directories by browser mode', async () => {
+    const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
+    const dirs: string[] = []
+    ;(pool as any).launchBrowser = async (_mode: string, userDataDir: string) => {
+        dirs.push(userDataDir)
+        return makeFakeBrowser({ connected: true })
+    }
+
+    await pool.createPage({ session_profile: 'x-main', browser_mode: 'headed-xvfb' })
+    await pool.createPage({ session_profile: 'x-main', browser_mode: 'headless' })
+
+    expect(dirs).toHaveLength(2)
+    expect(dirs[0]).not.toBe(dirs[1])
+})
+
 test('BrowserSessionPool force-kills an orphan when graceful close fails', async () => {
     const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
     const browser = makeFakeBrowser({ connected: true })

@@ -413,12 +413,13 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         >,
         emitter: EventEmitter,
         log?: Logger,
-        options: { warmupUntilMs?: number; warmupMaxDispatchPerTick?: number } = {},
+        options: { warmupUntilMs?: number; warmupDurationMs?: number; warmupMaxDispatchPerTick?: number } = {},
     ) {
         super(emitter)
         this.props = props
         this.log = log?.child({ subservice: this.NAME })
-        this.warmupUntilMs = Math.max(0, Number(options.warmupUntilMs) || 0)
+        const warmupDurationMs = Math.max(0, Number(options.warmupDurationMs) || 0)
+        this.warmupUntilMs = warmupDurationMs > 0 ? Date.now() + warmupDurationMs : Math.max(0, Number(options.warmupUntilMs) || 0)
         this.warmupMaxDispatchPerTick = Math.max(1, Math.floor(Number(options.warmupMaxDispatchPerTick) || 1))
     }
 
@@ -725,14 +726,20 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         return true
     }
 
-    private async runConfiguredSchedules(now = Math.floor(Date.now() / 1000)) {
+    private async runConfiguredSchedules(
+        now = Math.floor(Date.now() / 1000),
+        maxDispatches = Number.POSITIVE_INFINITY,
+    ) {
         const warmupActive = Date.now() < this.warmupUntilMs
+        const dispatchBudget = warmupActive
+            ? Math.min(maxDispatches, this.warmupMaxDispatchPerTick)
+            : maxDispatches
         let dispatchedThisTick = 0
         for (const runtimeSchedule of this.runtimeSchedules.values()) {
             if (!runtimeSchedule.nextRunAt || runtimeSchedule.nextRunAt > now) {
                 continue
             }
-            if (warmupActive && dispatchedThisTick >= this.warmupMaxDispatchPerTick) {
+            if (dispatchedThisTick >= dispatchBudget) {
                 continue
             }
             const crawler = this.crawlersByName.get(runtimeSchedule.crawlerName)
@@ -766,10 +773,15 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         return payload && typeof payload === 'object' ? (payload as ScheduledCrawlerRunPayload) : {}
     }
 
-    private async runQueuedScheduledCrawlerRuns(now = Math.floor(Date.now() / 1000)) {
+    private async runQueuedScheduledCrawlerRuns(
+        now = Math.floor(Date.now() / 1000),
+        maxDispatches = Number.POSITIVE_INFINITY,
+    ) {
+        let dispatchedCount = 0
         await DB.TaskQueue.recoverStaleProcessing(now, 5 * 60, { types: [DB.TaskQueue.TYPE.ScheduledCrawlerRun] })
         const dueTasks = await DB.TaskQueue.getPending(now, { types: [DB.TaskQueue.TYPE.ScheduledCrawlerRun] })
         for (const dueTask of dueTasks) {
+            if (dispatchedCount >= maxDispatches) break
             const claimedTask = await DB.TaskQueue.claimPending(dueTask.id)
             if (!claimedTask) {
                 continue
@@ -814,8 +826,11 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                     last_error: 'No spider dispatcher registered',
                     result_summary: 'scheduled crawler run failed: dispatcher unavailable',
                 })
+            } else {
+                dispatchedCount += 1
             }
         }
+        return dispatchedCount
     }
 
     private async runScheduleTick(now = Math.floor(Date.now() / 1000)) {
@@ -824,8 +839,19 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         }
         this.runningScheduleTick = true
         try {
-            await this.runQueuedScheduledCrawlerRuns(now)
-            await this.runConfiguredSchedules(now)
+            const warmupActive = Date.now() < this.warmupUntilMs
+            if (warmupActive) {
+                // Soft-start covers the persisted queue backlog too: cap total dispatches
+                // per tick and never start a new crawler while one is already active, so a
+                // long-outage cold start cannot fire the whole backlog at once.
+                const activeCrawlers = this.getActiveCrawlerTaskCount()
+                const budget = activeCrawlers > 0 ? 0 : this.warmupMaxDispatchPerTick
+                const usedQueued = await this.runQueuedScheduledCrawlerRuns(now, budget)
+                await this.runConfiguredSchedules(now, Math.max(0, budget - usedQueued))
+            } else {
+                await this.runQueuedScheduledCrawlerRuns(now)
+                await this.runConfiguredSchedules(now)
+            }
         } catch (error) {
             this.log?.error(`Crawler schedule tick failed: ${toErrorMessage(error)}`)
         } finally {
@@ -888,6 +914,12 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             }
         }
         return buildScheduleSnapshot(crawlerName, schedule, nextRunAt, previous?.lastRunAt || null)
+    }
+
+    private getActiveCrawlerTaskCount() {
+        return Array.from(this.tasks.values()).filter(
+            (task) => task.status === TaskScheduler.TaskStatus.PENDING || task.status === TaskScheduler.TaskStatus.RUNNING,
+        ).length
     }
 
     private hasActiveCrawlerTask(crawlerName: string) {

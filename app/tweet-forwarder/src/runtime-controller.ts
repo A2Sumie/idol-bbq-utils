@@ -16,7 +16,11 @@ import {
     type ApiRuntimeReloadResult,
 } from './managers/api-manager'
 import { startMediaCacheCleanupJob, type MediaCacheCleanupJob } from './services/media-cache-service'
-import { startRuntimeHeartbeatJob, type RuntimeHeartbeatJob } from './services/runtime-heartbeat-service'
+import {
+    DEFAULT_SOFT_START_DURATION_MS,
+    startRuntimeHeartbeatJob,
+    type RuntimeHeartbeatJob,
+} from './services/runtime-heartbeat-service'
 import { LiveCaptureExecutor } from './services/live-capture-executor-service'
 import { buildRouteGraph } from './services/route-graph-service'
 import { buildRuntimeManifest } from './services/runtime-manifest-service'
@@ -98,7 +102,7 @@ export class RuntimeController {
             this.mediaCacheCleanupJob = startMediaCacheCleanupJob(this.log)
             // Cold-start detection: a long downtime (real outage) triggers a soft-start
             // that staggers the first crawler dispatch cycle; a short deploy restart does not.
-            this.runtimeHeartbeatJob = startRuntimeHeartbeatJob({ log: this.log })
+            this.runtimeHeartbeatJob = startRuntimeHeartbeatJob({ log: this.log, deferWrites: true })
         } else {
             this.log.warn('Runtime mode api-only: media cache cleanup and all dispatch/send workers are disabled')
         }
@@ -111,6 +115,7 @@ export class RuntimeController {
             })
         }
         this.runtime = await this.createRuntime(config)
+        this.runtimeHeartbeatJob?.start()
         this.startedAt = Date.now()
         this.lastReloadedAt = this.startedAt
 
@@ -304,7 +309,7 @@ export class RuntimeController {
                 emitter,
                 log,
                 this.runtimeHeartbeatJob?.state.softStart
-                    ? { warmupUntilMs: this.runtimeHeartbeatJob.state.warmupUntilMs || 0, warmupMaxDispatchPerTick: 1 }
+                    ? { warmupDurationMs: DEFAULT_SOFT_START_DURATION_MS, warmupMaxDispatchPerTick: 1 }
                     : undefined,
             )
             taskSchedulers.push(spiderTaskScheduler)

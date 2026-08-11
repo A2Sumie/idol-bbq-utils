@@ -51,6 +51,7 @@ export class BrowserSessionPool {
     private readonly pendingLaunches = new Map<string, Promise<BrowserRuntimeSession>>()
     private readonly browserRoot: string
     private readonly log?: Logger
+    private closing = false
 
     constructor(cacheRoot: string, log?: Logger) {
         this.browserRoot = getBrowserProfileRoot(cacheRoot)
@@ -59,6 +60,9 @@ export class BrowserSessionPool {
     }
 
     async createPage(request: BrowserPageRequest = {}): Promise<Page> {
+        if (this.closing) {
+            throw new Error('Browser session pool is closing')
+        }
         const resolvedProfile = resolveBrowserProfile(request.device_profile, {
             extraHeaders: request.extra_headers,
             locale: request.locale,
@@ -112,8 +116,9 @@ export class BrowserSessionPool {
     }
 
     async closeAll() {
-        // Wait for in-flight launches to settle so closeAll cannot miss a browser that
-        // is about to enter the pool during runtime reload/shutdown.
+        // Set the termination gate before snapshotting launches so no late createPage
+        // can start a Chrome after teardown has begun.
+        this.closing = true
         await Promise.allSettled(Array.from(this.pendingLaunches.values()))
         await Promise.all(
             Array.from(this.sessions.values()).map(async (session) => {
@@ -166,7 +171,10 @@ export class BrowserSessionPool {
         browserMode: BrowserMode,
         profile: BrowserProfileConfig,
     ): Promise<BrowserRuntimeSession> {
-        const userDataDir = path.join(this.browserRoot, sessionId)
+        // Headed and headless sessions are distinct pool keys; they must also use
+        // distinct profile directories or concurrent cookie-export/normal crawls can
+        // collide on Chrome's profile lock.
+        const userDataDir = path.join(this.browserRoot, `${sessionId}-${browserMode}`)
         ensureDirectoryExists(userDataDir)
         const browser = await this.launchBrowser(browserMode, userDataDir, profile)
         const runtimeSession: BrowserRuntimeSession = {
