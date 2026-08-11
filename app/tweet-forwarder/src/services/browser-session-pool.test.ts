@@ -165,6 +165,25 @@ test('BrowserSessionPool recovers when newPage fails with a closed connection', 
     expect(broken._state.closeCalls).toBeGreaterThanOrEqual(1)
 })
 
+test('BrowserSessionPool does not evict a live shared browser for a local newPage error', async () => {
+    const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
+    const browser = makeFakeBrowser({
+        connected: true,
+        newPage: async () => {
+            throw new Error('temporary page allocation failure')
+        },
+    })
+    const launched = stubLaunch(pool, [browser])
+
+    await expect(pool.createPage({ session_profile: 'x-main', browser_mode: 'headed-xvfb' })).rejects.toThrow(
+        'temporary page allocation failure',
+    )
+
+    expect(launched).toHaveLength(1)
+    expect(browser._state.closeCalls).toBe(0)
+    expect((pool as any).sessions.size).toBe(1)
+})
+
 test('BrowserSessionPool surfaces the error when every relaunch keeps failing to open a page', async () => {
     const pool = new BrowserSessionPool(path.join(os.tmpdir(), 'unused'))
     const makeBroken = () =>

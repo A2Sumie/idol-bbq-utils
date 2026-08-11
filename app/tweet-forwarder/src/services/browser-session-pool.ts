@@ -84,10 +84,12 @@ export class BrowserSessionPool {
             try {
                 page = await session.browser.newPage()
             } catch (error) {
-                // The pooled browser is most likely dead/disconnected (Chrome crashed or was killed).
-                // Evict the dead handle so the next attempt relaunches a fresh browser instead of
-                // repeatedly failing with "Protocol error: Connection closed." on every reuse.
                 lastError = error
+                // Only evict a shared browser when the transport is actually dead.
+                // A local newPage error must not tear down other crawlers' live pages.
+                if (this.isSessionAlive(session) && !this.isBrowserConnectionError(error)) {
+                    throw error
+                }
                 await this.evictSession(sessionKey, session)
                 this.log?.warn(
                     `Browser session ${sessionId} (${browserMode}) could not open a page on attempt ${attempt}/${CREATE_PAGE_MAX_ATTEMPTS}; recreating: ${error}`,
@@ -190,6 +192,9 @@ export class BrowserSessionPool {
             if (this.sessions.get(sessionKey) === runtimeSession) {
                 this.sessions.delete(sessionKey)
                 this.log?.warn(`Browser session ${sessionId} (${browserMode}) disconnected; evicted from pool`)
+                // CDP disconnect does not guarantee the OS process exited. Finish
+                // cleanup asynchronously; closeBrowser falls back to SIGKILL.
+                void this.closeBrowser(runtimeSession, `disconnect:${sessionId}`)
             }
         })
         this.sessions.set(sessionKey, runtimeSession)
@@ -203,6 +208,12 @@ export class BrowserSessionPool {
         } catch {
             return false
         }
+    }
+
+    private isBrowserConnectionError(error: unknown) {
+        return /connection (?:closed|lost)|target closed|browser has disconnected|session closed|protocol error/i.test(
+            error instanceof Error ? error.message : String(error),
+        )
     }
 
     private async evictSession(sessionKey: string, session: BrowserRuntimeSession) {
