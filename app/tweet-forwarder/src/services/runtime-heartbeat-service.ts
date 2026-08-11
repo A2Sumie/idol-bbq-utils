@@ -85,9 +85,6 @@ function startRuntimeHeartbeatJob(options: {
     let timer: ReturnType<typeof setInterval> | undefined
     const beginWrites = () => {
         if (timer) return
-        // The first write only happens once the runtime is actually ready. Writing at
-        // process entry would mask a real outage as a short restart if init then fails
-        // and a supervisor restarts within the threshold.
         try {
             writeHeartbeat(filePath, options.now ?? Date.now())
         } catch (error) {

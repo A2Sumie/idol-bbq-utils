@@ -57,8 +57,6 @@ const CAPTURED_HEADER_KEYS = new Set([
     'sec-ch-ua-mobile',
     'sec-ch-ua-platform',
     'user-agent',
-    // x-client-transaction-id is per-request and must not survive in a 12h
-    // operation-profile cache; replaying it creates an abnormal request fingerprint.
     'x-csrf-token',
     'x-twitter-active-user',
     'x-twitter-auth-type',

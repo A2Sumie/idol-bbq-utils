@@ -85,8 +85,6 @@ export class BrowserSessionPool {
                 page = await session.browser.newPage()
             } catch (error) {
                 lastError = error
-                // Only evict a shared browser when the transport is actually dead.
-                // A local newPage error must not tear down other crawlers' live pages.
                 if (this.isSessionAlive(session) && !this.isBrowserConnectionError(error)) {
                     throw error
                 }
@@ -118,8 +116,6 @@ export class BrowserSessionPool {
     }
 
     async closeAll() {
-        // Set the termination gate before snapshotting launches so no late createPage
-        // can start a Chrome after teardown has begun.
         this.closing = true
         await Promise.allSettled(Array.from(this.pendingLaunches.values()))
         await Promise.all(
@@ -173,9 +169,6 @@ export class BrowserSessionPool {
         browserMode: BrowserMode,
         profile: BrowserProfileConfig,
     ): Promise<BrowserRuntimeSession> {
-        // Headed and headless sessions are distinct pool keys; they must also use
-        // distinct profile directories or concurrent cookie-export/normal crawls can
-        // collide on Chrome's profile lock.
         const userDataDir = path.join(this.browserRoot, `${sessionId}-${browserMode}`)
         ensureDirectoryExists(userDataDir)
         const browser = await this.launchBrowser(browserMode, userDataDir, profile)
@@ -192,8 +185,6 @@ export class BrowserSessionPool {
             if (this.sessions.get(sessionKey) === runtimeSession) {
                 this.sessions.delete(sessionKey)
                 this.log?.warn(`Browser session ${sessionId} (${browserMode}) disconnected; evicted from pool`)
-                // CDP disconnect does not guarantee the OS process exited. Finish
-                // cleanup asynchronously; closeBrowser falls back to SIGKILL.
                 void this.closeBrowser(runtimeSession, `disconnect:${sessionId}`)
             }
         })

@@ -841,9 +841,6 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         try {
             const warmupActive = Date.now() < this.warmupUntilMs
             if (warmupActive) {
-                // Soft-start covers the persisted queue backlog too: cap total dispatches
-                // per tick and never start a new crawler while one is already active, so a
-                // long-outage cold start cannot fire the whole backlog at once.
                 const activeCrawlers = this.getActiveCrawlerTaskCount()
                 const budget = activeCrawlers > 0 ? 0 : this.warmupMaxDispatchPerTick
                 const usedQueued = await this.runQueuedScheduledCrawlerRuns(now, budget)

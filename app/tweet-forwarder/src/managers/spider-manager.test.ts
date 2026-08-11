@@ -193,6 +193,61 @@ test('SpiderTaskScheduler soft-start caps crawler dispatch per tick', async () =
     }
 })
 
+test('SpiderTaskScheduler soft-start shares dispatch budget with queued backlog', async () => {
+    const originalRecover = DB.TaskQueue.recoverStaleProcessing
+    const originalGetPending = DB.TaskQueue.getPending
+    const originalClaim = DB.TaskQueue.claimPending
+    const originalUpdate = DB.TaskQueue.updateStatus
+    const now = Date.UTC(2026, 5, 12, 9, 20, 0) / 1000
+    const queuedTasks = ['Queued A', 'Queued B'].map((crawler, index) => ({
+        id: 500 + index,
+        type: DB.TaskQueue.TYPE.ScheduledCrawlerRun,
+        payload: { crawler },
+        status: DB.TaskQueue.STATUS.Pending,
+        execute_at: now,
+    }))
+    ;(DB.TaskQueue as any).recoverStaleProcessing = async () => ({ count: 0 })
+    ;(DB.TaskQueue as any).getPending = async () => queuedTasks
+    ;(DB.TaskQueue as any).claimPending = async (id: number) => ({
+        ...queuedTasks.find((task) => task.id === id),
+        status: DB.TaskQueue.STATUS.Processing,
+    })
+    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+
+    try {
+        const emitter = new EventEmitter()
+        const dispatched: any[] = []
+        emitter.on(`spider:${TaskScheduler.TaskEvent.DISPATCH}`, (payload) => dispatched.push(payload))
+        const makeCrawler = (name: string, scheduled = false) => ({
+            name,
+            websites: ['https://example.com/feed'],
+            cfg_crawler: scheduled
+                ? { schedule: { slots: ['18:20'], timezone: 'Asia/Tokyo', min_gap_seconds: 0 } }
+                : { schedule: { enabled: false } },
+        })
+        const scheduler = new SpiderTaskScheduler(
+            {
+                crawlers: [makeCrawler('Queued A'), makeCrawler('Queued B'), makeCrawler('Configured', true)],
+            },
+            emitter,
+            undefined,
+            { warmupUntilMs: Date.now() + 60_000, warmupMaxDispatchPerTick: 1 },
+        )
+
+        await scheduler.init()
+        ;(scheduler as any).runtimeSchedules.get('Configured').nextRunAt = now
+        await (scheduler as any).runScheduleTick(now)
+
+        expect(dispatched).toHaveLength(1)
+        expect(dispatched[0]?.task.meta.schedule_source).toBe('task_queue')
+    } finally {
+        ;(DB.TaskQueue as any).recoverStaleProcessing = originalRecover
+        ;(DB.TaskQueue as any).getPending = originalGetPending
+        ;(DB.TaskQueue as any).claimPending = originalClaim
+        ;(DB.TaskQueue as any).updateStatus = originalUpdate
+    }
+})
+
 test('SpiderTaskScheduler claims due scheduled crawler queue tasks', async () => {
     const originalRecover = DB.TaskQueue.recoverStaleProcessing
     const originalGetPending = DB.TaskQueue.getPending
