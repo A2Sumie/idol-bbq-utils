@@ -40,7 +40,7 @@ HELP
 
     git rev-parse --is-inside-work-tree >/dev/null
 
-    local deploy preflight start dockerfile drill drift converge capture_smoke health_audit
+    local deploy preflight start dockerfile drill drift converge capture_smoke health_audit cookie_maintenance youtube_cookie_keepalive
     deploy="tools/deploy-forwarder-stopped.sh"
     preflight="tools/forwarder-preflight.sh"
     start="app/tweet-forwarder/start.sh"
@@ -50,6 +50,8 @@ HELP
     converge="tools/forwarder-remote-converge.sh"
     capture_smoke="tools/forwarder-capture-smoke.sh"
     health_audit="app/tweet-forwarder/scripts/crawler-health-audit.ts"
+    cookie_maintenance="tools/forwarder-cookie-maintenance.sh"
+    youtube_cookie_keepalive="tools/youtube-cookie-keepalive.sh"
 
     require_contains "$deploy" 'require_clean_local_worktree' \
         'local clean-worktree deploy guard'
@@ -221,6 +223,24 @@ HELP
         'crawler health audit static-only option'
     require_contains "$health_audit" 'liveProbe: args.liveProbe' \
         'crawler health audit live-probe toggle wiring'
+    require_contains "$cookie_maintenance" 'discover_crawlers' \
+        'cookie maintenance runtime-config discovery'
+    require_contains "$cookie_maintenance" 'const jarKey = `${cookieFile}\u0000${sessionProfile}`' \
+        'cookie maintenance jar/profile deduplication'
+    require_not_contains "$cookie_maintenance" "sync 'Instagram抓取 - 高频时段'" \
+        'cookie maintenance hardcoded Instagram crawler'
+    require_not_contains "$cookie_maintenance" "sync 'Tiktok抓取'" \
+        'cookie maintenance hardcoded TikTok crawler'
+    require_contains "$cookie_maintenance" 'endsWith("/ycookies.txt")' \
+        'cookie maintenance YouTube browser-sync exclusion'
+    require_contains "$cookie_maintenance" 'youtube-cookie-keepalive.sh' \
+        'cookie maintenance YouTube jar keepalive'
+    require_contains "$youtube_cookie_keepalive" "*'|subscriber_only|'*" \
+        'YouTube cookie keepalive membership gate'
+    require_contains "$youtube_cookie_keepalive" 'mv "$temporary_cookie_file" "$COOKIE_FILE"' \
+        'YouTube cookie keepalive atomic replacement'
+    require_contains "$youtube_cookie_keepalive" 'rm -f "$temporary_cookie_file"' \
+        'YouTube cookie keepalive temporary cleanup'
 
     python3 - "$dockerfile" <<'PY'
 import sys
