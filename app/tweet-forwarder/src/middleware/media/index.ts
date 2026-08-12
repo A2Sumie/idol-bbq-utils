@@ -127,22 +127,17 @@ function galleryDownloadMediaFile(
     args.push('--directory', `${CACHE_DIR_ROOT}/media/gallery-dl`)
     args.push(url)
     log.debug(`downloading media files with args: ${args.join(' ')}`)
-    try {
-        const res = execFileSync(exec_path, args, { encoding: 'utf-8' })
-            .split('\n')
-            .filter((path) => path !== '')
-            .map((path) => {
-                if (path.startsWith('# ')) {
-                    return path.slice(2)
-                }
-                return path
-            })
-        log.debug(`downloaded media files: ${res}`)
-        return res
-    } catch (e) {
-        log.error('download media files failed', e)
-        return []
-    }
+    const res = execFileSync(exec_path, args, { encoding: 'utf-8' })
+        .split('\n')
+        .filter((path) => path !== '')
+        .map((path) => {
+            if (path.startsWith('# ')) {
+                return path.slice(2)
+            }
+            return path
+        })
+    log.debug(`downloaded media files: ${res}`)
+    return res
 }
 
 function safeFilenamePrefix(prefix?: string): string {

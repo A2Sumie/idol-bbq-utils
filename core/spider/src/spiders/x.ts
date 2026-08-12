@@ -124,6 +124,7 @@ const X_FETCH_TIMEOUT_MS = 20_000
 const X_CACHE_OPERATION_PROFILE_TTL_S = 12 * 60 * 60
 const X_CACHE_REST_ID_TTL_S = 24 * 60 * 60
 const X_CACHE_LIST_VIEWPORT_TTL_S = 10 * 60
+const X_REPLIES_404_NEGATIVE_TTL_S = 30 * 60
 
 interface XOperationProfile {
     queryId: string
@@ -659,6 +660,7 @@ class XStatusSpider extends BaseSpider {
         )
         let rateLimited = false
         let coverageSkippedCount = 0
+        let replies404SkippedCount = 0
 
         for (let index = 0; index < userIds.length && !rateLimited; index += concurrency) {
             const chunk = userIds.slice(index, index + concurrency)
@@ -688,12 +690,19 @@ class XStatusSpider extends BaseSpider {
                         )
                     }
                     if (options.fetchReplies) {
-                        try {
-                            userArticles.push(...(await client.grabReplies(userId, cookie)))
-                        } catch (error) {
-                            failures.push({ scope: 'replies', error })
-                            if (isAuthOrRateLimitError(error)) {
-                                return { userId, articles: userArticles, failures, rateLimited: true }
+                        if (client.isReplies404Cached?.(userId)) {
+                            replies404SkippedCount += 1
+                            this.log?.debug(
+                                `Unified list hydration skipped replies for @${userId}: recent 404`,
+                            )
+                        } else {
+                            try {
+                                userArticles.push(...(await client.grabReplies(userId, cookie)))
+                            } catch (error) {
+                                failures.push({ scope: 'replies', error })
+                                if (isAuthOrRateLimitError(error)) {
+                                    return { userId, articles: userArticles, failures, rateLimited: true }
+                                }
                             }
                         }
                     }
@@ -734,6 +743,11 @@ class XStatusSpider extends BaseSpider {
         if (coverageSkippedCount > 0) {
             this.log?.info(
                 `Unified list hydration skipped tweets for ${coverageSkippedCount} user(s) already covered by the list timeline.`,
+            )
+        }
+        if (replies404SkippedCount > 0) {
+            this.log?.info(
+                `Unified list hydration skipped replies for ${replies404SkippedCount} user(s) with recent 404.`,
             )
         }
 
@@ -1689,6 +1703,16 @@ export class XApiClient {
         this.cache?.set(`x-restid:${normalized}`, restId, X_CACHE_REST_ID_TTL_S)
     }
 
+    /**
+     * Accounts whose replies endpoint 404s do so consistently (private/no
+     * replies); a short negative cache skips the doomed request instead of
+     * paying one 404 per round per account.
+     */
+    isReplies404Cached(userId: string) {
+        const key = normalizeHydrationUserId(userId)
+        return Boolean(key && this.cache?.get(`x-replies-404:${key}`))
+    }
+
     private async fetchRestIdForUser(key: string, cookie: string) {
         const user_info = await this.getRawUserInfo(key, cookie)
         if (!user_info) {
@@ -1870,7 +1894,19 @@ export class XApiClient {
             },
             'replies',
         )
-        this.assertOkOrInvalidate(res, 'replies', XApis.UserTweetsAndReplies, id)
+        try {
+            this.assertOkOrInvalidate(res, 'replies', XApis.UserTweetsAndReplies, id)
+        } catch (error) {
+            // A 404 here is an account trait, not a transient failure; remember it
+            // briefly so the next rounds skip the doomed request.
+            if (isNotFoundError(error)) {
+                const key = normalizeHydrationUserId(id)
+                if (key) {
+                    this.cache?.set(`x-replies-404:${key}`, true, X_REPLIES_404_NEGATIVE_TTL_S)
+                }
+            }
+            throw error
+        }
         const json = await res.json()
         if (json.errors) {
             throw new Error(`Failed to fetch replies: ${json.errors[0].message}`)

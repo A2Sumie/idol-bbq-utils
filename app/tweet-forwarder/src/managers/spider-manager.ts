@@ -12,7 +12,7 @@ import { Page } from 'puppeteer-core'
 import { CronJob } from 'cron'
 import { BaseProcessor, PROCESSOR_ERROR_FALLBACK } from '@/middleware/processor/base'
 import EventEmitter from 'events'
-import { BaseCompatibleModel, sanitizeWebsites, TaskScheduler } from '@/utils/base'
+import { BaseCompatibleModel, sanitizeWebsites, TaskScheduler, toErrorMessage } from '@/utils/base'
 import type { Crawler } from '@/types/crawler'
 import type { AppConfig } from '@/types'
 import { Platform } from '@idol-bbq-utils/spider/types'
@@ -256,9 +256,6 @@ class CrawlerCookieExportError extends Error {
     }
 }
 
-function toErrorMessage(error: unknown) {
-    return error instanceof Error ? error.message : String(error)
-}
 
 function unwrapRetryError(error: unknown): unknown {
     let current = error
@@ -2457,26 +2454,33 @@ class SpiderPools extends BaseCompatibleModel {
                 const { a_id, username, platform } = currentArticle
                 // maybe the ref article translated failed
                 const article_maybe_processed = await DB.Article.getByArticleCode(a_id, platform)
+                const processField = async (field: string, context: string) => {
+                    try {
+                        return await pRetry(() => processor.process(field), {
+                            retries: RETRY_LIMIT,
+                            onFailedAttempt: (error) => {
+                                ctx.log?.warn(
+                                    `[${username}] [${a_id}] Process ${context} failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
+                                )
+                            },
+                        })
+                    } catch (err) {
+                        ctx.log?.error(`[${username}] [${a_id}] Error while processing ${context}: ${err}`)
+                        // Never persist the sentinel: a failed request keeps the
+                        // field untranslated so the next cycle retries it.
+                        return null
+                    }
+                }
                 if (currentArticle.content && !BaseProcessor.isValidResult(article_maybe_processed?.translation)) {
                     const content = currentArticle.content
                     ctx.log?.info(`[${username}] [${a_id}] Starting to process...`)
-                    const content_processed = await pRetry(() => processor.process(content), {
-                        retries: RETRY_LIMIT,
-                        onFailedAttempt: (error) => {
-                            ctx.log?.warn(
-                                `[${username}] [${a_id}] Process content failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
-                            )
-                        },
-                    })
-                        .then((res) => res)
-                        .catch((err) => {
-                            ctx.log?.error(`[${username}] [${a_id}] Error while processing content: ${err}`)
-                            return PROCESSOR_ERROR_FALLBACK
-                        })
-                    ctx.log?.debug(`[${username}] [${a_id}] Process result: ${content_processed}`)
-                    ctx.log?.info(`[${username}] [${a_id}] Process complete.`)
-                    currentArticle.translation = content_processed
-                    currentArticle.translated_by = processor.NAME
+                    const content_processed = await processField(content, 'content')
+                    if (content_processed !== null) {
+                        ctx.log?.debug(`[${username}] [${a_id}] Process result: ${content_processed}`)
+                        ctx.log?.info(`[${username}] [${a_id}] Process complete.`)
+                        currentArticle.translation = content_processed
+                        currentArticle.translated_by = processor.NAME
+                    }
                 }
 
                 if (currentArticle.media) {
@@ -2489,21 +2493,11 @@ class SpiderPools extends BaseCompatibleModel {
                             )
                         ) {
                             const alt = media.alt
-                            const caption_processed = await await pRetry(() => processor.process(alt), {
-                                retries: RETRY_LIMIT,
-                                onFailedAttempt: (error) => {
-                                    ctx.log?.warn(
-                                        `[${username}] [${a_id}] Process media alt failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
-                                    )
-                                },
-                            })
-                                .then((res) => res)
-                                .catch((err) => {
-                                    ctx.log?.error(`[${username}] [${a_id}] Error while processing media alt: ${err}`)
-                                    return PROCESSOR_ERROR_FALLBACK
-                                })
-                            media.translation = caption_processed
-                            media.translated_by = processor.NAME
+                            const caption_processed = await processField(alt, 'media alt')
+                            if (caption_processed !== null) {
+                                media.translation = caption_processed
+                                media.translated_by = processor.NAME
+                            }
                         }
                     }
                 }
@@ -2512,21 +2506,11 @@ class SpiderPools extends BaseCompatibleModel {
                     const extra_ref = currentArticle.extra
                     let { content, translation } = extra_ref
                     if (content && !BaseProcessor.isValidResult(translation)) {
-                        const content_processed = await pRetry(() => processor.process(content), {
-                            retries: RETRY_LIMIT,
-                            onFailedAttempt: (error) => {
-                                ctx.log?.warn(
-                                    `[${username}] [${a_id}] Process extra content failed, there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
-                                )
-                            },
-                        })
-                            .then((res) => res)
-                            .catch((err) => {
-                                ctx.log?.error(`[${username}] [${a_id}] Error while processing extra content: ${err}`)
-                                return PROCESSOR_ERROR_FALLBACK
-                            })
-                        extra_ref.translation = content_processed
-                        extra_ref.translated_by = processor.NAME
+                        const content_processed = await processField(content, 'extra content')
+                        if (content_processed !== null) {
+                            extra_ref.translation = content_processed
+                            extra_ref.translated_by = processor.NAME
+                        }
                     }
                 }
             }),

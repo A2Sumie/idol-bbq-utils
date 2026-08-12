@@ -155,4 +155,8 @@ function stripUrlsFromText(text: string) {
         .trim()
 }
 
-export { TaskScheduler, BaseCompatibleModel, sanitizeWebsites, stripUrlsFromText }
+function toErrorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error)
+}
+
+export { TaskScheduler, BaseCompatibleModel, sanitizeWebsites, stripUrlsFromText, toErrorMessage }

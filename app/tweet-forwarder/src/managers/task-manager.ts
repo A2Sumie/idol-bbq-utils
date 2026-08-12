@@ -1,5 +1,5 @@
 import { Logger } from '@idol-bbq-utils/log'
-import { BaseCompatibleModel } from '@/utils/base'
+import { BaseCompatibleModel, toErrorMessage } from '@/utils/base'
 import DB from '@/db'
 import { processorRegistry } from '@/middleware/processor'
 import { ForwarderPools } from '@/managers/forwarder-manager'
@@ -27,6 +27,7 @@ import {
     syntheticOutboundKey,
     targetRouteKey,
 } from '@/services/outbound-message-service'
+import { markTargetHealthForSendOutcome } from '@/services/target-health-service'
 
 type AggregateTaskKind = typeof DB.TaskQueue.TYPE.AggregateHourly | typeof DB.TaskQueue.TYPE.AggregateDaily
 
@@ -93,9 +94,6 @@ class TaskDeliveryError extends Error {
     }
 }
 
-function toErrorMessage(error: unknown) {
-    return error instanceof Error ? error.message : String(error)
-}
 
 function tryParseJson(value: string) {
     try {
@@ -883,48 +881,23 @@ export class TaskManager extends BaseCompatibleModel {
             })
             if (sendResult.status === 'queued') {
                 await DB.OutboundMessage.markQueued(outboundIdempotencyKey, sendResult)
-                await DB.TargetHealth.mark({
-                    target_id: targetId,
-                    provider: forwarder.NAME,
-                    status: 'ok',
-                    last_send_status: 'queued',
-                    details: sendResult,
-                })
+                await markTargetHealthForSendOutcome(forwarder, { kind: 'queued', result: sendResult }, this.log)
                 return { targetId, status: 'queued', retryable: false }
             }
             if (sendResult.status === 'blocked') {
                 await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
-                await DB.TargetHealth.mark({
-                    target_id: targetId,
-                    provider: forwarder.NAME,
-                    status: 'ok',
-                    last_send_status: 'blocked',
-                    details: sendResult,
-                })
+                await markTargetHealthForSendOutcome(forwarder, { kind: 'blocked', result: sendResult }, this.log)
                 return { targetId, status: 'blocked', retryable: false }
             }
             if (sendResult.status === 'dry_run') {
                 await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
-                await DB.TargetHealth.mark({
-                    target_id: targetId,
-                    provider: forwarder.NAME,
-                    status: 'ok',
-                    last_send_status: 'dry_run',
-                    details: sendResult,
-                })
+                await markTargetHealthForSendOutcome(forwarder, { kind: 'dry_run', result: sendResult }, this.log)
                 return { targetId, status: 'dry_run', retryable: true }
             }
 
             const providerResult = getForwarderProviderResult(sendResult)
             await DB.OutboundMessage.markSent(outboundIdempotencyKey, summarizeProviderResult(providerResult))
-            await DB.TargetHealth.mark({
-                target_id: targetId,
-                provider: forwarder.NAME,
-                status: 'ok',
-                last_send_status: 'sent',
-                last_provider_code: providerCode(providerResult),
-                details: summarizeProviderResult(providerResult),
-            })
+            await markTargetHealthForSendOutcome(forwarder, { kind: 'sent', providerResult }, this.log)
             return { targetId, status: 'sent', retryable: false }
         } catch (error) {
             this.log?.error(`Failed to send ${taskKind} for ${payload.u_id} to ${targetId}: ${error}`)
@@ -934,29 +907,26 @@ export class TaskManager extends BaseCompatibleModel {
                     summarizeProviderResult(error.partialResults),
                     error,
                 ).catch(() => undefined)
-                await DB.TargetHealth.mark({
-                    target_id: targetId,
-                    provider: forwarder.NAME,
-                    status: 'degraded',
-                    last_send_status: 'partial',
-                    last_provider_code: providerCode(error.partialResults),
-                    disabled_reason: error.message,
-                    details: summarizeProviderResult(error.partialResults),
-                }).catch(() => undefined)
+                await markTargetHealthForSendOutcome(
+                    forwarder,
+                    { kind: 'partial', partialResults: error.partialResults, message: error.message },
+                    this.log,
+                )
                 return { targetId, status: 'partial', retryable: false, error: error.message }
             }
             await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
-            await DB.TargetHealth.mark({
-                target_id: targetId,
-                provider: forwarder.NAME,
-                status: 'error',
-                last_send_status: 'failed',
-                disabled_reason: toErrorMessage(error),
-                details: {
-                    route_key: routeKeyValue,
-                    task_kind: taskKind,
+            await markTargetHealthForSendOutcome(
+                forwarder,
+                {
+                    kind: 'failed',
+                    message: toErrorMessage(error),
+                    details: {
+                        route_key: routeKeyValue,
+                        task_kind: taskKind,
+                    },
                 },
-            }).catch(() => undefined)
+                this.log,
+            )
             return { targetId, status: 'failed', retryable: true, error: toErrorMessage(error) }
         }
     }

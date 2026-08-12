@@ -2,7 +2,7 @@ import { Logger } from '@idol-bbq-utils/log'
 import { spiderRegistry } from '@idol-bbq-utils/spider'
 import { CronJob } from 'cron'
 import EventEmitter from 'events'
-import { BaseCompatibleModel, sanitizeWebsites, stripUrlsFromText, TaskScheduler } from '@/utils/base'
+import { BaseCompatibleModel, sanitizeWebsites, stripUrlsFromText, TaskScheduler, toErrorMessage } from '@/utils/base'
 import type { AppConfig, Processor } from '@/types'
 import { Platform, type MediaType, type TaskType } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
@@ -53,6 +53,7 @@ import {
     syntheticOutboundKey,
     targetRouteKey,
 } from '@/services/outbound-message-service'
+import { markTargetHealthForSendOutcome } from '@/services/target-health-service'
 import { resolveSummaryCardConfig, type ResolvedSummaryCardConfig } from '@/services/summary-card-policy'
 import { buildShortVideoTextFingerprint } from '@/services/media-cache-service'
 import {
@@ -188,9 +189,6 @@ function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
 
-function toErrorMessage(error: unknown) {
-    return error instanceof Error ? error.message : String(error)
-}
 
 function uniquePreserveOrder(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean)))
@@ -2803,13 +2801,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                 await this.releaseArticleChain(article, platform, target.id)
                             }
                             await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
-                            await DB.TargetHealth.mark({
-                                target_id: target.id,
-                                provider: target.NAME,
-                                status: 'ok',
-                                last_send_status: 'queued',
-                                details: sendResult,
-                            })
+                            await markTargetHealthForSendOutcome(target, { kind: 'queued', result: sendResult }, log)
                             error_for_all = false
                             hadNonErrorOutcome = true
                             return
@@ -2817,13 +2809,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         if (sendResult.status === 'blocked') {
                             await DB.OutboundMessage.markSkipped(outboundIdempotencyKey, sendResult.reason, sendResult)
                             await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
-                            await DB.TargetHealth.mark({
-                                target_id: target.id,
-                                provider: target.NAME,
-                                status: 'ok',
-                                last_send_status: 'blocked',
-                                details: sendResult,
-                            })
+                            await markTargetHealthForSendOutcome(target, { kind: 'blocked', result: sendResult }, log)
                             error_for_all = false
                             hadNonErrorOutcome = true
                             return
@@ -2831,13 +2817,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         if (sendResult.status === 'dry_run') {
                             await DB.OutboundMessage.markDryRun(outboundIdempotencyKey, sendResult)
                             await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
-                            await DB.TargetHealth.mark({
-                                target_id: target.id,
-                                provider: target.NAME,
-                                status: 'ok',
-                                last_send_status: 'dry_run',
-                                details: sendResult,
-                            })
+                            await markTargetHealthForSendOutcome(target, { kind: 'dry_run', result: sendResult }, log)
                             if (claimed && !options?.forceSend) {
                                 await this.releaseArticleChain(article, platform, target.id)
                             }
@@ -2863,14 +2843,7 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
                         await DB.OutboundMessage.markSent(outboundIdempotencyKey, providerSummary)
                         await this.markMediaBatchArticlesSent(target, sendResult, providerSummary)
-                        await DB.TargetHealth.mark({
-                            target_id: target.id,
-                            provider: target.NAME,
-                            status: 'ok',
-                            last_send_status: 'sent',
-                            last_provider_code: providerCode(providerResult),
-                            details: summarizeProviderResult(providerResult),
-                        })
+                        await markTargetHealthForSendOutcome(target, { kind: 'sent', providerResult }, log)
                         if (options?.forceSend) {
                             await DB.ForwardBy.save(article.id, platform, target.id, 'article')
                         }
@@ -2911,32 +2884,29 @@ class ForwarderPools extends BaseCompatibleModel {
                             )
                             // Partial counts as a visible completion; keep the fingerprint claimed.
                             contentFingerprintForRelease = []
-                            await DB.TargetHealth.mark({
-                                target_id: target.id,
-                                provider: target.NAME,
-                                status: 'degraded',
-                                last_send_status: 'partial',
-                                last_provider_code: providerCode(partialError.partialResults),
-                                disabled_reason: partialError.message,
-                                details: summarizeProviderResult(partialError.partialResults),
-                            })
+                            await markTargetHealthForSendOutcome(
+                                target,
+                                { kind: 'partial', partialResults: partialError.partialResults, message: partialError.message },
+                                log,
+                            )
                             error_for_all = false
                             hadNonErrorOutcome = true
                             return
                         }
                         await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                         await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
-                        await DB.TargetHealth.mark({
-                            target_id: target.id,
-                            provider: target.NAME,
-                            status: 'error',
-                            last_send_status: 'failed',
-                            disabled_reason: error instanceof Error ? error.message : String(error),
-                            details: {
-                                route_key: routeKeyForTarget,
-                                article_key: articleKey(article),
+                        await markTargetHealthForSendOutcome(
+                            target,
+                            {
+                                kind: 'failed',
+                                message: error instanceof Error ? error.message : String(error),
+                                details: {
+                                    route_key: routeKeyForTarget,
+                                    article_key: articleKey(article),
+                                },
                             },
-                        })
+                            log,
+                        )
                         if (!options?.forceSend) {
                             await this.releaseArticleChain(article, platform, target.id)
                         }
@@ -4145,6 +4115,12 @@ class ForwarderPools extends BaseCompatibleModel {
             cardRenderResult,
         )
         if (mediaFilesWithTargetExtras.length === 0) {
+            if (cardRenderResult && cardRenderResult !== renderResult) {
+                this.renderService.cleanup([
+                    ...(cardRenderResult.mediaFiles || []),
+                    ...(cardRenderResult.cardMediaFiles || []),
+                ])
+            }
             return {
                 hadMedia: false,
                 handled: true,
@@ -4541,6 +4517,14 @@ class ForwarderPools extends BaseCompatibleModel {
             // Any non-visible outcome (queued/blocked/dry_run/failed/early return) releases the content
             // fingerprint so it never suppresses a future genuine send. Visible sends null this out above.
             await this.releaseContentFingerprintClaim(contentFingerprintForRelease).catch(() => undefined)
+            // The translated tail card rendered inside this call is owned here;
+            // its media files were never cleaned up (the caller only owns renderResult).
+            if (cardRenderResult && cardRenderResult !== renderResult) {
+                this.renderService.cleanup([
+                    ...(cardRenderResult.mediaFiles || []),
+                    ...(cardRenderResult.cardMediaFiles || []),
+                ])
+            }
         }
     }
 
@@ -5073,6 +5057,14 @@ class ForwarderPools extends BaseCompatibleModel {
         } finally {
             if (companionMediaFiles.length > 0) {
                 this.renderService.cleanup(companionMediaFiles)
+            }
+            // The original card render created inside this call is owned here;
+            // only companion files were cleaned before (the card PNGs leaked).
+            if (originalCardRender) {
+                this.renderService.cleanup([
+                    ...(originalCardRender.mediaFiles || []),
+                    ...(originalCardRender.cardMediaFiles || []),
+                ])
             }
         }
     }

@@ -1310,83 +1310,110 @@ export class RenderService {
                     })
                 }
 
-                // Tool: Default HTTP Downloader
-                if (media.use.tool === MediaToolEnum.DEFAULT && currentArticle.media) {
-                    this.log?.debug(`Downloading media with http downloader`)
-                    new_files = await _handleMedia(currentArticle.media)
-
-                    const uniqueExtraMedia = getUniqueExtraMedia()
-                    if (uniqueExtraMedia.length > 0) {
-                        const extra_files = await _handleMedia(uniqueExtraMedia, true)
-                        new_files = new_files.concat(extra_files)
-                    }
+                // Tool chain: primary tool first, then configured fallbacks. A
+                // fallback runs only when the previous tool produced no files
+                // (or threw); a tool that produced files ends the chain.
+                const toolChain = [media.use, ...(media.fallbacks || [])]
+                    .map((entry: unknown) => (typeof entry === 'string' ? { tool: entry } : entry))
+                    .filter((entry): entry is MediaTool => Boolean(entry && (entry as MediaTool).tool))
+                if (toolChain.length === 0) {
+                    this.log?.warn(`Article ${currentArticle.a_id} has media enabled but no media tool configured; skipping download`)
                 }
 
-                // Tool: Gallery-DL
-                if (media.use.tool === MediaToolEnum.GALLERY_DL) {
-                    this.log?.debug(`Downloading media with gallery-dl`)
-                    // galleryDownloadMediaFile returns string[] (paths)
-                    const paths = await galleryDownloadMediaFile(
-                        currentArticle.url,
-                        media.use as MediaTool<MediaToolEnum.GALLERY_DL>,
-                    )
-
-                    new_files = await Promise.all(
-                        paths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
-                    )
-                    new_files = new_files.filter((f) => f !== undefined)
-
-                    const uniqueExtraMedia = getUniqueExtraMedia()
-                    if (uniqueExtraMedia.length > 0) {
-                        const extra_files = await _handleMedia(uniqueExtraMedia, true)
-                        new_files = new_files.concat(extra_files)
+                const runTool = async (tool: MediaTool): Promise<Array<RenderedMediaFile | undefined>> => {
+                    if (tool.tool === MediaToolEnum.DEFAULT && currentArticle.media) {
+                        this.log?.debug(`Downloading media with http downloader`)
+                        let files = await _handleMedia(currentArticle.media)
+                        const uniqueExtraMedia = getUniqueExtraMedia()
+                        if (uniqueExtraMedia.length > 0) {
+                            files = files.concat(await _handleMedia(uniqueExtraMedia, true))
+                        }
+                        return files
                     }
-                }
-
-                // Tool: yt-dlp
-                if (media.use.tool === MediaToolEnum.YT_DLP) {
-                    this.log?.debug(`Downloading media with yt-dlp`)
-
-                    if (currentArticle.media) {
-                        new_files = await _handleMedia(currentArticle.media)
+                    if (tool.tool === MediaToolEnum.GALLERY_DL) {
+                        this.log?.debug(`Downloading media with gallery-dl`)
+                        // galleryDownloadMediaFile throws on tool failure and returns
+                        // [] when the tool ran but genuinely produced nothing.
+                        const paths = await galleryDownloadMediaFile(
+                            currentArticle.url,
+                            tool as MediaTool<MediaToolEnum.GALLERY_DL>,
+                        )
+                        const files = await Promise.all(
+                            paths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
+                        )
+                        const uniqueExtraMedia = getUniqueExtraMedia()
+                        if (uniqueExtraMedia.length > 0) {
+                            files.push(...(await _handleMedia(uniqueExtraMedia, true)))
+                        }
+                        return files.filter((f) => f !== undefined)
                     }
-
-                    // yt-dlp re-resolves the video page and gets a fresh signed URL, which matters
-                    // when the stored CDN URL (e.g. tiktokcdn) has expired or is session-bound.
-                    // Only run it for articles that actually contain video media; image-only posts
-                    // must not be duplicated by an extra yt-dlp pass.
-                    if (shouldRunYtDlpForArticle(currentArticle)) {
-                        const ytDlpCacheKey = `ytdlp:${currentArticle.url}`
-                        if (this.isMediaDownloadCachedFailed(ytDlpCacheKey)) {
-                            this.log?.debug(`Skipping cached-failed yt-dlp download for ${currentArticle.url}`)
-                        } else {
-                            try {
-                                const videoPaths = await ytDlpDownloadMediaFile(
-                                    currentArticle.url,
-                                    media.use as MediaTool<MediaToolEnum.YT_DLP>,
-                                    `${taskId}-${currentArticle.a_id}`,
-                                )
-                                const videoFiles = await Promise.all(
-                                    videoPaths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
-                                )
-                                new_files = new_files.concat(videoFiles)
-                            } catch (error) {
-                                const message = error instanceof Error ? error.message : String(error)
-                                if (/403|Forbidden|blocked|confirm your age|Sign in/i.test(message)) {
-                                    this.mediaDownloadFailureCache.set(
-                                        ytDlpCacheKey,
-                                        Date.now() + RenderService.MEDIA_FAILURE_CACHE_MS,
+                    if (tool.tool === MediaToolEnum.YT_DLP) {
+                        this.log?.debug(`Downloading media with yt-dlp`)
+                        let files: Array<RenderedMediaFile | undefined> = []
+                        if (currentArticle.media) {
+                            files = await _handleMedia(currentArticle.media)
+                        }
+                        // yt-dlp re-resolves the video page and gets a fresh signed URL, which matters
+                        // when the stored CDN URL (e.g. tiktokcdn) has expired or is session-bound.
+                        // Only run it for articles that actually contain video media; image-only posts
+                        // must not be duplicated by an extra yt-dlp pass.
+                        if (shouldRunYtDlpForArticle(currentArticle)) {
+                            const ytDlpCacheKey = `ytdlp:${currentArticle.url}`
+                            if (this.isMediaDownloadCachedFailed(ytDlpCacheKey)) {
+                                this.log?.debug(`Skipping cached-failed yt-dlp download for ${currentArticle.url}`)
+                            } else {
+                                try {
+                                    const videoPaths = await ytDlpDownloadMediaFile(
+                                        currentArticle.url,
+                                        tool as MediaTool<MediaToolEnum.YT_DLP>,
+                                        `${taskId}-${currentArticle.a_id}`,
                                     )
+                                    files = files.concat(
+                                        await Promise.all(
+                                            videoPaths.map((path) =>
+                                                finalizeDownloadedFile(path, currentArticle?.url),
+                                            ),
+                                        ),
+                                    )
+                                } catch (error) {
+                                    const message = error instanceof Error ? error.message : String(error)
+                                    if (/403|Forbidden|blocked|confirm your age|Sign in/i.test(message)) {
+                                        this.mediaDownloadFailureCache.set(
+                                            ytDlpCacheKey,
+                                            Date.now() + RenderService.MEDIA_FAILURE_CACHE_MS,
+                                        )
+                                    }
                                 }
                             }
                         }
+                        const uniqueExtraMedia = getUniqueExtraMedia()
+                        if (uniqueExtraMedia.length > 0) {
+                            files = files.concat(await _handleMedia(uniqueExtraMedia, true))
+                        }
+                        return files
                     }
+                    return []
+                }
 
-                    const uniqueExtraMedia = getUniqueExtraMedia()
-                    if (uniqueExtraMedia.length > 0) {
-                        const extra_files = await _handleMedia(uniqueExtraMedia, true)
-                        new_files = new_files.concat(extra_files)
+                for (let toolIndex = 0; toolIndex < toolChain.length; toolIndex++) {
+                    const tool = toolChain[toolIndex]!
+                    let files: Array<RenderedMediaFile | undefined> = []
+                    try {
+                        files = await runTool(tool)
+                    } catch (error) {
+                        this.log?.warn(
+                            `Media tool ${tool.tool} failed for ${currentArticle.a_id}: ${
+                                error instanceof Error ? error.message : String(error)
+                            }`,
+                        )
                     }
+                    new_files = files
+                    if (files.filter((file) => file !== undefined).length > 0 || toolIndex === toolChain.length - 1) {
+                        break
+                    }
+                    this.log?.warn(
+                        `Media tool ${tool.tool} produced no files for ${currentArticle.a_id}; trying the next configured fallback`,
+                    )
                 }
 
                 if (new_files.length > 0) {

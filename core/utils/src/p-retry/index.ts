@@ -123,7 +123,10 @@ export async function pRetry<T>(input: (attemptCount: number) => PromiseLike<T> 
         let options = Object.assign(
             {
                 onFailedAttempt() {},
-                retries: 10,
+                // Keep the fallback small: callers that forget to pass retries must
+                // not silently gain 10 attempts. Every production call site sets
+                // retries explicitly.
+                retries: 2,
                 shouldRetry: (error: FailedAttemptError) => true,
             },
             _options,

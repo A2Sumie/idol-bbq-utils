@@ -154,7 +154,10 @@ export class RuntimeController {
         }
 
         this.shuttingDown = true
-        this.log.info('Shutting down gracefully...')
+        // Capture the caller so silent restarts (no signal log line) can be
+        // traced to their trigger (api reload, monitor, manual stop, ...).
+        const callerStack = new Error('shutdown trigger').stack?.split('\n').slice(2, 5).join(' | ') || 'unknown'
+        this.log.info(`Shutting down gracefully... (trigger: ${callerStack})`)
 
         if (this.runtime) {
             await this.stopRuntime(this.runtime, 'shutdown')
