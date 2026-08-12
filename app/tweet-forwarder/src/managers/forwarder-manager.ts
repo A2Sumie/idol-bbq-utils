@@ -465,17 +465,17 @@ function resolveBatchAggregationConfig(
     const cron = normalizeCronSecond(
         raw?.aggregation_cron || raw?.batch_cron || formatterCron || DEFAULT_BATCH_AGGREGATION_CRON,
     )
-    const windowSeconds = Math.max(
-        60,
-        Math.floor(
-            Number(
-                raw?.aggregation_window_seconds ||
-                    raw?.batch_window_seconds ||
-                    formatterWindowSeconds ||
-                    DEFAULT_BATCH_AGGREGATION_WINDOW_SECONDS,
-            ),
-        ),
+    // NaN from a malformed config value used to flow straight into the cron
+    // window math; guard it and fall back to the default.
+    const windowValue = Number(
+        raw?.aggregation_window_seconds ||
+            raw?.batch_window_seconds ||
+            formatterWindowSeconds ||
+            DEFAULT_BATCH_AGGREGATION_WINDOW_SECONDS,
     )
+    const windowSeconds = Number.isFinite(windowValue)
+        ? Math.max(60, Math.floor(windowValue))
+        : DEFAULT_BATCH_AGGREGATION_WINDOW_SECONDS
     return {
         cron,
         windowSeconds,

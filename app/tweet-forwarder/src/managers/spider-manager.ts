@@ -188,9 +188,16 @@ function resolveExistingArticleReusePolicy(cfg_crawler: Crawler['cfg_crawler'] |
         return null
     }
     const objectConfig = typeof raw === 'object' && raw ? raw : {}
+    const clampFinite = (value: unknown, fallback: number, min: number, max?: number) => {
+        const numeric = Math.floor(Number(value ?? fallback))
+        if (!Number.isFinite(numeric)) {
+            return fallback
+        }
+        return Math.max(min, Math.min(max ?? Number.POSITIVE_INFINITY, numeric))
+    }
     return {
-        maxAgeSeconds: Math.max(1, Math.floor(Number(objectConfig.max_age_seconds || 5 * 60))),
-        maxItems: Math.max(1, Math.min(Math.floor(Number(objectConfig.max_items || 5)), 20)),
+        maxAgeSeconds: clampFinite(objectConfig.max_age_seconds, 5 * 60, 1),
+        maxItems: clampFinite(objectConfig.max_items, 5, 1, 20),
         reason: objectConfig.reason || 'explicit backfill',
     }
 }

@@ -80,10 +80,10 @@ function resolveVideoPairingConfig(rawConfig: unknown): ResolvedVideoPairingConf
     if (joinPlatforms.length === 0) {
         return null
     }
-    const windowSeconds = Math.max(
-        60,
-        Math.floor(Number(objectConfig.window_seconds || DEFAULT_VIDEO_PAIRING_WINDOW_SECONDS)),
-    )
+    const windowValue = Number(objectConfig.window_seconds || DEFAULT_VIDEO_PAIRING_WINDOW_SECONDS)
+    const windowSeconds = Number.isFinite(windowValue)
+        ? Math.max(60, Math.floor(windowValue))
+        : DEFAULT_VIDEO_PAIRING_WINDOW_SECONDS
     const onExpiry = DEFAULT_VIDEO_PAIRING_ON_EXPIRY
     return {
         enabled: true,

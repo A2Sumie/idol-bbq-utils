@@ -106,6 +106,14 @@ function resolveSummaryCardSingleItemBehavior(raw: unknown): SummaryCardSingleIt
     return DEFAULT_SUMMARY_CARD_SINGLE_ITEM_BEHAVIOR
 }
 
+function clampFiniteInt(value: unknown, fallback: number, min: number, max?: number) {
+    const numeric = Math.floor(Number(value ?? fallback))
+    if (!Number.isFinite(numeric)) {
+        return fallback
+    }
+    return Math.max(min, Math.min(max ?? Number.POSITIVE_INFINITY, numeric))
+}
+
 function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): ResolvedSummaryCardConfig | null {
     const raw = config.summary_card
     const enabled = raw === true || (typeof raw === 'object' && raw?.enabled !== false)
@@ -114,15 +122,13 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
     }
 
     const objectConfig = typeof raw === 'object' && raw ? raw : {}
-    const intervalSeconds = Math.max(
+    const intervalSeconds = clampFiniteInt(
+        objectConfig.interval_seconds,
+        DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS,
         60,
-        Math.floor(Number(objectConfig.interval_seconds || DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS)),
     )
-    const threshold = Math.max(2, Math.floor(Number(objectConfig.threshold || DEFAULT_SUMMARY_CARD_THRESHOLD)))
-    const maxItems = Math.max(
-        3,
-        Math.min(Math.floor(Number(objectConfig.max_items || DEFAULT_SUMMARY_CARD_MAX_ITEMS)), 30),
-    )
+    const threshold = clampFiniteInt(objectConfig.threshold, DEFAULT_SUMMARY_CARD_THRESHOLD, 2)
+    const maxItems = clampFiniteInt(objectConfig.max_items, DEFAULT_SUMMARY_CARD_MAX_ITEMS, 3, 30)
     const explicitDuplicateLimit = Math.floor(Number((objectConfig as any).media_duplicate_limit || 0))
     const includeOriginalMedia = objectConfig.include_original_media === true
     const mediaRealtime = (objectConfig as any).media_realtime === true
@@ -162,7 +168,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         mediaRealtimeVideoOnly,
         mediaRealtimeDropSummaryPlatforms,
         flushOnThreshold: (objectConfig as any).flush_on_threshold !== false,
-        flushDelaySeconds: Math.max(0, Math.floor(Number((objectConfig as any).flush_delay_seconds || 0))),
+        flushDelaySeconds: clampFiniteInt((objectConfig as any).flush_delay_seconds, 0, 0),
         windowAlignment,
         singleItemBehavior: resolveSummaryCardSingleItemBehavior((objectConfig as any).single_item_behavior),
         mediaDuplicateLimit: duplicateLimit > 0 ? duplicateLimit : null,
