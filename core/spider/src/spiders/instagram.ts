@@ -571,7 +571,12 @@ namespace InsApiJsonParser {
                     return
                 }
                 try {
-                    done(await response.json())
+                    const json = await response.json()
+                    const vv = JSONPath({ path: '$..video_versions', json })
+                    const vd = JSONPath({ path: '$..video_duration', json })
+                    const img = JSONPath({ path: '$..image_versions2', json })
+                    console.log('DEBUG xdt-global video_versions_groups=' + vv.length + ' durations=' + JSON.stringify(vd.slice(0, 5)) + ' image_versions_groups=' + img.length)
+                    done(json)
                 } catch (e) {
                     fail(e)
                 }
