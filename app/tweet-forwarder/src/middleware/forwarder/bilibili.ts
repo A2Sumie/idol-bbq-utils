@@ -137,6 +137,12 @@ class BiliForwarder extends Forwarder {
     private photoUploadCooldownMs = BILI_PHOTO_UPLOAD_COOLDOWN_MS
     private dynamicCreateRetries = 2
     private dynamicCreateRetryMinTimeoutMs = 3000
+    // Same image (content hash) re-uploaded within the TTL reuses the previous
+    // upload_bfs result: retry flushes and dedup-approved repeated media used to
+    // pay a full upload + serial gap every time.
+    private uploadResultCache = new Map<string, { at: number; uploaded: BiliUploadPhotoResponse }>()
+    private static readonly UPLOAD_RESULT_TTL_MS = 4 * 60 * 60 * 1000
+    private static readonly UPLOAD_RESULT_CACHE_LIMIT = 200
     protected override BASIC_TEXT_LIMIT = 1000
 
     static resetUploadQueuesForTests() {
@@ -827,20 +833,23 @@ class BiliForwarder extends Forwarder {
                 }
                 try {
                     _log?.debug(`Uploading photo ${item.path}`)
-                    const obj = await pRetry(() => this.runQueuedPhotoUpload(() => this.uploadPhoto(item.path)), {
-                        retries: this.photoUploadRetries,
-                        minTimeout: this.photoUploadRetryMinTimeoutMs,
-                        factor: 2,
-                        shouldRetry(error) {
-                            if (error.originalError instanceof BiliUploadThrottledError) {
-                                return true
-                            }
-                            return !(error.originalError instanceof NonRetryableForwarderSendError)
+                    const obj = await pRetry(
+                        () => this.runQueuedPhotoUpload(() => this.uploadPhotoCached(item)),
+                        {
+                            retries: this.photoUploadRetries,
+                            minTimeout: this.photoUploadRetryMinTimeoutMs,
+                            factor: 2,
+                            shouldRetry(error) {
+                                if (error.originalError instanceof BiliUploadThrottledError) {
+                                    return true
+                                }
+                                return !(error.originalError instanceof NonRetryableForwarderSendError)
+                            },
+                            onFailedAttempt(e) {
+                                _log?.error(`Upload photo failed, retrying...: ${e.originalError.message}`)
+                            },
                         },
-                        onFailedAttempt(e) {
-                            _log?.error(`Upload photo failed, retrying...: ${e.originalError.message}`)
-                        },
-                    })
+                    )
                     uploadedPhotos.push(obj)
                 } catch (e) {
                     if (isBiliUploadThrottledError(e) && allowMissingSummaryMedia) {
@@ -993,6 +1002,35 @@ class BiliForwarder extends Forwarder {
         const { rawResponse, data } = await this.api.uploadPhoto(path)
         this.log?.debug(`Upload photo response: ${JSON.stringify(rawResponse.data)}`)
         return data as BiliUploadPhotoResponse
+    }
+
+    private async uploadPhotoCached(item: { path: string; content_hash?: string }): Promise<BiliUploadPhotoResponse> {
+        const identity = item.content_hash || this.fileIdentityFallback(item.path)
+        const cached = identity ? this.uploadResultCache.get(identity) : undefined
+        if (cached && cached.at > Date.now() - BiliForwarder.UPLOAD_RESULT_TTL_MS) {
+            this.log?.debug(`Reusing cached Bilibili upload result for ${identity}`)
+            return cached.uploaded
+        }
+        const uploaded = await this.uploadPhoto(item.path)
+        if (identity) {
+            this.uploadResultCache.set(identity, { at: Date.now(), uploaded })
+            if (this.uploadResultCache.size > BiliForwarder.UPLOAD_RESULT_CACHE_LIMIT) {
+                const oldest = Array.from(this.uploadResultCache.entries()).sort((a, b) => a[1].at - b[1].at)[0]
+                if (oldest) {
+                    this.uploadResultCache.delete(oldest[0])
+                }
+            }
+        }
+        return uploaded
+    }
+
+    private fileIdentityFallback(path: string) {
+        try {
+            const stat = fs.statSync(path)
+            return `size:${stat.size}:mtime:${stat.mtimeMs}`
+        } catch {
+            return null
+        }
     }
 
     private async sendText(text: string) {

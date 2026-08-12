@@ -293,7 +293,9 @@ test('enqueueMissingYouTubeLinksFromXArticle queues missing YouTube crawler run 
                 action_type: 'x_youtube_link_ingest',
             },
         })
-        expect(adds[0].payload.websites).toBeUndefined()
+        // The dispatched task must carry the linked video, otherwise the crawler
+        // falls back to its default channel list and never touches the target.
+        expect(adds[0].payload.websites).toEqual(['https://www.youtube.com/watch?v=PWUNnCNTOLk'])
         expect(adds[0].meta.idempotency_key).toBeTruthy()
     } finally {
         ;(DB.Article as any).getByArticleCode = originalGetByArticleCode

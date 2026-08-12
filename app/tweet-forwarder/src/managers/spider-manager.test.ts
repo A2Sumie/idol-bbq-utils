@@ -1526,18 +1526,33 @@ test('SpiderPools passes a working articleStateLookup to Website crawls (duplica
             },
         })
 
-        await (pools as any).onTaskReceived({
-            taskId: 'manual-website-state',
-            task: {
-                id: 'manual-website-state',
-                status: TaskScheduler.TaskStatus.PENDING,
-                data: {
-                    name: 'crawler-website-state',
-                    websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/news/list'],
-                    cfg_crawler: { engine: 'unit-test' as any },
+        await (pools as any).crawlArticle(
+            {
+                taskId: 'manual-website-state',
+                log: undefined,
+                task: {
+                    id: 'manual-website-state',
+                    status: TaskScheduler.TaskStatus.PENDING,
+                    data: {
+                        name: 'crawler-website-state',
+                        websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/news/list'],
+                        cfg_crawler: { engine: 'unit-test' as any },
+                    },
                 },
             },
-        })
+            {
+                crawl: async (_url: string, _page: any, _taskId: string, config: any) => {
+                    capturedConfig = config
+                    return []
+                },
+            },
+            new URL('https://nanabunnonijyuuni-mobile.com/s/n110/news/list'),
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            Platform.Website,
+        )
 
         // The regression: articleStateLookup used to be overwritten by the YouTube
         // variant of the same object key and arrived as undefined for Website crawls.

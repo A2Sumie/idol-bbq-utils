@@ -407,11 +407,37 @@ async function stopRelay() {
 
 const lockPath = path.join(archiveRoot, `watch-${handle}.lock`)
 fs.mkdirSync(archiveRoot, { recursive: true })
-try {
-  const fd = fs.openSync(lockPath, 'wx')
-  fs.writeSync(fd, JSON.stringify({ pid: process.pid, handle, startedAt: new Date().toISOString() }))
-  fs.closeSync(fd)
-} catch {
+let lockAcquired = false
+for (let attempt = 0; attempt < 2 && !lockAcquired; attempt++) {
+  try {
+    const fd = fs.openSync(lockPath, 'wx')
+    fs.writeSync(fd, JSON.stringify({ pid: process.pid, handle, startedAt: new Date().toISOString() }))
+    fs.closeSync(fd)
+    lockAcquired = true
+  } catch {
+    // Reclaim stale locks via PID liveness (the monitor no longer rm -f's the
+    // lock, so a SIGKILLed watcher must not wedge the 15s self-heal loop).
+    let stale = true
+    try {
+      const prev = JSON.parse(fs.readFileSync(lockPath, 'utf8'))
+      if (prev?.pid) {
+        try {
+          process.kill(prev.pid, 0)
+          stale = false
+        } catch {
+          stale = true
+        }
+      }
+    } catch {
+      stale = true
+    }
+    if (stale) {
+      log(`removing stale lock ${lockPath}`)
+      try { fs.rmSync(lockPath, { force: true }) } catch {}
+    }
+  }
+}
+if (!lockAcquired) {
   log(`another watcher holds ${lockPath}; exiting`)
   process.exit(0)
 }

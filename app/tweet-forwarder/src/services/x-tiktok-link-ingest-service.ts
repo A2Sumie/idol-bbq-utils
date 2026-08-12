@@ -374,6 +374,9 @@ async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options:
         const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
         const payload = {
             crawler: crawlerName,
+            // Without `websites` the dispatched task crawls the crawler's default
+            // channel list and never touches the linked video.
+            websites: [resolved.watchUrl],
             reason: `x youtube link ${article.a_id || article.id || ''}`.trim().slice(0, 200),
         }
         const task = await DB.TaskQueue.add(taskType, payload, now, {

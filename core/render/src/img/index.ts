@@ -405,6 +405,7 @@ function resolveRasterScale(article: Article, height: number) {
 
 class ImgConverter {
     private fonts: Array<FontConfig>
+    private cachedFontOptions: Font[] | null = null
     constructor() {
         const fontsDir = process.env.FONTS_DIR || './assets/fonts'
         const fonts: FontConfig[] = JSON.parse(fs.readFileSync(`${fontsDir}/fonts.json`, 'utf-8'))
@@ -456,6 +457,20 @@ class ImgConverter {
         }).filter(Boolean) as Font[]
     }
 
+    /**
+     * Every render used to re-read and re-parse the full bundled font set plus
+     * the system fallback fonts (tens of MB per card in the container image).
+     * satori treats Font.data as read-only, so the same buffers can be shared
+     * across renders; cache them on the converter instance.
+     */
+    private getFontOptions(): Font[] {
+        if (this.cachedFontOptions) {
+            return this.cachedFontOptions
+        }
+        this.cachedFontOptions = [...this.loadBundledFonts(), ...this.loadSystemFallbackFonts()]
+        return this.cachedFontOptions
+    }
+
     public async articleToImg(
         article: Article,
         template?: string | { templateName?: string; features?: Array<string> },
@@ -463,7 +478,7 @@ class ImgConverter {
         const templateName = typeof template === 'string' ? template : template?.templateName
         const parser = TemplateRegistry.getInstance().getOrDefault(templateName)
         const { height, component: Card } = parser(article, typeof template === 'string' ? undefined : template)
-        const fontsOptions: Font[] = [...this.loadBundledFonts(), ...this.loadSystemFallbackFonts()]
+        const fontsOptions: Font[] = this.getFontOptions()
         const svg = await satori(Card, {
             width: CARD_WIDTH,
             height: height,

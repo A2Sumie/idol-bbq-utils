@@ -29,6 +29,8 @@ model twitter_article {
 
   @@unique([a_id], map: "sqlite_autoindex_twitter_article_2")
   @@index([created_at(sort: Desc)], map: "twitter_by_timestamp")
+  @@index([u_id, created_at(sort: Desc)], map: "twitter_by_uid_ts")
+  @@index([url], map: "twitter_by_url")
 }
 
 model instagram_article {
@@ -52,6 +54,8 @@ model instagram_article {
 
   @@unique([a_id], map: "sqlite_autoindex_instagram_article_2")
   @@index([created_at(sort: Desc)], map: "instagram_by_timestamp")
+  @@index([u_id, created_at(sort: Desc)], map: "instagram_by_uid_ts")
+  @@index([url], map: "instagram_by_url")
 }
 
 model tiktok_article {
@@ -75,6 +79,8 @@ model tiktok_article {
 
   @@unique([a_id], map: "sqlite_autoindex_tiktok_article_2")
   @@index([created_at(sort: Desc)], map: "tiktok_by_timestamp")
+  @@index([u_id, created_at(sort: Desc)], map: "tiktok_by_uid_ts")
+  @@index([url], map: "tiktok_by_url")
 }
 
 model youtube_article {
@@ -98,6 +104,8 @@ model youtube_article {
 
   @@unique([a_id], map: "sqlite_autoindex_youtube_article_2")
   @@index([created_at(sort: Desc)], map: "youtube_by_timestamp")
+  @@index([u_id, created_at(sort: Desc)], map: "youtube_by_uid_ts")
+  @@index([url], map: "youtube_by_url")
 }
 
 model website_article {
@@ -121,6 +129,8 @@ model website_article {
 
   @@unique([a_id], map: "sqlite_autoindex_website_article_2")
   @@index([created_at(sort: Desc)], map: "website_by_timestamp")
+  @@index([u_id, created_at(sort: Desc)], map: "website_by_uid_ts")
+  @@index([url], map: "website_by_url")
 }
 
 model task_queue {
@@ -140,6 +150,8 @@ model task_queue {
   
   @@index([status, execute_at])
   @@unique([type, idempotency_key])
+  @@index([type, status, execute_at])
+  @@index([status, updated_at])
 }
 
 model processor_runs {

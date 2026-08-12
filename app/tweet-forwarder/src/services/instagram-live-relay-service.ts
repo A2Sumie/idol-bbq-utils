@@ -588,6 +588,20 @@ class InstagramLiveRelayService {
         this.cacheDir = path.join(cacheRoot, 'instagram-live')
         this.log = log?.child({ label: 'InstagramLiveRelayService' })
         ensureDirectoryExists(this.cacheDir)
+        // ffmpeg children do not cascade-exit with the parent: register an exit
+        // hook so a forwarder restart/reload never leaves orphan recorders
+        // writing to disk indefinitely.
+        process.once('exit', () => {
+            for (const session of this.recordingSessions.values()) {
+                try {
+                    if (!session.process.killed) {
+                        session.process.kill('SIGINT')
+                    }
+                } catch {
+                    // best effort
+                }
+            }
+        })
     }
 
     async syncProfile(options: SyncInstagramLiveOptions) {
@@ -994,15 +1008,49 @@ class InstagramLiveRelayService {
         })
         child.stdout.on('data', (chunk) => {
             const text = chunk.toString()
+            // Keep the in-memory buffer bounded: only the tail matters for
+            // diagnostics, the full stream is already appended to the log file.
             session.stdout.push(text)
+            if (session.stdout.length > 256) {
+                session.stdout.splice(0, session.stdout.length - 256)
+            }
             fs.appendFileSync(session.stdoutLogPath, text, 'utf8')
         })
         child.stderr.on('data', (chunk) => {
             const text = chunk.toString()
             session.stderr.push(text)
+            if (session.stderr.length > 256) {
+                session.stderr.splice(0, session.stderr.length - 256)
+            }
             fs.appendFileSync(session.stderrLogPath, text, 'utf8')
         })
+        // A silent input (dead stream url) would otherwise hang until the -t
+        // limit while recording nothing; kill the segment early and let the
+        // next sync round re-evaluate the stream.
+        const firstByteWatchdogMs = archiveConfig.first_byte_timeout_seconds
+            ? archiveConfig.first_byte_timeout_seconds * 1000
+            : 30 * 1000
+        const watchdog = setInterval(() => {
+            let bytes = 0
+            try {
+                bytes = fs.statSync(paths.mediaPath).size
+            } catch {
+                return
+            }
+            if (bytes > 0) {
+                clearInterval(watchdog)
+                return
+            }
+            if (Date.now() - Date.parse(startedAt) >= firstByteWatchdogMs) {
+                clearInterval(watchdog)
+                options.log?.warn(
+                    `Instagram live archive produced no data within ${firstByteWatchdogMs}ms for ${options.handle}; stopping recorder`,
+                )
+                child.kill('SIGINT')
+            }
+        }, 10_000)
         child.on('close', () => {
+            clearInterval(watchdog)
             this.finalizeRecordingSession(key, session, options.log).catch((error) => {
                 options.log?.warn(`Instagram live archive finalize failed for ${options.handle}: ${error}`)
             })

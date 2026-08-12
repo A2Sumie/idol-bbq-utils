@@ -94,7 +94,7 @@ namespace DB {
         }
 
         export async function trySave(article: Article): Promise<DBArticle | undefined> {
-            let exist_one = await checkExist(article)
+            const exist_one = await checkExist(article)
             if (exist_one) {
                 return
             }
@@ -102,10 +102,6 @@ namespace DB {
         }
 
         export async function save(article: Article): Promise<DBArticle> {
-            let exist_one = await checkExist(article)
-            if (exist_one) {
-                return exist_one
-            }
             let ref: number | undefined = undefined
             // 递归注意
             if (article.ref) {
@@ -125,15 +121,27 @@ namespace DB {
             // It does NOT have 'platform' column.
             const { platform, ...rest } = article
 
-            const res = await delegate.create({
-                data: {
-                    ...rest,
-                    ref: ref,
-                    extra: article.extra ? (article.extra as unknown as Prisma.JsonObject) : Prisma.JsonNull,
-                    media: (article.media as unknown as Prisma.JsonArray) ?? Prisma.JsonNull,
-                },
-            })
-            return res
+            try {
+                return await delegate.create({
+                    data: {
+                        ...rest,
+                        ref: ref,
+                        extra: article.extra ? (article.extra as unknown as Prisma.JsonObject) : Prisma.JsonNull,
+                        media: (article.media as unknown as Prisma.JsonArray) ?? Prisma.JsonNull,
+                    },
+                })
+            } catch (error) {
+                // a_id is unique: a concurrent save of the same article surfaces as
+                // P2002. Return the winning row instead of the old double-checkExist
+                // (which cost one extra query on every successful save).
+                if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                    const existing = await delegate.findUnique({ where: { a_id: article.a_id } })
+                    if (existing) {
+                        return existing
+                    }
+                }
+                throw error
+            }
         }
 
         export async function get(id: number, platform: Platform) {
@@ -228,7 +236,9 @@ namespace DB {
                               extra: (extra as unknown as Prisma.JsonObject) ?? Prisma.JsonNull,
                           }
                         : {}),
-                    ...(ref === null ? { ref: null } : {}),
+                    // Previously only `ref: null` was applied; a numeric ref patch was
+                    // silently dropped. Support both clearing and setting.
+                    ...(ref !== undefined ? { ref: ref === null ? null : ref } : {}),
                 },
             })
         }

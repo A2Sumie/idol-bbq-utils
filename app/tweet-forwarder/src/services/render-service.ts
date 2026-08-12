@@ -21,7 +21,7 @@ import {
     ImgConverter,
     type ArticleTextOptions,
 } from '@idol-bbq-utils/render'
-import { existsSync, readFileSync, unlinkSync } from 'fs'
+import { existsSync, readFileSync, statSync, unlinkSync } from 'fs'
 import path from 'path'
 import { cloneDeep } from 'lodash'
 import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spider/const'
@@ -140,6 +140,7 @@ export class RenderService {
     // Permanent (4xx) download failures, cached so repeated cycles do not re-hit
     // the same dead URL. 5xx/network errors are transient and never cached.
     private mediaDownloadFailureCache = new Map<string, number>()
+    private mediaReadCache = new Map<string, { mtimeMs: number; entry: { dataUrl: string; dimensions: { width: number; height: number } | null } }>()
     private static readonly MEDIA_FAILURE_CACHE_MS = 30 * 60 * 1000
     private static readonly MEDIA_FAILURE_CACHE_LIMIT = 1000
 
@@ -778,12 +779,11 @@ export class RenderService {
 
     private mediaFileToDataUrl(filePath: string) {
         try {
-            // Transcode formats satori cannot load (e.g. WebP-in-.jpg thumbnails) before inlining;
-            // the extension alone is not a reliable content indicator.
-            const compatiblePath = ensureSatoriCompatibleImage(filePath, this.log)
-            const ext = path.extname(compatiblePath).slice(1).toLowerCase()
-            const mime = extToMime[ext as keyof typeof extToMime] || 'image/png'
-            return `data:${mime};base64,${readFileSync(compatiblePath).toString('base64')}`
+            const entry = this.readMediaFileOnce(filePath)
+            if (!entry) {
+                return null
+            }
+            return entry.dataUrl
         } catch (e) {
             this.log?.warn(`Failed to inline media for rendered card ${filePath}: ${e}`)
             return null
@@ -792,11 +792,47 @@ export class RenderService {
 
     private mediaFileDimensions(filePath: string): { width: number; height: number } | null {
         try {
-            const buffer = readFileSync(ensureSatoriCompatibleImage(filePath, this.log))
-            return this.parsePngDimensions(buffer) || this.parseJpegDimensions(buffer)
+            return this.readMediaFileOnce(filePath)?.dimensions ?? null
         } catch {
             return null
         }
+    }
+
+    /**
+     * One stat + one read per path: the media store files are content-addressed
+     * and immutable, so dataUrl + dimensions can share the same buffer and be
+     * cached across renders (summary-card flush previously read and base64-
+     * encoded every embedded image twice per variant).
+     */
+    private readMediaFileOnce(filePath: string): { dataUrl: string; dimensions: { width: number; height: number } | null } | null {
+        let mtimeMs: number
+        try {
+            mtimeMs = statSync(filePath).mtimeMs
+        } catch {
+            return null
+        }
+        const cached = this.mediaReadCache.get(filePath)
+        if (cached && cached.mtimeMs === mtimeMs) {
+            return cached.entry
+        }
+        // Transcode formats satori cannot load (e.g. WebP-in-.jpg thumbnails) before inlining;
+        // the extension alone is not a reliable content indicator.
+        const compatiblePath = ensureSatoriCompatibleImage(filePath, this.log)
+        const buffer = readFileSync(compatiblePath)
+        const ext = path.extname(compatiblePath).slice(1).toLowerCase()
+        const mime = extToMime[ext as keyof typeof extToMime] || 'image/png'
+        const entry = {
+            dataUrl: `data:${mime};base64,${buffer.toString('base64')}`,
+            dimensions: this.parsePngDimensions(buffer) || this.parseJpegDimensions(buffer),
+        }
+        this.mediaReadCache.set(filePath, { mtimeMs, entry })
+        if (this.mediaReadCache.size > 256) {
+            const oldest = Array.from(this.mediaReadCache.entries()).sort((a, b) => a[1].mtimeMs - b[1].mtimeMs)[0]
+            if (oldest) {
+                this.mediaReadCache.delete(oldest[0])
+            }
+        }
+        return entry
     }
 
     private parsePngDimensions(buffer: Buffer): { width: number; height: number } | null {
