@@ -357,6 +357,7 @@ class LeapProjectsSpider extends BaseSpider {
                 max?: number
             }
             block_resource_types?: Array<string>
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
         },
     ): Promise<TaskTypeResult<T, Platform.Website>> {
         if (config.task_type !== 'article') {
@@ -387,22 +388,34 @@ class LeapProjectsSpider extends BaseSpider {
             1,
             Math.min(20, Math.floor(Number(config.max_detail_count) || 20)),
         )
-        const list = await extractLeapList(page, listUrl, feedConfig.tab)
+        // The news and schedule crawlers load the same list page (different hash);
+        // cache the extracted list for a few minutes so the second crawler does not
+        // pay a duplicate navigation for the identical document.
+        const listCacheKey = `leap_list:${listUrl}:${feedConfig.tab}`
+        const cachedList = this.cache.get(listCacheKey) as LeapListPageResult | null
+        const list = cachedList || (await extractLeapList(page, listUrl, feedConfig.tab))
+        if (!cachedList) {
+            this.cache.set(listCacheKey, list, 300)
+        }
         const articles: Array<GenericArticle<Platform.Website>> = []
         for (const item of list.items.slice(0, maxDetailCount)) {
+            const articleId = tryParseLeapUrl(item.detailUrl)?.pathname.split('/').filter(Boolean).pop() || ''
+            if (articleId && config.isArticleKnown) {
+                try {
+                    if (await config.isArticleKnown(articleId)) {
+                        continue
+                    }
+                } catch {
+                    // fall through to a full re-fetch on lookup error
+                }
+            }
             try {
                 const detail = await extractLeapDetail(page, item.detailUrl)
                 articles.push(buildLeapArticle(feedConfig, item.detailUrl, item, detail))
             } catch (error) {
-                this.log?.warn?.(`LEAP! detail crawl failed for ${item.detailUrl}: ${error}`)
-                articles.push(buildLeapArticle(feedConfig, item.detailUrl, item, {
-                    title: item.title,
-                    dateText: item.dateText,
-                    category: item.category,
-                    bodyText: '',
-                    bodyHtml: '',
-                    media: [],
-                }))
+                // Never persist a title-only shell: a stored empty article would be
+                // treated as known forever and its real body would never be fetched.
+                this.log?.warn?.(`LEAP! detail crawl failed for ${item.detailUrl}, skipping this round: ${error}`)
             }
         }
         return articles as TaskTypeResult<T, Platform.Website>

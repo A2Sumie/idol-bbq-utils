@@ -406,17 +406,39 @@ namespace TiktokApiJsonParser {
         cache?: SimpleExpiringCache,
     ): Promise<Array<GenericArticle<Platform.TikTok>>> {
         const handle = url.match(/\/\@([^/?]+)/)?.[1] || ''
-        const secUidKey = `secuid:${handle.toLowerCase()}`
+        const handleKey = handle.toLowerCase()
+        const secUidKey = `secuid:${handleKey}`
+        const rejectedKey = `creator_api_rejected:${handleKey}`
+        const hydrationKey = `hydration_missing:${handleKey}`
         const cachedSecUid = cache?.get(secUidKey)
+        const apiRejectedRecently = Boolean(cache?.get(rejectedKey))
+        const hydrationMissingRecently = Boolean(cache?.get(hydrationKey))
 
-        // API-first: with a cached secUid the whole crawl is a single unsigned API
-        // request (mirrors yt-dlp's tiktok extractor); the heavy browser navigation
-        // is reserved for secUid resolution and API-rejection fallback.
-        if (cachedSecUid) {
+        // Recent hydration failures with a cached secUid: one API attempt, then fast
+        // fail. Re-navigating + re-polling the same broken page (up to ~27s of
+        // backoff) and re-running the whole round via the manager retry multiplies
+        // the waste without changing the outcome.
+        if (hydrationMissingRecently && cachedSecUid) {
             const api = await callCreatorApi(String(cachedSecUid), url, device_id, random_hex7, cookieString)
             if (api.ok) {
                 return api.posts
             }
+            throw api.error || new Error('TikTok creator API rejected')
+        }
+
+        let rejectedSecUid: string | null = null
+        let lastApiError: unknown = null
+        // API-first: with a cached secUid the whole crawl is a single unsigned API
+        // request (mirrors yt-dlp's tiktok extractor); the heavy browser navigation
+        // is reserved for secUid resolution and API-rejection fallback. A recent
+        // rejection skips the doomed first call entirely.
+        if (cachedSecUid && !apiRejectedRecently) {
+            const api = await callCreatorApi(String(cachedSecUid), url, device_id, random_hex7, cookieString)
+            if (api.ok) {
+                return api.posts
+            }
+            rejectedSecUid = String(cachedSecUid)
+            lastApiError = api.error
         }
 
         let browserPosts: Array<GenericArticle<Platform.TikTok>> = []
@@ -479,6 +501,9 @@ namespace TiktokApiJsonParser {
                 if (browserPosts.length > 0) {
                     return browserPosts
                 }
+                if (/hydration missing/i.test(error instanceof Error ? error.message : String(error)) && cache) {
+                    cache.set(hydrationKey, true, 10 * 60)
+                }
                 throw error
             }
         }
@@ -497,12 +522,25 @@ namespace TiktokApiJsonParser {
         if (!secUid) {
             return pagePosts
         }
-        const api = await callCreatorApi(String(secUid), url, device_id, random_hex7, cookieString)
-        if (api.ok) {
-            return mergePostsById(pagePosts, api.posts)
+        // Skip the second API call when this round already rejected the same
+        // secUid: the unsigned API does not change its answer within one round.
+        if (secUid !== rejectedSecUid) {
+            const api = await callCreatorApi(String(secUid), url, device_id, random_hex7, cookieString)
+            if (api.ok) {
+                return mergePostsById(pagePosts, api.posts)
+            }
+            lastApiError = api.error
         }
-        if (pagePosts.length === 0 && api.error) {
-            throw api.error
+        if (pagePosts.length === 0) {
+            if (lastApiError) {
+                throw lastApiError
+            }
+            throw new Error('TikTok creator API rejected (cached rejection), no browser posts available')
+        }
+        // The browser fallback produced posts: remember the rejection briefly so
+        // upcoming rounds skip the doomed first call instead of paying it again.
+        if (cache) {
+            cache.set(rejectedKey, true, 15 * 60)
         }
         return pagePosts
     }

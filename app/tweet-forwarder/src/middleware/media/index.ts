@@ -184,6 +184,9 @@ function buildYtDlpArgs(
     if (yt_dlp.retry_sleep) {
         args.push('--retry-sleep', yt_dlp.retry_sleep)
     }
+    // Default retry budget so a single transient failure does not fail the whole
+    // article download (callers have no retry of their own).
+    args.push('--retries', '3', '--fragment-retries', '3', '--extractor-retries', '2')
     args.push('-f', yt_dlp.format || DEFAULT_YT_DLP_FORMAT, url)
     return args
 }
@@ -207,6 +210,9 @@ function ytDlpDownloadMediaFile(
     try {
         const res = execFileSync(exec_path, args, {
             encoding: 'utf-8',
+            // A hung yt-dlp process must not block the article pipeline forever.
+            timeout: 180_000,
+            killSignal: 'SIGKILL',
         })
             .split('\n')
             .map((line) => line.trim())
@@ -215,8 +221,9 @@ function ytDlpDownloadMediaFile(
         return res
     } catch (e: any) {
         const stderr = e?.stderr?.toString?.() || e?.message || String(e)
-        log.error(`download media files failed via yt-dlp: ${stderr}`)
-        return []
+        const error = new Error(`download media files failed via yt-dlp: ${stderr}`)
+        log.error(error.message)
+        throw error
     }
 }
 

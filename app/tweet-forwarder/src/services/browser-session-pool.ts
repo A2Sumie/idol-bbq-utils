@@ -36,6 +36,10 @@ interface BrowserRuntimeSession {
  */
 const CREATE_PAGE_MAX_ATTEMPTS = 2
 const BROWSER_CLOSE_TIMEOUT_MS = 5_000
+// After an eviction the same profile must not cold-start again immediately: a
+// crash loop (OOM kill -> relaunch -> kill) is throttled with a short backoff
+// so callers queue on the pending launch instead of stacking relaunches.
+const EVICTION_BACKOFF_MS = 30_000
 
 function sanitizeSessionId(value?: string) {
     return (value || 'default').replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'default'
@@ -49,6 +53,7 @@ export class BrowserSessionPool {
     // the losers of the Map.set() race — that leak stacked dozens of Chrome instances
     // per profile and drove the host into OOM.
     private readonly pendingLaunches = new Map<string, Promise<BrowserRuntimeSession>>()
+    private readonly evictionBackoff = new Map<string, number>()
     private readonly browserRoot: string
     private readonly log?: Logger
     private closing = false
@@ -154,6 +159,14 @@ export class BrowserSessionPool {
             return replacement
         }
 
+        // Throttle relaunches after an eviction so a crash loop cannot cold-start
+        // Chrome back-to-back and hammer the host (the launch still happens, just
+        // not immediately after the previous one died).
+        const backoffUntil = this.evictionBackoff.get(sessionKey)
+        if (backoffUntil && backoffUntil > Date.now() && process.env.NODE_ENV !== 'test') {
+            await new Promise((resolve) => setTimeout(resolve, Math.min(backoffUntil - Date.now(), EVICTION_BACKOFF_MS)))
+        }
+
         const launchPromise = this.launchSession(sessionKey, sessionId, browserMode, profile).finally(() => {
             if (this.pendingLaunches.get(sessionKey) === launchPromise) {
                 this.pendingLaunches.delete(sessionKey)
@@ -184,6 +197,7 @@ export class BrowserSessionPool {
         browser.once('disconnected', () => {
             if (this.sessions.get(sessionKey) === runtimeSession) {
                 this.sessions.delete(sessionKey)
+                this.evictionBackoff.set(sessionKey, Date.now() + EVICTION_BACKOFF_MS)
                 this.log?.warn(`Browser session ${sessionId} (${browserMode}) disconnected; evicted from pool`)
                 void this.closeBrowser(runtimeSession, `disconnect:${sessionId}`)
             }
@@ -210,6 +224,7 @@ export class BrowserSessionPool {
     private async evictSession(sessionKey: string, session: BrowserRuntimeSession) {
         if (this.sessions.get(sessionKey) === session) {
             this.sessions.delete(sessionKey)
+            this.evictionBackoff.set(sessionKey, Date.now() + EVICTION_BACKOFF_MS)
         }
         await this.closeBrowser(session, `evict:${session.sessionId}`)
     }

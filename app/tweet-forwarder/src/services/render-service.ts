@@ -137,6 +137,39 @@ function formatPlatformTag(
 export class RenderService {
     private log?: Logger
     private ArticleConverter = new ImgConverter()
+    // Permanent (4xx) download failures, cached so repeated cycles do not re-hit
+    // the same dead URL. 5xx/network errors are transient and never cached.
+    private mediaDownloadFailureCache = new Map<string, number>()
+    private static readonly MEDIA_FAILURE_CACHE_MS = 30 * 60 * 1000
+    private static readonly MEDIA_FAILURE_CACHE_LIMIT = 1000
+
+    private isMediaDownloadCachedFailed(url: string): boolean {
+        const until = this.mediaDownloadFailureCache.get(url)
+        if (!until) {
+            return false
+        }
+        if (until <= Date.now()) {
+            this.mediaDownloadFailureCache.delete(url)
+            return false
+        }
+        return true
+    }
+
+    private cacheMediaDownloadFailure(url: string, error: unknown) {
+        const message = error instanceof Error ? error.message : String(error)
+        const statusMatch = message.match(/(\d{3})/)
+        const status = statusMatch ? Number(statusMatch[1]) : 0
+        if (status < 400 || status >= 500) {
+            return
+        }
+        this.mediaDownloadFailureCache.set(url, Date.now() + RenderService.MEDIA_FAILURE_CACHE_MS)
+        if (this.mediaDownloadFailureCache.size > RenderService.MEDIA_FAILURE_CACHE_LIMIT) {
+            const oldest = Array.from(this.mediaDownloadFailureCache.entries()).sort((a, b) => a[1] - b[1])[0]
+            if (oldest) {
+                this.mediaDownloadFailureCache.delete(oldest[0])
+            }
+        }
+    }
 
     constructor(log?: Logger) {
         this.log = log?.child({ subservice: 'RenderService' })
@@ -167,12 +200,17 @@ export class RenderService {
         }))
         let card_media_files: Array<RenderedMediaFile> = []
         let skipReason: string | undefined
+        // URLs whose download failed this cycle: their remote media must never reach
+        // satori (it would fetch the dead URL and fail the whole render). Dropped
+        // before the first render so the strip-and-retry pass is not needed.
+        let failedRemoteMediaUrls = new Set<string>()
 
         // 1. Download/Handle Media Files
         if (mediaConfig) {
             const mediaResult = await this.handleMedia(taskId, cloned_article, mediaConfig, effectiveDeduplication)
             maybe_media_files = [...maybe_media_files, ...(Array.isArray(mediaResult?.files) ? mediaResult.files : [])]
             skipReason = mediaResult?.skipReason
+            failedRemoteMediaUrls = new Set(mediaResult?.failedUrls || [])
         }
 
         let text = ''
@@ -215,10 +253,19 @@ export class RenderService {
         const generateRenderedImage = async () => {
             // Normalize before hydrate: a malformed media field must not crash the hydrate pass, which runs
             // outside any render-failure retry.
-            const hydratedArticle = this.hydrateArticleMediaForCard(
+            let hydratedArticle = this.hydrateArticleMediaForCard(
                 sanitizeArticleForRender(article),
                 maybe_media_files,
             )
+            if (failedRemoteMediaUrls.size > 0) {
+                const dropped = this.dropFailedRemoteMediaForRender(hydratedArticle, failedRemoteMediaUrls)
+                if (dropped.removed > 0) {
+                    this.log?.debug(
+                        `Dropped ${dropped.removed} failed-download media item(s) before render for ${article.platform}:${article.a_id}`,
+                    )
+                    hydratedArticle = dropped.article
+                }
+            }
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
                 const imgBuffer = await renderArticleImage(hydratedArticle)
@@ -490,6 +537,54 @@ export class RenderService {
 
     private isRemoteCardMediaUrl(value: unknown) {
         return typeof value === 'string' && /^https?:\/\//i.test(value)
+    }
+
+    /**
+     * Removes only the media items whose URL failed to download this cycle. Done
+     * before the first render so satori never fetches the dead remote URLs (a
+     * remote fetch failure surfaces as "Image size cannot be determined" and used
+     * to force a strip-and-re-render pass).
+     */
+    private dropFailedRemoteMediaForRender(article: Article, failedUrls: Set<string>) {
+        const cloned = cloneDeep(article)
+        let removed = 0
+        const filterList = (media: unknown) => {
+            if (!Array.isArray(media)) {
+                return media
+            }
+            return media.filter((mediaItem) => {
+                if (
+                    mediaItem &&
+                    typeof mediaItem === 'object' &&
+                    ((mediaItem as any).type === 'photo' || (mediaItem as any).type === 'video_thumbnail') &&
+                    failedUrls.has((mediaItem as any).url)
+                ) {
+                    removed += 1
+                    return false
+                }
+                return true
+            })
+        }
+        const walk = (value: unknown) => {
+            if (!value || typeof value !== 'object') {
+                return
+            }
+            if (Array.isArray(value)) {
+                value.forEach((item) => walk(item))
+                return
+            }
+            const record = value as Record<string, unknown>
+            if (Array.isArray(record.media)) {
+                record.media = filterList(record.media)
+            }
+            for (const key of ['items', 'groups', 'ref', 'extra', 'data']) {
+                if (key in record && record[key] && typeof record[key] === 'object') {
+                    walk(record[key])
+                }
+            }
+        }
+        walk(cloned)
+        return { article: cloned, removed }
     }
 
     private stripRemoteCardMediaForRender(article: Article) {
@@ -991,6 +1086,7 @@ export class RenderService {
     ): Promise<{
         files: Array<RenderedMediaFile>
         skipReason?: string
+        failedUrls: Array<string>
     }> {
         let maybe_media_files = [] as Array<RenderedMediaFile>
         let currentArticle: Article | null = article
@@ -1000,6 +1096,7 @@ export class RenderService {
         let rootDuplicateMediaCount = 0
         let rootDuplicateMediaReason: string | undefined
         let articleDepth = 0
+        const failedUrls = new Set<string>()
         const isRootNewTweet =
             article.platform === Platform.X &&
             String(article.type || '').trim().toLocaleLowerCase() === 'tweet'
@@ -1011,8 +1108,11 @@ export class RenderService {
             let new_files = [] as Array<RenderedMediaFile | undefined>
             if (currentArticle.has_media) {
                 this.log?.debug(`Downloading media files for ${currentArticle.a_id}`)
+                const articleMediaUrls = (currentArticle.media || []).map((item) => item?.url).filter(Boolean)
+                const allMediaCachedFailed =
+                    articleMediaUrls.length > 0 && articleMediaUrls.every((url) => this.isMediaDownloadCachedFailed(url))
                 let cookie: string | undefined = undefined
-                if ([Platform.TikTok].includes(currentArticle.platform)) {
+                if ([Platform.TikTok].includes(currentArticle.platform) && !allMediaCachedFailed) {
                     cookie = await tryGetCookie(currentArticle.url)
                 }
 
@@ -1166,6 +1266,12 @@ export class RenderService {
                 ) => {
                     const files = [] as Array<RenderedMediaFile | undefined>
                     for (const [index, { url, type }] of mediaList.entries()) {
+                        if (this.isMediaDownloadCachedFailed(url)) {
+                            this.log?.debug(`Skipping cached-failed media download for ${url}`)
+                            failedUrls.add(url)
+                            files.push(undefined)
+                            continue
+                        }
                         try {
                             const path = await plainDownloadMediaFile(url, taskId, {
                                 cookie: cookie || '',
@@ -1176,6 +1282,8 @@ export class RenderService {
                             files.push(await finalizeDownloadedFile(path, url, overrideType ? undefined : type))
                         } catch (e) {
                             this.log?.error(`Error while downloading media file: ${e}, skipping ${url}`)
+                            failedUrls.add(url)
+                            this.cacheMediaDownloadFailure(url, e)
                             files.push(undefined)
                         }
 
@@ -1248,15 +1356,30 @@ export class RenderService {
                     // Only run it for articles that actually contain video media; image-only posts
                     // must not be duplicated by an extra yt-dlp pass.
                     if (shouldRunYtDlpForArticle(currentArticle)) {
-                        const videoPaths = await ytDlpDownloadMediaFile(
-                            currentArticle.url,
-                            media.use as MediaTool<MediaToolEnum.YT_DLP>,
-                            `${taskId}-${currentArticle.a_id}`,
-                        )
-                        const videoFiles = await Promise.all(
-                            videoPaths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
-                        )
-                        new_files = new_files.concat(videoFiles)
+                        const ytDlpCacheKey = `ytdlp:${currentArticle.url}`
+                        if (this.isMediaDownloadCachedFailed(ytDlpCacheKey)) {
+                            this.log?.debug(`Skipping cached-failed yt-dlp download for ${currentArticle.url}`)
+                        } else {
+                            try {
+                                const videoPaths = await ytDlpDownloadMediaFile(
+                                    currentArticle.url,
+                                    media.use as MediaTool<MediaToolEnum.YT_DLP>,
+                                    `${taskId}-${currentArticle.a_id}`,
+                                )
+                                const videoFiles = await Promise.all(
+                                    videoPaths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
+                                )
+                                new_files = new_files.concat(videoFiles)
+                            } catch (error) {
+                                const message = error instanceof Error ? error.message : String(error)
+                                if (/403|Forbidden|blocked|confirm your age|Sign in/i.test(message)) {
+                                    this.mediaDownloadFailureCache.set(
+                                        ytDlpCacheKey,
+                                        Date.now() + RenderService.MEDIA_FAILURE_CACHE_MS,
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     const uniqueExtraMedia = getUniqueExtraMedia()
@@ -1297,6 +1420,7 @@ export class RenderService {
         return {
             files: maybe_media_files,
             skipReason,
+            failedUrls: Array.from(failedUrls),
         }
     }
 }

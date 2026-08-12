@@ -22,10 +22,25 @@ test('buildYtDlpArgs includes cookies, output path, and custom format', () => {
         '/tmp/ytdlp/%(id)s.%(ext)s',
         '--cookies',
         '/app/assets/cookies/ycookies.txt',
+        '--retries',
+        '3',
+        '--fragment-retries',
+        '3',
+        '--extractor-retries',
+        '2',
         '-f',
         'best[ext=mp4]',
         'https://www.youtube.com/watch?v=bBRUMp_WNUU',
     ])
+})
+
+test('buildYtDlpArgs always includes the default transient retry budget', () => {
+    const args = buildYtDlpArgs('https://www.youtube.com/watch?v=bBRUMp_WNUU', {}, '/tmp/ytdlp/%(id)s.%(ext)s')
+
+    expect(args).toContain('--retries')
+    expect(args[args.indexOf('--retries') + 1]).toBe('3')
+    expect(args).toContain('--fragment-retries')
+    expect(args).toContain('--extractor-retries')
 })
 
 test('buildYtDlpArgs falls back to the default mp4-first format', () => {

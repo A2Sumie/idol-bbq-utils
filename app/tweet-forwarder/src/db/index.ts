@@ -153,6 +153,20 @@ namespace DB {
             })
         }
 
+        export async function getLatestByArticleCodePrefix(prefix: string, platform: Platform) {
+            const delegate = getDelegate(platform)
+            return await delegate.findFirst({
+                where: {
+                    a_id: {
+                        startsWith: prefix,
+                    },
+                },
+                orderBy: {
+                    created_at: 'desc',
+                },
+            })
+        }
+
         export async function findByUrl(url: string): Promise<ArticleWithId | undefined> {
             const trimmed = String(url || '').trim()
             if (!trimmed) {

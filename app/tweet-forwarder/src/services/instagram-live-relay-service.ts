@@ -629,14 +629,19 @@ class InstagramLiveRelayService {
                     nextCache.archive = finishedArchive
                 }
 
-                const postLivePackage = await this.refreshPostLivePackage(previousCache, relayConfig, scopedLog)
+                // Only pay the manifest re-fetches when a post-live relay sync is
+                // actually due; otherwise the package is unchanged and re-analyzing
+                // manifests every round (up to 24 rounds in the grace window) is
+                // pure upstream traffic.
+                const shouldSyncPostLive =
+                    !previousCache?.relay?.active
+                    || !previousCache?.syncedAt
+                    || Date.now() - new Date(previousCache.syncedAt).getTime() >= relayConfig.sync_interval_seconds * 1000
+                const postLivePackage = shouldSyncPostLive
+                    ? await this.refreshPostLivePackage(previousCache, relayConfig, scopedLog)
+                    : previousCache?.package || null
                 if (postLivePackage) {
                     nextCache.package = postLivePackage
-
-                    const shouldSyncPostLive =
-                        !previousCache?.relay?.active
-                        || !previousCache?.syncedAt
-                        || Date.now() - new Date(previousCache.syncedAt).getTime() >= relayConfig.sync_interval_seconds * 1000
 
                     if (shouldSyncPostLive && relayConfig.relay_enabled) {
                         const relayResponse = await this.syncRelay(relayConfig, postLivePackage, {

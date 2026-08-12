@@ -1491,16 +1491,16 @@ test('SpiderPools escalates repeat cooldowns for the same target', async () => {
     }
 
     ;(pools as any).setCooldownForError(context, 'timeout', 'first timeout')
-    const first = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome')
+    const first = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome:some_profile')
     expect(first.expiresAt - Date.now()).toBeGreaterThan(0)
 
     const firstDuration = first.expiresAt
     ;(pools as any).setCooldownForError(context, 'timeout', 'second timeout')
-    const second = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome')
+    const second = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome:some_profile')
     expect(second.expiresAt).toBeGreaterThan(firstDuration)
 
     ;(pools as any).setCooldownForError(context, 'timeout', 'third timeout')
-    const third = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome')
+    const third = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome:some_profile')
     expect(third.expiresAt).toBeGreaterThan(second.expiresAt)
     expect(third.expiresAt - Date.now()).toBeLessThanOrEqual(6 * 60 * 60 * 1000)
 })

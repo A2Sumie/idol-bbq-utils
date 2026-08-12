@@ -19,6 +19,18 @@ type FeedKind =
     | 'live-report'
 
 const IMMUTABLE_DETAIL_FEEDS = new Set<FeedKind>(['fc-news', 'official-news', 'official-blog', 'live-report'])
+// Mutable feeds re-crawl detail pages by default; once the article is stored a
+// TTL-gated re-crawl keeps content changes (stream urls, ticket state) flowing
+// without paying a full detail pass for unchanged pages every round.
+const MUTABLE_DETAIL_TTL_S: Partial<Record<FeedKind, number>> = {
+    radio: 24 * 3600,
+    movie: 48 * 3600,
+    ticket: 12 * 3600,
+}
+// Published photo archives are append-only; skip re-crawling archived albums
+// whose stored rows are older than this TTL. The current collection (headline)
+// is never skipped because photos are appended to it continuously.
+const PHOTO_ARCHIVE_TTL_S = 72 * 3600
 
 export interface FeedConfig {
     feed: FeedKind
@@ -1591,7 +1603,13 @@ async function extractPhotoDetailArticles(
     config: FeedConfig,
     listItem: WebsiteListItem,
 ): Promise<Array<GenericArticle<Platform.Website>>> {
-    await page.goto(url, { waitUntil: 'domcontentloaded' })
+    // The photo current-collection item uses the gallery url as its detail url;
+    // when the list crawl just loaded that very page, reuse it instead of paying
+    // a second navigation for the same URL.
+    const alreadyOnPage = page.url().split('#')[0] === url
+    if (!alreadyOnPage) {
+        await page.goto(url, { waitUntil: 'domcontentloaded' })
+    }
     await page.waitForSelector('.photo-block, .photo-modal', { timeout: 15000 })
 
     const payload = await page.evaluate(() => {
@@ -1814,6 +1832,8 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             }
             block_resource_types?: Array<string>
             isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
+            articleStateLookup?: (a_id: string) => Promise<{ known: boolean; createdAt: number | null }>
+            articlePrefixStateLookup?: (prefix: string) => Promise<{ known: boolean; createdAt: number | null }>
         },
     ): Promise<TaskTypeResult<T, Platform.Website>> {
         if (config.task_type !== 'article') {
@@ -1844,16 +1864,29 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             return articles as TaskTypeResult<T, Platform.Website>
         }
 
-        const articles = await this.crawlFeed(page, feedConfig, url, effectiveCrawlOptions, config.isArticleKnown)
+        const articles = await this.crawlFeed(
+            page,
+            feedConfig,
+            url,
+            effectiveCrawlOptions,
+            config.isArticleKnown,
+            config.articleStateLookup,
+            config.articlePrefixStateLookup,
+        )
         return articles as TaskTypeResult<T, Platform.Website>
     }
 
+    // Mutable feeds re-crawl detail pages by default; once the article is stored a
+    // TTL-gated re-crawl keeps content changes (stream urls, ticket state) flowing
+    // without paying a full detail pass for unchanged pages every round.
     private async crawlFeed(
         page: Page,
         feedConfig: FeedConfig,
         url: string,
         options: ResolvedWebsiteCrawlOptions,
         isArticleKnown?: (a_id: string) => Promise<boolean> | boolean,
+        articleStateLookup?: (a_id: string) => Promise<{ known: boolean; createdAt: number | null }>,
+        articlePrefixStateLookup?: (prefix: string) => Promise<{ known: boolean; createdAt: number | null }>,
     ) {
         const discovered = new Map<string, WebsiteListItem>()
         let currentUrl: string | null = url
@@ -1870,32 +1903,81 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
                     discovered.set(detailKey, item)
                 }
             })
-            currentUrl = result.nextUrl || null
             pageCount += 1
-        }
-
-        const listItems = Array.from(discovered.values()).slice(0, options.maxDetailCount)
-        const articles: Array<GenericArticle<Platform.Website>> = []
-        this.log?.info(
-            `Website crawl budget feed=${feedConfig.feed} pages=${pageCount}/${options.maxListPages} details=${listItems.length}/${options.maxDetailCount} blocked=${options.blockResourceTypes.join(',') || 'none'}`,
-        )
-
-        const failedDetails = [] as Array<{ url: string; error: unknown }>
-        for (const [index, item] of listItems.entries()) {
-            if (index > 0) {
-                const waitTime = randomInterval(options.detailIntervalTime)
-                if (waitTime > 0) {
-                    await sleep(waitTime)
+            // The newest page already covers the detail budget; older pages are pure waste.
+            if (discovered.size >= options.maxDetailCount) {
+                break
+            }
+            // Immutable feeds are newest-first: when every item on this page is
+            // already stored, older pages cannot contain anything new either.
+            if (IMMUTABLE_DETAIL_FEEDS.has(feedConfig.feed) && isArticleKnown && result.items.length > 0) {
+                const states = await Promise.all(
+                    result.items.map((item) =>
+                        isArticleKnown(getDetailKey(feedConfig, item.detailUrl)).catch(() => false),
+                    ),
+                )
+                if (states.every(Boolean)) {
+                    break
                 }
             }
+            currentUrl = result.nextUrl || null
+        }
+
+        const articles: Array<GenericArticle<Platform.Website>> = []
+        const failedDetails = [] as Array<{ url: string; error: unknown }>
+        let detailBudgetUsed = 0
+        for (const item of discovered.values()) {
+            const detailKey = getDetailKey(feedConfig, item.detailUrl)
+            // Immutable feeds: known details are never re-crawled.
             if (IMMUTABLE_DETAIL_FEEDS.has(feedConfig.feed) && isArticleKnown) {
-                const detailKey = getDetailKey(feedConfig, item.detailUrl)
                 try {
                     if (await isArticleKnown(detailKey)) {
                         continue
                     }
                 } catch {
                     // fall through to a full re-fetch on lookup error
+                }
+            }
+            // Mutable feeds (radio/movie/ticket): TTL-gated re-crawl.
+            const mutableTtl = MUTABLE_DETAIL_TTL_S[feedConfig.feed]
+            if (mutableTtl != null && articleStateLookup) {
+                try {
+                    const state = await articleStateLookup(detailKey)
+                    if (
+                        state?.known &&
+                        typeof state.createdAt === 'number' &&
+                        Date.now() / 1000 - state.createdAt > mutableTtl
+                    ) {
+                        continue
+                    }
+                } catch {
+                    // fall through on lookup error
+                }
+            }
+            // Photo archives: prefix lookup + TTL; the current collection is
+            // always crawled (its detailUrl is the gallery url itself).
+            if (feedConfig.feed === 'photo' && item.detailUrl !== url && articlePrefixStateLookup) {
+                try {
+                    const parsed = new URL(item.detailUrl)
+                    const albumId = parsed.searchParams.get('ct')
+                    if (albumId) {
+                        const state = await articlePrefixStateLookup(`photo:album:${albumId}:`)
+                        if (
+                            state?.known &&
+                            typeof state.createdAt === 'number' &&
+                            Date.now() / 1000 - state.createdAt > PHOTO_ARCHIVE_TTL_S
+                        ) {
+                            continue
+                        }
+                    }
+                } catch {
+                    // fall through on lookup error
+                }
+            }
+            if (detailBudgetUsed > 0) {
+                const waitTime = randomInterval(options.detailIntervalTime)
+                if (waitTime > 0) {
+                    await sleep(waitTime)
                 }
             }
             try {
@@ -1915,7 +1997,15 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
                 failedDetails.push({ url: item.detailUrl, error })
                 this.log?.warn(`Website crawl partial: detail failed after retry ${formatSafeWebsiteUrl(item.detailUrl)}: ${websiteErrorMessage(error)}`)
             }
+            detailBudgetUsed += 1
+            if (detailBudgetUsed >= options.maxDetailCount) {
+                break
+            }
         }
+
+        this.log?.info(
+            `Website crawl budget feed=${feedConfig.feed} pages=${pageCount}/${options.maxListPages} details=${detailBudgetUsed}/${options.maxDetailCount} discovered=${discovered.size} blocked=${options.blockResourceTypes.join(',') || 'none'}`,
+        )
 
         if (articles.length === 0 && failedDetails.length > 0) {
             throw failedDetails[0].error

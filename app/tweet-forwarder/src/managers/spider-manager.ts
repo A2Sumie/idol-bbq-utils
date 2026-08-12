@@ -982,6 +982,7 @@ class SpiderPools extends BaseCompatibleModel {
     >()
     private seededBrowserSessions = new Set<string>()
     private warmedBrowserSessions = new Map<string, number>()
+    private cookieExportProbeCache = new Map<string, number>()
     private static readonly X_WARMUP_REFRESH_MS = 30 * 60 * 1000
     /**
      * BaseSpider._VALID_URL.source
@@ -1742,7 +1743,15 @@ class SpiderPools extends BaseCompatibleModel {
                 }
             }
 
-            if (options.visit !== false) {
+            // A session validated recently does not need a fresh visit + live probe
+            // on every maintenance run: reuse the persistent browser jar for the
+            // export and re-validate on a 30-minute TTL instead.
+            const probeCacheKey = `${browserRequest.session_profile || browserRequest.device_profile || 'default'}|${platformHint}`
+            const lastProbeOkAt = this.cookieExportProbeCache.get(probeCacheKey)
+            const skipVisitAndProbe =
+                typeof lastProbeOkAt === 'number' && Date.now() - lastProbeOkAt < 30 * 60 * 1000
+
+            if (options.visit !== false && !skipVisitAndProbe) {
                 await page
                     .goto(visitedUrl, {
                         waitUntil: 'domcontentloaded',
@@ -1795,7 +1804,7 @@ class SpiderPools extends BaseCompatibleModel {
                 diagnostic_codes: ['live_probe_not_requested'],
                 http_status: null,
             }
-            if (options.validateLiveProbe) {
+            if (options.validateLiveProbe && !skipVisitAndProbe) {
                 liveProbe = await probeCrawlerCookieLiveHealth(platformHint, filteredCookies, {
                     fetch: options.fetch,
                     timeoutMs: options.timeoutMs,
@@ -1824,6 +1833,15 @@ class SpiderPools extends BaseCompatibleModel {
                             },
                         },
                     )
+                }
+                if (liveProbe.status !== 'fail') {
+                    this.cookieExportProbeCache.set(probeCacheKey, Date.now())
+                }
+            } else if (skipVisitAndProbe) {
+                liveProbe = {
+                    status: 'skipped',
+                    diagnostic_codes: ['live_probe_recently_validated'],
+                    http_status: null,
                 }
             }
 
@@ -1889,11 +1907,21 @@ class SpiderPools extends BaseCompatibleModel {
     }
 
     private crawlCooldownKey(context: CrawlTargetContext) {
+        // Instagram cooldowns include the profile path so one failing handle does
+        // not cool the whole shared session (11 handles used to back off together
+        // after a single 45s timeout).
+        const targetScope =
+            context.platform === Platform.Instagram
+                ? context.url.pathname.split('/').filter(Boolean)[0] || 'root'
+                : ''
         return [
             context.platform,
             context.url.hostname,
             context.sessionProfile || context.deviceProfile || 'stateless',
-        ].join(':')
+            targetScope,
+        ]
+            .filter(Boolean)
+            .join(':')
     }
 
     private getActiveCooldown(context: CrawlTargetContext): CrawlRiskCooldown | null {
@@ -2194,6 +2222,29 @@ class SpiderPools extends BaseCompatibleModel {
                           isArticleKnown: platform
                               ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
                               : undefined,
+                          // Website mutable feeds need TTL-gated re-crawls driven by
+                          // the stored row's created_at; photo archives need prefix
+                          // lookups (photo:album:<ct>:*). Both served from one query.
+                          articleStateLookup:
+                              platform === Platform.Website
+                                  ? async (a_id: string) => {
+                                        const existing = await DB.Article.getByArticleCode(a_id, platform)
+                                        return {
+                                            known: Boolean(existing),
+                                            createdAt: existing?.created_at ?? null,
+                                        }
+                                    }
+                                  : undefined,
+                          articlePrefixStateLookup:
+                              platform === Platform.Website
+                                  ? async (prefix: string) => {
+                                        const existing = await DB.Article.getLatestByArticleCodePrefix(prefix, platform)
+                                        return {
+                                            known: Boolean(existing),
+                                            createdAt: existing?.created_at ?? null,
+                                        }
+                                    }
+                                  : undefined,
                           // YouTube needs known + premiere-pending per article; serve
                           // both from one DB lookup instead of two callbacks each
                           // issuing the same query per round.
