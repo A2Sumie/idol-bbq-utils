@@ -538,6 +538,9 @@ namespace InsApiJsonParser {
                 const url = response.url()
                 const request = response.request()
                 const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
+                if (/graphql\/query|api\/graphql/i.test(url)) {
+                    console.log('DEBUG ig resp fn=' + friendlyName + ' url=' + url.slice(0, 60) + ' status=' + response.status())
+                }
                 if (friendlyName !== PROFILE_POSTS_KEY) {
                     const isTimelineEndpoint =
                         /xdt_api__v1__feed__user_timeline|graphql\/query|api\/graphql/i.test(url)
