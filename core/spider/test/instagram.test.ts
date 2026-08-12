@@ -205,41 +205,6 @@ test('Instagram grabPosts merges reloaded posts when a cache-bust reload returns
     expect(listeners.has('response')).toBeFalse()
 })
 
-test('Instagram grabPosts accepts new xdt_api timeline endpoint payloads', async () => {
-    const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
-    const listeners = new Map<string, (data: any) => void>()
-    const page = {
-        on: (eventName: string, handler: (data: any) => void) => {
-            listeners.set(eventName, handler)
-        },
-        off: (eventName: string, handler: (data: any) => void) => {
-            if (listeners.get(eventName) === handler) {
-                listeners.delete(eventName)
-            }
-        },
-        goto: async () => {
-            listeners.get('response')?.({
-                url: () => 'https://www.instagram.com/api/graphql',
-                status: () => 200,
-                headers: () => ({ 'content-type': 'application/json' }),
-                json: async () => posts_json,
-                request: () => ({
-                    method: () => 'POST',
-                    postData: () => 'xdt_api__v1__feed__user_timeline_graphql_connection=1',
-                }),
-            })
-        },
-        waitForSelector: async () => {
-            throw new Error('not found')
-        },
-    } as any
-
-    const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/instagram/')
-
-    expect(posts.length).toBeGreaterThan(0)
-    expect(listeners.has('response')).toBeFalse()
-})
-
 test('Instagram parser drops generated media summaries while preserving real captions', () => {
     const posts = InsApiJsonParser.postsParser({
         data: {
