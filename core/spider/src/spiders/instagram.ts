@@ -542,31 +542,6 @@ namespace InsApiJsonParser {
                     console.log('DEBUG ig resp fn=' + friendlyName + ' url=' + url.slice(0, 60) + ' status=' + response.status())
                 }
                 if (friendlyName !== PROFILE_POSTS_KEY) {
-                    const isTimelineEndpoint =
-                        /xdt_api__v1__feed__user_timeline|graphql\/query|api\/graphql/i.test(url)
-                    if (!isTimelineEndpoint) {
-                        return
-                    }
-                    const contentType = response.headers()['content-type'] || ''
-                    if (!contentType.includes('json')) {
-                        return
-                    }
-                    let json: any
-                    try {
-                        json = await response.json()
-                    } catch {
-                        return
-                    }
-                    const legacyEdges = JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json })
-                    const newEdges = JSONPath({ path: '$..xdt_api__v1__feed__user_timeline_graphql_connection.edges', json })
-                    console.log(
-                        'DEBUG ig timeline resp url=' + url.slice(0, 80) + ' fn=' + friendlyName + ' legacy_edges=' + legacyEdges.length + ' new_edges=' + newEdges.length,
-                    )
-                    const hasTimeline = legacyEdges.length > 0 || newEdges.length > 0
-                    if (!hasTimeline) {
-                        return
-                    }
-                    done(json)
                     return
                 }
                 if (response.status() >= 300 && response.status() < 400) {
@@ -587,7 +562,13 @@ namespace InsApiJsonParser {
                     return
                 }
                 try {
-                    done(await response.json())
+                    const json = await response.json()
+                    const edges = JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json })
+                    const newest = edges[0]?.node?.taken_at || edges[0]?.node?.taken_at_timestamp || null
+                    console.log(
+                        'DEBUG ig profile-posts edges=' + edges.length + ' newest_taken=' + newest + ' has_new=' + String(json).includes('3962115127033029731'),
+                    )
+                    done(json)
                 } catch (e) {
                     fail(e)
                 }
