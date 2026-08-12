@@ -539,6 +539,29 @@ namespace InsApiJsonParser {
                 const request = response.request()
                 const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
                 if (friendlyName !== PROFILE_POSTS_KEY) {
+                    const isTimelineEndpoint =
+                        /xdt_api__v1__feed__user_timeline|graphql\/query|api\/graphql/i.test(url)
+                    if (!isTimelineEndpoint) {
+                        return
+                    }
+                    const contentType = response.headers()['content-type'] || ''
+                    if (!contentType.includes('json')) {
+                        return
+                    }
+                    let json: any
+                    try {
+                        json = await response.json()
+                    } catch {
+                        return
+                    }
+                    const hasTimeline =
+                        JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json }).length > 0 ||
+                        JSONPath({ path: '$..xdt_api__v1__feed__user_timeline_graphql_connection.edges', json })
+                            .length > 0
+                    if (!hasTimeline) {
+                        return
+                    }
+                    done(json)
                     return
                 }
                 if (response.status() >= 300 && response.status() < 400) {
