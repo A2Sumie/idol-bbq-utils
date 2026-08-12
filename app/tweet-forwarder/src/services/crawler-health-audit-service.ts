@@ -85,6 +85,7 @@ type CrawlerHealthAuditOptions = {
     xProbeTarget?: XLiveProbeTarget
     instagramProbeTarget?: InstagramLiveProbeTarget
     tiktokProbeTarget?: TikTokLiveProbeTarget
+    instagramBrowserProbe?: () => Promise<CrawlerCookieLiveProbeResult>
 }
 
 const LIVE_PROBE_PLATFORMS = new Set<CrawlerHealthPlatform>(['x', 'instagram', 'tiktok'])
@@ -613,67 +614,49 @@ async function probeInstagram(
     timeoutMs: number,
     target?: InstagramLiveProbeTarget,
 ): Promise<CrawlerCookieLiveProbeResult> {
-    const cookie = getCookieString(cookies)
-    const csrf = cookieValue(cookies, 'csrftoken')
-    const username = target?.username || 'instagram'
-    // Private mobile API (i.instagram.com/api/v1) is far more tolerant than the
-    // public web_profile_info endpoint (which the community consistently hits 429
-    // on). The web cookies are shared across instagram.com hosts, so the same
-    // sessionid works here — this is the endpoint instagrapi/instaloader-style
-    // clients prefer for cookie validation.
-    const response = await fetchWithTimeout(
-        fetchImpl,
-        `https://i.instagram.com/api/v1/users/${encodeURIComponent(username)}/username_info/`,
-        {
-            method: 'GET',
-            headers: {
-                cookie,
-                'x-csrftoken': csrf,
-                'x-ig-app-id': '936619743392459',
-                accept: '*/*',
-                'user-agent':
-                    'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-                'accept-language': 'en-US,en;q=0.9',
-            },
-        },
-        timeoutMs,
-    )
-    const result = statusFromAuthResponse(
-        'instagram',
-        response,
-        'instagram_live_probe_ok',
-        'instagram_live_auth_rejected',
-        'instagram_live_rate_limited',
-        'instagram_live_unexpected_status',
-    )
-    if (result.status !== 'ok') {
-        return result
+    void cookies
+    void fetchImpl
+    void timeoutMs
+    void target
+    return {
+        status: 'skipped',
+        diagnostic_codes: ['instagram_live_probe_requires_browser'],
+        http_status: null,
     }
+}
+
+export async function probeInstagramBrowserLoginState(page: Page): Promise<CrawlerCookieLiveProbeResult> {
     try {
-        const json = await response.json()
-        const returnedUsername = String(json?.user?.username || '').trim()
-        if (!returnedUsername) {
+        const loginForm = await page.waitForSelector('form[id="loginForm"]', { timeout: 1500 }).catch(() => null)
+        if (loginForm) {
             return {
-                status: 'warn',
-                diagnostic_codes: ['instagram_live_payload_missing_user'],
-                http_status: response.status,
+                status: 'fail',
+                diagnostic_codes: ['instagram_live_auth_rejected'],
+                http_status: null,
             }
         }
-        if (target && returnedUsername.toLowerCase() !== target.username.toLowerCase()) {
+        const mainFrameError = await page
+            .waitForSelector('div[id="main-frame-error"]', { timeout: 1000 })
+            .catch(() => null)
+        if (mainFrameError) {
             return {
-                status: 'warn',
-                diagnostic_codes: ['instagram_live_payload_username_mismatch'],
-                http_status: response.status,
+                status: 'fail',
+                diagnostic_codes: ['instagram_live_challenge_or_blocked'],
+                http_status: null,
             }
         }
-    } catch {
+        return {
+            status: 'ok',
+            diagnostic_codes: ['instagram_live_probe_ok'],
+            http_status: null,
+        }
+    } catch (error) {
         return {
             status: 'warn',
-            diagnostic_codes: ['instagram_live_payload_not_json'],
-            http_status: response.status,
+            diagnostic_codes: ['instagram_live_probe_failed'],
+            http_status: null,
         }
     }
-    return result
 }
 
 async function probeTikTok(
@@ -724,12 +707,19 @@ async function runLiveProbe(
     cookies: Array<CookieData>,
     fetchImpl: typeof fetch,
     timeoutMs: number,
-    options: Pick<CrawlerHealthAuditOptions, 'xProbeTarget' | 'instagramProbeTarget' | 'tiktokProbeTarget'> = {},
+    options: Pick<
+        CrawlerHealthAuditOptions,
+        'xProbeTarget' | 'instagramProbeTarget' | 'tiktokProbeTarget' | 'instagramBrowserProbe'
+    > = {},
 ): Promise<CrawlerCookieLiveProbeResult> {
     try {
         if (platform === 'x') return await probeX(cookies, fetchImpl, timeoutMs, options.xProbeTarget)
-        if (platform === 'instagram')
+        if (platform === 'instagram') {
+            if (options.instagramBrowserProbe) {
+                return await options.instagramBrowserProbe()
+            }
             return await probeInstagram(cookies, fetchImpl, timeoutMs, options.instagramProbeTarget)
+        }
         if (platform === 'tiktok') return await probeTikTok(cookies, fetchImpl, timeoutMs, options.tiktokProbeTarget)
         return {
             status: 'skipped',
@@ -750,7 +740,7 @@ async function probeCrawlerCookieLiveHealth(
     cookies: Array<CookieData>,
     options: Pick<
         CrawlerHealthAuditOptions,
-        'fetch' | 'timeoutMs' | 'xProbeTarget' | 'instagramProbeTarget' | 'tiktokProbeTarget'
+        'fetch' | 'timeoutMs' | 'xProbeTarget' | 'instagramProbeTarget' | 'tiktokProbeTarget' | 'instagramBrowserProbe'
     > = {},
 ): Promise<CrawlerCookieLiveProbeResult> {
     const auditPlatform: CrawlerHealthPlatform = platform === 'website' ? 'unknown' : platform
@@ -766,6 +756,7 @@ async function probeCrawlerCookieLiveHealth(
         xProbeTarget: options.xProbeTarget,
         instagramProbeTarget: options.instagramProbeTarget,
         tiktokProbeTarget: options.tiktokProbeTarget,
+        instagramBrowserProbe: options.instagramBrowserProbe,
     })
 }
 

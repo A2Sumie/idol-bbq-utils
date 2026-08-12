@@ -141,7 +141,7 @@ test('buildCrawlerLiveHealthAudit probes X username crawlers through user lookup
     }
 })
 
-test('buildCrawlerLiveHealthAudit probes Instagram configured usernames', async () => {
+test('buildCrawlerLiveHealthAudit skips Instagram live probe without a browser session', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
     try {
         const cookieFile = join(dir, 'instagram.cookies.txt')
@@ -179,23 +179,21 @@ test('buildCrawlerLiveHealthAudit probes Instagram configured usernames', async 
 
         expect(audit.counts).toMatchObject({
             checked: 1,
-            ok: 1,
+            ok: 0,
+            skipped: 1,
             fail: 0,
         })
         expect(audit.results[0]).toMatchObject({
             crawler_id: 'instagram-targeted',
             platform: 'instagram',
-            status: 'ok',
-            diagnostic_codes: ['instagram_live_probe_ok'],
-            live_probe: {
-                checked: true,
-                status: 'ok',
-                http_status: 200,
-            },
+            status: 'skipped',
         })
-        expect(requests).toHaveLength(1)
-        expect(requests[0]?.url).toContain('/users/shiina_satsuki227/username_info/')
-        expect(requests[0]?.headers['user-agent']).toContain('iPhone')
+        expect(audit.results[0]?.live_probe).toMatchObject({
+            checked: false,
+            status: 'skipped',
+            http_status: null,
+        })
+        expect(requests).toHaveLength(0)
     } finally {
         rmSync(dir, { recursive: true, force: true })
     }
@@ -430,16 +428,17 @@ test('buildCrawlerLiveHealthAudit reuses live probes for shared cookie files', a
             },
         )
 
-        expect(fetchCalls).toBe(1)
+        expect(fetchCalls).toBe(0)
         expect(audit.counts).toMatchObject({
             checked: 3,
-            ok: 3,
+            ok: 0,
+            skipped: 3,
             fail: 0,
         })
         expect(audit.results.map((result) => result.live_probe)).toEqual([
-            { checked: true, status: 'ok', http_status: 200 },
-            { checked: true, status: 'ok', http_status: 200 },
-            { checked: true, status: 'ok', http_status: 200 },
+            { checked: false, status: 'skipped', http_status: null },
+            { checked: false, status: 'skipped', http_status: null },
+            { checked: false, status: 'skipped', http_status: null },
         ])
     } finally {
         rmSync(dir, { recursive: true, force: true })

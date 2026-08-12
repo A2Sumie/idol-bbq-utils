@@ -35,6 +35,7 @@ import {
     inferTikTokProbeTarget,
     inferXProbeTarget,
     probeCrawlerCookieLiveHealth,
+    probeInstagramBrowserLoginState,
     type CrawlerCookieLiveProbeResult,
 } from '@/services/crawler-health-audit-service'
 import {
@@ -1770,6 +1771,10 @@ class SpiderPools extends BaseCompatibleModel {
                     xProbeTarget: platformHint === 'x' ? inferXProbeTarget(crawler) : undefined,
                     instagramProbeTarget: platformHint === 'instagram' ? inferInstagramProbeTarget(crawler) : undefined,
                     tiktokProbeTarget: platformHint === 'tiktok' ? inferTikTokProbeTarget(crawler) : undefined,
+                    instagramBrowserProbe:
+                        platformHint === 'instagram' && options.visit !== false
+                            ? () => probeInstagramBrowserLoginState(page)
+                            : undefined,
                 })
                 if (liveProbe.status === 'fail') {
                     throw new CrawlerCookieExportError(
