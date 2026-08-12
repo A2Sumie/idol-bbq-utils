@@ -563,7 +563,11 @@ namespace InsApiJsonParser {
                     return
                 }
                 try {
-                    done(await response.json())
+                    const json = await response.json()
+                    const xdtEdges = JSONPath({ path: '$..xdt_api__v1__feed__user_timeline_graphql_connection.edges', json })[0] || []
+                    const first = xdtEdges[0]?.node || {}
+                    console.log('DEBUG pp xdt_edges=' + xdtEdges.length + ' has_new=' + String(json).includes('3962115127033029731') + ' first_keys=' + Object.keys(first).slice(0, 20).join(',') + ' code=' + String(first.code || first.pk || '').slice(0, 24) + ' has_user=' + Boolean(first.user || first.owner))
+                    done(json)
                 } catch (e) {
                     fail(e)
                 }
