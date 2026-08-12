@@ -28,8 +28,10 @@ async function waitForApiReady(timeoutMs: number) {
     const deadline = Date.now() + timeoutMs
     while (Date.now() < deadline) {
         try {
-            const response = await fetch(`${API_BASE}/api/runtime/status`)
-            if (response.ok) {
+            const response = await fetch(`${API_BASE}/api/runtime/status`, {
+                signal: AbortSignal.timeout(8000),
+            })
+            if (response) {
                 return true
             }
         } catch {
@@ -75,6 +77,7 @@ async function syncCrawlerCookies(name: string, secret: string) {
             'Content-Type': 'application/json',
         },
         body: JSON.stringify({ crawlerName: name }),
+        signal: AbortSignal.timeout(60000),
     })
     if (!response.ok) {
         throw new Error(`sync failed http=${response.status}: ${(await response.text()).slice(0, 200)}`)
