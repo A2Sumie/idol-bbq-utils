@@ -9,8 +9,8 @@
 //
 // Usage (inside the watcher container):
 //   bun /app/instagram-live-watch.ts nao_aikawa227 --until 01:00 --player-id relay-nao \
-//     --player-name "【IG Live】相川奈央" --live-player-url https://tv.n2nj.moe \
-//     --auth-username sumie --auth-password '...' --waf-header N2NJ_SUPER_SECRET_PASS_2026_7684 \
+//     --player-name "【IG Live】相川奈央" --live-player-url https://<live-player-host> \
+//     --auth-username <user> --auth-password '...' --waf-header '<secret>' \
 //     --cookie /app/assets/cookies/inscks0318.txt [--archive]
 import fs from 'fs'
 import path from 'path'

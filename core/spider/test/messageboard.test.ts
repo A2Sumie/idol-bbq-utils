@@ -4,6 +4,10 @@ import { Platform } from '../src/types'
 
 const ORIGINAL_ENV_FLAG = process.env[MESSAGEBOARD_ENABLED_FLAG]
 const ORIGINAL_ENV_PASSWORD = process.env[UIE_PASSWORD_ENV]
+// Test-only board password placeholder; set UIE_PASSWORD (or MESSAGEBOARD_TEST_VERBENA)
+// to exercise the real deployment value. The protocol under test only needs the
+// client and server values to match.
+const TEST_VERBENA = process.env.MESSAGEBOARD_TEST_VERBENA || process.env[UIE_PASSWORD_ENV] || 'local-test-verbena'
 
 afterEach(() => {
     if (ORIGINAL_ENV_FLAG === undefined) {
@@ -231,7 +235,7 @@ test('readMessageBoardMessages completes the full sealed handshake against a loc
                     )
                     receivedClientMessages.push(plain)
                     if (plain.type === 'daikon') {
-                        expect(plain.verbena).toBe('stpuie12qwaszx34$')
+                        expect(plain.verbena).toBe(TEST_VERBENA)
                         const sealed = await (async () => {
                             const n = crypto.getRandomValues(new Uint8Array(12))
                             const ct = await crypto.subtle.encrypt(
@@ -297,7 +301,7 @@ test('readMessageBoardMessages completes the full sealed handshake against a loc
         const wsUrl = `ws://127.0.0.1:${server.port}/ws`
         const messages = await readMessageBoardMessages({
             wsUrl,
-            verbena: 'stpuie12qwaszx34$',
+            verbena: TEST_VERBENA,
             timeoutMs: 15000,
         })
 
@@ -423,7 +427,7 @@ test('readMessageBoardMessages disconnects on raccoon unread=0 without pulling t
     try {
         const messages = await readMessageBoardMessages({
             wsUrl: `ws://127.0.0.1:${server.port}/ws`,
-            verbena: 'stpuie12qwaszx34$',
+            verbena: TEST_VERBENA,
             timeoutMs: 15000,
         })
 

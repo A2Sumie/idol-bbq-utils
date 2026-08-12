@@ -46,7 +46,7 @@ high/index.m3u8
         bandwidth: 2560000,
         resolution: '1280x720',
     })
-    expect(buildPlayerUrl('relay')).toBe('https://stream.n2nj.moe/relay.m3u8')
+    expect(buildPlayerUrl('relay')).toBe(process.env.LIVE_PLAYER_STREAM_URL || '')
 })
 
 test('instagram live relay parser extracts mpd urls from web_info payload', () => {

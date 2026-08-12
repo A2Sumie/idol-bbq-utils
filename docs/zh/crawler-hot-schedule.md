@@ -53,7 +53,7 @@ POST /api/schedules/crawlers/insert
 
 ## Current Dense Stable Windows
 
-Based on the 3020e production DB, 120-day JST article timestamp distribution:
+Based on the production DB, 120-day JST article timestamp distribution:
 
 - X: keep all-day 4-minute scans per list with the two list crawlers offset by 2 minutes. Dense activity is strongest at 18:00-00:59 and 12:00; production lag showed the old 8-minute per-list cadence commonly planned sends around 9 minutes after source time.
 - Instagram: keep 15:00-23:59 every 5 minutes and 00:00-14:59 every 10 minutes. The densest buckets are 19:00-23:59, especially 21:00-23:45; production lag showed the old 15/30-minute cadence commonly planned sends 30+ minutes after source time.

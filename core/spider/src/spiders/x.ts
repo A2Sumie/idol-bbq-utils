@@ -410,6 +410,7 @@ class XStatusSpider extends BaseSpider {
     API_PREFIX = 'https://api.twitter.com'
 
     PUBLIC_TOKEN =
+        process.env.X_PUBLIC_TOKEN ||
         'Bearer AAAAAAAAAAAAAAAAAAAAAFQODgEAAAAAVHTp76lzh3rFzcHbmHVvQxYYpTw%3DckAlMINMjmCwxUcaXbAN4XqJVdgMJaHqNOFgPMK0zN1qLqLQCF'
 
     async _crawl<T extends TaskType>(
@@ -1034,8 +1035,9 @@ class XStatusSpider extends BaseSpider {
  * This is dangerous, because it will be banned by X if you use it too much
  */
 export class XApiClient {
-    guest_token = '1918915913551839395'
+    guest_token = process.env.X_GUEST_TOKEN || '1918915913551839395'
     PUBLIC_TOKEN =
+        process.env.X_PUBLIC_TOKEN ||
         'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA'
     /**
      * 'https://x.com'

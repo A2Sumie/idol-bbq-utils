@@ -1868,7 +1868,7 @@ async function uploadArchiveToBilibili(
 
     const title = sanitizeSegment(payload.title || defaults.title, defaults.title).slice(0, 80)
     const description = String(payload.description || defaults.description || '').trim()
-    const sourceUrl = String(payload.sourceUrl || defaults.sourceUrl || 'https://tv.n2nj.moe').trim()
+    const sourceUrl = String(payload.sourceUrl || defaults.sourceUrl || process.env.LIVE_PLAYER_WEB_URL || '').trim()
     const tags = normalizeTags(payload.tags, defaults.tags)
     const tid = Math.max(1, Math.floor(Number(payload.tid || defaults.tid)))
     const threads = Math.max(1, Math.floor(Number(payload.threads || defaults.threads)))

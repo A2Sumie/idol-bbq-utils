@@ -224,7 +224,7 @@ describe('RenderService text-compact', () => {
                 content,
                 translation: null,
                 translated_by: null,
-                url: 'https://drop.n2nj.moe/',
+                url: 'https://drop.example.com/',
                 type: 'article',
                 ref: null,
                 has_media: false,

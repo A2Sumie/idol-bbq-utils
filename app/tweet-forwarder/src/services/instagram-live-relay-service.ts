@@ -12,9 +12,11 @@ import { ensureDirectoryExists } from '@/utils/directories'
 import { CACHE_DIR_ROOT } from '@/config'
 import type { CrawlerConfig, InstagramLiveArchiveConfig, InstagramLivePublishConfig, LiveRelayConfig, LiveRelayTargetConfig } from '@/types/crawler'
 
-const DEFAULT_LIVE_PLAYER_URL = 'https://tv.n2nj.moe'
+const DEFAULT_LIVE_PLAYER_URL =
+    process.env.LIVE_PLAYER_WEB_URL ||
+    (process.env.LIVE_PLAYER_BASE_URL ? `https://${process.env.LIVE_PLAYER_BASE_URL}` : '')
 const DEFAULT_LIVE_PLAYER_PLAYER_ID = 'relay'
-const DEFAULT_LIVE_PLAYER_STREAM_URL = 'https://stream.n2nj.moe/relay.m3u8'
+const DEFAULT_LIVE_PLAYER_STREAM_URL = process.env.LIVE_PLAYER_STREAM_URL || ''
 const DEFAULT_SYNC_INTERVAL_SECONDS = 300
 const DEFAULT_POST_LIVE_GRACE_SECONDS = 6 * 60 * 60
 const STREAM_CAPTURE_TIMEOUT_MS = 15000
@@ -452,7 +454,8 @@ function buildPlayerUrl(playerId: string, configuredUrl?: string) {
     if (playerId === DEFAULT_LIVE_PLAYER_PLAYER_ID) {
         return DEFAULT_LIVE_PLAYER_STREAM_URL
     }
-    return `https://stream.n2nj.moe/${playerId}.m3u8`
+    const streamBase = process.env.LIVE_PLAYER_STREAM_BASE_URL
+    return streamBase ? `${streamBase.replace(/\/+$/, '')}/${playerId}.m3u8` : DEFAULT_LIVE_PLAYER_STREAM_URL
 }
 
 function applyWafBypassHeader(headers: Headers, rawHeader?: string) {
