@@ -297,9 +297,11 @@ def main():
     import datetime as _dt
     consecutive_429 = 0
     while True:
-        jst_hour = int(_dt.datetime.now(_dt.timezone(_dt.timedelta(hours=9))).strftime('%H'))
-        if jst_hour < 12:
-            print(f'[probe] pass skipped (JST hour {jst_hour} < 12, no probing 00-12h)')
+        jst_now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=9)))
+        jst_hour = jst_now.hour
+        is_weekend = jst_now.weekday() >= 5
+        if not is_weekend and jst_hour < 12:
+            print(f'[probe] pass skipped (JST hour {jst_hour} < 12 on weekday, no probing 00-12h)')
             if args.once:
                 return
             time.sleep(1800)
