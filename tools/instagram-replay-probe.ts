@@ -2,7 +2,6 @@
 // IG live replay probe (no private API): reads today's video posts captured by the
 // IG crawler (browser xdt timeline), uses yt-dlp (public extractor) to decide
 // replay (duration >= 300s) and download the video into the replay archive.
-import { DatabaseSync } from 'node:sqlite'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -33,17 +32,29 @@ function main() {
         log(`missing prereq db=${fs.existsSync(DB_PATH)} cookie=${fs.existsSync(COOKIE_FILE)} ytdlp=${fs.existsSync(YT_DLP)}`)
         process.exit(1)
     }
-    const db = new DatabaseSync(DB_PATH, { readOnly: true })
     const from = todayStartUtc()
+    const query = `select a_id,url from instagram_article where u_id in (${HANDLES.map(() => '?').join(',')}) and type='post' and created_at>=? order by created_at desc`
+    const q = spawnSync('python3', ['-c', `import sqlite3,json,sys
+c=sqlite3.connect(sys.argv[1])
+c.row_factory=sqlite3.Row
+rows=c.execute(sys.argv[2], sys.argv[3:]).fetchall()
+print(json.dumps([dict(r) for r in rows]))`, DB_PATH, query, ...HANDLES, String(from)], { encoding: 'utf8', timeout: 30000 })
+    if (q.status !== 0) {
+        log(`db query failed: ${String(q.stderr || q.stdout || '').slice(0, 200)}`)
+        process.exit(1)
+    }
+    let allRows: Array<{ a_id: string; url: string }> = []
+    try {
+        allRows = JSON.parse(q.stdout)
+    } catch {
+        log('db result parse failed')
+        process.exit(1)
+    }
     let downloaded = 0
     let skipped = 0
     for (const handle of HANDLES) {
-        const rows = db
-            .prepare(
-                "select a_id,url from instagram_article where u_id=? and type='post' and created_at>=? order by created_at desc",
-            )
-            .all(handle, from)
-        for (const row of rows as Array<{ a_id: string; url: string }>) {
+        const _rows = allRows.filter((row: any) => row.url.includes(`/${handle}/`))
+        for (const row of _rows as Array<{ a_id: string; url: string }>) {
             const outDir = path.join(REPLAY_ROOT, handle, row.a_id)
             const outFile = path.join(outDir, 'merged.mp4')
             if (fs.existsSync(outFile)) {
