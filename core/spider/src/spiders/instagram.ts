@@ -572,12 +572,7 @@ namespace InsApiJsonParser {
                 }
                 try {
                     const json = await response.json()
-                    const vv = JSONPath({ path: '$..video_versions', json })
-                    const dur = JSONPath({ path: '$..media_duration', json })
-                    const dur2 = JSONPath({ path: '$..duration', json })
-                    const first = vv[0] || []
-                    const sample = first[0] || {}
-                    console.log('DEBUG xdt-global vv_groups=' + vv.length + ' media_duration=' + JSON.stringify(dur.slice(0, 4)) + ' duration=' + JSON.stringify(dur2.slice(0, 4)) + ' vv0=' + String(sample.url || '').slice(0, 60) + ' keys=' + Object.keys(sample).join(','))
+                    done(json)
                     done(json)
                 } catch (e) {
                     fail(e)
