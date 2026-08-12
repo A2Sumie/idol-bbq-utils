@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.request
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urljoin
@@ -241,6 +242,73 @@ def resolve_uid_cached(cl, handle):
     return uid
 
 
+def collect_timeline_replay_candidates(cl, uid):
+    """IG no longer surfaces live replays through the story feed post_live_item;
+    replays are published as long timeline videos. Return (pk, duration, taken_at)
+    for videos posted today that look like replays."""
+    import datetime as _dt
+    candidates = []
+    try:
+        medias = cl.user_medias(uid, amount=20)
+    except Exception as exc:
+        print(f'[probe] timeline fetch failed for {uid}: {exc}')
+        return candidates
+    jst_now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=9)))
+    today_start = _dt.datetime(jst_now.year, jst_now.month, jst_now.day, tzinfo=jst_now.tzinfo)
+    for m in medias:
+        if m.media_type != 2:
+            continue
+        taken = m.taken_at
+        if taken.tzinfo is None:
+            taken = taken.replace(tzinfo=_dt.timezone.utc)
+        taken_jst = taken.astimezone(_dt.timezone(_dt.timedelta(hours=9)))
+        if taken_jst < today_start:
+            break
+        duration = float(getattr(m, 'video_duration', 0) or 0)
+        if duration >= 300:
+            candidates.append({'pk': str(m.pk), 'duration': duration, 'taken_at': str(taken_jst)})
+    return candidates
+
+
+def download_timeline_replay(cl, handle, out_dir, candidate):
+    bid = candidate['pk']
+    handle_dir = out_dir / handle / bid
+    if (handle_dir / 'merged.mp4').exists():
+        print(f'[probe] {handle} {bid}: replay already downloaded, skip')
+        return
+    handle_dir.mkdir(parents=True, exist_ok=True)
+    (handle_dir / 'broadcast.json').write_text(
+        json.dumps({**candidate, 'source': 'timeline_clip_replay'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    print(f"[probe] {handle} {bid}: timeline replay duration={candidate['duration']:.0f}s taken={candidate['taken_at']}")
+    try:
+        media = cl.media_info(bid)
+        url = str(media.video_url or '')
+        if not url:
+            print(f'[probe] {handle} {bid}: no video url available')
+            (handle_dir / 'NO_DASH.txt').write_text('no video url\n', encoding='utf-8')
+            return
+        print(f'[probe] {handle} {bid}: downloading {url[:100]}')
+        cookies = load_cookies(COOKIE_FILE)
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1',
+            'cookie': '; '.join(f'{k}={v}' for k, v in cookies.items()),
+        })
+        outfile = handle_dir / 'merged.mp4'
+        with urllib.request.urlopen(req, timeout=600) as r, open(outfile, 'wb') as fh:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                fh.write(chunk)
+        size = outfile.stat().st_size
+        print(f'[probe] {handle} {bid}: merged.mp4 {size} bytes')
+        (handle_dir / 'DONE.txt').write_text(f'merged={size}\n', encoding='utf-8')
+    except Exception as exc:
+        print(f'[probe] {handle} {bid}: replay download failed: {exc}')
+
+
 def process_handle(cl, handle, out_dir):
     uid = resolve_uid_cached(cl, handle)
     if uid is None:
@@ -248,6 +316,8 @@ def process_handle(cl, handle, out_dir):
     broadcasts = collect_broadcasts(cl, uid)
     if not broadcasts:
         print(f'[probe] {handle}: no broadcasts')
+        for candidate in collect_timeline_replay_candidates(cl, uid):
+            download_timeline_replay(cl, handle, out_dir, candidate)
         return
     for kind, b in broadcasts:
         bid = str(b.get('id', 'unknown'))
