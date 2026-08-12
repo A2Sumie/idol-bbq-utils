@@ -461,3 +461,44 @@ test('Hy3Free provider preserves prompt and response_format in fallback', async 
         ;(axios as any).post = originalPost
     }
 })
+
+test('DeepSeekV4FlashTranslator delegates to the configured fallback on primary failure', async () => {
+    const originalPost = axios.post
+    const calls: Array<{ url: string; body: any; options: any }> = []
+    ;(axios as any).post = async (url: string, body: any, options: any) => {
+        calls.push({ url, body, options })
+        if (url.includes('/responses')) {
+            throw new Error('primary down')
+        }
+        return { data: { choices: [{ message: { content: 'fallback译文' } }] } }
+    }
+
+    try {
+        const processor = await processorRegistry.create('DeepSeekV4Flash', 'flash-key', undefined, {
+            prompt: 'Translate to Simplified Chinese.',
+            base_url: 'https://api.deepseek.com/responses',
+            wire_api: 'responses',
+            fallback: {
+                provider: 'DeepSeekV4Flash',
+                api_key: 'fallback-key',
+                model_id: 'deepseek-v4-flash',
+                base_url: 'https://api.deepseek.com/chat/completions',
+                wire_api: 'chat_completions',
+            },
+        })
+        const result = await processor.process('こんにちは')
+
+        expect(result).toBe('fallback译文')
+        expect(calls.map((call) => call.url)).toEqual([
+            'https://api.deepseek.com/responses',
+            'https://api.deepseek.com/chat/completions',
+        ])
+        expect(calls[1]?.body.messages).toMatchObject([
+            { role: 'system', content: 'Translate to Simplified Chinese.' },
+            { role: 'user', content: 'こんにちは' },
+        ])
+        expect(calls[1]?.options?.headers?.Authorization).toBe('Bearer fallback-key')
+    } finally {
+        ;(axios as any).post = originalPost
+    }
+})

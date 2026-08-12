@@ -25,11 +25,15 @@ import YAML from 'yaml'
 
 const V4PRO_PROVIDER = 'DeepSeekV4Pro'
 const HY3_PROVIDER = 'Hy3Free'
+const FLASH_PROVIDER = 'DeepSeekV4Flash'
 const HY3_API_KEY_ENV = 'env:TENCENT_HUNYUAN_API_KEY'
+const FLASH_API_KEY_ENV = 'env:DEEPSEEK_API_KEY'
 const GO_BASE_URL = 'https://opencode.ai/zen/go/v1/chat/completions'
 const HY3_BASE_URL = 'https://api.lkeap.cloud.tencent.com/plan/v3/chat/completions'
+const FLASH_RESPONSES_BASE_URL = 'https://api.deepseek.com/responses'
+const FLASH_CHAT_BASE_URL = 'https://api.deepseek.com/chat/completions'
 
-const MODES = ['hy3', 'v4pro', 'status'] as const
+const MODES = ['hy3', 'v4pro', 'flash', 'status'] as const
 type Mode = (typeof MODES)[number]
 
 interface ProcessorLikeBlock {
@@ -52,7 +56,7 @@ function parseArgs(argv: string[]): { mode: Mode; force: boolean; noReload: bool
     const noReload = args.includes('--no-reload')
     const modeArg = args.find((a) => !a.startsWith('--')) as Mode | undefined
     if (!modeArg || !MODES.includes(modeArg)) {
-        console.error(`Usage: bun tools/switch-processor-model.ts <hy3|v4pro|status> [--force] [--no-reload]`)
+        console.error(`Usage: bun tools/switch-processor-model.ts <hy3|v4pro|flash|status> [--force] [--no-reload]`)
         process.exit(2)
     }
     const configPath = path.join(process.cwd(), 'assets/config.yaml')
@@ -77,9 +81,9 @@ function isProcessorBlock(value: unknown): value is ProcessorLikeBlock {
     )
 }
 
-function switchBlock(block: ProcessorLikeBlock, mode: 'hy3' | 'v4pro'): boolean {
+function switchBlock(block: ProcessorLikeBlock, mode: 'hy3' | 'v4pro' | 'flash'): boolean {
     const provider = String(block.provider || '')
-    if (provider !== V4PRO_PROVIDER && provider !== HY3_PROVIDER) {
+    if (provider !== V4PRO_PROVIDER && provider !== HY3_PROVIDER && provider !== FLASH_PROVIDER) {
         return false
     }
     const cfg = block.cfg_processor
@@ -88,7 +92,30 @@ function switchBlock(block: ProcessorLikeBlock, mode: 'hy3' | 'v4pro'): boolean 
     }
     const originalTemp = typeof cfg.temperature === 'number' ? cfg.temperature : 1.0
 
-    if (mode === 'hy3') {
+    if (mode === 'flash') {
+        // Canonical stack: DeepSeek official Responses API, deepseek-v4-flash,
+        // temperature 1, top_p 0.98, reasoning effort default, full window.
+        block.provider = FLASH_PROVIDER
+        block.api_key = FLASH_API_KEY_ENV
+        cfg.model_id = 'deepseek-v4-flash'
+        cfg.base_url = FLASH_RESPONSES_BASE_URL
+        cfg.wire_api = 'responses'
+        cfg.temperature = 1
+        cfg.top_p = 0.98
+        cfg.reasoning_effort = 'default'
+        delete cfg.max_tokens
+        delete cfg.extended_payload
+        cfg.fallback = {
+            provider: FLASH_PROVIDER,
+            api_key: FLASH_API_KEY_ENV,
+            model_id: 'deepseek-v4-flash',
+            base_url: FLASH_CHAT_BASE_URL,
+            wire_api: 'chat_completions',
+            temperature: 1,
+            top_p: 0.98,
+            extended_payload: { thinking: { type: 'enabled' } },
+        }
+    } else if (mode === 'hy3') {
         block.provider = HY3_PROVIDER
         block.api_key = HY3_API_KEY_ENV
         cfg.model_id = 'hy3'

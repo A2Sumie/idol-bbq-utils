@@ -126,9 +126,43 @@ class OpenaiLikeLLMTranslator extends BaseOpenai {
 
 class DeepSeekV4FlashTranslator extends OpenaiLikeLLMTranslator {
     static _PROVIDER = ProcessorProvider.DeepSeekV4Flash
+    private fallbackProcessor: OpenaiLikeLLMTranslator | null = null
 
     constructor(api_key: string, log?: Logger, config?: ProcessorConfig) {
         super(api_key, log, mergeProcessorDefaults(DEEPSEEK_V4_FLASH_DEFAULT_CONFIG, config))
+        // Optional generic fallback (same shape as the Hy3Free breaker fallback):
+        // a second wire/endpoint for the flash translator so a primary outage
+        // does not leave articles untranslated.
+        if (config?.fallback) {
+            const fallbackConfig = buildFallbackProcessorConfig(this.config as ProcessorConfig, config.fallback)
+            const fallbackApiKey = resolveProcessorApiKey(config.fallback.api_key)
+            this.fallbackProcessor = new OpenaiLikeLLMTranslator(fallbackApiKey, log, fallbackConfig)
+        }
+    }
+
+    async init(): Promise<void> {
+        await super.init()
+        await this.fallbackProcessor?.init()
+    }
+
+    async drop(...args: any[]): Promise<void> {
+        await Promise.all([super.drop(...args), this.fallbackProcessor?.drop(...args)])
+    }
+
+    public async process(text: string): Promise<string> {
+        try {
+            return await super.process(text)
+        } catch (error) {
+            if (!this.fallbackProcessor) {
+                throw error
+            }
+            this.log?.warn(
+                `DeepSeekV4Flash primary failed; delegating to fallback processor: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            return await this.fallbackProcessor.process(text)
+        }
     }
 }
 
