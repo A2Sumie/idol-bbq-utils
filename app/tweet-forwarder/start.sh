@@ -398,6 +398,15 @@ fi
 echo "Starting application in runtime mode: $runtime_mode"
 bun /app/bin.js &
 APP_PID=$!
+
+if [ "$runtime_mode" = "online" ]; then
+    (
+        sleep 20
+        mkdir -p /tmp/tweet-forwarder/logs
+        bun /app/tools/startup-cookie-maintenance.js >> /tmp/tweet-forwarder/logs/startup-cookie-maintenance.log 2>&1
+    ) &
+fi
+
 wait "$APP_PID"
 APP_STATUS=$?
 APP_PID=""

@@ -24,6 +24,7 @@ RUN bun build app/tweet-forwarder/scripts/export-biliup-browser-cookies.ts --out
 RUN bun build app/tweet-forwarder/scripts/config-audit.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
 RUN bun build app/tweet-forwarder/scripts/crawler-health-audit.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
 RUN bun build app/tweet-forwarder/scripts/crawler-cookie-export-audit.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
+RUN bun build app/tweet-forwarder/scripts/startup-cookie-maintenance.ts --outdir=./app/tweet-forwarder/build --target=bun --minify
 COPY ./assets/knowledge ./assets/knowledge
 
 FROM base AS font-extractor
@@ -65,6 +66,7 @@ COPY --from=builder /app/app/tweet-forwarder/build/export-biliup-browser-cookies
 COPY --from=builder /app/app/tweet-forwarder/build/config-audit.js /app/tools/config-audit.js
 COPY --from=builder /app/app/tweet-forwarder/build/crawler-health-audit.js /app/tools/crawler-health-audit.js
 COPY --from=builder /app/app/tweet-forwarder/build/crawler-cookie-export-audit.js /app/tools/crawler-cookie-export-audit.js
+COPY --from=builder /app/app/tweet-forwarder/build/startup-cookie-maintenance.js /app/tools/startup-cookie-maintenance.js
 COPY --from=builder /app/app/tweet-forwarder/build/resvgjs* /app/
 # Copy assets
 COPY --from=builder /app/assets/fonts /app/assets/fonts

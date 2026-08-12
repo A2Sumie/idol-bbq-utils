@@ -241,6 +241,12 @@ HELP
         'YouTube cookie keepalive atomic replacement'
     require_contains "$youtube_cookie_keepalive" 'rm -f "$temporary_cookie_file"' \
         'YouTube cookie keepalive temporary cleanup'
+    require_contains "$start" 'startup-cookie-maintenance.js' \
+        'startup cookie maintenance hook'
+    require_contains "app/tweet-forwarder/Dockerfile" 'startup-cookie-maintenance.ts' \
+        'startup cookie maintenance image build'
+    require_contains "app/tweet-forwarder/Dockerfile" 'startup-cookie-maintenance.js' \
+        'startup cookie maintenance image copy'
 
     python3 - "$dockerfile" <<'PY'
 import sys
