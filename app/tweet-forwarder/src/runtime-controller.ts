@@ -308,7 +308,9 @@ export class RuntimeController {
         let spiderPools: SpiderPools | undefined
         let spiderTaskScheduler: SpiderTaskScheduler | undefined
         if (crawlers && crawlers.length > 0) {
-            spiderPools = new SpiderPools(this.cacheRoot, emitter, log)
+            spiderPools = new SpiderPools(this.cacheRoot, emitter, log, {
+                onSchedulePoke: () => spiderTaskScheduler?.pokeSchedules() ?? Promise.resolve(),
+            })
             compatibleModels.push(spiderPools)
             spiderTaskScheduler = new SpiderTaskScheduler(
                 {

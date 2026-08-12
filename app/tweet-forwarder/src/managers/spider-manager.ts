@@ -993,12 +993,24 @@ class SpiderPools extends BaseCompatibleModel {
      */
     private spiders: Map<string, BaseSpider> = new Map()
     private dispatchListener: (payload: unknown) => Promise<void>
+    private readonly onSchedulePoke?: () => Promise<void>
+    private readonly enqueueExternalMediaLinks: typeof enqueueMissingExternalMediaLinksFromXArticle
     private stopping = false
     // private workers:
-    constructor(cacheRoot: string, emitter: EventEmitter, log?: Logger) {
+    constructor(
+        cacheRoot: string,
+        emitter: EventEmitter,
+        log?: Logger,
+        options?: {
+            onSchedulePoke?: () => Promise<void>
+            enqueueExternalMediaLinks?: typeof enqueueMissingExternalMediaLinksFromXArticle
+        },
+    ) {
         super()
         this.log = log?.child({ subservice: this.NAME })
         this.emitter = emitter
+        this.onSchedulePoke = options?.onSchedulePoke
+        this.enqueueExternalMediaLinks = options?.enqueueExternalMediaLinks || enqueueMissingExternalMediaLinksFromXArticle
         this.browserPool = new BrowserSessionPool(cacheRoot, this.log)
         this.instagramLiveRelay = new InstagramLiveRelayService(cacheRoot, this.log)
         this.dispatchListener = this.onDispatchReceived.bind(this)
@@ -2226,9 +2238,9 @@ class SpiderPools extends BaseCompatibleModel {
                           isArticleKnown: platform
                               ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
                               : undefined,
-                          // Website mutable feeds need TTL-gated re-crawls driven by
-                          // the stored row's created_at; photo archives need prefix
-                          // lookups (photo:album:<ct>:*). Both served from one query.
+                          // Single article-state lookup; the shape differs per platform:
+                          // Website mutable feeds need TTL-gated re-crawls driven by the
+                          // stored row's created_at, YouTube needs known + premiere-pending.
                           articleStateLookup:
                               platform === Platform.Website
                                   ? async (a_id: string) => {
@@ -2238,7 +2250,21 @@ class SpiderPools extends BaseCompatibleModel {
                                             createdAt: existing?.created_at ?? null,
                                         }
                                     }
-                                  : undefined,
+                                  : platform === Platform.YouTube
+                                    ? async (a_id: string) => {
+                                          const existing = await DB.Article.getByArticleCode(a_id, platform)
+                                          return {
+                                              known: Boolean(existing),
+                                              storedPremierePending: existing
+                                                  ? isPremierePendingArticleLike({
+                                                        platform,
+                                                        content: (existing as any)?.content || null,
+                                                        extra: (existing as any)?.extra || null,
+                                                    })
+                                                  : false,
+                                          }
+                                      }
+                                    : undefined,
                           articlePrefixStateLookup:
                               platform === Platform.Website
                                   ? async (prefix: string) => {
@@ -2246,25 +2272,6 @@ class SpiderPools extends BaseCompatibleModel {
                                         return {
                                             known: Boolean(existing),
                                             createdAt: existing?.created_at ?? null,
-                                        }
-                                    }
-                                  : undefined,
-                          // YouTube needs known + premiere-pending per article; serve
-                          // both from one DB lookup instead of two callbacks each
-                          // issuing the same query per round.
-                          articleStateLookup:
-                              platform === Platform.YouTube
-                                  ? async (a_id: string) => {
-                                        const existing = await DB.Article.getByArticleCode(a_id, platform)
-                                        return {
-                                            known: Boolean(existing),
-                                            storedPremierePending: existing
-                                                ? isPremierePendingArticleLike({
-                                                      platform,
-                                                      content: (existing as any)?.content || null,
-                                                      extra: (existing as any)?.extra || null,
-                                                  })
-                                                : false,
                                         }
                                     }
                                   : undefined,
@@ -2372,7 +2379,7 @@ class SpiderPools extends BaseCompatibleModel {
             const persisted = res || (await DB.Article.checkExist(article))
             if (persisted) {
                 dispatch_article_ids.push(persisted.id)
-                const ingestedLinks = await enqueueMissingExternalMediaLinksFromXArticle(article, {
+                const ingestedLinks = await this.enqueueExternalMediaLinks(article, {
                     crawlerConfig: cfg_crawler,
                     log: ctx.log,
                 })
@@ -2382,7 +2389,10 @@ class SpiderPools extends BaseCompatibleModel {
                     (ingestedLinks?.instagram?.length || 0) +
                     (ingestedLinks?.website?.length || 0)
                 if (queuedExternalLinks > 0) {
-                    this.pokeSchedules().catch((error) =>
+                    // SpiderPools has no scheduler of its own; the runtime wires the
+                    // scheduler's poke in at construction. A missing hook must never
+                    // break the article-save loop.
+                    this.onSchedulePoke?.().catch((error) =>
                         ctx.log?.warn(`Failed to poke schedules after external link ingest: ${error}`),
                     )
                 }

@@ -365,7 +365,6 @@ test('Hy3Free fallback can use a separate api_key from the primary', async () =>
                 prompt: 'Translate to Simplified Chinese.',
                 fallback: {
                     provider: 'DeepSeekV4Pro',
-                    api_key: 'test-fallback-key',
                     api_key: 'go-key',
                     model_id: 'deepseek-v4-pro',
                     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',

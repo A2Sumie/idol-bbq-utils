@@ -35,7 +35,9 @@ HELP
         tools/forwarder-preflight.sh \
         tools/forwarder-remote-drift.sh \
         tools/forwarder-remote-converge.sh \
-        tools/forwarder-green-gate.sh
+        tools/forwarder-green-gate.sh \
+        tools/typecheck-hard-errors.sh
+    run bash tools/typecheck-hard-errors.sh
     run sh -n app/tweet-forwarder/start.sh
     run bash tools/forwarder-operator-contracts.sh
     run bun run audit:config -- --fail-on-diagnostics

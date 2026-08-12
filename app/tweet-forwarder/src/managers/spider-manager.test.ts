@@ -1504,3 +1504,113 @@ test('SpiderPools escalates repeat cooldowns for the same target', async () => {
     expect(third.expiresAt).toBeGreaterThan(second.expiresAt)
     expect(third.expiresAt - Date.now()).toBeLessThanOrEqual(6 * 60 * 60 * 1000)
 })
+
+test('SpiderPools passes a working articleStateLookup to Website crawls (duplicate-key regression)', async () => {
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const originalCheckExist = DB.Article.checkExist
+    const originalTrySave = DB.Article.trySave
+    const originalGetByArticleCode = DB.Article.getByArticleCode
+    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+    ;(DB.Article as any).checkExist = async () => undefined
+    ;(DB.Article as any).trySave = async () => undefined
+    ;(DB.Article as any).getByArticleCode = async (a_id: string) =>
+        a_id === 'known-detail' ? { a_id, created_at: 1000 } : undefined
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-website-state-lookup', new EventEmitter())
+        let capturedConfig: any = null
+        ;(pools as any).spiders.set('website-227', {
+            crawl: async (_url: string, _page: any, _taskId: string, config: any) => {
+                capturedConfig = config
+                return []
+            },
+        })
+
+        await (pools as any).onTaskReceived({
+            taskId: 'manual-website-state',
+            task: {
+                id: 'manual-website-state',
+                status: TaskScheduler.TaskStatus.PENDING,
+                data: {
+                    name: 'crawler-website-state',
+                    websites: ['https://nanabunnonijyuuni-mobile.com/s/n110/news/list'],
+                    cfg_crawler: { engine: 'unit-test' as any },
+                },
+            },
+        })
+
+        // The regression: articleStateLookup used to be overwritten by the YouTube
+        // variant of the same object key and arrived as undefined for Website crawls.
+        expect(typeof capturedConfig?.articleStateLookup).toBe('function')
+        const state = await capturedConfig.articleStateLookup('known-detail')
+        expect(state).toEqual({ known: true, createdAt: 1000 })
+        expect(typeof capturedConfig?.articlePrefixStateLookup).toBe('function')
+    } finally {
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+        ;(DB.Article as any).checkExist = originalCheckExist
+        ;(DB.Article as any).trySave = originalTrySave
+        ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
+    }
+})
+
+test('SpiderPools saves articles even when no schedule poke hook is wired', async () => {
+    const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
+    const originalCheckExist = DB.Article.checkExist
+    const originalTrySave = DB.Article.trySave
+    ;(DB.TaskQueue as any).updateStatus = async () => undefined
+    ;(DB.Article as any).checkExist = async () => undefined
+    let savedCount = 0
+    ;(DB.Article as any).trySave = async (article: any) => {
+        savedCount += 1
+        return { id: 228, ...article }
+    }
+
+    const ingestMock = async () => ({
+        tiktok: [{ videoId: '1', profileUrl: 'https://www.tiktok.com/@t', taskQueueId: 1, status: 'added' }],
+    })
+    const originalGetSingleArticle = DB.Article.getSingleArticle
+    ;(DB.Article as any).getSingleArticle = async () => ({ id: 229, a_id: 'poke-article' })
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-poke-absent', new EventEmitter(), undefined, {
+            enqueueExternalMediaLinks: ingestMock as any,
+        })
+        ;(pools as any).spiders.set('x-timeline', {
+            crawl: async () => [
+                {
+                    a_id: 'poke-article',
+                    u_id: 'member',
+                    username: 'member',
+                    created_at: 1773981283,
+                    url: 'https://x.com/member/status/poke-article',
+                    type: 'tweet',
+                    has_media: false,
+                    media: [],
+                    platform: Platform.X,
+                },
+            ],
+        })
+
+        await (pools as any).onTaskReceived({
+            taskId: 'manual-poke-absent',
+            task: {
+                id: 'manual-poke-absent',
+                status: TaskScheduler.TaskStatus.PENDING,
+                data: {
+                    name: 'crawler-poke-absent',
+                    websites: ['https://x.com/member'],
+                    cfg_crawler: { engine: 'unit-test' as any },
+                },
+            },
+        })
+
+        // Previously the missing pokeSchedules threw a TypeError that aborted the
+        // article-save loop; with the optional hook the save flow must complete.
+        expect(savedCount).toBeGreaterThan(0)
+    } finally {
+        ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus
+        ;(DB.Article as any).checkExist = originalCheckExist
+        ;(DB.Article as any).trySave = originalTrySave
+        ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
+    }
+})
