@@ -4,7 +4,7 @@ import { BaseSpider } from './base'
 import { Page } from 'puppeteer-core'
 
 import { JSONPath } from 'jsonpath-plus'
-import { getCookieString, HTTPClient } from '@/utils'
+import { getCookieString, HTTPClient, UserAgent, SimpleExpiringCache } from '@/utils'
 import dayjs, { type ManipulateType } from 'dayjs'
 
 const DEFAULT_YOUTUBE_HYDRATE_LIMIT = 8
@@ -47,7 +47,9 @@ class YoutubeSpider extends BaseSpider {
             }
             isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
             isStoredPremierePending?: (a_id: string) => Promise<boolean> | boolean
+            articleStateLookup?: (a_id: string) => Promise<{ known: boolean; storedPremierePending: boolean }>
             cookieString?: string
+            requestHeaders?: Record<string, string>
         },
     ): Promise<TaskTypeResult<T, Platform.YouTube>> {
         const result = super._match_valid_url(url, YoutubeSpider)?.groups
@@ -70,6 +72,10 @@ class YoutubeSpider extends BaseSpider {
                 hydrate_interval_time: config.hydrate_interval_time,
                 isArticleKnown: config.isArticleKnown,
                 isStoredPremierePending: config.isStoredPremierePending,
+                articleStateLookup: config.articleStateLookup,
+                cookieString: config.cookieString,
+                requestHeaders: config.requestHeaders,
+                cache: this.cache,
             })
 
             return res as TaskTypeResult<T, Platform.YouTube>
@@ -106,9 +112,34 @@ namespace YoutubeApiJsonParser {
         }
         isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
         isStoredPremierePending?: (a_id: string) => Promise<boolean> | boolean
+        articleStateLookup?: (a_id: string) => Promise<{ known: boolean; storedPremierePending: boolean }>
+        cookieString?: string
+        requestHeaders?: Record<string, string>
+        cache?: SimpleExpiringCache
     }
 
     const LOCALE_QUERY = 'hl=en&persist_hl=1&gl=US'
+    // Pending premieres used to be re-hydrated from the detail page every round (the
+    // only way to detect resolution). Re-checking on a TTL keeps detection while
+    // removing the per-round detail fetch for scheduled events that are days away.
+    const PREMIERE_RECHECK_TTL_S = 600
+
+    async function downloadListPage(url: string, headers: Record<string, string>) {
+        for (let attempt = 0; ; attempt++) {
+            try {
+                return await HTTPClient.download_webpage(url, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS })
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error)
+                const transient = /timeout|timed out|network|fetch failed|econnreset|socket hang up|(^|\s)50\d(\s|$)/i.test(
+                    message,
+                )
+                if (!transient || attempt >= 1) {
+                    throw error
+                }
+                await delay(600 * (attempt + 1))
+            }
+        }
+    }
 
     function normalizeUrl(url?: string | null): string | null {
         if (!url) {
@@ -583,14 +614,20 @@ namespace YoutubeApiJsonParser {
         const fallbackHandle = stripHandlePrefix(url.split('/').pop() || '')
         const videosUrl = `${url}/videos?${LOCALE_QUERY}`
         const shortsUrl = `${url}/shorts?${LOCALE_QUERY}`
-        const cookies = await page.cookies(videosUrl, shortsUrl)
+        // Prefer the manager-merged cookie string (seeded file cookies + live browser
+        // session); fall back to reading the page jar only when no cookie string was
+        // provided. Keep the fetch UA aligned with the browser profile.
+        const cookieString = options.cookieString?.trim()
+            ? options.cookieString
+            : getCookieString(await page.cookies(videosUrl, shortsUrl))
         const headers = {
             'accept-language': 'en-US,en;q=0.9',
-            cookie: getCookieString(cookies),
+            'user-agent': options.requestHeaders?.['user-agent'] || UserAgent.CHROME,
+            cookie: cookieString,
         }
         const [videosPage, shortsPage] = await Promise.all([
-            HTTPClient.download_webpage(videosUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
-            HTTPClient.download_webpage(shortsUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
+            downloadListPage(videosUrl, headers),
+            downloadListPage(shortsUrl, headers),
         ])
         let [videosText, shortsText] = await Promise.all([videosPage.text(), shortsPage.text()])
         let videosJson = extractAssignedObject<any>(videosText, 'ytInitialData')
@@ -635,7 +672,29 @@ namespace YoutubeApiJsonParser {
         )
         const knownIds = new Set<string>()
         const storedPendingPremiereIds = new Set<string>()
-        if (options.isArticleKnown) {
+        if (options.articleStateLookup) {
+            // Merged lookup: one DB round-trip per article serves both the known
+            // gate and the premiere-pending override.
+            await Promise.all(
+                baseArticles.map(async (article) => {
+                    try {
+                        const state = await options.articleStateLookup?.(article.a_id)
+                        if (!state?.known) {
+                            return
+                        }
+                        if (state.storedPremierePending) {
+                            storedPendingPremiereIds.add(article.a_id)
+                            return
+                        }
+                        if (!isPremierePendingArticle(article)) {
+                            knownIds.add(article.a_id)
+                        }
+                    } catch {
+                        // A lookup failure should not make the crawler miss upstream content; fall back to normal hydrate.
+                    }
+                }),
+            )
+        } else if (options.isArticleKnown) {
             await Promise.all(
                 baseArticles.map(async (article) => {
                     try {
@@ -660,7 +719,28 @@ namespace YoutubeApiJsonParser {
 
         const articlesById = new Map(baseArticles.map((article) => [article.a_id, article]))
         const hydrateQueue = baseArticles
-            .filter((article) => !knownIds.has(article.a_id))
+            .filter((article) => {
+                if (knownIds.has(article.a_id)) {
+                    return false
+                }
+                const premiereCheck =
+                    storedPendingPremiereIds.has(article.a_id) || isPremierePendingArticle(article)
+                if (!premiereCheck) {
+                    return true
+                }
+                // Scheduled premieres can sit pending for weeks; re-hydrating their
+                // detail page every round wastes a request per round. Re-check on a
+                // TTL, and always re-check near the scheduled start.
+                const cacheKey = `yt:premiere-check:${article.a_id}`
+                const lastCheck = options.cache?.get(cacheKey) as number | null
+                const scheduled = (article.extra?.data?.premiere?.scheduled_start_at as number | null) || null
+                const nearSchedule = Boolean(scheduled && Date.now() / 1000 >= scheduled - 60)
+                if (typeof lastCheck === 'number' && Date.now() / 1000 - lastCheck < PREMIERE_RECHECK_TTL_S && !nearSchedule) {
+                    return false
+                }
+                options.cache?.set(cacheKey, Math.floor(Date.now() / 1000), PREMIERE_RECHECK_TTL_S * 2)
+                return true
+            })
             .sort((a, b) => {
                 // Items without a usable list timestamp need the detail page most: the shorts tab
                 // markup no longer exposes a published time, so shorts carry created_at=0 from the

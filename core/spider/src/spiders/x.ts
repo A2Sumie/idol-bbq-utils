@@ -73,6 +73,45 @@ const X_UNIFIED_LIST_DEFAULT_CONCURRENCY = 2
 const X_UNIFIED_LIST_MAX_CONCURRENCY = 4
 const X_UNIFIED_LIST_MEMBER_CURSORS = new Map<string, number>()
 const X_UNIFIED_LIST_MEMBER_CACHE = new Map<string, Array<string>>()
+// In-flight dedup for rest-id lookups across concurrent XApiClient instances:
+// the same screen name never triggers two UserByScreenName requests at once.
+const X_REST_ID_IN_FLIGHT = new Map<string, Promise<string>>()
+// GraphQL requests observed on a page outside capture windows (e.g. during the
+// manager's warmup navigation). Buffered per page so the first capture attempt
+// can consume what warmup already triggered instead of reloading the page.
+const X_PAGE_REQUEST_BUFFER = new WeakMap<object, Array<{ url: string; headers: Record<string, string> }>>()
+const X_PAGE_REQUEST_BUFFER_LIMIT = 500
+
+/**
+ * Starts buffering X GraphQL requests fired by the page (typically attached
+ * before a warmup navigation). Idempotent per page; the buffer lives until
+ * drainCapturedXOperations consumes it.
+ */
+export function beginXOperationCapture(page: Page) {
+    if (X_PAGE_REQUEST_BUFFER.has(page)) {
+        return
+    }
+    const buffer: Array<{ url: string; headers: Record<string, string> }> = []
+    X_PAGE_REQUEST_BUFFER.set(page, buffer)
+    page.on('request', (request) => {
+        if (!/\/i\/api\/graphql\//.test(request.url())) {
+            return
+        }
+        buffer.push({ url: request.url(), headers: request.headers() })
+        if (buffer.length > X_PAGE_REQUEST_BUFFER_LIMIT) {
+            buffer.shift()
+        }
+    })
+}
+
+/**
+ * Returns (and clears) the GraphQL requests buffered on a page.
+ */
+export function drainCapturedXOperations(page: Page) {
+    const buffer = X_PAGE_REQUEST_BUFFER.get(page)
+    X_PAGE_REQUEST_BUFFER.delete(page)
+    return buffer || []
+}
 // Must match the `count` variable of XApiClient.grabTweets. The list timeline
 // (count=20) covers a member's latest tweets; when the discovery window already
 // contains at least this many tweets from a member, their UserTweets hydration
@@ -493,7 +532,17 @@ class XStatusSpider extends BaseSpider {
         let membersResolved = true
         let listMemberUserIds = await client
             .grabFollowsFromList(list_id, cookie)
-            .then((follows) => this.sanitizeUserIds(follows.map((follow) => follow?.u_id)))
+            .then((follows) => {
+                // ListMembers payloads already carry each member's rest_id: prefill the
+                // rest-id caches so member hydration never pays a UserByScreenName
+                // request for data we just fetched for free.
+                for (const follow of follows) {
+                    if (follow?.rest_id) {
+                        client.prefillRestId(follow.u_id || '', String(follow.rest_id))
+                    }
+                }
+                return this.sanitizeUserIds(follows.map((follow) => follow?.u_id))
+            })
             .catch((error) => {
                 this.log?.warn(`Unified list crawl failed to expand list members for ${list_id}: ${error}`)
                 membersResolved = false
@@ -976,7 +1025,7 @@ class XStatusSpider extends BaseSpider {
 /**
  * This is dangerous, because it will be banned by X if you use it too much
  */
-class XApiClient {
+export class XApiClient {
     guest_token = '1918915913551839395'
     PUBLIC_TOKEN =
         'Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA'
@@ -1022,10 +1071,23 @@ class XApiClient {
                 this.api_with_queryid[operation] = (cached as XOperationProfile).queryId
             }
         }
+        // Query ids extracted from the JS bundles are cached separately (ListMembers
+        // and TweetDetail are captured by the browser only when that op is requested,
+        // so their ids otherwise force a full HTML+JS re-download every round).
+        for (const operation of Object.values(XApis)) {
+            const queryId = this.cache?.get(this.queryIdCacheKey(operation))
+            if (typeof queryId === 'string' && queryId) {
+                this.api_with_queryid[operation] = queryId
+            }
+        }
     }
 
     private operationProfileCacheKey(operation: XApis) {
         return `x-op:${operation}`
+    }
+
+    private queryIdCacheKey(operation: XApis) {
+        return `x-queryid:${operation}`
     }
 
     /**
@@ -1091,7 +1153,10 @@ class XApiClient {
         ])
         if (res.status === 404) {
             if (userId) {
-                this.cache?.set(`x-restid:${userId}`, null, 0)
+                const normalized = normalizeHydrationUserId(userId)
+                if (normalized) {
+                    this.cache?.set(`x-restid:${normalized}`, null, 0)
+                }
             }
             const profile = this.operationProfiles[operation]
             const capturedRecently = Boolean(profile && Date.now() - profile.capturedAt < 30 * 60 * 1000)
@@ -1122,7 +1187,10 @@ class XApiClient {
     }
 
     async prepareListOperations(listId: string) {
-        await this.captureOperationsFromPage(`${this.BASE_URL}/i/lists/${listId}`, [XApis.ListLatestTweetsTimeline])
+        await this.captureOperationsFromPage(`${this.BASE_URL}/i/lists/${listId}`, [
+            XApis.ListLatestTweetsTimeline,
+            XApis.ListMembers,
+        ])
         await this.captureListViewportUsers(listId)
     }
 
@@ -1151,6 +1219,11 @@ class XApiClient {
                 const queryId = this.getQueryId(js_code, XApis.ListLatestTweetsTimeline)
                 if (queryId) {
                     this.api_with_queryid[XApis.ListLatestTweetsTimeline] = queryId
+                    this.cache?.set(
+                        this.queryIdCacheKey(XApis.ListLatestTweetsTimeline),
+                        queryId,
+                        X_CACHE_OPERATION_PROFILE_TTL_S,
+                    )
                 }
             }
         }
@@ -1180,6 +1253,19 @@ class XApiClient {
         }
 
         const requestedOperations = new Set(missingOperations)
+        // Warmup (or any earlier navigation) may already have fired the GraphQL
+        // requests we need: consume the page buffer before deciding to navigate.
+        for (const { url, headers } of drainCapturedXOperations(this.page)) {
+            const parsed = this.parseCapturedOperation(url)
+            if (!parsed || !requestedOperations.has(parsed.operationName)) {
+                continue
+            }
+            this.storeOperationProfile(url, headers)
+        }
+        if (missingOperations.every((operation) => Boolean(this.operationProfiles[operation]))) {
+            return
+        }
+
         const onRequest = (request: { url: () => string; headers: () => Record<string, string> }) => {
             const parsed = this.parseCapturedOperation(request.url())
             if (!parsed || !requestedOperations.has(parsed.operationName)) {
@@ -1293,14 +1379,17 @@ class XApiClient {
         await collectVisibleUsers()
 
         const viewport = this.page.viewport()
-        for (let index = 0; index < 3; index += 1) {
+        // A single larger scroll keeps the sample diverse enough while avoiding the
+        // extra ListLatestTweetsTimeline cursor requests each additional scroll used
+        // to trigger (those responses were consumed by nobody).
+        for (let index = 0; index < 1; index += 1) {
             if (viewport) {
                 const targetX = Math.floor(viewport.width * (0.25 + Math.random() * 0.5))
                 const targetY = Math.floor(viewport.height * (0.2 + Math.random() * 0.55))
                 await this.page.mouse.move(targetX, targetY, { steps: 10 }).catch(() => null)
             }
 
-            const scrollAmount = 500 + Math.floor(Math.random() * 900)
+            const scrollAmount = 800 + Math.floor(Math.random() * 1200)
             await this.page.mouse.wheel(0, scrollAmount).catch(() => null)
             await this.page
                 .evaluate((amount) => {
@@ -1406,6 +1495,7 @@ class XApiClient {
                 const queryId = this.getQueryId(jsCode, api)
                 if (queryId) {
                     this.api_with_queryid[api] = queryId
+                    this.cache?.set(this.queryIdCacheKey(api), queryId, X_CACHE_OPERATION_PROFILE_TTL_S)
                 }
             }
 
@@ -1539,37 +1629,68 @@ class XApiClient {
 
         const query = this.generateParams(features, variables, fieldToggles)
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetchWithTimeout(url, {
-            headers: this.buildOperationHeaders(XApis.UserByScreenName, cookie, {
-                includeGuestToken: true,
-                referer: `${this.BASE_URL}/${id}`,
-            }),
-        })
+        const res = await this.fetchWithTransientRetry(
+            url,
+            {
+                headers: this.buildOperationHeaders(XApis.UserByScreenName, cookie, {
+                    includeGuestToken: true,
+                    referer: `${this.BASE_URL}/${id}`,
+                }),
+            },
+            `user info (${id})`,
+        )
         this.assertOkOrInvalidate(res, `user info (${id})`, XApis.UserByScreenName, id)
         const json = await res.json()
         return json
     }
 
     async getRestId(id: string, cookie: string) {
-        if (this.name_to_rest_id[id]) {
-            return this.name_to_rest_id[id]
+        const key = normalizeHydrationUserId(id)
+        if (!key) {
+            throw new Error(`Invalid user id: ${id}`)
         }
-        const cached = this.cache?.get(`x-restid:${id}`)
+        if (this.name_to_rest_id[key]) {
+            return this.name_to_rest_id[key]
+        }
+        const cached = this.cache?.get(`x-restid:${key}`)
         if (cached) {
-            this.name_to_rest_id[id] = String(cached)
+            this.name_to_rest_id[key] = String(cached)
             return String(cached)
         }
-        const user_info = await this.getRawUserInfo(id, cookie)
+        const inFlight = X_REST_ID_IN_FLIGHT.get(key)
+        if (inFlight) {
+            return inFlight
+        }
+        const promise = this.fetchRestIdForUser(key, cookie).finally(() => X_REST_ID_IN_FLIGHT.delete(key))
+        X_REST_ID_IN_FLIGHT.set(key, promise)
+        return promise
+    }
+
+    /**
+     * Records a rest id obtained for free from another payload (ListMembers).
+     * Normalized key keeps one cache entry per account regardless of casing.
+     */
+    prefillRestId(key: string, restId: string) {
+        const normalized = normalizeHydrationUserId(key)
+        if (!normalized || !restId) {
+            return
+        }
+        this.name_to_rest_id[normalized] = restId
+        this.cache?.set(`x-restid:${normalized}`, restId, X_CACHE_REST_ID_TTL_S)
+    }
+
+    private async fetchRestIdForUser(key: string, cookie: string) {
+        const user_info = await this.getRawUserInfo(key, cookie)
         if (!user_info) {
-            throw new Error(`Failed to fetch user info for ${id}`)
+            throw new Error(`Failed to fetch user info for ${key}`)
         }
         const rest_id = user_info?.data?.user?.result?.rest_id
         if (!rest_id) {
-            throw new Error(`Failed to fetch rest id for ${id}`)
+            throw new Error(`Failed to fetch rest id for ${key}`)
         }
-        this.name_to_rest_id[id] = String(rest_id)
+        this.name_to_rest_id[key] = String(rest_id)
         if (this.cache) {
-            this.cache.set(`x-restid:${id}`, String(rest_id), X_CACHE_REST_ID_TTL_S)
+            this.cache.set(`x-restid:${key}`, String(rest_id), X_CACHE_REST_ID_TTL_S)
         }
         return String(rest_id)
     }
@@ -2526,13 +2647,14 @@ namespace XApiJsonParser {
         }
     }
 
-    export function tweetsFollowsFromListParser(json: any): Array<GenericFollows> {
+    export function tweetsFollowsFromListParser(json: any): Array<GenericFollows & { rest_id?: string | null }> {
         const results = JSONPath({ path: '$..user_results.result', json })
         return results.map((r: any) => {
             return {
                 platform: Platform.X,
                 username: r?.core?.name,
                 u_id: r?.core?.screen_name,
+                rest_id: r?.rest_id ?? null,
                 followers: r?.legacy?.followers_count,
             }
         })

@@ -1479,3 +1479,28 @@ test('SpiderPools warms browser sessions once per profile and honors cooldown re
     ;(pools as any).warmedBrowserSessions.set('fp-1', Date.now() - 31 * 60 * 1000)
     expect((pools as any).shouldPrimeBrowserSession(fakePage, url, 'fp-1', context)).toBe(true)
 })
+
+test('SpiderPools escalates repeat cooldowns for the same target', async () => {
+    const emitter = new EventEmitter()
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools-escalate', emitter)
+    const context = {
+        url: new URL('https://www.instagram.com/some_profile'),
+        platform: Platform.Instagram,
+        sessionProfile: 'desktop_chrome',
+        deviceProfile: 'desktop_chrome',
+    }
+
+    ;(pools as any).setCooldownForError(context, 'timeout', 'first timeout')
+    const first = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome')
+    expect(first.expiresAt - Date.now()).toBeGreaterThan(0)
+
+    const firstDuration = first.expiresAt
+    ;(pools as any).setCooldownForError(context, 'timeout', 'second timeout')
+    const second = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome')
+    expect(second.expiresAt).toBeGreaterThan(firstDuration)
+
+    ;(pools as any).setCooldownForError(context, 'timeout', 'third timeout')
+    const third = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome')
+    expect(third.expiresAt).toBeGreaterThan(second.expiresAt)
+    expect(third.expiresAt - Date.now()).toBeLessThanOrEqual(6 * 60 * 60 * 1000)
+})

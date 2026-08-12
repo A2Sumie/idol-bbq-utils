@@ -2,7 +2,7 @@ import dayjs from 'dayjs'
 import { test, expect } from 'bun:test'
 import { spiderRegistry } from '../src'
 import { ArticleTypeEnum, YoutubeApiJsonParser, YoutubeSpider } from '../src/spiders/youtube'
-import { HTTPClient } from '../src/utils'
+import { HTTPClient, SimpleExpiringCache } from '../src/utils'
 
 const channelHeaderFixture = {
     c4TabbedHeaderRenderer: {
@@ -566,6 +566,146 @@ test('YouTube grabArticles skips detail hydration for already-known articles', a
         expect(detailRequests).toHaveLength(1)
         expect(detailRequests[0]).toContain('/shorts/NYnbjoDltqA')
         expect(detailRequests[0]).not.toContain('bBRUMp_WNUU')
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
+test('YouTube grabArticles throttles stored-pending premiere detail rechecks to a TTL', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const requestedUrls: Array<string> = []
+    const realTitleVideos = {
+        header: officialChannelHeaderFixture,
+        richGridRenderer: {
+            contents: [{
+                richItemRenderer: {
+                    content: {
+                        videoRenderer: {
+                            videoId: 'premiere-ttl',
+                            title: { runs: [{ text: '【MV】TTL Premiere' }] },
+                            publishedTimeText: { simpleText: 'Upcoming' },
+                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-ttl/hqdefault.jpg', width: 480 }] },
+                        },
+                    },
+                },
+            }],
+        },
+    }
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        requestedUrls.push(url)
+        if (url.includes('/videos?')) {
+            return new Response(buildYoutubeInitialData(realTitleVideos))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData({ header: officialChannelHeaderFixture }))
+        }
+        return new Response(buildYoutubeDetailHtml('premiere-ttl'))
+    }
+
+    const cache = new SimpleExpiringCache()
+    const options = {
+        hydrate_limit: 8,
+        hydrate_concurrency: 1,
+        isStoredPremierePending: () => true,
+        isArticleKnown: () => true,
+        cache,
+    }
+    const countPremiereDetailFetches = () =>
+        requestedUrls.filter((url) => url.includes('premiere-ttl') && url.includes('/watch?')).length
+
+    try {
+        await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', options)
+        expect(countPremiereDetailFetches()).toBe(1)
+
+        // A second round within the TTL must not re-fetch the pending premiere.
+        await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', options)
+        expect(countPremiereDetailFetches()).toBe(1)
+
+        // After the TTL expires the premiere is re-checked.
+        cache.set('yt:premiere-check:premiere-ttl', Math.floor(Date.now() / 1000) - 601, 1)
+        await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', options)
+        expect(countPremiereDetailFetches()).toBe(2)
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
+test('YouTube grabArticles serves known + premiere state from a single merged lookup', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const lookupCalls: Array<string> = []
+    const isArticleKnownCalls: Array<string> = []
+    const realTitleVideos = {
+        header: officialChannelHeaderFixture,
+        richGridRenderer: {
+            contents: [{
+                richItemRenderer: {
+                    content: {
+                        videoRenderer: {
+                            videoId: 'merged-lookup',
+                            title: { runs: [{ text: '【MV】Merged' }] },
+                            publishedTimeText: { simpleText: 'Upcoming' },
+                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/merged-lookup/hqdefault.jpg', width: 480 }] },
+                        },
+                    },
+                },
+            }],
+        },
+    }
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        if (url.includes('/videos?')) {
+            return new Response(buildYoutubeInitialData(realTitleVideos))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData({ header: officialChannelHeaderFixture }))
+        }
+        return new Response(buildYoutubeDetailHtml('merged-lookup'))
+    }
+
+    try {
+        await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', {
+            hydrate_limit: 8,
+            hydrate_concurrency: 1,
+            articleStateLookup: async (a_id) => {
+                lookupCalls.push(a_id)
+                return { known: true, storedPremierePending: true }
+            },
+            isArticleKnown: (a_id) => {
+                isArticleKnownCalls.push(a_id)
+                return true
+            },
+        })
+
+        expect(lookupCalls).toContain('merged-lookup')
+        expect(isArticleKnownCalls).toEqual([])
+    } finally {
+        ;(HTTPClient as any).download_webpage = originalDownload
+    }
+})
+
+test('YouTube grabArticles retries a transient list fetch once before failing', async () => {
+    const originalDownload = HTTPClient.download_webpage
+    const calls: Array<string> = []
+    ;(HTTPClient as any).download_webpage = async (url: string) => {
+        calls.push(url)
+        if (url.includes('/videos?')) {
+            if (calls.filter((entry) => entry.includes('/videos?')).length < 2) {
+                throw new Error('socket hang up')
+            }
+            return new Response(buildYoutubeInitialData(videosFixture))
+        }
+        if (url.includes('/shorts?')) {
+            return new Response(buildYoutubeInitialData(shortsFixture))
+        }
+        const videoId = new URL(url).searchParams.get('v') || url.split('/').pop() || 'unknown'
+        return new Response(buildYoutubeDetailHtml(videoId))
+    }
+
+    try {
+        const articles = await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@anime-english-club', {
+            hydrate_limit: 8,
+        })
+        expect(articles.length).toBeGreaterThan(0)
+        expect(calls.filter((entry) => entry.includes('/videos?')).length).toBe(2)
     } finally {
         ;(HTTPClient as any).download_webpage = originalDownload
     }

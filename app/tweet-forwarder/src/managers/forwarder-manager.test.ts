@@ -12,7 +12,7 @@ import {
 } from './forwarder-manager'
 import { TaskScheduler } from '@/utils/base'
 import { fileURLToPath } from 'url'
-import { Forwarder, PartialForwarderSendError } from '@/middleware/forwarder/base'
+import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError } from '@/middleware/forwarder/base'
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { normalizeCronSecond } from '@/utils/cron'
@@ -12311,4 +12311,113 @@ test('content_fingerprint_dedup releases the claim when a realtime media send is
     // A blocked realtime send is not a visible delivery, so the fingerprint must be released (not retained).
     const fingerprintRecords = (DB.ContentFingerprint as any).__records as Map<string, any>
     expect(fingerprintRecords.size).toBe(0)
+})
+
+test('summary-card targets that fail non-retryably are cooled down instead of retried forever', async () => {
+    class FailingForwarder extends Forwarder {
+        NAME = 'failing-qq'
+        attempts = 0
+
+        protected async realSend(_texts: string[], _props?: any): Promise<any> {
+            this.attempts += 1
+            throw new NonRetryableForwarderSendError('QQ OneBot send failed (send_group_msg): result=120')
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new FailingForwarder(
+        {
+            block_until: '32h',
+            summary_card: {
+                enabled: true,
+                threshold: 2,
+                interval_seconds: 1800,
+                include_original_media: false,
+                single_item_behavior: 'summary_card',
+            },
+        } as any,
+        'target-nonretryable',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).renderService = {
+        process: async (article: any) => ({
+            text: article.content,
+            textCollapseMode: 'article',
+            cardMediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+            originalMediaFiles: [],
+            mediaFiles: [{ media_type: 'photo', path: '/tmp/summary-card.png' }],
+        }),
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: (files: Array<any>) =>
+            files.map((file) => ({
+                type: 'photo',
+                url: `data:image/png;base64,${Buffer.from(file.sourceArticleId || file.path).toString('base64')}`,
+                alt: file.sourceArticleId,
+            })),
+        cleanup: () => undefined,
+    }
+
+    const originalCheckExist = DB.ForwardBy.checkExist
+    ;(DB.ForwardBy as any).checkExist = async () => false
+
+    try {
+        await (pools as any).sendArticles(
+            undefined,
+            'nonretryable-threshold',
+            [1, 2].map((id) => ({
+                id,
+                a_id: `nr-${id}`,
+                platform: Platform.X,
+                username: `member${id}`,
+                u_id: `member${id}`,
+                content: `content ${id}`,
+                url: `https://x.com/member/status/${id}`,
+                type: 'tweet',
+                created_at: Math.floor(Date.now() / 1000),
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: `https://example.com/avatar-${id}.jpg`,
+            })),
+            [
+                {
+                    forwarder: target,
+                    runtime_config: undefined,
+                },
+            ],
+            {
+                render_type: 'text-card',
+            } as any,
+        )
+
+        backdateSummaryCardQueues(pools as any, 1800)
+        await (pools as any).flushDueSummaryCardQueues()
+
+        expect(target.attempts).toBe(1)
+        expect((pools as any).summaryCardTargetCooldowns.get('target-nonretryable')).toBeGreaterThan(Date.now())
+        expect(getSummaryCardQueueForTarget(pools as any, 'target-nonretryable')).toBeUndefined()
+
+        // A second flush while the target is cooling must not send again.
+        await (pools as any).flushDueSummaryCardQueues()
+        expect(target.attempts).toBe(1)
+    } finally {
+        ;(DB.ForwardBy as any).checkExist = originalCheckExist
+    }
 })

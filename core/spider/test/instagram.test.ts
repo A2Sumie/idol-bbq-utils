@@ -124,26 +124,31 @@ test('Instagram GraphQL friendly-name detection accepts current non-/graphql/que
 
 test('Instagram grabPosts resolves after posts query without waiting for highlights query', async () => {
     const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
-    const listeners = new Map<string, (data: any) => void>()
+    const listeners = new Map<string, Array<(data: any) => void>>()
     const page = {
         on: (eventName: string, handler: (data: any) => void) => {
-            listeners.set(eventName, handler)
+            const handlers = listeners.get(eventName) || []
+            handlers.push(handler)
+            listeners.set(eventName, handlers)
         },
         off: (eventName: string, handler: (data: any) => void) => {
-            if (listeners.get(eventName) === handler) {
-                listeners.delete(eventName)
-            }
+            listeners.set(
+                eventName,
+                (listeners.get(eventName) || []).filter((entry) => entry !== handler),
+            )
         },
         goto: async () => {
-            listeners.get('response')?.({
-                url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
-                status: () => 200,
-                json: async () => posts_json,
-                request: () => ({
-                    method: () => 'POST',
-                    postData: () => 'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D',
-                }),
-            })
+            for (const handler of listeners.get('response') || []) {
+                handler({
+                    url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
+                    status: () => 200,
+                    json: async () => posts_json,
+                    request: () => ({
+                        method: () => 'POST',
+                        postData: () => 'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D',
+                    }),
+                })
+            }
         },
         waitForSelector: async () => {
             throw new Error('not found')
@@ -153,12 +158,14 @@ test('Instagram grabPosts resolves after posts query without waiting for highlig
     const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/instagram/')
 
     expect(posts.length).toBeGreaterThan(0)
-    expect(listeners.has('response')).toBeFalse()
+    // The auxiliary profile-payload listener may remain attached until its own
+    // timeout; posts/highlights listeners must all be cleaned up.
+    expect((listeners.get('response') || []).length).toBeLessThanOrEqual(1)
 })
 
 test('Instagram grabPosts merges reloaded posts when a cache-bust reload returns newer data', async () => {
     const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
-    const listeners = new Map<string, (data: any) => void>()
+    const listeners = new Map<string, Array<(data: any) => void>>()
     const makeResponse = (json: any) => ({
         url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
         status: () => 200,
@@ -170,15 +177,20 @@ test('Instagram grabPosts merges reloaded posts when a cache-bust reload returns
     })
     const page = {
         on: (eventName: string, handler: (data: any) => void) => {
-            listeners.set(eventName, handler)
+            const handlers = listeners.get(eventName) || []
+            handlers.push(handler)
+            listeners.set(eventName, handlers)
         },
         off: (eventName: string, handler: (data: any) => void) => {
-            if (listeners.get(eventName) === handler) {
-                listeners.delete(eventName)
-            }
+            listeners.set(
+                eventName,
+                (listeners.get(eventName) || []).filter((entry) => entry !== handler),
+            )
         },
         goto: async () => {
-            listeners.get('response')?.(makeResponse(posts_json))
+            for (const handler of listeners.get('response') || []) {
+                handler(makeResponse(posts_json))
+            }
         },
         reload: async () => {
             const withNewer = JSON.parse(JSON.stringify(posts_json))
@@ -193,7 +205,9 @@ test('Instagram grabPosts merges reloaded posts when a cache-bust reload returns
                     code: 'NEWPOST',
                 },
             })
-            listeners.get('response')?.(makeResponse(withNewer))
+            for (const handler of listeners.get('response') || []) {
+                handler(makeResponse(withNewer))
+            }
         },
         waitForSelector: async () => {
             throw new Error('not found')
@@ -204,12 +218,14 @@ test('Instagram grabPosts merges reloaded posts when a cache-bust reload returns
         isArticleKnown: async () => true,
     })
     expect(posts.some((post) => post.a_id === 'NEWPOST')).toBe(true)
-    expect(listeners.has('response')).toBeFalse()
+    // The auxiliary profile-payload listener may remain attached until its own
+    // timeout; posts/highlights listeners must all be cleaned up.
+    expect((listeners.get('response') || []).length).toBeLessThanOrEqual(1)
 })
 
 test('Instagram grabPosts skips cache-bust reload when the first response has unknown posts', async () => {
     const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
-    const listeners = new Map<string, (data: any) => void>()
+    const listeners = new Map<string, Array<(data: any) => void>>()
     let reloadCalls = 0
     const makeResponse = () => ({
         url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
@@ -223,15 +239,20 @@ test('Instagram grabPosts skips cache-bust reload when the first response has un
     })
     const page = {
         on: (eventName: string, handler: (data: any) => void) => {
-            listeners.set(eventName, handler)
+            const handlers = listeners.get(eventName) || []
+            handlers.push(handler)
+            listeners.set(eventName, handlers)
         },
         off: (eventName: string, handler: (data: any) => void) => {
-            if (listeners.get(eventName) === handler) {
-                listeners.delete(eventName)
-            }
+            listeners.set(
+                eventName,
+                (listeners.get(eventName) || []).filter((entry) => entry !== handler),
+            )
         },
         goto: async () => {
-            listeners.get('response')?.(makeResponse())
+            for (const handler of listeners.get('response') || []) {
+                handler(makeResponse())
+            }
         },
         reload: async () => {
             reloadCalls += 1
@@ -247,7 +268,9 @@ test('Instagram grabPosts skips cache-bust reload when the first response has un
 
     expect(posts.length).toBeGreaterThan(0)
     expect(reloadCalls).toBe(0)
-    expect(listeners.has('response')).toBeFalse()
+    // The auxiliary profile-payload listener may remain attached until its own
+    // timeout; posts/highlights listeners must all be cleaned up.
+    expect((listeners.get('response') || []).length).toBeLessThanOrEqual(1)
 })
 
 test('Instagram parser drops generated media summaries while preserving real captions', () => {
@@ -743,5 +766,157 @@ test('Instagram article crawl does not invoke the private API fallback', async (
     } finally {
         ;(InsApiJsonParser as any).grabPosts = originalGrabPosts
         ;(InsApiJsonParser as any).grabStories = originalGrabStories
+    }
+})
+
+test('Instagram grabPostsAndHighlights captures posts and highlights in a single navigation', async () => {
+    const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
+    const highlights_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-highlights.json'), 'utf-8'))
+    const listeners = new Map<string, Array<(data: any) => void>>()
+    let gotoCount = 0
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            const handlers = listeners.get(eventName) || []
+            handlers.push(handler)
+            listeners.set(eventName, handlers)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(
+                eventName,
+                (listeners.get(eventName) || []).filter((entry) => entry !== handler),
+            )
+        },
+        goto: async () => {
+            gotoCount += 1
+            for (const handler of listeners.get('response') || []) {
+                handler({
+                    url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
+                    status: () => 200,
+                    json: async () => posts_json,
+                    request: () => ({
+                        method: () => 'POST',
+                        postData: () => 'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D',
+                    }),
+                })
+                handler({
+                    url: () => 'https://www.instagram.com/graphql/query/',
+                    status: () => 200,
+                    json: async () => highlights_json,
+                    request: () => ({
+                        method: () => 'POST',
+                        postData: () =>
+                            'av=0&fb_api_req_friendly_name=PolarisProfileStoryHighlightsTrayContentQuery&variables=%7B%7D',
+                    }),
+                })
+            }
+        },
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+    } as any
+
+    const result = await InsApiJsonParser.grabPostsAndHighlights(page, 'https://www.instagram.com/instagram/', {
+        isArticleKnown: async () => false,
+        wantHighlights: true,
+    })
+
+    expect(gotoCount).toBe(1)
+    expect(result.posts.length).toBeGreaterThan(0)
+    expect(result.highlights.length).toBeGreaterThan(0)
+})
+
+test('Instagram grabPosts skips the cache-bust reload for an empty profile', async () => {
+    const listeners = new Map<string, Array<(data: any) => void>>()
+    let reloadCalls = 0
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            const handlers = listeners.get(eventName) || []
+            handlers.push(handler)
+            listeners.set(eventName, handlers)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(
+                eventName,
+                (listeners.get(eventName) || []).filter((entry) => entry !== handler),
+            )
+        },
+        goto: async () => {
+            for (const handler of listeners.get('response') || []) {
+                handler({
+                    url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
+                    status: () => 200,
+                    json: async () => ({
+                        data: {
+                            xdt_api__v1__feed__user_timeline_graphql_connection: { edges: [] },
+                        },
+                    }),
+                    request: () => ({
+                        method: () => 'POST',
+                        postData: () => 'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D',
+                    }),
+                })
+            }
+        },
+        reload: async () => {
+            reloadCalls += 1
+        },
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+    } as any
+
+    const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/instagram/', {
+        isArticleKnown: async () => true,
+    })
+
+    expect(posts).toEqual([])
+    expect(reloadCalls).toBe(0)
+})
+
+test('Instagram highlights failures are isolated and keep posts', async () => {
+    const originalCombined = InsApiJsonParser.grabPostsAndHighlights
+    const originalHighlights = InsApiJsonParser.grabHighlights
+    const originalStories = InsApiJsonParser.grabStories
+    ;(InsApiJsonParser as any).grabPostsAndHighlights = async () => ({
+        posts: [
+            {
+                platform: 2,
+                a_id: 'POST1',
+                u_id: 'instagram',
+                username: 'Instagram',
+                created_at: 1773845200,
+                content: 'post survives',
+                url: 'https://www.instagram.com/p/POST1/',
+                type: 'post',
+                ref: null,
+                has_media: false,
+                media: [],
+                extra: null,
+                u_avatar: null,
+            },
+        ],
+        highlights: [],
+    })
+    ;(InsApiJsonParser as any).grabHighlights = async () => {
+        throw new Error('highlights blocked')
+    }
+    ;(InsApiJsonParser as any).grabStories = async () => []
+
+    try {
+        const spider = new InstagramSpider()
+        const page = {
+            evaluate: async () => true,
+        } as any
+        const articles = await spider.crawl('https://www.instagram.com/instagram/', page, 'ig-hl-fail', {
+            task_type: 'article',
+            crawl_engine: 'browser',
+            sub_task_type: ['posts', 'highlights'],
+        })
+
+        expect(articles.map((article: any) => article.a_id)).toEqual(['POST1'])
+    } finally {
+        ;(InsApiJsonParser as any).grabPostsAndHighlights = originalCombined
+        ;(InsApiJsonParser as any).grabHighlights = originalHighlights
+        ;(InsApiJsonParser as any).grabStories = originalStories
     }
 })

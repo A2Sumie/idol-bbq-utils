@@ -13,6 +13,7 @@ import {
     type ForwarderSendResult,
     getForwarderProviderResult,
     isForwarderSentResult,
+    NonRetryableForwarderSendError,
     PartialForwarderSendError,
 } from '@/middleware/forwarder/base'
 import { type Media, type MediaTool, MediaToolEnum } from '@/types/media'
@@ -954,6 +955,8 @@ class ForwarderPools extends BaseCompatibleModel {
     private summaryCardTargetLastSentAt = new Map<string, number>()
     private summaryCardProcessors = new Map<string, BaseProcessor>()
     private summaryCardFlushTimer?: ReturnType<typeof setInterval>
+    private summaryCardTargetCooldowns = new Map<string, number>()
+    private static readonly SUMMARY_CARD_NONRETRYABLE_COOLDOWN_MS = 30 * 60 * 1000
     private dispatchListener: (payload: unknown) => Promise<void>
     private shuttingDown = false
 
@@ -4951,6 +4954,23 @@ class ForwarderPools extends BaseCompatibleModel {
             return true
         } catch (error) {
             this.log?.error(`Failed to send single summary-card item to ${queue.target.id}: ${error}`)
+            if (error instanceof NonRetryableForwarderSendError) {
+                await DB.OutboundMessage.markFailed(outboundData.outboundIdempotencyKey, error).catch(() => undefined)
+                await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
+                this.summaryCardTargetCooldowns.set(
+                    queue.target.id,
+                    Date.now() + ForwarderPools.SUMMARY_CARD_NONRETRYABLE_COOLDOWN_MS,
+                )
+                if (queue.windowId) {
+                    await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
+                        payload_hash: outboundData.outboundPayloadHash,
+                    }).catch(() => undefined)
+                }
+                this.log?.warn(
+                    `Single summary-card send to ${queue.target.id} rejected with a non-retryable error; dropping item and cooling the target for 30m: ${error.message}`,
+                )
+                return true
+            }
             if (error instanceof PartialForwarderSendError) {
                 await DB.OutboundMessage.markPartial(
                     outboundData.outboundIdempotencyKey,
@@ -5012,8 +5032,21 @@ class ForwarderPools extends BaseCompatibleModel {
             this.summaryCardQueues.delete(queueKey)
             return
         }
-        this.summaryCardQueues.delete(queueKey)
         const now = Math.floor(Date.now() / 1000)
+        // A target that rejected a card non-retryably (e.g. muted group) must not be
+        // hammered every flush interval: keep the queue retained but skip the send
+        // attempt until the cooldown expires.
+        const cooldownUntil = this.summaryCardTargetCooldowns.get(queue.target.id)
+        if (cooldownUntil && cooldownUntil > Date.now()) {
+            this.log?.debug(
+                `Skipping summary-card flush for ${queue.target.id}: non-retryable send cooldown until ${dayjs(cooldownUntil).format()}`,
+            )
+            return
+        }
+        if (cooldownUntil) {
+            this.summaryCardTargetCooldowns.delete(queue.target.id)
+        }
+        this.summaryCardQueues.delete(queueKey)
         if (queue.windowId && this.isSummaryCardWindowStale({ window_end: queue.windowEnd }, queue.config, now)) {
             await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
                 payload_hash: 'stale-window',
@@ -5378,6 +5411,30 @@ class ForwarderPools extends BaseCompatibleModel {
             return true
         } catch (error) {
             this.log?.error(`Failed to send message pack card to ${queue.target.id}: ${error}`)
+            if (error instanceof NonRetryableForwarderSendError) {
+                await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+                this.summaryCardTargetCooldowns.set(
+                    queue.target.id,
+                    Date.now() + ForwarderPools.SUMMARY_CARD_NONRETRYABLE_COOLDOWN_MS,
+                )
+                await DB.TargetHealth.mark({
+                    target_id: queue.target.id,
+                    provider: queue.target.NAME,
+                    status: 'error',
+                    last_send_status: 'failed',
+                    disabled_reason: error.message,
+                    details: { route_key: queue.routeKey, task_kind: 'summary_card' },
+                }).catch(() => undefined)
+                if (queue.windowId) {
+                    await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
+                        payload_hash: outboundPayloadHash,
+                    }).catch(() => undefined)
+                }
+                this.log?.warn(
+                    `Summary-card send to ${queue.target.id} rejected with a non-retryable error; dropping queue and cooling the target for 30m: ${error.message}`,
+                )
+                return true
+            }
             if (error instanceof PartialForwarderSendError) {
                 await DB.OutboundMessage.markPartial(
                     outboundIdempotencyKey,

@@ -152,13 +152,50 @@ class InstagramSpider extends BaseSpider {
             const wantHighlights = sub_task_type?.includes(InstagramArticleTaskType.highlights) ?? false
 
             const articles: Array<GenericArticle<Platform.Instagram>> = []
-            if (wantPosts) {
-                this.log?.info('Trying to grab posts.')
-                articles.push(
-                    ...(await InsApiJsonParser.grabPosts(page, _url, {
-                        isArticleKnown: config.isArticleKnown,
-                    })),
-                )
+            if (wantPosts && wantHighlights) {
+                // One profile navigation serves posts + highlights tray + profile
+                // payload; the tray is captured on the same page load instead of
+                // navigating to the identical URL a second time.
+                this.log?.info('Trying to grab posts and highlights.')
+                const combined = await InsApiJsonParser.grabPostsAndHighlights(page, _url, {
+                    isArticleKnown: config.isArticleKnown,
+                    wantHighlights: true,
+                })
+                articles.push(...combined.posts)
+                if (combined.highlights.length > 0) {
+                    articles.push(...combined.highlights)
+                } else {
+                    try {
+                        // The tray query did not resolve on the shared load (rare):
+                        // only pay a dedicated navigation when the profile actually
+                        // renders highlight links.
+                        const hasHighlightsLinks = await page.evaluate(
+                            () => Boolean(document.querySelector('a[href*="/stories/highlights/"]')),
+                        )
+                        if (hasHighlightsLinks) {
+                            articles.push(...(await InsApiJsonParser.grabHighlights(page, _url)))
+                        }
+                    } catch (error) {
+                        this.log?.warn(`Failed to grab highlights for ${id}, keeping posts only: ${error}`)
+                    }
+                }
+            } else {
+                if (wantPosts) {
+                    this.log?.info('Trying to grab posts.')
+                    articles.push(
+                        ...(await InsApiJsonParser.grabPosts(page, _url, {
+                            isArticleKnown: config.isArticleKnown,
+                        })),
+                    )
+                }
+                if (wantHighlights) {
+                    this.log?.info('Trying to grab highlights.')
+                    try {
+                        articles.push(...(await InsApiJsonParser.grabHighlights(page, _url)))
+                    } catch (error) {
+                        this.log?.warn(`Failed to grab highlights for ${id}, keeping other articles: ${error}`)
+                    }
+                }
             }
             if (wantStories) {
                 this.log?.info(`Trying to grab stories.`)
@@ -170,10 +207,6 @@ class InstagramSpider extends BaseSpider {
                 } catch (error) {
                     this.log?.warn(`Failed to grab stories for ${id}, keeping posts only: ${error}`)
                 }
-            }
-            if (wantHighlights) {
-                this.log?.info('Trying to grab highlights.')
-                articles.push(...(await InsApiJsonParser.grabHighlights(page, _url)))
             }
             return articles as TaskTypeResult<T, Platform.Instagram>
         }
@@ -231,19 +264,16 @@ namespace InsApiJsonParser {
             : null
     }
 
-    async function checkLogin(page: Page) {
-        const login_form = await page.waitForSelector('form[id="loginForm"]', { timeout: 1000 }).catch(() => null)
-        if (login_form) {
+    async function checkPageHealth(page: Page) {
+        const [loginForm, mainFrameError] = await Promise.all([
+            page.waitForSelector('form[id="loginForm"]', { timeout: 1000 }).catch(() => null),
+            page.waitForSelector('div[id="main-frame-error"]', { timeout: 1000 }).catch(() => null),
+        ])
+        if (loginForm) {
             throw new Error('You need to login first, check your cookies')
         }
-    }
-
-    async function checkSomethingWrong(page: Page) {
-        const main_frame_error = await page
-            .waitForSelector('div[id="main-frame-error"]', { timeout: 1000 })
-            .catch(() => null)
-        if (main_frame_error) {
-            const error_content = (await main_frame_error.evaluate((e) => e.textContent))?.replace(/\s+/g, ' ')
+        if (mainFrameError) {
+            const error_content = (await mainFrameError.evaluate((e) => e.textContent))?.replace(/\s+/g, ' ')
             throw new Error(`Something wrong on the page: ${error_content}`)
         }
     }
@@ -444,7 +474,10 @@ namespace InsApiJsonParser {
         json: any,
         observedAt = Math.floor(Date.now() / 1000),
     ): Array<GenericArticle<Platform.Instagram>> {
-        const { edges } = parseEdges(json)
+        // Prefer the scoped highlights tray edges; a generic $..edges fallback can
+        // match a different edges section and silently parse the wrong payload.
+        const scoped = JSONPath({ path: '$..highlights.edges', json })[0]
+        const edges = Array.isArray(scoped) && scoped.length > 0 ? scoped : parseEdges(json).edges
         return edges
             .map((edge: any) => highlightParser(edge, observedAt))
             .filter((article: GenericArticle<Platform.Instagram>) => article.a_id && article.u_id)
@@ -540,132 +573,70 @@ namespace InsApiJsonParser {
      * @param url https://www.instagram.com/username
      * @description grab common posts from user page
      */
-    export async function grabPosts(
-        page: Page,
-        url: string,
-        config: {
-            viewport?: {
-                width: number
-                height: number
-            }
-            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
-        } = {},
-    ): Promise<Array<GenericArticle<Platform.Instagram>>> {
-        const fetchOnce = async (viaReload: boolean) => {
-            const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
-                const url = response.url()
-                const request = response.request()
-                const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
-                if (friendlyName !== PROFILE_POSTS_KEY) {
-                    return
-                }
-                if (response.status() >= 300 && response.status() < 400) {
-                    const location = response.headers()['location'] || ''
-                    if (/login/i.test(location)) {
-                        fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
-                    } else {
-                        fail(
-                            new Error(
-                                `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
-                            ),
-                        )
-                    }
-                    return
-                }
-                if (response.status() >= 400) {
-                    fail(new Error(`Error: ${response.status()}`))
-                    return
-                }
-                try {
-                    const json = await response.json()
-                    done(json)
-                } catch (e) {
-                    fail(e)
-                }
-            }, 60000)
-            if (config.viewport) {
-                await page.setViewport(config.viewport)
-            }
-            try {
-                if (viaReload) {
-                    await page.reload({ waitUntil: 'domcontentloaded' })
-                } else {
-                    await page.goto(url)
-                }
-            } catch (error) {
-                cleanup()
-                throw error
-            }
-            try {
-                await checkLogin(page)
-                await checkSomethingWrong(page)
-            } catch (error) {
-                cleanup()
-                throw error
-            }
+    type IgProfileFetchResult = {
+        posts: Array<GenericArticle<Platform.Instagram>>
+        highlightsJson: unknown
+        profileJson: unknown
+    }
 
-            const data = await waitForTweets
-            if (!data.success) {
-                throw data.error
-            }
-            const handle = (() => {
-                try {
-                    return String(new URL(url).pathname).split('/').filter(Boolean)[0] || ''
-                } catch {
-                    return ''
-                }
-            })()
-            return postsParser(data.data, { fallbackHandle: handle })
+    const PROFILE_PAYLOAD_CACHE_TTL_MS = 120_000
+    const PROFILE_PAYLOAD_CACHE = new Map<string, { payload: unknown; expiresAt: number }>()
+    // Profile payload promises observed during a posts crawl. Live-relay consumers
+    // (which run right after the crawl on their own page) can await these instead of
+    // paying a third profile navigation per round.
+    const PENDING_PROFILE_PROMISES = new Map<string, Promise<unknown>>()
+
+    function readCachedProfilePayload(url: string) {
+        const entry = PROFILE_PAYLOAD_CACHE.get(url)
+        if (!entry) {
+            return null
         }
-        const posts = await fetchOnce(false)
-        const known = new Set<string>()
-        for (const post of posts) {
-            try {
-                if (await config.isArticleKnown?.(post.a_id)) {
-                    known.add(post.a_id)
-                }
-            } catch {
-                // treat unknown on error
-            }
+        if (entry.expiresAt <= Date.now()) {
+            PROFILE_PAYLOAD_CACHE.delete(url)
+            return null
         }
-        if (known.size < posts.length) {
-            return posts
+        return entry.payload
+    }
+
+    function sleep(ms: number) {
+        return new Promise((resolve) => setTimeout(resolve, ms))
+    }
+
+    function storeProfilePayload(url: string, payload: unknown) {
+        if (!payload) {
+            return
         }
-        try {
-            const reloaded = await fetchOnce(true)
-            const byId = new Map(posts.map((post) => [post.a_id, post]))
-            for (const post of reloaded) {
-                byId.set(post.a_id, post)
+        PROFILE_PAYLOAD_CACHE.set(url, { payload, expiresAt: Date.now() + PROFILE_PAYLOAD_CACHE_TTL_MS })
+        if (PROFILE_PAYLOAD_CACHE.size > 128) {
+            const oldest = Array.from(PROFILE_PAYLOAD_CACHE.entries()).sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0]
+            if (oldest) {
+                PROFILE_PAYLOAD_CACHE.delete(oldest[0])
             }
-            return Array.from(byId.values())
-        } catch {
-            return posts
         }
     }
 
-    export async function grabHighlights(
-        page: Page,
-        url: string,
-        config: {
-            viewport?: {
-                width: number
-                height: number
-            }
-        } = {},
-    ): Promise<Array<GenericArticle<Platform.Instagram>>> {
-        const { cleanup, promise: waitForHighlights } = waitForResponse(page, async (response, { done, fail }) => {
+    function parseHandleFromUrl(url: string) {
+        try {
+            return String(new URL(url).pathname).split('/').filter(Boolean)[0] || ''
+        } catch {
+            return ''
+        }
+    }
+
+    function buildGraphQLResponseGate(friendlyNameKey: string) {
+        return async (response: any, control: { done: (data?: any) => void; fail: (reason: any) => void }) => {
             const responseUrl = response.url()
             const request = response.request()
             const friendlyName = graphQLFriendlyNameFromRequest(responseUrl, request.method(), request.postData())
-            if (friendlyName !== PROFILE_HIGHLIGHTS_KEY) {
+            if (friendlyName !== friendlyNameKey) {
                 return
             }
             if (response.status() >= 300 && response.status() < 400) {
                 const location = response.headers()['location'] || ''
                 if (/login/i.test(location)) {
-                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    control.fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
                 } else {
-                    fail(
+                    control.fail(
                         new Error(
                             `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
                         ),
@@ -674,22 +645,203 @@ namespace InsApiJsonParser {
                 return
             }
             if (response.status() >= 400) {
-                fail(new Error(`Error: ${response.status()}`))
+                control.fail(new Error(`Error: ${response.status()}`))
                 return
             }
             try {
-                done(await response.json())
+                control.done(await response.json())
             } catch (e) {
-                fail(e)
+                control.fail(e)
             }
-        })
-        if (config.viewport) {
-            await page.setViewport(config.viewport)
         }
-        await page.goto(url)
+    }
+
+    async function fetchIgProfilePayloads(
+        page: Page,
+        url: string,
+        options: {
+            wantHighlights: boolean
+            highlightsTimeoutMs?: number
+            postsTimeoutMs?: number
+            viaReload?: boolean
+        },
+    ): Promise<IgProfileFetchResult> {
+        const postsWait = waitForResponse(page, buildGraphQLResponseGate(PROFILE_POSTS_KEY), options.postsTimeoutMs ?? 60000)
+
+        // Highlights and profile payloads are auxiliary: they must never block or fail
+        // the posts capture, so their waits are raced with a timeout and swallowed.
+        // The reload path re-captures posts only; the profile payload from the first
+        // navigation is already stashed.
+        const highlightsWait = options.wantHighlights
+            ? waitForResponse(page, buildGraphQLResponseGate(PROFILE_HIGHLIGHTS_KEY), options.highlightsTimeoutMs ?? 12000)
+            : null
+        const profileWait = options.viaReload
+            ? null
+            : waitForResponse(
+                  page,
+                  async (response, control) => {
+                      const friendlyName = graphQLFriendlyNameFromRequest(
+                          response.url(),
+                          response.request().method(),
+                          response.request().postData(),
+                      )
+                      if (friendlyName !== PROFILE_USER_KEY) {
+                          return
+                      }
+                      if (response.status() >= 400) {
+                          return
+                      }
+                      try {
+                          control.done(await response.json())
+                      } catch {
+                          // auxiliary payload; ignore
+                      }
+                  },
+                  12000,
+              )
+
         try {
-            await checkLogin(page)
-            await checkSomethingWrong(page)
+            if (options.viaReload) {
+                await page.reload({ waitUntil: 'domcontentloaded' })
+            } else {
+                await page.goto(url)
+            }
+        } catch (error) {
+            postsWait.cleanup()
+            highlightsWait?.cleanup()
+            profileWait?.cleanup()
+            throw error
+        }
+        try {
+            await checkPageHealth(page)
+        } catch (error) {
+            postsWait.cleanup()
+            highlightsWait?.cleanup()
+            profileWait?.cleanup()
+            throw error
+        }
+
+        const postsData = await postsWait.promise
+        if (!postsData.success) {
+            throw postsData.error
+        }
+        const posts = postsParser(postsData.data, { fallbackHandle: parseHandleFromUrl(url) })
+
+        const trayResult = highlightsWait ? await highlightsWait.promise.catch(() => null) : null
+        const highlightsJson = trayResult && (trayResult as any).success ? (trayResult as any).data : null
+
+        // Do not block posts on the profile payload: stash the promise for the
+        // live-relay consumer and move on.
+        if (profileWait) {
+            const profilePromise = profileWait.promise
+                .then((result: any) => {
+                    const payload = result && result.success ? result.data : null
+                    if (payload) {
+                        storeProfilePayload(url, payload)
+                    }
+                    return payload
+                })
+                .catch(() => null)
+                .finally(() => PENDING_PROFILE_PROMISES.delete(url))
+            PENDING_PROFILE_PROMISES.set(url, profilePromise)
+        }
+
+        return { posts, highlightsJson, profileJson: null }
+    }
+
+    export async function grabPostsAndHighlights(
+        page: Page,
+        url: string,
+        config: {
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
+            wantHighlights?: boolean
+            highlightsTimeoutMs?: number
+        } = {},
+    ): Promise<{ posts: Array<GenericArticle<Platform.Instagram>>; highlights: Array<GenericArticle<Platform.Instagram>> }> {
+        const wantHighlights = Boolean(config.wantHighlights)
+        const first = await fetchIgProfilePayloads(page, url, {
+            wantHighlights,
+            highlightsTimeoutMs: config.highlightsTimeoutMs,
+        })
+        let posts = first.posts
+        // An empty profile cannot surface anything new: skip the cache-bust reload
+        // (the "all known" heuristic would otherwise always trigger it here).
+        if (posts.length > 0) {
+            const known = new Set<string>()
+            const knownResults = await Promise.all(
+                posts.map(async (post) => {
+                    try {
+                        return (await config.isArticleKnown?.(post.a_id)) ? post.a_id : null
+                    } catch {
+                        return null
+                    }
+                }),
+            )
+            for (const id of knownResults) {
+                if (id) {
+                    known.add(id)
+                }
+            }
+            const allKnown = posts.every((post) => known.has(post.a_id))
+            if (allKnown) {
+                try {
+                    const reloaded = await fetchIgProfilePayloads(page, url, {
+                        wantHighlights: false,
+                        viaReload: true,
+                    })
+                    const byId = new Map(posts.map((post) => [post.a_id, post]))
+                    for (const post of reloaded.posts) {
+                        byId.set(post.a_id, post)
+                    }
+                    posts = Array.from(byId.values())
+                } catch {
+                    // keep the first-pass posts
+                }
+            }
+        }
+
+        let highlights: Array<GenericArticle<Platform.Instagram>> = []
+        if (wantHighlights && first.highlightsJson) {
+            try {
+                highlights = highlightsParser(first.highlightsJson)
+            } catch {
+                // caller falls back to the dedicated highlights navigation
+            }
+        }
+        return { posts, highlights }
+    }
+
+    export async function grabPosts(
+        page: Page,
+        url: string,
+        config: {
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
+        } = {},
+    ): Promise<Array<GenericArticle<Platform.Instagram>>> {
+        const { posts } = await grabPostsAndHighlights(page, url, { ...config, wantHighlights: false })
+        return posts
+    }
+
+    export async function grabHighlights(
+        page: Page,
+        url: string,
+        config: {
+            timeout?: number
+        } = {},
+    ): Promise<Array<GenericArticle<Platform.Instagram>>> {
+        const { cleanup, promise: waitForHighlights } = waitForResponse(
+            page,
+            buildGraphQLResponseGate(PROFILE_HIGHLIGHTS_KEY),
+            config.timeout ?? 30000,
+        )
+        try {
+            await page.goto(url)
+        } catch (error) {
+            cleanup()
+            throw error
+        }
+        try {
+            await checkPageHealth(page)
         } catch (error) {
             cleanup()
             throw error
@@ -712,23 +864,11 @@ namespace InsApiJsonParser {
         page: Page,
         url: string,
         config: {
-            viewport?: {
-                width: number
-                height: number
-            }
             timeout?: number
         } = {},
     ): Promise<Array<GenericArticle<Platform.Instagram>>> {
-        if (config.viewport) {
-            await page.setViewport(config.viewport)
-        }
         await page.goto(url, config.timeout ? { timeout: config.timeout } : undefined)
-        try {
-            await checkLogin(page)
-            await checkSomethingWrong(page)
-        } catch (error) {
-            throw error
-        }
+        await checkPageHealth(page)
         /**
          * Xpath selector for stories json, but not working in bun with puppeteer version after 22.10+
          */
@@ -784,43 +924,30 @@ namespace InsApiJsonParser {
     }
 
     async function grabProfileUserPayload(page: Page, url: string) {
-        const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
-            const url = response.url()
-            const request = response.request()
-            const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
-            if (friendlyName !== PROFILE_USER_KEY) {
-                return
+        // The posts crawl usually fired PolarisProfilePageContentQuery moments ago on
+        // this same URL (live relay runs right after the crawl): reuse it instead of
+        // paying a third full profile navigation per round.
+        const cached = readCachedProfilePayload(url)
+        if (cached) {
+            return cached
+        }
+        const pending = PENDING_PROFILE_PROMISES.get(url)
+        if (pending) {
+            const payload = await Promise.race([pending, sleep(5000).then(() => null)])
+            if (payload) {
+                return payload
             }
-            if (response.status() >= 300 && response.status() < 400) {
-                // A redirected GraphQL response has no readable body in Puppeteer. Instagram answers with a
-                // 302 both for login bounces (expired session) and for rate-limit/challenge throttling;
-                // only the Location header tells them apart.
-                const location = response.headers()['location'] || ''
-                if (/login/i.test(location)) {
-                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
-                } else {
-                    fail(
-                        new Error(
-                            `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
-                        ),
-                    )
-                }
-                return
-            }
-            if (response.status() >= 400) {
-                fail(new Error(`Error: ${response.status()}`))
-                return
-            }
-            try {
-                done(await response.json())
-            } catch (e) {
-                fail(e)
-            }
-        })
-        await page.goto(url)
+        }
+
+        const { cleanup, promise: waitForTweets } = waitForResponse(page, buildGraphQLResponseGate(PROFILE_USER_KEY), 20000)
         try {
-            await checkLogin(page)
-            await checkSomethingWrong(page)
+            await page.goto(url)
+        } catch (error) {
+            cleanup()
+            throw error
+        }
+        try {
+            await checkPageHealth(page)
         } catch (error) {
             cleanup()
             throw error
@@ -829,6 +956,7 @@ namespace InsApiJsonParser {
         if (!data.success) {
             throw data.error
         }
+        storeProfilePayload(url, data.data)
         return data.data
     }
 }

@@ -1,6 +1,6 @@
 import puppeteer from 'puppeteer-core'
 import { Spider, X } from '@/.'
-import { parseNetscapeCookieToPuppeteerCookie, UserAgent } from '@/utils'
+import { parseNetscapeCookieToPuppeteerCookie, SimpleExpiringCache, UserAgent } from '@/utils'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { createLogger, winston, format } from '@idol-bbq-utils/log'
@@ -805,4 +805,87 @@ test('assertXResponseOk keeps statusText when the runtime provides it', () => {
         thrown = error
     }
     expect((thrown as Error).message).toBe('Failed to fetch user info (X): 403 Forbidden')
+})
+
+test('X ListMembers parser carries each member rest_id for prefill', () => {
+    const json = {
+        data: {
+            list: {
+                members_timeline: {
+                    timeline: {
+                        instructions: [
+                            {
+                                type: 'TimelineAddEntries',
+                                entries: [
+                                    {
+                                        content: {
+                                            itemContent: {
+                                                user_results: {
+                                                    result: {
+                                                        rest_id: '111',
+                                                        core: { name: 'Alpha', screen_name: 'alpha' },
+                                                        legacy: { followers_count: 100 },
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                    {
+                                        content: {
+                                            itemContent: {
+                                                user_results: {
+                                                    result: {
+                                                        rest_id: '222',
+                                                        core: { name: 'Beta', screen_name: 'beta' },
+                                                        legacy: { followers_count: 200 },
+                                                    },
+                                                },
+                                            },
+                                        },
+                                    },
+                                ],
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    }
+
+    const follows = X.XApiJsonParser.tweetsFollowsFromListParser(json)
+    expect(follows).toHaveLength(2)
+    expect((follows[0] as any).rest_id).toBe('111')
+    expect((follows[1] as any).rest_id).toBe('222')
+})
+
+test('XApiClient prefilled rest ids answer with normalized keys and no extra request', async () => {
+    const client = new X.XApiClient()
+    client.prefillRestId('@Alpha', '12345')
+    ;(client as any).getRawUserInfo = async () => {
+        throw new Error('must not be called')
+    }
+    expect(await client.getRestId('ALPHA', 'cookie')).toBe('12345')
+    expect(await client.getRestId('alpha', 'cookie')).toBe('12345')
+})
+
+test('XApiClient dedupes concurrent rest-id lookups for the same user', async () => {
+    const client = new X.XApiClient()
+    let lookupCalls = 0
+    ;(client as any).getRawUserInfo = async () => {
+        lookupCalls += 1
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return { data: { user: { result: { rest_id: '4242' } } } }
+    }
+
+    const [first, second] = await Promise.all([client.getRestId('gamma', 'cookie'), client.getRestId('@GAMMA', 'cookie')])
+    expect(first).toBe('4242')
+    expect(second).toBe('4242')
+    expect(lookupCalls).toBe(1)
+})
+
+test('XApiClient preloads persisted query ids from the spider cache', () => {
+    const cache = new SimpleExpiringCache()
+    cache.set('x-queryid:ListMembers', 'listMembersQueryId', 3600)
+    const client = new X.XApiClient(undefined, undefined, undefined, cache)
+    expect((client as any).api_with_queryid['ListMembers']).toBe('listMembersQueryId')
 })

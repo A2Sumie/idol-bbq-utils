@@ -1,5 +1,6 @@
 import { Logger } from '@idol-bbq-utils/log'
 import {
+    beginXOperationCapture,
     buildBrowserRequestHeaders,
     HttpStatusError,
     HttpTimeoutError,
@@ -975,6 +976,10 @@ class SpiderPools extends BaseCompatibleModel {
     private browserPool: BrowserSessionPool
     private instagramLiveRelay: InstagramLiveRelayService
     private riskCooldowns = new Map<string, CrawlRiskCooldown>()
+    private cooldownEscalations = new Map<
+        string,
+        { classification: CrawlErrorClass; consecutive: number; lastSetAt: number }
+    >()
     private seededBrowserSessions = new Set<string>()
     private warmedBrowserSessions = new Map<string, number>()
     private static readonly X_WARMUP_REFRESH_MS = 30 * 60 * 1000
@@ -1918,8 +1923,34 @@ class SpiderPools extends BaseCompatibleModel {
         if (duration <= 0) {
             return
         }
-        this.riskCooldowns.set(this.crawlCooldownKey(context), {
-            expiresAt: Date.now() + duration,
+        const key = this.crawlCooldownKey(context)
+        const now = Date.now()
+        // A target that fails the same way every round is not helped by hammering:
+        // escalate repeat cooldowns exponentially (up to 6h) so failing targets
+        // back off instead of re-attempting at full frequency forever.
+        const history = this.cooldownEscalations.get(key)
+        let consecutive = 1
+        if (
+            history &&
+            history.classification === classification &&
+            now - history.lastSetAt < 2 * 60 * 60 * 1000
+        ) {
+            consecutive = history.consecutive + 1
+        }
+        const multiplier = Math.min(Math.pow(2, consecutive - 1), 8)
+        const effectiveDuration = Math.min(duration * multiplier, 6 * 60 * 60 * 1000)
+        this.cooldownEscalations.set(key, {
+            classification,
+            consecutive,
+            lastSetAt: now,
+        })
+        if (consecutive > 1 && effectiveDuration > duration) {
+            this.log?.warn(
+                `Escalating ${classification} cooldown for ${context.url.hostname} (attempt ${consecutive}): ${Math.round(duration / 60000)}m -> ${Math.round(effectiveDuration / 60000)}m`,
+            )
+        }
+        this.riskCooldowns.set(key, {
+            expiresAt: now + effectiveDuration,
             classification,
             message,
         })
@@ -1963,6 +1994,12 @@ class SpiderPools extends BaseCompatibleModel {
         if (this.getActiveCooldown(context)) {
             return true
         }
+        // The YouTube spider consumes only cookies, never warmup DOM; cookie
+        // freshness is maintained by the dedicated keepalive tooling. Skip the
+        // full page load entirely (cooldown recovery is kept above).
+        if (context.platform === Platform.YouTube) {
+            return false
+        }
         if (!sessionFingerprint) {
             return true
         }
@@ -1994,6 +2031,13 @@ class SpiderPools extends BaseCompatibleModel {
 
     private async primeBrowserSession(page: Page, url: URL, log?: Logger) {
         try {
+            // X api engines capture GraphQL query ids/headers from a page navigation.
+            // Buffering requests during warmup lets the spider consume what this
+            // navigation already triggered instead of reloading the same URL right
+            // after (cold-cache rounds otherwise paid two full page loads).
+            if (url.hostname === 'x.com' || url.hostname === 'twitter.com') {
+                beginXOperationCapture(page)
+            }
             await page.goto(url.href, {
                 waitUntil: 'domcontentloaded',
                 timeout: 15000,
@@ -2150,6 +2194,25 @@ class SpiderPools extends BaseCompatibleModel {
                           isArticleKnown: platform
                               ? async (a_id: string) => Boolean(await DB.Article.getByArticleCode(a_id, platform))
                               : undefined,
+                          // YouTube needs known + premiere-pending per article; serve
+                          // both from one DB lookup instead of two callbacks each
+                          // issuing the same query per round.
+                          articleStateLookup:
+                              platform === Platform.YouTube
+                                  ? async (a_id: string) => {
+                                        const existing = await DB.Article.getByArticleCode(a_id, platform)
+                                        return {
+                                            known: Boolean(existing),
+                                            storedPremierePending: existing
+                                                ? isPremierePendingArticleLike({
+                                                      platform,
+                                                      content: (existing as any)?.content || null,
+                                                      extra: (existing as any)?.extra || null,
+                                                  })
+                                                : false,
+                                        }
+                                    }
+                                  : undefined,
                           isStoredPremierePending:
                               platform === Platform.YouTube
                                   ? async (a_id: string) => {

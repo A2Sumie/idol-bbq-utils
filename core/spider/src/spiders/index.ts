@@ -136,6 +136,7 @@ namespace Spider {
 
 export { Spider, spiderRegistry }
 export * from './base'
+export { beginXOperationCapture, drainCapturedXOperations } from './x'
 export * as X from './x'
 export * as Instagram from './instagram'
 export * as Tiktok from './tiktok'
