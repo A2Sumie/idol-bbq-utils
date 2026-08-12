@@ -500,31 +500,38 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         const normalItems = items.filter((item) => item.cardMedia.length === 0)
         const splitMediaItems = items.filter((item) => item.cardMedia.length > 0 && item.contentMedia.length > 0)
 
+        // Each segment is an independent provider send. When a later segment fails
+        // after earlier segments already posted, re-sending the whole batch would
+        // duplicate the visible earlier segments: surface it as a partial instead.
+        const sendSegment = async (part: string, texts: string[], media: Array<any>) => {
+            if (media.length === 0 && texts.length === 0) {
+                return
+            }
+            try {
+                providerResults.push(await this.sendPrepared(texts, { ...baseProps, media }))
+            } catch (error) {
+                if (providerResults.length > 0) {
+                    throw new PartialForwarderSendError(
+                        `media batch part ${part} failed after earlier parts were posted`,
+                        providerResults,
+                        `media_batch_part_${part}`,
+                        error,
+                    )
+                }
+                throw error
+            }
+        }
+
         if (cardItems.length > 0) {
-            providerResults.push(
-                await this.sendPrepared(this.buildTextChunksFromItems(cardItems), {
-                    ...baseProps,
-                    media: cardItems.flatMap((item) => item.cardMedia),
-                }),
-            )
+            await sendSegment('card', this.buildTextChunksFromItems(cardItems), cardItems.flatMap((item) => item.cardMedia))
         }
 
         if (normalItems.length > 0) {
-            providerResults.push(
-                await this.sendPrepared(this.buildTextChunksFromItems(normalItems), {
-                    ...baseProps,
-                    media: normalItems.flatMap((item) => item.media),
-                }),
-            )
+            await sendSegment('normal', this.buildTextChunksFromItems(normalItems), normalItems.flatMap((item) => item.media))
         }
 
         if (splitMediaItems.length > 0) {
-            providerResults.push(
-                await this.sendPrepared([], {
-                    ...baseProps,
-                    media: splitMediaItems.flatMap((item) => item.contentMedia),
-                }),
-            )
+            await sendSegment('content_media', [], splitMediaItems.flatMap((item) => item.contentMedia))
         }
         return {
             status: 'sent',
@@ -569,6 +576,26 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             config: batchConfig,
             items: [] as PreparedBatchItem[],
             unitCount: 0,
+        }
+
+        // A stale queued outbound can be re-claimed and re-dispatched 30 minutes
+        // later; without dedup the same article would be pushed into the same
+        // batch twice and appear twice in one visible message. Production sends
+        // always carry the outboundKey; direct calls without one keep the old
+        // append behavior.
+        if (
+            item.outboundKey &&
+            batch.items.some((existing) => existing.outboundKey === item.outboundKey)
+        ) {
+            this.log?.debug(`Media batch item ${item.outboundKey} already queued for ${this.id}; skipping duplicate`)
+            return {
+                status: 'queued',
+                reason: 'media_batch',
+                batchKey,
+                pendingUnits: batch.unitCount,
+                threshold: batchConfig.threshold,
+                outboundKey: item.outboundKey,
+            }
         }
 
         batch.items.push(item)

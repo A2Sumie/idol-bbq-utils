@@ -956,7 +956,10 @@ class ForwarderPools extends BaseCompatibleModel {
     private summaryCardProcessors = new Map<string, BaseProcessor>()
     private summaryCardFlushTimer?: ReturnType<typeof setInterval>
     private summaryCardTargetCooldowns = new Map<string, number>()
+    private articleTargetCooldowns = new Map<string, number>()
+    private translationPassthroughCache = new Map<string, { value: boolean; at: number }>()
     private static readonly SUMMARY_CARD_NONRETRYABLE_COOLDOWN_MS = 30 * 60 * 1000
+    private static readonly ARTICLE_NONRETRYABLE_COOLDOWN_MS = 10 * 60 * 1000
     private dispatchListener: (payload: unknown) => Promise<void>
     private shuttingDown = false
 
@@ -2161,6 +2164,18 @@ class ForwarderPools extends BaseCompatibleModel {
                             hadNonErrorOutcome = true
                             return
                         }
+                        // A target that rejected this exact article non-retryably is
+                        // cooled instead of re-rendering + re-sending every cycle.
+                        const targetCooldownKey = `${platform}:${cloned_article.a_id}:${target.id}`
+                        const cooldownUntil = this.articleTargetCooldowns.get(targetCooldownKey)
+                        if (cooldownUntil && cooldownUntil > Date.now()) {
+                            log?.debug(`Skipping article ${cloned_article.a_id} for ${target.id}: non-retryable send cooldown`)
+                            hadNonErrorOutcome = true
+                            return
+                        }
+                        if (cooldownUntil) {
+                            this.articleTargetCooldowns.delete(targetCooldownKey)
+                        }
                         const routeKeyForTarget = targetRouteKey(
                             context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
                             target.id,
@@ -2866,6 +2881,20 @@ class ForwarderPools extends BaseCompatibleModel {
                         hadNonErrorOutcome = true
                     } catch (error) {
                         log?.error(`Error while sending to ${target.id}: ${error}`)
+                        if (error instanceof NonRetryableForwarderSendError) {
+                            this.articleTargetCooldowns.set(
+                                `${platform}:${cloned_article.a_id}:${target.id}`,
+                                Date.now() + ForwarderPools.ARTICLE_NONRETRYABLE_COOLDOWN_MS,
+                            )
+                            if (this.articleTargetCooldowns.size > 2000) {
+                                const oldest = Array.from(this.articleTargetCooldowns.entries()).sort(
+                                    (a, b) => a[1] - b[1],
+                                )[0]
+                                if (oldest) {
+                                    this.articleTargetCooldowns.delete(oldest[0])
+                                }
+                            }
+                        }
                         const partialError = error instanceof PartialForwarderSendError ? error : null
                         const routeKeyForTarget = targetRouteKey(
                             context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
@@ -3008,14 +3037,29 @@ class ForwarderPools extends BaseCompatibleModel {
             return false
         }
         const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', articleKey(article))
+        // The prefilter and the per-target send path both call this for the same
+        // (article, target) within one dispatch run, and every crawl cycle
+        // re-dispatches known articles through the prefilter; memoize briefly so
+        // the same outbound lookup is not issued repeatedly.
+        const cacheKey = `${article.id}:${target.id}`
+        const cached = this.translationPassthroughCache.get(cacheKey)
+        if (cached && cached.at > Date.now() - 30_000) {
+            return cached.value
+        }
         const record = await DB.OutboundMessage.getByIdempotencyKey(passthroughKey).catch(() => null)
-        if (!record) {
-            return true
+        const result = !record
+            ? true
+            : isOutboundSuppressedCompletionStatus(record.status)
+              ? false
+              : !DB.OutboundMessage.isTerminalFailed(record)
+        this.translationPassthroughCache.set(cacheKey, { value: result, at: Date.now() })
+        if (this.translationPassthroughCache.size > 2000) {
+            const oldest = Array.from(this.translationPassthroughCache.entries()).sort((a, b) => a[1].at - b[1].at)[0]
+            if (oldest) {
+                this.translationPassthroughCache.delete(oldest[0])
+            }
         }
-        if (isOutboundSuppressedCompletionStatus(record.status)) {
-            return false
-        }
-        return !DB.OutboundMessage.isTerminalFailed(record)
+        return result
     }
 
     private articleHasRenderableRef(article: Pick<ArticleWithId, 'ref'>) {
@@ -4587,6 +4631,13 @@ class ForwarderPools extends BaseCompatibleModel {
     private async flushDueSummaryCardQueues() {
         const now = Math.floor(Date.now() / 1000)
         let flushed = 0
+        // Drop digest state that ended more than a day ago so long-running
+        // processes do not accumulate (targetId, tag) entries forever.
+        for (const [key, state] of this.tagDigestStates) {
+            if (state.digestUntil && state.digestUntil < now - 24 * 3600) {
+                this.tagDigestStates.delete(key)
+            }
+        }
         for (const [queueKey, queue] of Array.from(this.summaryCardQueues.entries())) {
             if (this.isSummaryCardQueueDue(queue, now)) {
                 await this.flushSummaryCardQueue(queueKey, 'interval')

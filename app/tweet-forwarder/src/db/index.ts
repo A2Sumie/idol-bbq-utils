@@ -1368,14 +1368,26 @@ namespace DB {
                     isOutboundFailedStatus(existing.status) &&
                     failedAttempts < FAILED_RETRY_LIMIT &&
                     existing.updated_at <= now - failedBackoffSeconds(failedAttempts)
-                const dryRunRetryable = existing.status === OUTBOUND_STATUS.DryRun
+                // Dry-run must not re-claim every dispatch cycle; give it the same
+                // 60s floor as a failed attempt so capture-mode loops do not
+                // re-render and re-"send" the same payload continuously.
+                const dryRunRetryable =
+                    existing.status === OUTBOUND_STATUS.DryRun &&
+                    existing.updated_at <= now - FAILED_RETRY_BASE_SECONDS
                 const retryable =
                     dryRunRetryable || failedRetryable || (isOutboundStaleRetryableStatus(existing.status) && stale)
                 if (!retryable) {
                     return { claimed: false, record: await recordSuppressedPayloadDrift(existing, data, now) }
                 }
-                const record = await prisma.outbound_messages.update({
-                    where: { idempotency_key: data.idempotency_key },
+                // Conditional update so two concurrent claimers of the same stale
+                // record cannot both flip it to Planned (read-then-update race used
+                // to allow double sends).
+                const updated = await prisma.outbound_messages.updateMany({
+                    where: {
+                        idempotency_key: data.idempotency_key,
+                        status: existing.status,
+                        updated_at: existing.updated_at,
+                    },
                     data: {
                         route_key: data.route_key,
                         target_id: data.target_id,
@@ -1391,6 +1403,15 @@ namespace DB {
                         updated_at: now,
                         finished_at: null,
                     },
+                })
+                if (updated.count === 0) {
+                    const loserRecord = await prisma.outbound_messages.findUniqueOrThrow({
+                        where: { idempotency_key: data.idempotency_key },
+                    })
+                    return { claimed: false, record: loserRecord }
+                }
+                const record = await prisma.outbound_messages.findUniqueOrThrow({
+                    where: { idempotency_key: data.idempotency_key },
                 })
                 return { claimed: true, record }
             }

@@ -458,7 +458,9 @@ async function captureSegment(probe: Extract<Probe, { candidates: Candidate[] }>
     log(`candidate failed (bytes=${bytes} dur=${duration}s video=${Boolean(v)}); advancing to next candidate`)
     try { if (fs.existsSync(mediaPath)) fs.rmSync(mediaPath) } catch {}
     if (stopping || Date.now() >= deadlineMs) break
-    const fresh = await probeLive()
+    // Reuse the persistent browser (WAF challenge passed once) instead of
+    // cold-starting a fresh Chrome per failed candidate.
+    const fresh = await persistentBrowserProbe()
     if (!fresh.roomId || fresh.status !== 2 || fresh.candidates.length === 0) { log('room no longer live during fallback'); return false }
     if (fresh.roomId !== session.roomId) { log('room changed during fallback; deferring to outer loop'); return false }
     cands = fresh.candidates

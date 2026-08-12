@@ -691,8 +691,13 @@ async function probeTikTok(
     if (result.status !== 'ok') {
         return result
     }
-    const text = await response.text()
-    if (!text.includes('__UNIVERSAL_DATA_FOR_REHYDRATION__')) {
+    // The universal-data script sits in the page head; reading the first 256KB is
+    // enough to verify the session without downloading the whole profile page on
+    // every audit/probe run.
+    const head = new TextDecoder().decode(
+        new Uint8Array(await response.arrayBuffer()).subarray(0, 256 * 1024),
+    )
+    if (!head.includes('__UNIVERSAL_DATA_FOR_REHYDRATION__')) {
         return {
             status: 'warn',
             diagnostic_codes: ['tiktok_live_payload_missing_universal_data'],

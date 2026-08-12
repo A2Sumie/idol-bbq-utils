@@ -30,6 +30,8 @@ type OneBotVideoSegment = {
 
 type OneBotMessageSegment = OneBotTextSegment | OneBotImageSegment | OneBotVideoSegment
 
+const QQ_REQUEST_TIMEOUT_MS = 15_000
+
 type MergedForwardRuntimeConfig = {
     enabled: boolean
     nodeName: string
@@ -267,6 +269,18 @@ class QQForwarder extends Forwarder {
         return headers
     }
 
+    /**
+     * A hung OneBot endpoint (TCP half-open) used to freeze the whole target
+     * slot forever: axios without a timeout never rejects, the pRetry never
+     * fires and the outbound stays stuck in `sending`.
+     */
+    private buildRequestOptions() {
+        return {
+            headers: this.buildHeaders(),
+            timeout: QQ_REQUEST_TIMEOUT_MS,
+        }
+    }
+
     async sendWithPayload(arr_of_segments: OneBotMessageSegment[]) {
         if (this.isPrivateChat()) {
             const res = await axios.post(
@@ -275,9 +289,7 @@ class QQForwarder extends Forwarder {
                     user_id: this.user_id,
                     message: arr_of_segments,
                 },
-                {
-                    headers: this.buildHeaders(),
-                },
+                this.buildRequestOptions(),
             )
             this.assertOneBotResponseOk(res, 'send_private_msg')
             return res
@@ -288,9 +300,7 @@ class QQForwarder extends Forwarder {
                 group_id: this.group_id,
                 message: arr_of_segments,
             },
-            {
-                headers: this.buildHeaders(),
-            },
+            this.buildRequestOptions(),
         )
         this.assertOneBotResponseOk(res, 'send_group_msg')
         return res
@@ -312,9 +322,7 @@ class QQForwarder extends Forwarder {
                     user_id: this.user_id,
                     messages: nodes,
                 },
-                {
-                    headers: this.buildHeaders(),
-                },
+                this.buildRequestOptions(),
             )
             this.assertOneBotResponseOk(res, 'send_private_forward_msg')
             return res
@@ -325,9 +333,7 @@ class QQForwarder extends Forwarder {
                 group_id: this.group_id,
                 messages: nodes,
             },
-            {
-                headers: this.buildHeaders(),
-            },
+            this.buildRequestOptions(),
         )
         this.assertOneBotResponseOk(res, 'send_group_forward_msg')
         return res

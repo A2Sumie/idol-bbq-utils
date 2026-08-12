@@ -150,6 +150,7 @@ export class TaskManager extends BaseCompatibleModel {
     private readonly taskRetryBaseSeconds = 120
     private readonly taskRetryMaxSeconds = 3600
     private readonly workerTaskTypes = [...DB.TaskQueue.WORKER_TYPES]
+    private readonly maxTasksPerPoll = 10
     private stopping = false
 
     constructor(forwarderPools: ForwarderPools, options: { processors?: Processor[] } = {}, log?: Logger) {
@@ -192,7 +193,9 @@ export class TaskManager extends BaseCompatibleModel {
             if (tasks.length > 0) {
                 this.log?.info(`Found ${tasks.length} pending tasks`)
             }
-            for (const task of tasks) {
+            // Cap per-poll work so a post-outage backlog cannot starve the queue
+            // for hours; the next poll tick picks up the rest.
+            for (const task of tasks.slice(0, this.maxTasksPerPoll)) {
                 if (this.shouldStopForShutdown('poll task loop')) {
                     break
                 }
@@ -760,7 +763,11 @@ export class TaskManager extends BaseCompatibleModel {
         return `retry_exhausted attempts=${attempts}/${this.taskRetryLimit}${resultSummary ? ` ${resultSummary}` : ''}`
     }
 
-    private classifySuppressedOutbound(targetId: string, status: string): AggregateSendOutcome {
+    private classifySuppressedOutbound(
+        targetId: string,
+        status: string,
+        record?: { status: string; attempt_count?: number | null } | null,
+    ): AggregateSendOutcome {
         if (isOutboundSuppressedCompletionStatus(status)) {
             return { targetId, status: 'already_completed', retryable: false, outboundStatus: status }
         }
@@ -774,7 +781,18 @@ export class TaskManager extends BaseCompatibleModel {
             return { targetId, status: 'in_progress', retryable: true, outboundStatus: status }
         }
         if (isOutboundFailedStatus(status)) {
-            return { targetId, status: 'failed', retryable: true, outboundStatus: status }
+            // A terminally failed outbound (attempt budget exhausted) will never
+            // claim again: re-running the whole aggregate task to re-compute
+            // downloads/renders/summaries for a dead row is pure waste.
+            const terminalFailed = record
+                ? DB.OutboundMessage.isTerminalFailed(record)
+                : false
+            return {
+                targetId,
+                status: terminalFailed ? 'already_completed' : 'failed',
+                retryable: !terminalFailed,
+                outboundStatus: status,
+            }
         }
         return {
             targetId,
@@ -840,7 +858,7 @@ export class TaskManager extends BaseCompatibleModel {
                 this.log?.debug(
                     `${taskKind} outbound ${outboundIdempotencyKey} already ${status}; skipping ${targetId}`,
                 )
-                return this.classifySuppressedOutbound(targetId, status)
+                return this.classifySuppressedOutbound(targetId, status, outbound.record)
             }
             if (this.shouldStopForShutdown(`aggregate outbound ${targetId}`)) {
                 await DB.OutboundMessage.markFailed(

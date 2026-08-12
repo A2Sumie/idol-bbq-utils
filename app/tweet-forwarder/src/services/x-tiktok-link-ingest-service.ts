@@ -194,6 +194,24 @@ function parseYouTubeUrl(rawUrl: string): YouTubeLinkInfo | null {
     }
 }
 
+// Short links are shared across many X posts; resolving the same one repeatedly
+// multiplies upstream GETs for zero new information. Memoize resolutions for a
+// short window and let concurrent enqueues share one fetch.
+const TIKTOK_LINK_RESOLVE_CACHE_TTL_MS = 10 * 60 * 1000
+const TIKTOK_LINK_RESOLVE_CACHE = new Map<string, Promise<TikTokLinkInfo | null>>()
+
+async function resolveTikTokLinkCached(rawUrl: string, fetchImpl: typeof fetch = fetch): Promise<TikTokLinkInfo | null> {
+    const existing = TIKTOK_LINK_RESOLVE_CACHE.get(rawUrl)
+    if (existing) {
+        return existing
+    }
+    const promise = resolveTikTokLink(rawUrl, fetchImpl).finally(() => {
+        setTimeout(() => TIKTOK_LINK_RESOLVE_CACHE.delete(rawUrl), TIKTOK_LINK_RESOLVE_CACHE_TTL_MS)
+    })
+    TIKTOK_LINK_RESOLVE_CACHE.set(rawUrl, promise)
+    return promise
+}
+
 async function resolveTikTokLink(rawUrl: string, fetchImpl: typeof fetch = fetch): Promise<TikTokLinkInfo | null> {
     const direct = parseTikTokUrl(rawUrl)
     if (direct?.videoId && direct.profileUrl) {
@@ -266,13 +284,23 @@ async function enqueueMissingTikTokLinksFromXArticle(article: Article, options: 
     const now = options.now || Math.floor(Date.now() / 1000)
     const queued: Array<{ videoId?: string; profileUrl: string; taskQueueId: number; status: string }> = []
     for (const link of links) {
-        const resolved = await resolveTikTokLink(link, options.fetchImpl)
+        // Direct (non-short) links expose the videoId without a network round
+        // trip: check the article table first and skip the resolve GET entirely
+        // for already-stored videos.
+        const direct = parseTikTokUrl(link)
+        if (direct?.videoId) {
+            const existing = await DB.Article.getByArticleCode(direct.videoId, Platform.TikTok)
+            if (existing) {
+                continue
+            }
+        }
+        const resolved = await resolveTikTokLinkCached(link, options.fetchImpl)
         if (!resolved?.profileUrl) {
             options.log?.warn?.(`X TikTok link ingest skipped unresolved link ${link}`)
             continue
         }
 
-        if (resolved.videoId) {
+        if (resolved.videoId && !direct?.videoId) {
             const existing = await DB.Article.getByArticleCode(resolved.videoId, Platform.TikTok)
             if (existing) {
                 continue

@@ -590,6 +590,10 @@ export class APIManager extends BaseCompatibleModel {
 
     async init() {
         this.log?.info('APIManager initializing...')
+        // Re-entrant init must not leak the previous Bun.serve listener.
+        if (this.server) {
+            await this.drop()
+        }
         const apiConfig = this.config.api || {}
         const port = apiConfig.port || 3000
         const secret = apiConfig.secret || process.env.API_SECRET

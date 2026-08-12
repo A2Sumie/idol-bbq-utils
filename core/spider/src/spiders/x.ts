@@ -657,6 +657,7 @@ class XStatusSpider extends BaseSpider {
             X_UNIFIED_LIST_MAX_CONCURRENCY,
         )
         let rateLimited = false
+        let coverageSkippedCount = 0
 
         for (let index = 0; index < userIds.length && !rateLimited; index += concurrency) {
             const chunk = userIds.slice(index, index + concurrency)
@@ -680,6 +681,7 @@ class XStatusSpider extends BaseSpider {
                             }
                         }
                     } else if (options.fetchTweets) {
+                        coverageSkippedCount += 1
                         this.log?.debug(
                             `Unified list hydration skipped tweets for @${userId}: covered by list timeline (${coveredTweetCount} tweets).`,
                         )
@@ -726,6 +728,12 @@ class XStatusSpider extends BaseSpider {
             if (delayMs > 0) {
                 await sleep(delayMs)
             }
+        }
+
+        if (coverageSkippedCount > 0) {
+            this.log?.info(
+                `Unified list hydration skipped tweets for ${coverageSkippedCount} user(s) already covered by the list timeline.`,
+            )
         }
 
         return articles

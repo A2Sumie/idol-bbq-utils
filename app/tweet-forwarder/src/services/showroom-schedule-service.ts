@@ -185,6 +185,7 @@ export class ShowroomScheduleService {
     private running = false
     private seenIds = new Set<number>()
     private lastScanFrom = Math.floor(Date.now() / 1000) - 60 * 60
+    private lastScanFinishedAt: number | null = null
 
     constructor(config: AppConfig, log?: Logger, options: ShowroomScheduleOptions = {}) {
         this.config = config
@@ -203,13 +204,23 @@ export class ShowroomScheduleService {
         if (this.timer) {
             return
         }
-        const intervalMs = this.resolveScanIntervalSeconds() * 1000
-        this.log?.info(`Showroom schedule service started (interval=${intervalMs}ms)`)
+        // Tick on a fixed minute base and re-resolve the fast/slow interval per
+        // tick: a process started before the scan window used to freeze on the
+        // slow 600s interval for its whole lifetime.
+        this.log?.info(
+            `Showroom schedule service started (fast=${this.options.fastScanSeconds}s, slow=${this.options.slowScanSeconds}s)`,
+        )
         this.timer = setInterval(() => {
+            if (this.running) {
+                return
+            }
+            if (Date.now() - (this.lastScanFinishedAt || 0) < this.resolveScanIntervalSeconds() * 1000) {
+                return
+            }
             void this.runScan().catch((error) => {
                 this.log?.warn(`Showroom schedule scan failed: ${error instanceof Error ? error.message : String(error)}`)
             })
-        }, intervalMs)
+        }, 60 * 1000)
         void this.runScan().catch((error) => {
             this.log?.warn(`Showroom schedule initial scan failed: ${error instanceof Error ? error.message : String(error)}`)
         })
@@ -237,8 +248,10 @@ export class ShowroomScheduleService {
         try {
             const from = this.lastScanFrom
             const to = Math.floor(Date.now() / 1000)
-            this.lastScanFrom = to
             const posts = await this.findNewStaffPosts(from, to)
+            // Only advance the window once the query actually succeeded: a DB
+            // error must not permanently skip this window's posts.
+            this.lastScanFrom = to
             if (posts.length === 0) {
                 return
             }
@@ -246,14 +259,25 @@ export class ShowroomScheduleService {
                 if (!post?.id || this.seenIds.has(post.id)) {
                     continue
                 }
-                this.seenIds.add(post.id)
-                await this.processStaffPost(post)
+                try {
+                    await this.processStaffPost(post)
+                    // Mark only after processing succeeded so a failed plan
+                    // creation is retried on the next scan.
+                    this.seenIds.add(post.id)
+                } catch (error) {
+                    this.log?.warn(
+                        `Showroom schedule: post ${post.a_id} processing failed; retrying next scan: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    )
+                }
             }
             if (this.seenIds.size > 500) {
                 this.seenIds.clear()
             }
         } finally {
             this.running = false
+            this.lastScanFinishedAt = Date.now()
         }
     }
 
@@ -430,17 +454,32 @@ export class ShowroomScheduleService {
             tags: ['showroom', '22/7', event.slug],
             notes: `出演情報 ${event.date_label} ${event.time_label} ${event.members.join('・')} SHOWROOM配信`,
         }
-        const response = await fetch(`http://127.0.0.1:${port}/api/live-capture-plans`, {
-            method: 'POST',
-            headers: {
-                Authorization: `Bearer ${secret}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(payload),
-            signal: AbortSignal.timeout(30000),
-        })
-        if (!response.ok) {
-            throw new Error(`plan create failed http=${response.status}: ${(await response.text()).slice(0, 200)}`)
+        // The plans endpoint is idempotent (created/exists); retry once so a
+        // transient local API blip does not lose a schedule plan forever.
+        let response: Response
+        let lastError: unknown
+        for (let attempt = 0; ; attempt++) {
+            try {
+                response = await fetch(`http://127.0.0.1:${port}/api/live-capture-plans`, {
+                    method: 'POST',
+                    headers: {
+                        Authorization: `Bearer ${secret}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload),
+                    signal: AbortSignal.timeout(30000),
+                })
+                if (response.ok) {
+                    break
+                }
+                lastError = new Error(`plan create failed http=${response.status}: ${(await response.text()).slice(0, 200)}`)
+            } catch (error) {
+                lastError = error
+            }
+            if (attempt >= 1) {
+                throw lastError
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2000 * (attempt + 1)))
         }
         const result = await response.json()
         this.log?.info(

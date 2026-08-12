@@ -260,7 +260,7 @@ export class RenderService {
             if (failedRemoteMediaUrls.size > 0) {
                 const dropped = this.dropFailedRemoteMediaForRender(hydratedArticle, failedRemoteMediaUrls)
                 if (dropped.removed > 0) {
-                    this.log?.debug(
+                    this.log?.info(
                         `Dropped ${dropped.removed} failed-download media item(s) before render for ${article.platform}:${article.a_id}`,
                     )
                     hydratedArticle = dropped.article

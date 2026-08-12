@@ -170,6 +170,14 @@ function moveIntoStore(sourcePath: string, destinationPath: string) {
         if (fs.existsSync(sourcePath)) {
             fs.unlinkSync(sourcePath)
         }
+        // A re-download hit means the stored file is actively used again: bump
+        // its mtime so the age-based cleanup does not delete a still-referenced
+        // file that has not been re-persisted for days.
+        try {
+            fs.utimesSync(destinationPath, new Date(), new Date())
+        } catch {
+            // best effort
+        }
         return
     }
     try {

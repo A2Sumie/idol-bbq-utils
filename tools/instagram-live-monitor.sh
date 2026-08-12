@@ -85,8 +85,11 @@ ensure_watcher_file() {
 relaunch() {
   ensure_container
   ensure_watcher_file
+  # Do not remove the lock here: the watcher's acquireLock already reclaims stale
+  # locks via PID liveness, and an unconditional rm can race a healthy watcher
+  # into running two instances for the same handle.
   docker exec -e AUTH_PASSWORD="$AUTH_PASSWORD" "$CONTAINER_NAME" sh -lc \
-    "rm -f /app/archive/instagram-live/watch-$HANDLE.lock; mkdir -p /app/archive/instagram-live; \
+    "mkdir -p /app/archive/instagram-live; \
      nohup bun /app/instagram-live-watch.ts $HANDLE --until $UNTIL --poll $POLL \
        --player-id \"$PLAYER_ID\" --player-name \"$PLAYER_NAME\" --live-player-url $LIVE_PLAYER_URL \
        --auth-username $AUTH_USERNAME --auth-password \"\$AUTH_PASSWORD\" --waf-header \"$WAF_HEADER\" \
