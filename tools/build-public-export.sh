@@ -25,6 +25,7 @@ EXCLUDE_PATHS=(
     DEPLOYMENT.md
     'app/tweet-forwarder/OPERATIONS.md'
     rewrite_history.sh
+    tools/build-public-export.sh
     'assets/tweet-forwarder/x.cookies'
     'assets/tweet-forwarder/data.db'
     tools/deploy-forwarder-stopped.sh
@@ -100,6 +101,7 @@ apply_scrub() {
         -e 's|N2NJ-Stream-Bot/1\.0|IdolBBQ-RelayBot/1.0|g' \
         -e 's|actual host (3020e)|deployment host|g' \
         -e 's|3020e production DB|production DB|g' \
+        -e 's|full TLS via cloudflared|full TLS via an external tunnel|g' \
         2>/dev/null || true
 }
 apply_scrub
@@ -164,12 +166,16 @@ with live-relay capture, card rendering, and summary-card aggregation.
 ## Setup
 
 1. `bun install`
-2. `cp .env.example .env` and fill in the values you need.
-3. `cp assets/tweet-forwarder/config.example.yaml assets/config.yaml` and edit
+2. Generate the Prisma client (required before the first build):
+   ```sh
+   bun run db:generate-client
+   ```
+3. `cp .env.example .env` and fill in the values you need.
+4. `cp assets/tweet-forwarder/config.example.yaml assets/config.yaml` and edit
    it for your crawlers/forwarders.
-4. Put cookie files under `assets/cookies/` (Netscape cookie-jar format) and
+5. Put cookie files under `assets/cookies/` (Netscape cookie-jar format) and
    reference them via `cookie_file` in the config.
-5. Run:
+6. Run:
    ```sh
    bun run start:forwarder
    ```
