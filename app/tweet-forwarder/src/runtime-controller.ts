@@ -22,6 +22,7 @@ import {
     type RuntimeHeartbeatJob,
 } from './services/runtime-heartbeat-service'
 import { LiveCaptureExecutor } from './services/live-capture-executor-service'
+import { ShowroomScheduleService } from './services/showroom-schedule-service'
 import { buildRouteGraph } from './services/route-graph-service'
 import { buildRuntimeManifest } from './services/runtime-manifest-service'
 import { reconcileBilibiliSubmissionsAfterDbRecovery } from './services/bilibili-recovery-reconciliation-service'
@@ -75,6 +76,7 @@ export class RuntimeController {
     private shuttingDown = false
     private mediaCacheCleanupJob?: MediaCacheCleanupJob
     private runtimeHeartbeatJob?: RuntimeHeartbeatJob
+    private showroomScheduleService?: ShowroomScheduleService
 
     constructor(
         configPath = './config.yaml',
@@ -116,6 +118,14 @@ export class RuntimeController {
         }
         this.runtime = await this.createRuntime(config)
         this.runtimeHeartbeatJob?.start()
+        if (this.runtimeMode === 'online') {
+            this.showroomScheduleService = new ShowroomScheduleService(config, this.log)
+            await this.showroomScheduleService.start().catch((error) => {
+                this.log.warn(
+                    `Showroom schedule service failed to start: ${error instanceof Error ? error.message : String(error)}`,
+                )
+            })
+        }
         this.startedAt = Date.now()
         this.lastReloadedAt = this.startedAt
 
