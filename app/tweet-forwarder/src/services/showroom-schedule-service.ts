@@ -324,6 +324,7 @@ export class ShowroomScheduleService {
                 temperature: cfg.temperature,
                 max_tokens: cfg.max_tokens,
                 response_format: { type: 'json_object' },
+                ...cfg.extended_payload,
                 messages: [
                     {
                         role: 'system',
@@ -380,6 +381,7 @@ export class ShowroomScheduleService {
             temperature: Number(cfg.temperature ?? 0.2),
             max_tokens: Number(cfg.max_tokens ?? 2048),
             prompt,
+            extended_payload: cfg.extended_payload || {},
         }
     }
 
