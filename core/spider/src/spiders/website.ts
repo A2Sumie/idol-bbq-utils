@@ -18,6 +18,8 @@ type FeedKind =
     | 'photo'
     | 'live-report'
 
+const IMMUTABLE_DETAIL_FEEDS = new Set<FeedKind>(['fc-news', 'official-news', 'official-blog', 'live-report'])
+
 export interface FeedConfig {
     feed: FeedKind
     u_id: string
@@ -1779,6 +1781,7 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
                 max?: number
             }
             block_resource_types?: Array<string>
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
         },
     ): Promise<TaskTypeResult<T, Platform.Website>> {
         if (config.task_type !== 'article') {
@@ -1809,11 +1812,17 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             return articles as TaskTypeResult<T, Platform.Website>
         }
 
-        const articles = await this.crawlFeed(page, feedConfig, url, effectiveCrawlOptions)
+        const articles = await this.crawlFeed(page, feedConfig, url, effectiveCrawlOptions, config.isArticleKnown)
         return articles as TaskTypeResult<T, Platform.Website>
     }
 
-    private async crawlFeed(page: Page, feedConfig: FeedConfig, url: string, options: ResolvedWebsiteCrawlOptions) {
+    private async crawlFeed(
+        page: Page,
+        feedConfig: FeedConfig,
+        url: string,
+        options: ResolvedWebsiteCrawlOptions,
+        isArticleKnown?: (a_id: string) => Promise<boolean> | boolean,
+    ) {
         const discovered = new Map<string, WebsiteListItem>()
         let currentUrl: string | null = url
         let pageCount = 0
@@ -1841,6 +1850,16 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
                 const waitTime = randomInterval(options.detailIntervalTime)
                 if (waitTime > 0) {
                     await sleep(waitTime)
+                }
+            }
+            if (IMMUTABLE_DETAIL_FEEDS.has(feedConfig.feed) && isArticleKnown) {
+                const detailKey = getDetailKey(feedConfig, item.detailUrl)
+                try {
+                    if (await isArticleKnown(detailKey)) {
+                        continue
+                    }
+                } catch {
+                    // fall through to a full re-fetch on lookup error
                 }
             }
             articles.push(...(await this.crawlSingleDetail(page, feedConfig, item)))

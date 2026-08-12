@@ -130,6 +130,7 @@ class InstagramSpider extends BaseSpider {
             crawl_engine: CrawlEngine
             sub_task_type?: Array<string>
             cookieString?: string
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
         },
     ): Promise<TaskTypeResult<T, Platform.Instagram>> {
         const result = super._match_valid_url(url, InstagramSpider)?.groups
@@ -153,7 +154,11 @@ class InstagramSpider extends BaseSpider {
             const articles: Array<GenericArticle<Platform.Instagram>> = []
             if (wantPosts) {
                 this.log?.info('Trying to grab posts.')
-                articles.push(...(await InsApiJsonParser.grabPosts(page, _url)))
+                articles.push(
+                    ...(await InsApiJsonParser.grabPosts(page, _url, {
+                        isArticleKnown: config.isArticleKnown,
+                    })),
+                )
             }
             if (wantStories) {
                 this.log?.info(`Trying to grab stories.`)
@@ -543,6 +548,7 @@ namespace InsApiJsonParser {
                 width: number
                 height: number
             }
+            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
         } = {},
     ): Promise<Array<GenericArticle<Platform.Instagram>>> {
         const fetchOnce = async (viaReload: boolean) => {
@@ -572,7 +578,6 @@ namespace InsApiJsonParser {
                 }
                 try {
                     const json = await response.json()
-                    done(json)
                     done(json)
                 } catch (e) {
                     fail(e)
@@ -613,6 +618,19 @@ namespace InsApiJsonParser {
             return postsParser(data.data, { fallbackHandle: handle })
         }
         const posts = await fetchOnce(false)
+        const known = new Set<string>()
+        for (const post of posts) {
+            try {
+                if (await config.isArticleKnown?.(post.a_id)) {
+                    known.add(post.a_id)
+                }
+            } catch {
+                // treat unknown on error
+            }
+        }
+        if (known.size < posts.length) {
+            return posts
+        }
         try {
             const reloaded = await fetchOnce(true)
             const byId = new Map(posts.map((post) => [post.a_id, post]))

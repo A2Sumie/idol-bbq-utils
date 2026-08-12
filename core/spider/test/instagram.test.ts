@@ -200,8 +200,53 @@ test('Instagram grabPosts merges reloaded posts when a cache-bust reload returns
         },
     } as any
 
-    const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/instagram/')
+    const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/instagram/', {
+        isArticleKnown: async () => true,
+    })
     expect(posts.some((post) => post.a_id === 'NEWPOST')).toBe(true)
+    expect(listeners.has('response')).toBeFalse()
+})
+
+test('Instagram grabPosts skips cache-bust reload when the first response has unknown posts', async () => {
+    const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
+    const listeners = new Map<string, (data: any) => void>()
+    let reloadCalls = 0
+    const makeResponse = () => ({
+        url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
+        status: () => 200,
+        headers: () => ({ 'content-type': 'application/json' }),
+        json: async () => posts_json,
+        request: () => ({
+            method: () => 'POST',
+            postData: () => 'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D',
+        }),
+    })
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(eventName, handler)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            if (listeners.get(eventName) === handler) {
+                listeners.delete(eventName)
+            }
+        },
+        goto: async () => {
+            listeners.get('response')?.(makeResponse())
+        },
+        reload: async () => {
+            reloadCalls += 1
+        },
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+    } as any
+
+    const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/instagram/', {
+        isArticleKnown: async () => false,
+    })
+
+    expect(posts.length).toBeGreaterThan(0)
+    expect(reloadCalls).toBe(0)
     expect(listeners.has('response')).toBeFalse()
 })
 
