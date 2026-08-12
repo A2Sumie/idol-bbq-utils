@@ -13,6 +13,7 @@ type ResolvedSummaryCardConfig = {
     sendFirstNative: boolean
     mediaRealtime: boolean
     mediaRealtimeText: 'none' | 'basic' | 'metadata' | 'rendered'
+    mediaRealtimeVideoOnly: boolean
     mediaRealtimeDropSummaryPlatforms: string[]
     flushOnThreshold: boolean
     flushDelaySeconds: number
@@ -36,6 +37,7 @@ type SummaryCardRoutePolicy = {
     send_first_native: boolean
     media_realtime: boolean
     media_realtime_text: 'none' | 'basic' | 'metadata' | 'rendered'
+    media_realtime_video_only: boolean
     media_realtime_drop_summary_platforms: string[]
     flush_on_threshold: boolean
     flush_delay_seconds: number
@@ -124,6 +126,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
     const explicitDuplicateLimit = Math.floor(Number((objectConfig as any).media_duplicate_limit || 0))
     const includeOriginalMedia = objectConfig.include_original_media === true
     const mediaRealtime = (objectConfig as any).media_realtime === true
+    const mediaRealtimeVideoOnly = (objectConfig as any).media_realtime_video_only === true
     const duplicateLimit =
         Number.isFinite(explicitDuplicateLimit) && explicitDuplicateLimit > 0
             ? explicitDuplicateLimit
@@ -156,6 +159,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
         sendFirstNative: (objectConfig as any).send_first_native === true,
         mediaRealtime,
         mediaRealtimeText,
+        mediaRealtimeVideoOnly,
         mediaRealtimeDropSummaryPlatforms,
         flushOnThreshold: (objectConfig as any).flush_on_threshold !== false,
         flushDelaySeconds: Math.max(0, Math.floor(Number((objectConfig as any).flush_delay_seconds || 0))),
@@ -177,6 +181,7 @@ function toSummaryCardRoutePolicy(config: ResolvedSummaryCardConfig): SummaryCar
         send_first_native: config.sendFirstNative,
         media_realtime: config.mediaRealtime,
         media_realtime_text: config.mediaRealtimeText,
+        media_realtime_video_only: config.mediaRealtimeVideoOnly,
         media_realtime_drop_summary_platforms: config.mediaRealtimeDropSummaryPlatforms,
         flush_on_threshold: config.flushOnThreshold,
         flush_delay_seconds: config.flushDelaySeconds,

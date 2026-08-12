@@ -216,6 +216,7 @@ interface ForwardTargetPlatformCommonConfig {
               send_first_native?: boolean
               media_realtime?: boolean
               media_realtime_text?: 'none' | 'basic' | 'metadata' | 'rendered'
+              media_realtime_video_only?: boolean
               /**
                * Platforms whose realtime media posts should not also remain in
                * the later summary-card text/card queue. Useful for image-only

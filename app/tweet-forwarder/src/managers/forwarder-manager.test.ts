@@ -474,6 +474,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         sendFirstNative: false,
         mediaRealtime: false,
         mediaRealtimeText: 'none',
+        mediaRealtimeVideoOnly: false,
         noAggregation: false,
         mediaRealtimeDropSummaryPlatforms: [],
         flushOnThreshold: true,
@@ -517,6 +518,7 @@ test('resolveSummaryCardConfig defaults to an eight-item summary card threshold'
         sendFirstNative: true,
         mediaRealtime: true,
         mediaRealtimeText: 'basic',
+        mediaRealtimeVideoOnly: false,
         noAggregation: false,
         mediaRealtimeDropSummaryPlatforms: ['instagram', 'tt'],
         flushOnThreshold: false,
@@ -2413,6 +2415,71 @@ test('summary realtime media skips when the passthrough completes during send pr
     const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
     expect(outboundRecord?.status).toBe('skipped')
     expect(outboundRecord?.provider_message_ids?.reason).toBe('translation_passthrough_delivered')
+})
+
+test('summary realtime media with media_realtime_video_only pushes video but not photos on QQ', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'qq'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder({} as any, 'target-rt-video-only')
+
+    const article = {
+        id: 223,
+        a_id: 'rt-video-only-article',
+        platform: 4,
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        content: 'video clip',
+    }
+
+    const result = await (pools as any).sendSummaryCardRealtimeMedia(
+        undefined,
+        article,
+        target,
+        undefined,
+        'route:key',
+        {
+            mediaRealtime: true,
+            mediaRealtimeText: 'basic',
+            mediaRealtimeVideoOnly: true,
+        },
+        {
+            text: 'x',
+            cardMediaFiles: [],
+            originalMediaFiles: [
+                { media_type: 'photo', path: '/tmp/rt-video-only-photo.jpg' },
+                { media_type: 'video', path: '/tmp/rt-video-only-clip.mp4' },
+            ],
+            mediaFiles: [],
+        },
+    )
+
+    expect(result.hadMedia).toBe(true)
+    expect(result.visibleMediaSent).toBe(true)
+    expect(target.sent).toHaveLength(1)
+    const sentMedia = target.sent[0]?.props?.media || []
+    expect(sentMedia.map((file: any) => file.media_type)).toEqual(['video'])
 })
 
 test('sendArticles stops after render when forwarder pool starts shutting down', async () => {

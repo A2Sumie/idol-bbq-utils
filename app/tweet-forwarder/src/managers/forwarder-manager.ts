@@ -3891,7 +3891,11 @@ class ForwarderPools extends BaseCompatibleModel {
         target: BaseForwarder,
         file: RenderedMediaFile,
         allFiles: RenderedMediaFile[],
+        config?: ResolvedSummaryCardConfig,
     ) {
+        if (config?.mediaRealtimeVideoOnly && target.NAME !== 'bilibili') {
+            return file.media_type === 'video'
+        }
         if (file.media_type === 'photo' || file.media_type === 'video') {
             return true
         }
@@ -4063,7 +4067,7 @@ class ForwarderPools extends BaseCompatibleModel {
         }
         const rawMediaFiles = [...renderResult.originalMediaFiles]
         const mediaFiles = rawMediaFiles.filter((file) =>
-            this.isSummaryRealtimeMediaEligible(target, file, rawMediaFiles),
+            this.isSummaryRealtimeMediaEligible(target, file, rawMediaFiles, config),
         )
         if (mediaFiles.length === 0) {
             log?.debug(
