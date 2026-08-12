@@ -28,7 +28,7 @@ test('Netscape cookie parser skips comments, malformed rows, and expired cookies
         [
             '# Netscape HTTP Cookie File',
             '.example.com\tTRUE\t/\tTRUE\t1000\texpired\told',
-            '.example.com\tTRUE\t/\tTRUE\t3000\tvalid\tnew',
+            '.example.com\tTRUE\t/\tTRUE\t4102444800\tvalid\tnew',
             'malformed row',
             '',
         ].join('\n'),
@@ -41,7 +41,7 @@ test('Netscape cookie parser skips comments, malformed rows, and expired cookies
                     value: 'new',
                     domain: '.example.com',
                     path: '/',
-                    expires: 3000,
+                    expires: 4102444800,
                     httpOnly: false,
                     secure: true,
                 },
@@ -49,6 +49,16 @@ test('Netscape cookie parser skips comments, malformed rows, and expired cookies
             expect(getCookieString(cookies)).toBe('valid=new')
         },
     )
+})
+
+test('getCookieString skips expired cookies but keeps session and future cookies', () => {
+    const now = Math.floor(Date.now() / 1000)
+    const cookies = [
+        { name: 'expired', value: 'old', domain: '.youtube.com', expires: now - 3600 },
+        { name: 'session', value: 'session-value', domain: '.youtube.com', expires: -1 },
+        { name: 'fresh', value: 'new', domain: '.youtube.com', expires: now + 3600 },
+    ]
+    expect(getCookieString(cookies)).toBe('session=session-value;fresh=new')
 })
 
 test('Netscape cookie parser preserves HttpOnly cookies and can include expired rows for audits', () => {

@@ -173,6 +173,7 @@ function buildYoutubeDetailHtml(videoId: string) {
 
 function buildYoutubePage() {
     return {
+        cookies: async () => [],
         browserContext: () => ({
             cookies: async () => [],
         }),

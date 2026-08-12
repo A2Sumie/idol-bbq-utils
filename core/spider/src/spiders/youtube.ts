@@ -580,14 +580,14 @@ namespace YoutubeApiJsonParser {
         url: string,
         options: GrabArticlesOptions = {},
     ): Promise<Array<YoutubeArticle>> {
-        const cookies = await page.browserContext().cookies()
+        const fallbackHandle = stripHandlePrefix(url.split('/').pop() || '')
+        const videosUrl = `${url}/videos?${LOCALE_QUERY}`
+        const shortsUrl = `${url}/shorts?${LOCALE_QUERY}`
+        const cookies = await page.cookies(videosUrl, shortsUrl)
         const headers = {
             'accept-language': 'en-US,en;q=0.9',
             cookie: getCookieString(cookies),
         }
-        const fallbackHandle = stripHandlePrefix(url.split('/').pop() || '')
-        const videosUrl = `${url}/videos?${LOCALE_QUERY}`
-        const shortsUrl = `${url}/shorts?${LOCALE_QUERY}`
         const [videosPage, shortsPage] = await Promise.all([
             HTTPClient.download_webpage(videosUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),
             HTTPClient.download_webpage(shortsUrl, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS }),

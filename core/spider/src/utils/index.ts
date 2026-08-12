@@ -166,7 +166,9 @@ function auditNetscapeCookieFile(
 }
 
 function getCookieString(cookies: Array<CookieData>): string {
+    const now = Math.floor(Date.now() / 1000)
     return cookies
+        .filter((cookie) => !isExpiredCookie(cookie.expires, now))
         .map((cookie) => {
             return `${cookie.name}=${cookie.value}`.trim()
         })
