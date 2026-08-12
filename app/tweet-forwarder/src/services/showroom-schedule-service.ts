@@ -375,9 +375,9 @@ export class ShowroomScheduleService {
             }
         }
         return {
-            base_url: String(cfg.base_url || 'https://opencode.ai/zen/go/v1').replace(/\/+$/, ''),
+            base_url: String(cfg.base_url || 'https://api.deepseek.com').replace(/\/+$/, ''),
             api_key: apiKey,
-            model_id: String(cfg.model_id || 'deepseek-v4-pro'),
+            model_id: String(cfg.model_id || 'deepseek-v4-flash'),
             temperature: Number(cfg.temperature ?? 0.2),
             max_tokens: Number(cfg.max_tokens ?? 2048),
             prompt,
@@ -424,7 +424,7 @@ export class ShowroomScheduleService {
             },
             extraction: {
                 confidence: event.confidence,
-                model: 'deepseek-v4-pro',
+                model: 'deepseek-v4-flash',
                 uncertainties: event.uncertainties,
             },
             tags: ['showroom', '22/7', event.slug],
