@@ -253,6 +253,10 @@ namespace InsApiJsonParser {
         if (Array.isArray(scoped) && scoped.length > 0) {
             return { edges: scoped, scoped: true }
         }
+        const xdt = JSONPath({ path: '$..xdt_api__v1__feed__user_timeline_graphql_connection.edges', json })[0]
+        if (Array.isArray(xdt) && xdt.length > 0) {
+            return { edges: xdt, scoped: false }
+        }
         const edges_json = JSONPath({ path: '$..edges', json })[0]
         if (!edges_json) {
             throw new Error('Edges json format may have changed')
@@ -538,9 +542,6 @@ namespace InsApiJsonParser {
                 const url = response.url()
                 const request = response.request()
                 const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
-                if (/graphql\/query|api\/graphql/i.test(url)) {
-                    console.log('DEBUG ig resp fn=' + friendlyName + ' url=' + url.slice(0, 60) + ' status=' + response.status())
-                }
                 if (friendlyName !== PROFILE_POSTS_KEY) {
                     return
                 }
@@ -562,14 +563,7 @@ namespace InsApiJsonParser {
                     return
                 }
                 try {
-                    const json = await response.json()
-                    const edges = JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json })
-                    const newest = edges[0]?.node?.taken_at || edges[0]?.node?.taken_at_timestamp || null
-                    const dataKeys = Object.keys(json?.data || {})
-                    console.log(
-                        'DEBUG ig profile-posts edges=' + edges.length + ' newest_taken=' + newest + ' has_new=' + String(json).includes('3962115127033029731') + ' data_keys=' + dataKeys.join(',') + ' json=' + JSON.stringify(json).slice(0, 500),
-                    )
-                    done(json)
+                    done(await response.json())
                 } catch (e) {
                     fail(e)
                 }
