@@ -367,10 +367,14 @@ namespace InsApiJsonParser {
         return Array.from(dedup.values())
     }
 
-    function postParser(edge: any, crawledProfile: InstagramProfileContext | null): GenericArticle<Platform.Instagram> {
+    function postParser(
+        edge: any,
+        crawledProfile: InstagramProfileContext | null,
+        fallbackHandle: string,
+    ): GenericArticle<Platform.Instagram> {
         const node = edge.node
         const owner = profileContextFromUser(node?.user) || profileContextFromUser(node?.owner)
-        const handle = fallbackUsername(owner?.u_id, crawledProfile?.u_id)
+        const handle = fallbackUsername(owner?.u_id, crawledProfile?.u_id, fallbackHandle)
         const displayName = fallbackUsername(owner?.username, crawledProfile?.username, handle)
         const avatarUrl = normalizeInstagramUrl(owner?.u_avatar || crawledProfile?.u_avatar)
         const permalinkType = node?.product_type === 'clips' ? 'reel' : 'p'
@@ -441,11 +445,15 @@ namespace InsApiJsonParser {
             .filter((article: GenericArticle<Platform.Instagram>) => article.a_id && article.u_id)
     }
 
-    export function postsParser(json: any): Array<GenericArticle<Platform.Instagram>> {
+    export function postsParser(
+        json: any,
+        options: { fallbackHandle?: string } = {},
+    ): Array<GenericArticle<Platform.Instagram>> {
         const parsed = parseEdges(json)
         const crawledProfile = parsed.scoped ? profileContextFromUser(json?.data?.user) : null
+        const fallbackHandle = String(options.fallbackHandle || '').trim()
         return parsed.edges
-            .map((edge: any) => postParser(edge, crawledProfile))
+            .map((edge: any) => postParser(edge, crawledProfile, fallbackHandle))
             // Drop posts whose owner cannot be identified (no node user/owner and no
             // crawled profile context): they would otherwise be saved with an empty
             // u_id and surface as "@<shortcode>" in forwarded notifications.
@@ -563,11 +571,7 @@ namespace InsApiJsonParser {
                     return
                 }
                 try {
-                    const json = await response.json()
-                    const xdtEdges = JSONPath({ path: '$..xdt_api__v1__feed__user_timeline_graphql_connection.edges', json })[0] || []
-                    const first = xdtEdges[0]?.node || {}
-                    console.log('DEBUG pp xdt_edges=' + xdtEdges.length + ' has_new=' + String(json).includes('3962115127033029731') + ' first_keys=' + Object.keys(first).slice(0, 20).join(',') + ' code=' + String(first.code || first.pk || '').slice(0, 24) + ' has_user=' + Boolean(first.user || first.owner))
-                    done(json)
+                    done(await response.json())
                 } catch (e) {
                     fail(e)
                 }
@@ -597,7 +601,14 @@ namespace InsApiJsonParser {
             if (!data.success) {
                 throw data.error
             }
-            return postsParser(data.data)
+            const handle = (() => {
+                try {
+                    return String(new URL(url).pathname).split('/').filter(Boolean)[0] || ''
+                } catch {
+                    return ''
+                }
+            })()
+            return postsParser(data.data, { fallbackHandle: handle })
         }
         const posts = await fetchOnce(false)
         try {
