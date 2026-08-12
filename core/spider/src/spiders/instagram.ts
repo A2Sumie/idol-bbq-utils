@@ -565,8 +565,9 @@ namespace InsApiJsonParser {
                     const json = await response.json()
                     const edges = JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json })
                     const newest = edges[0]?.node?.taken_at || edges[0]?.node?.taken_at_timestamp || null
+                    const dataKeys = Object.keys(json?.data || {})
                     console.log(
-                        'DEBUG ig profile-posts edges=' + edges.length + ' newest_taken=' + newest + ' has_new=' + String(json).includes('3962115127033029731') + ' keys=' + Object.keys(json || {}).join(',') + ' body=' + String(json).slice(0, 300),
+                        'DEBUG ig profile-posts edges=' + edges.length + ' newest_taken=' + newest + ' has_new=' + String(json).includes('3962115127033029731') + ' data_keys=' + dataKeys.join(',') + ' json=' + JSON.stringify(json).slice(0, 500),
                     )
                     done(json)
                 } catch (e) {
