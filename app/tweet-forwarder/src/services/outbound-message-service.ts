@@ -22,6 +22,13 @@ const OUTBOUND_STATUS = {
 
 type OutboundMessageStatus = (typeof OUTBOUND_STATUS)[keyof typeof OUTBOUND_STATUS]
 
+/**
+ * Attempt budget after which a failed outbound is terminal and claim() will
+ * never admit it again. Defined here (not in db) so both the claim policy and
+ * the record classifier share one source of truth.
+ */
+const OUTBOUND_FAILED_RETRY_LIMIT = 5
+
 const OUTBOUND_STALE_RETRYABLE_STATUSES = new Set<string>([
     OUTBOUND_STATUS.Planned,
     OUTBOUND_STATUS.Sending,
@@ -65,6 +72,63 @@ function isOutboundVisibleCompletionStatus(status: string | null | undefined) {
 
 function isOutboundSuppressedCompletionStatus(status: string | null | undefined) {
     return OUTBOUND_SUPPRESSED_COMPLETION_STATUSES.has(String(status || ''))
+}
+
+/**
+ * The single authority for "this outbound record already exists — what now?".
+ * Send paths used to inline four variants of this verdict; consolidate so every
+ * caller treats an already-claimed record identically.
+ */
+export interface OutboundRecordVerdict {
+    status: string
+    /** The message already reached the target visibly. */
+    visible: boolean
+    /** Record is completed in a way that suppresses future sends of this payload. */
+    suppressed: boolean
+    queued: boolean
+    dryRun: boolean
+    inProgress: boolean
+    /** Failed and the attempt budget is exhausted. */
+    terminalFailed: boolean
+    /** The dispatch may retry this payload (through claim's retry policy). */
+    retryable: boolean
+    /** Suggestion for callers that need a task-level status. */
+    aggregateStatus: 'already_completed' | 'queued' | 'dry_run' | 'in_progress' | 'failed'
+}
+
+export function classifyOutboundRecord(
+    record: Pick<{ idempotency_key: string; status: string; attempt_count: number | null }, 'status' | 'attempt_count'>,
+): OutboundRecordVerdict {
+    const status = String(record.status || '')
+    const visible = isOutboundVisibleCompletionStatus(status)
+    const suppressed = isOutboundSuppressedCompletionStatus(status)
+    const queued = isOutboundQueuedStatus(status)
+    const dryRun = isOutboundDryRunStatus(status)
+    const inProgress = isOutboundInProgressStatus(status)
+    const terminalFailed =
+        isOutboundFailedStatus(status) && (Number(record.attempt_count) || 0) >= OUTBOUND_FAILED_RETRY_LIMIT
+    // Mirrors the aggregate-task semantics: queued/suppressed outcomes are not
+    // retried by the task, dry-run/in-progress/non-terminal-failed are.
+    const retryable = dryRun || inProgress || (isOutboundFailedStatus(status) && !terminalFailed)
+    return {
+        status,
+        visible,
+        suppressed,
+        queued,
+        dryRun,
+        inProgress,
+        terminalFailed,
+        retryable,
+        aggregateStatus: visible || suppressed
+            ? 'already_completed'
+            : queued
+              ? 'queued'
+              : dryRun
+                ? 'dry_run'
+                : inProgress
+                  ? 'in_progress'
+                  : 'failed',
+    }
 }
 
 function stableSerialize(value: unknown): string {
@@ -210,6 +274,7 @@ export {
     isOutboundStaleRetryableStatus,
     isOutboundSuppressedCompletionStatus,
     isOutboundVisibleCompletionStatus,
+    OUTBOUND_FAILED_RETRY_LIMIT,
     OUTBOUND_STATUS,
     payloadHash,
     providerCode,

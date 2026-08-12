@@ -15,6 +15,7 @@ import { getForwarderProviderResult, PartialForwarderSendError } from '@/middlew
 import { pRetry } from '@idol-bbq-utils/utils'
 import { RETRY_LIMIT } from '@/config'
 import {
+    classifyOutboundRecord,
     isOutboundFailedStatus,
     isOutboundDryRunStatus,
     isOutboundInProgressStatus,
@@ -766,38 +767,15 @@ export class TaskManager extends BaseCompatibleModel {
         status: string,
         record?: { status: string; attempt_count?: number | null } | null,
     ): AggregateSendOutcome {
-        if (isOutboundSuppressedCompletionStatus(status)) {
-            return { targetId, status: 'already_completed', retryable: false, outboundStatus: status }
-        }
-        if (isOutboundQueuedStatus(status)) {
-            return { targetId, status: 'queued', retryable: false, outboundStatus: status }
-        }
-        if (isOutboundDryRunStatus(status)) {
-            return { targetId, status: 'dry_run', retryable: true, outboundStatus: status }
-        }
-        if (isOutboundInProgressStatus(status)) {
-            return { targetId, status: 'in_progress', retryable: true, outboundStatus: status }
-        }
-        if (isOutboundFailedStatus(status)) {
-            // A terminally failed outbound (attempt budget exhausted) will never
-            // claim again: re-running the whole aggregate task to re-compute
-            // downloads/renders/summaries for a dead row is pure waste.
-            const terminalFailed = record
-                ? DB.OutboundMessage.isTerminalFailed(record)
-                : false
-            return {
-                targetId,
-                status: terminalFailed ? 'already_completed' : 'failed',
-                retryable: !terminalFailed,
-                outboundStatus: status,
-            }
-        }
+        const verdict = classifyOutboundRecord({
+            status,
+            attempt_count: record?.attempt_count ?? null,
+        })
         return {
             targetId,
-            status: 'failed',
-            retryable: true,
+            status: verdict.aggregateStatus,
+            retryable: verdict.retryable,
             outboundStatus: status,
-            error: `Unexpected suppressed outbound status: ${status}`,
         }
     }
 

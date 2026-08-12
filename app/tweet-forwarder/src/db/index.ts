@@ -8,6 +8,7 @@ import { normalizeWebsitePhotoArticles } from '@/utils/website-photo'
 import {
     isOutboundFailedStatus,
     isOutboundStaleRetryableStatus,
+    OUTBOUND_FAILED_RETRY_LIMIT,
     OUTBOUND_STATUS,
     hashValue,
 } from '@/services/outbound-message-service'
@@ -1245,7 +1246,6 @@ namespace DB {
     }
 
     export namespace OutboundMessage {
-        const FAILED_RETRY_LIMIT = 5
         const FAILED_RETRY_BASE_SECONDS = 60
         const FAILED_RETRY_MAX_SECONDS = 3600
 
@@ -1341,7 +1341,7 @@ namespace DB {
         }
 
         export function isTerminalFailed(record: Pick<DBOutboundMessage, 'status' | 'attempt_count'>) {
-            return isOutboundFailedStatus(record.status) && (record.attempt_count || 0) >= FAILED_RETRY_LIMIT
+            return isOutboundFailedStatus(record.status) && (record.attempt_count || 0) >= OUTBOUND_FAILED_RETRY_LIMIT
         }
 
         export async function claim(
@@ -1366,7 +1366,7 @@ namespace DB {
                 const failedAttempts = existing.attempt_count || 0
                 const failedRetryable =
                     isOutboundFailedStatus(existing.status) &&
-                    failedAttempts < FAILED_RETRY_LIMIT &&
+                    failedAttempts < OUTBOUND_FAILED_RETRY_LIMIT &&
                     existing.updated_at <= now - failedBackoffSeconds(failedAttempts)
                 // Dry-run must not re-claim every dispatch cycle; give it the same
                 // 60s floor as a failed attempt so capture-mode loops do not

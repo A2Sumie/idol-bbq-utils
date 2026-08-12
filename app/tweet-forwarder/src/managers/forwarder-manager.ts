@@ -43,6 +43,7 @@ import { normalizeCronSecond } from '@/utils/cron'
 import {
     articleKey,
     articleOutboundKey,
+    classifyOutboundRecord,
     hashValue,
     isOutboundSuppressedCompletionStatus,
     isOutboundVisibleCompletionStatus,
@@ -53,7 +54,12 @@ import {
     syntheticOutboundKey,
     targetRouteKey,
 } from '@/services/outbound-message-service'
-import { markTargetHealthForSendOutcome } from '@/services/target-health-service'
+import {
+    applyFailedSendFailure,
+    applyNonRetryableSendFailure,
+    applyPartialSendFailure,
+    markTargetHealthForSendOutcome,
+} from '@/services/target-health-service'
 import { resolveSummaryCardConfig, type ResolvedSummaryCardConfig } from '@/services/summary-card-policy'
 import { buildShortVideoTextFingerprint } from '@/services/media-cache-service'
 import {
@@ -1702,11 +1708,58 @@ class ForwarderPools extends BaseCompatibleModel {
 
         try {
             for (const { forwarder: target } of targets) {
-                const prefixedText = originalText.trim() ? `[X解析]\n${originalText}` : '[X解析]'
-                sends.push({
+                // Unlike every other visible-send path this one used to fire without
+                // any ledger entry: webhook retries re-rendered and re-sent the same
+                // article. Claim per target so a duplicate trigger is suppressed.
+                const outboundKey = syntheticOutboundKey(
+                    target.id,
+                    'qq_x_link_merged_forward',
+                    articleKey(refreshedArticle),
+                )
+                const routeKeyForTarget = targetRouteKey(
+                    routeKey({ source: 'system', crawlerId: options.crawlerName || 'unknown' }),
+                    target.id,
+                )
+                const outbound = await DB.OutboundMessage.claim({
+                    idempotency_key: outboundKey,
+                    route_key: routeKeyForTarget,
                     target_id: target.id,
-                    part: 'merged_forward',
-                    result: await target.send(prefixedText, {
+                    target_platform: target.NAME,
+                    task_kind: 'qq_x_link_merged_forward',
+                    article_key: articleKey(refreshedArticle),
+                    payload_hash: payloadHash({
+                        routeKey: routeKeyForTarget,
+                        targetId: target.id,
+                        taskKind: 'qq_x_link_merged_forward',
+                        text: originalText,
+                        articleKeys: [articleKey(refreshedArticle)],
+                        media: [...cardResult.originalMediaFiles, ...cardResult.cardMediaFiles],
+                    }),
+                }).catch((error) => {
+                    taskLog?.warn(
+                        `QQ x-link outbound claim failed for ${target.id}: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    )
+                    return null
+                })
+                if (!outbound?.claimed) {
+                    sends.push({
+                        target_id: target.id,
+                        part: 'merged_forward',
+                        result: {
+                            status: 'blocked',
+                            reason: classifyOutboundRecord(outbound.record).visible
+                                ? 'already_sent'
+                                : `already_${outbound.record.status}`,
+                        } as ForwarderSendResult,
+                    })
+                    continue
+                }
+                const prefixedText = originalText.trim() ? `[X解析]\n${originalText}` : '[X解析]'
+                await DB.OutboundMessage.markSending(outboundKey).catch(() => undefined)
+                try {
+                    const result = await target.send(prefixedText, {
                         media: [...cardResult.originalMediaFiles, ...cardResult.cardMediaFiles],
                         contentMedia: cardResult.originalMediaFiles,
                         cardMedia: cardResult.cardMediaFiles,
@@ -1720,8 +1773,37 @@ class ForwarderPools extends BaseCompatibleModel {
                                 enabled: true,
                             },
                         } as any,
-                    }),
-                })
+                    })
+                    if (result.status === 'sent') {
+                        await DB.OutboundMessage.markSent(
+                            outboundKey,
+                            summarizeProviderResult(getForwarderProviderResult(result)),
+                        ).catch(() => undefined)
+                        await markTargetHealthForSendOutcome(
+                            target,
+                            { kind: 'sent', providerResult: getForwarderProviderResult(result) },
+                            taskLog,
+                        )
+                    } else {
+                        await applyFailedSendFailure(
+                            target,
+                            outboundKey,
+                            new Error(`QQ x-link merged forward not sent: ${result.status}`),
+                            { route_key: routeKeyForTarget, task_kind: 'qq_x_link_merged_forward' },
+                            taskLog,
+                        )
+                    }
+                    sends.push({ target_id: target.id, part: 'merged_forward', result })
+                } catch (error) {
+                    await applyFailedSendFailure(
+                        target,
+                        outboundKey,
+                        error,
+                        { route_key: routeKeyForTarget, task_kind: 'qq_x_link_merged_forward' },
+                        taskLog,
+                    )
+                    taskLog?.error(`QQ x-link send failed for ${target.id}: ${error}`)
+                }
             }
         } finally {
             this.renderService.cleanup(cardResult.mediaFiles)
@@ -2621,9 +2703,10 @@ class ForwarderPools extends BaseCompatibleModel {
                             log?.debug(
                                 `[Trace] Outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping ${article.a_id} for ${target.id}`,
                             )
-                            if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
+                            const verdict = classifyOutboundRecord(outbound.record)
+                            if (verdict.visible) {
                                 await DB.ForwardBy.save(article.id, platform, target.id, 'article')
-                            } else if (DB.OutboundMessage.isTerminalFailed(outbound.record)) {
+                            } else if (verdict.terminalFailed) {
                                 // The provider rejected this message past the retry limit. Mark the article as
                                 // handled for this target so every crawl cycle stops re-rendering and
                                 // re-dispatching it forever; an operator can still forceSend via the API.
@@ -2877,33 +2960,21 @@ class ForwarderPools extends BaseCompatibleModel {
                             forceKey: options?.forceSend ? taskId : undefined,
                         })
                         if (partialError) {
-                            await DB.OutboundMessage.markPartial(
-                                outboundIdempotencyKey,
-                                summarizeProviderResult(partialError.partialResults),
-                                partialError,
-                            )
+                            await applyPartialSendFailure(target, outboundIdempotencyKey, partialError, log)
                             // Partial counts as a visible completion; keep the fingerprint claimed.
                             contentFingerprintForRelease = []
-                            await markTargetHealthForSendOutcome(
-                                target,
-                                { kind: 'partial', partialResults: partialError.partialResults, message: partialError.message },
-                                log,
-                            )
                             error_for_all = false
                             hadNonErrorOutcome = true
                             return
                         }
                         await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
-                        await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
-                        await markTargetHealthForSendOutcome(
+                        await applyFailedSendFailure(
                             target,
+                            outboundIdempotencyKey,
+                            error,
                             {
-                                kind: 'failed',
-                                message: error instanceof Error ? error.message : String(error),
-                                details: {
-                                    route_key: routeKeyForTarget,
-                                    article_key: articleKey(article),
-                                },
+                                route_key: routeKeyForTarget,
+                                article_key: articleKey(article),
                             },
                             log,
                         )
@@ -3178,7 +3249,7 @@ class ForwarderPools extends BaseCompatibleModel {
         })
         if (!outbound?.claimed) {
             await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
-            return isOutboundVisibleCompletionStatus(outbound?.record.status)
+            return outbound ? classifyOutboundRecord(outbound.record).visible : false
         }
         try {
             try {
@@ -3226,15 +3297,24 @@ class ForwarderPools extends BaseCompatibleModel {
                 return true
             } else {
                 await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
-                await DB.OutboundMessage.markFailed(
+                await applyFailedSendFailure(
+                    target,
                     passthroughKey,
                     new Error(`translation passthrough not sent: ${sendResult.status}`),
+                    { route_key: routeKeyForTarget, task_kind: 'translation_passthrough', article_key: articleKey(article) },
+                    log,
                 )
                 return false
             }
         } catch (error) {
             await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
-            await DB.OutboundMessage.markFailed(passthroughKey, error).catch(() => undefined)
+            await applyFailedSendFailure(
+                target,
+                passthroughKey,
+                error,
+                { route_key: routeKeyForTarget, task_kind: 'translation_passthrough', article_key: articleKey(article) },
+                log,
+            )
             log?.warn(
                 `Translation passthrough failed for ${article.a_id} to ${target.id}: ${
                     error instanceof Error ? error.stack || error.message : String(error)
@@ -4234,7 +4314,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     `Summary realtime media outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible media send`,
                 )
                 await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
-                const visibleCompletion = isOutboundVisibleCompletionStatus(outbound.record.status)
+                const visibleCompletion = classifyOutboundRecord(outbound.record).visible
                 return {
                     hadMedia: true,
                     handled: visibleCompletion,
@@ -4470,20 +4550,7 @@ class ForwarderPools extends BaseCompatibleModel {
         } catch (error) {
             log?.error(`Failed to send summary realtime media for ${article.a_id} to ${target.id}: ${error}`)
             if (error instanceof PartialForwarderSendError) {
-                await DB.OutboundMessage.markPartial(
-                    outboundIdempotencyKey,
-                    summarizeProviderResult(error.partialResults),
-                    error,
-                ).catch(() => undefined)
-                await DB.TargetHealth.mark({
-                    target_id: target.id,
-                    provider: target.NAME,
-                    status: 'degraded',
-                    last_send_status: 'partial',
-                    last_provider_code: providerCode(error.partialResults),
-                    disabled_reason: error.message,
-                    details: summarizeProviderResult(error.partialResults),
-                }).catch(() => undefined)
+                await applyPartialSendFailure(target, outboundIdempotencyKey, error, log)
                 // Partial counts as a visible completion; keep the fingerprint claimed.
                 contentFingerprintForRelease = []
                 return {
@@ -4494,19 +4561,17 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
             }
             await this.releaseTargetMediaVisibilityClaims(visibility).catch(() => undefined)
-            await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
-            await DB.TargetHealth.mark({
-                target_id: target.id,
-                provider: target.NAME,
-                status: 'error',
-                last_send_status: 'failed',
-                disabled_reason: error instanceof Error ? error.message : String(error),
-                details: {
+            await applyFailedSendFailure(
+                target,
+                outboundIdempotencyKey,
+                error,
+                {
                     route_key: routeKeyValue,
                     task_kind: 'summary_realtime_media',
                     article_key: articleKey(article),
                 },
-            }).catch(() => undefined)
+                log,
+            )
             return {
                 hadMedia: true,
                 handled: false,
@@ -4880,8 +4945,9 @@ class ForwarderPools extends BaseCompatibleModel {
                     `Single summary-card native outbound ${outboundData.outboundIdempotencyKey} already ${outbound.record.status}; skipping visible send`,
                 )
                 await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
-                if (isOutboundSuppressedCompletionStatus(outbound.record.status)) {
-                    if (isOutboundVisibleCompletionStatus(outbound.record.status)) {
+                const verdict = classifyOutboundRecord(outbound.record)
+                if (verdict.suppressed) {
+                    if (verdict.visible) {
                         this.markSummaryCardVisibleSent(
                             this.getSummaryCardQueueKey(
                                 queue.routeKey,
@@ -4896,7 +4962,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     if (queue.windowId) {
                         await DB.AggregationWindow.updateStatus(
                             queue.windowId,
-                            isOutboundVisibleCompletionStatus(outbound.record.status)
+                            verdict.visible
                                 ? DB.AggregationWindow.STATUS.Completed
                                 : DB.AggregationWindow.STATUS.Cancelled,
                             { payload_hash: outboundData.outboundPayloadHash },
@@ -4990,7 +5056,13 @@ class ForwarderPools extends BaseCompatibleModel {
         } catch (error) {
             this.log?.error(`Failed to send single summary-card item to ${queue.target.id}: ${error}`)
             if (error instanceof NonRetryableForwarderSendError) {
-                await DB.OutboundMessage.markFailed(outboundData.outboundIdempotencyKey, error).catch(() => undefined)
+                await applyNonRetryableSendFailure(
+                    queue.target,
+                    outboundData.outboundIdempotencyKey,
+                    error,
+                    { route_key: queue.routeKey, task_kind: 'summary_single_native' },
+                    this.log,
+                )
                 await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
                 this.summaryCardTargetCooldowns.set(
                     queue.target.id,
@@ -5007,20 +5079,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 return true
             }
             if (error instanceof PartialForwarderSendError) {
-                await DB.OutboundMessage.markPartial(
-                    outboundData.outboundIdempotencyKey,
-                    summarizeProviderResult(error.partialResults),
-                    error,
-                ).catch(() => undefined)
-                await DB.TargetHealth.mark({
-                    target_id: queue.target.id,
-                    provider: queue.target.NAME,
-                    status: 'degraded',
-                    last_send_status: 'partial',
-                    last_provider_code: providerCode(error.partialResults),
-                    disabled_reason: error.message,
-                    details: summarizeProviderResult(error.partialResults),
-                }).catch(() => undefined)
+                await applyPartialSendFailure(queue.target, outboundData.outboundIdempotencyKey, error, this.log)
                 if (queue.windowId) {
                     await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Completed, {
                         payload_hash: outboundData.outboundPayloadHash,
@@ -5034,20 +5093,18 @@ class ForwarderPools extends BaseCompatibleModel {
                 visibilityForRelease = null
                 return true
             }
-            await DB.OutboundMessage.markFailed(outboundData.outboundIdempotencyKey, error).catch(() => undefined)
-            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
-            await DB.TargetHealth.mark({
-                target_id: queue.target.id,
-                provider: queue.target.NAME,
-                status: 'error',
-                last_send_status: 'failed',
-                disabled_reason: error instanceof Error ? error.message : String(error),
-                details: {
+            await applyFailedSendFailure(
+                queue.target,
+                outboundData.outboundIdempotencyKey,
+                error,
+                {
                     route_key: queue.routeKey,
                     task_kind: 'summary_single_native',
                     article_key: outboundData.currentArticleKey,
                 },
-            }).catch(() => undefined)
+                this.log,
+            )
+            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(() => undefined)
             if (queue.windowId) {
                 await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Open, {
                     payload_hash: outboundData.outboundPayloadHash,
@@ -5331,7 +5388,8 @@ class ForwarderPools extends BaseCompatibleModel {
                 this.log?.debug(
                     `Summary-card outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping visible send`,
                 )
-                if (DB.OutboundMessage.isTerminalFailed(outbound.record)) {
+                const verdict = classifyOutboundRecord(outbound.record)
+                if (verdict.terminalFailed) {
                     // The dead record would block every future flush of the same article set; rotate the
                     // synthetic key so the next flush gets a fresh claim once the provider recovers.
                     // After a few generations give up visibly instead of churning the queue forever.
@@ -5353,8 +5411,8 @@ class ForwarderPools extends BaseCompatibleModel {
                     )
                     return false
                 }
-                if (isOutboundSuppressedCompletionStatus(outbound.record.status)) {
-                    const visibleCompletion = isOutboundVisibleCompletionStatus(outbound.record.status)
+                if (verdict.suppressed) {
+                    const visibleCompletion = verdict.visible
                     const terminalStatus = visibleCompletion
                         ? DB.AggregationWindow.STATUS.Completed
                         : DB.AggregationWindow.STATUS.Cancelled
@@ -5455,19 +5513,17 @@ class ForwarderPools extends BaseCompatibleModel {
         } catch (error) {
             this.log?.error(`Failed to send message pack card to ${queue.target.id}: ${error}`)
             if (error instanceof NonRetryableForwarderSendError) {
-                await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+                await applyNonRetryableSendFailure(
+                    queue.target,
+                    outboundIdempotencyKey,
+                    error,
+                    { route_key: queue.routeKey, task_kind: 'summary_card' },
+                    this.log,
+                )
                 this.summaryCardTargetCooldowns.set(
                     queue.target.id,
                     Date.now() + ForwarderPools.SUMMARY_CARD_NONRETRYABLE_COOLDOWN_MS,
                 )
-                await DB.TargetHealth.mark({
-                    target_id: queue.target.id,
-                    provider: queue.target.NAME,
-                    status: 'error',
-                    last_send_status: 'failed',
-                    disabled_reason: error.message,
-                    details: { route_key: queue.routeKey, task_kind: 'summary_card' },
-                }).catch(() => undefined)
                 if (queue.windowId) {
                     await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
                         payload_hash: outboundPayloadHash,
@@ -5479,20 +5535,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 return true
             }
             if (error instanceof PartialForwarderSendError) {
-                await DB.OutboundMessage.markPartial(
-                    outboundIdempotencyKey,
-                    summarizeProviderResult(error.partialResults),
-                    error,
-                ).catch(() => undefined)
-                await DB.TargetHealth.mark({
-                    target_id: queue.target.id,
-                    provider: queue.target.NAME,
-                    status: 'degraded',
-                    last_send_status: 'partial',
-                    last_provider_code: providerCode(error.partialResults),
-                    disabled_reason: error.message,
-                    details: summarizeProviderResult(error.partialResults),
-                }).catch(() => undefined)
+                await applyPartialSendFailure(queue.target, outboundIdempotencyKey, error, this.log)
                 if (queue.windowId) {
                     await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Completed, {
                         payload_hash: outboundPayloadHash,
@@ -5505,19 +5548,17 @@ class ForwarderPools extends BaseCompatibleModel {
                 )
                 return true
             }
-            await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
-            await DB.TargetHealth.mark({
-                target_id: queue.target.id,
-                provider: queue.target.NAME,
-                status: 'error',
-                last_send_status: 'failed',
-                disabled_reason: error instanceof Error ? error.message : String(error),
-                details: {
+            await applyFailedSendFailure(
+                queue.target,
+                outboundIdempotencyKey,
+                error,
+                {
                     route_key: queue.routeKey,
                     task_kind: 'summary_card',
                     article_keys: articleKeys,
                 },
-            }).catch(() => undefined)
+                this.log,
+            )
             if (queue.windowId) {
                 await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Open, {
                     payload_hash: outboundPayloadHash,
@@ -6976,7 +7017,7 @@ class ForwarderPools extends BaseCompatibleModel {
             })
             if (!outbound.claimed) {
                 log?.debug(`Digest outbound ${outboundIdempotencyKey} already ${outbound.record.status}; skipping send`)
-                if (isOutboundSuppressedCompletionStatus(outbound.record.status)) {
+                if (classifyOutboundRecord(outbound.record).suppressed) {
                     return claimedArticles.map((article) => article.id)
                 }
                 for (const article of claimedArticles) {
@@ -7046,35 +7087,20 @@ class ForwarderPools extends BaseCompatibleModel {
         } catch (error) {
             log?.error(`Failed to send digest to ${targetId}: ${error}`)
             if (error instanceof PartialForwarderSendError) {
-                await DB.OutboundMessage.markPartial(
-                    outboundIdempotencyKey,
-                    summarizeProviderResult(error.partialResults),
-                    error,
-                ).catch(() => undefined)
-                await DB.TargetHealth.mark({
-                    target_id: targetId,
-                    provider: group.target.NAME,
-                    status: 'degraded',
-                    last_send_status: 'partial',
-                    last_provider_code: providerCode(error.partialResults),
-                    disabled_reason: error.message,
-                    details: summarizeProviderResult(error.partialResults),
-                }).catch(() => undefined)
+                await applyPartialSendFailure(group.target, outboundIdempotencyKey, error, log)
                 return claimedArticles.map((article) => article.id)
             }
-            await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
-            await DB.TargetHealth.mark({
-                target_id: targetId,
-                provider: group.target.NAME,
-                status: 'error',
-                last_send_status: 'failed',
-                disabled_reason: error instanceof Error ? error.message : String(error),
-                details: {
+            await applyFailedSendFailure(
+                group.target,
+                outboundIdempotencyKey,
+                error,
+                {
                     route_key: group.routeKey,
                     task_kind: taskKind,
                     article_keys: articleKeys,
                 },
-            }).catch(() => undefined)
+                log,
+            )
             for (const article of claimedArticles) {
                 await this.releaseArticleChain(article, article.platform, targetId)
             }

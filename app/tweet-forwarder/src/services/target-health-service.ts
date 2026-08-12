@@ -1,7 +1,7 @@
 import DB from '@/db'
 import type { Logger } from '@idol-bbq-utils/log'
 import { providerCode, summarizeProviderResult } from '@/services/outbound-message-service'
-import type { BaseForwarder } from '@/middleware/forwarder/base'
+import type { BaseForwarder, NonRetryableForwarderSendError, PartialForwarderSendError } from '@/middleware/forwarder/base'
 
 /**
  * Health bookkeeping for a send attempt against one forward target. Every send
@@ -88,4 +88,53 @@ export async function markTargetHealthForSendOutcome(
             `Failed to record target health for ${target.id}: ${error instanceof Error ? error.message : String(error)}`,
         )
     }
+}
+
+/**
+ * Shared failure bookkeeping for send paths. Every path used to inline these
+ * three blocks (with subtle divergence in mark order and error handling);
+ * these helpers fix the order (mark outbound first, health second, never throw).
+ */
+export async function applyPartialSendFailure(
+    target: Pick<BaseForwarder, 'id' | 'NAME'>,
+    outboundIdempotencyKey: string,
+    error: PartialForwarderSendError,
+    log?: Logger,
+): Promise<void> {
+    await DB.OutboundMessage.markPartial(
+        outboundIdempotencyKey,
+        summarizeProviderResult(error.partialResults),
+        error,
+    ).catch(() => undefined)
+    await markTargetHealthForSendOutcome(
+        target,
+        { kind: 'partial', partialResults: error.partialResults, message: error.message },
+        log,
+    )
+}
+
+export async function applyFailedSendFailure(
+    target: Pick<BaseForwarder, 'id' | 'NAME'>,
+    outboundIdempotencyKey: string,
+    error: unknown,
+    details: Record<string, unknown> | undefined,
+    log?: Logger,
+): Promise<void> {
+    await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+    await markTargetHealthForSendOutcome(
+        target,
+        { kind: 'failed', message: error instanceof Error ? error.message : String(error), details },
+        log,
+    )
+}
+
+export async function applyNonRetryableSendFailure(
+    target: Pick<BaseForwarder, 'id' | 'NAME'>,
+    outboundIdempotencyKey: string,
+    error: NonRetryableForwarderSendError,
+    details: Record<string, unknown> | undefined,
+    log?: Logger,
+): Promise<void> {
+    await DB.OutboundMessage.markFailed(outboundIdempotencyKey, error).catch(() => undefined)
+    await markTargetHealthForSendOutcome(target, { kind: 'failed', message: error.message, details }, log)
 }
