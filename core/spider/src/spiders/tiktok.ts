@@ -150,12 +150,7 @@ namespace TiktokApiJsonParser {
         )
     }
 
-    async function loadUniversalDataFromBrowser(url: string, page: Page): Promise<string> {
-        await page.goto(url, {
-            waitUntil: 'domcontentloaded',
-        })
-        await checkLogin(page)
-        await checkSomethingWrong(page)
+    async function extractUniversalDataFromLoadedPage(page: Page): Promise<string> {
         for (let attempt = 0; attempt < TIKTOK_BROWSER_HYDRATE_ATTEMPTS; attempt++) {
             await page
                 .waitForSelector('script[id="__UNIVERSAL_DATA_FOR_REHYDRATION__"]', {
@@ -175,6 +170,15 @@ namespace TiktokApiJsonParser {
         }
 
         throw new Error('Cannot find user data (browser hydration missing)')
+    }
+
+    async function loadUniversalDataFromBrowser(url: string, page: Page): Promise<string> {
+        await page.goto(url, {
+            waitUntil: 'domcontentloaded',
+        })
+        await checkLogin(page)
+        await checkSomethingWrong(page)
+        return extractUniversalDataFromLoadedPage(page)
     }
 
     async function loadUniversalData(url: string, page?: Page, cookieString?: string): Promise<string> {
@@ -416,6 +420,8 @@ namespace TiktokApiJsonParser {
         }
 
         let browserPosts: Array<GenericArticle<Platform.TikTok>> = []
+        let browserContent: string | null = null
+        let browserLoginError: unknown = null
         if (page) {
             const { cleanup, promise: waitForPosts } = waitForResponse(
                 page,
@@ -444,19 +450,37 @@ namespace TiktokApiJsonParser {
                 if (data.success) {
                     browserPosts = postsParser(data.data)
                 }
-            } catch {
+                // Reuse this navigation for universal data instead of reloading the
+                // same profile page: the posts XHR only fires after hydration, so the
+                // universal-data script is almost always present by now.
+                browserContent = await extractUniversalDataFromLoadedPage(page)
+            } catch (error) {
                 cleanup()
+                if (error instanceof Error && /You need to login first/.test(error.message)) {
+                    browserLoginError = error
+                }
             }
         }
 
         let content: string
-        try {
-            content = await loadUniversalData(url, page, cookieString)
-        } catch (error) {
+        if (browserContent) {
+            content = browserContent
+        } else if (browserLoginError) {
+            // The login wall was already rendered once; re-navigating to the same page
+            // (and the doomed HTTP fallback) would only repeat the same failure.
             if (browserPosts.length > 0) {
                 return browserPosts
             }
-            throw error
+            throw browserLoginError
+        } else {
+            try {
+                content = await loadUniversalData(url, page, cookieString)
+            } catch (error) {
+                if (browserPosts.length > 0) {
+                    return browserPosts
+                }
+                throw error
+            }
         }
         const universalData = JSON.parse(content)
         const userInfo = findUserInfoForHandle(universalData, handle)

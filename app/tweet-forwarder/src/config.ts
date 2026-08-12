@@ -8,6 +8,11 @@ import { normalizePipelinesForRuntime } from './services/quick-config-service'
 
 const CACHE_DIR_ROOT = getCacheRoot()
 const RETRY_LIMIT = 2
+// Crawl retries are deliberately lower than processor retries: a transient crawl
+// error used to re-run the whole per-URL fan-out (all list/hydration/detail
+// requests) up to 3 times. Spiders now absorb transient failures per-request, so
+// the whole-round retry is a last resort and one retry is enough.
+const CRAWL_RETRY_LIMIT = 1
 
 ensureDirectoryExists(CACHE_DIR_ROOT)
 ensureDirectoryExists(path.join(CACHE_DIR_ROOT, 'logs'))
@@ -54,4 +59,4 @@ function configParser(config_path: string) {
 
 const CONFIG = {}
 
-export { log, configParser, CONFIG, CACHE_DIR_ROOT, RETRY_LIMIT }
+export { log, configParser, CONFIG, CACHE_DIR_ROOT, RETRY_LIMIT, CRAWL_RETRY_LIMIT }

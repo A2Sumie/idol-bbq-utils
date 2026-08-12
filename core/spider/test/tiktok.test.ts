@@ -3,7 +3,7 @@ import { readFileSync } from 'fs'
 import type { GenericFollows } from '../src/types'
 import { Platform } from '../src/types'
 import { TiktokApiJsonParser, TiktokSpider } from '../src/spiders/tiktok'
-import { HTTPClient, HttpStatusError } from '../src/utils'
+import { HTTPClient, HttpStatusError, SimpleExpiringCache } from '../src/utils'
 import { test, expect } from 'bun:test'
 
 function tiktokUniversalHtml(universalData: unknown) {
@@ -595,4 +595,85 @@ test('TikTok single-video grab uses the browser when the unsigned fetch is block
     } finally {
         ;(HTTPClient as any).download_webpage = original
     }
+})
+
+function makeTikTokResponsePage(options: {
+    gotoUrls: string[]
+    pageContent: string
+    itemList?: Array<any>
+    loginWall?: boolean
+}) {
+    let responseHandler: ((resp: any) => void) | null = null
+    const fakePage: any = {
+        on: (event: string, handler: any) => {
+            if (event === 'response') responseHandler = handler
+        },
+        off: () => {
+            responseHandler = null
+        },
+        goto: async (url: string) => {
+            options.gotoUrls.push(url)
+            queueMicrotask(() => {
+                responseHandler?.({
+                    url: () => 'https://www.tiktok.com/api/post/item_list/?aid=1988',
+                    request: () => ({ method: () => 'GET' }),
+                    status: () => 200,
+                    json: async () => ({ itemList: options.itemList ?? [] }),
+                })
+            })
+        },
+        waitForSelector: async (selector: string) => {
+            if (options.loginWall && String(selector).includes('loginForm')) {
+                return {}
+            }
+            return null
+        },
+        content: async () => options.pageContent,
+        browserContext: () => ({ cookies: async () => [] }),
+    }
+    return fakePage
+}
+
+test('TikTok grabPosts reuses a single browser navigation for posts and universal data', async () => {
+    const original = HTTPClient.download_webpage
+    ;(HTTPClient as any).download_webpage = async () => {
+        throw new Error('blocked')
+    }
+
+    const gotoUrls: string[] = []
+    const fakePage = makeTikTokResponsePage({
+        gotoUrls,
+        pageContent: tiktokPageHtml({ handle: 'emma_tsukishiro', postId: '222', secUid: 'sec-abc' }),
+        itemList: [tiktokPost('emma_tsukishiro', '111')],
+    })
+
+    try {
+        const articles = await TiktokApiJsonParser.grabPosts(
+            'https://www.tiktok.com/@emma_tsukishiro',
+            'abc1234',
+            1988,
+            fakePage,
+            undefined,
+            new SimpleExpiringCache(),
+        )
+        expect(gotoUrls).toHaveLength(1)
+        expect(gotoUrls[0]).toBe('https://www.tiktok.com/@emma_tsukishiro')
+        expect(articles.map((a: any) => a.a_id).sort()).toEqual(['111', '222'])
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
+})
+
+test('TikTok grabPosts avoids a second navigation on the login wall', async () => {
+    const gotoUrls: string[] = []
+    const fakePage = makeTikTokResponsePage({
+        gotoUrls,
+        pageContent: '',
+        loginWall: true,
+    })
+
+    await expect(
+        TiktokApiJsonParser.grabPosts('https://www.tiktok.com/@emma_tsukishiro', 'abc1234', 1988, fakePage, undefined, new SimpleExpiringCache()),
+    ).rejects.toThrow(/You need to login first/)
+    expect(gotoUrls).toHaveLength(1)
 })

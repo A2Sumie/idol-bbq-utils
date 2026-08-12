@@ -21,7 +21,7 @@ import { processorRegistry } from '@/middleware/processor'
 import { pRetry } from '@idol-bbq-utils/utils'
 import DB from '@/db'
 import type { Article } from '@/db'
-import { RETRY_LIMIT } from '@/config'
+import { RETRY_LIMIT, CRAWL_RETRY_LIMIT } from '@/config'
 import { delay } from '@/utils/time'
 import { shuffle } from 'lodash'
 import crypto from 'crypto'
@@ -976,6 +976,8 @@ class SpiderPools extends BaseCompatibleModel {
     private instagramLiveRelay: InstagramLiveRelayService
     private riskCooldowns = new Map<string, CrawlRiskCooldown>()
     private seededBrowserSessions = new Set<string>()
+    private warmedBrowserSessions = new Map<string, number>()
+    private static readonly X_WARMUP_REFRESH_MS = 30 * 60 * 1000
     /**
      * BaseSpider._VALID_URL.source
      */
@@ -1113,7 +1115,28 @@ class SpiderPools extends BaseCompatibleModel {
             }
 
             if (page && crawl_engine?.startsWith('api')) {
-                await this.primeBrowserSession(page, url, ctx.log)
+                const warmupFingerprint = JSON.stringify({
+                    browser_mode: browserRequest.browser_mode,
+                    device_profile: browserRequest.device_profile,
+                    session_profile: browserRequest.session_profile,
+                    locale: browserRequest.locale,
+                    timezone: browserRequest.timezone,
+                    viewport: browserRequest.viewport,
+                    user_agent: cfg_crawler.user_agent,
+                    host: url.hostname,
+                })
+                await this.primeBrowserSessionIfNeeded(
+                    page,
+                    url,
+                    warmupFingerprint,
+                    {
+                        url,
+                        platform: spiderPlugin.platform,
+                        sessionProfile: browserRequest.session_profile,
+                        deviceProfile: browserRequest.device_profile,
+                    },
+                    ctx.log,
+                )
             }
 
             const sessionCookieString =
@@ -1434,8 +1457,8 @@ class SpiderPools extends BaseCompatibleModel {
                         ctx.log?.debug(`Using non-browser engine: ${crawl_engine}`)
                     }
 
-                    if (page && crawl_engine?.startsWith('api')) {
-                        await this.primeBrowserSession(page, url, ctx.log)
+                    if (page && crawl_engine?.startsWith('api') && targetContext) {
+                        await this.primeBrowserSessionIfNeeded(page, url, nextPageKey, targetContext, ctx.log)
                     }
 
                     const sessionCookieString =
@@ -1482,13 +1505,16 @@ class SpiderPools extends BaseCompatibleModel {
                                     requestHeaders,
                                 }),
                             {
-                                retries: RETRY_LIMIT,
+                                retries: CRAWL_RETRY_LIMIT,
                                 shouldRetry: (error) => shouldRetryCrawlErrorForPlatform(error, spiderPlugin.platform),
-                                onFailedAttempt: (error) => {
+                                onFailedAttempt: async (error) => {
                                     const classification = classifyCrawlError(error)
                                     ctx.log?.error(
                                         `[${url.href}] Crawl follows failed (${classification}), there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
                                     )
+                                    if (classification === 'transient' || classification === 'timeout') {
+                                        await delay(500 * error.attemptNumber)
+                                    }
                                 },
                             },
                         )) as TaskTypeResult<'follows', Platform>
@@ -1910,6 +1936,62 @@ class SpiderPools extends BaseCompatibleModel {
         return Math.floor(Math.random() * (max - min + 1)) + min
     }
 
+    private pageIsAlreadyOnHost(page: Page, url: URL): boolean {
+        try {
+            const current = page.url()
+            if (!current || current === 'about:blank') {
+                return false
+            }
+            return new URL(current).hostname === url.hostname
+        } catch {
+            return false
+        }
+    }
+
+    private shouldPrimeBrowserSession(
+        page: Page,
+        url: URL,
+        sessionFingerprint: string | undefined,
+        context: CrawlTargetContext,
+    ): boolean {
+        // A page already on this host was warmed earlier in the same task.
+        if (this.pageIsAlreadyOnHost(page, url)) {
+            return false
+        }
+        // During/right after an auth or rate-limit cooldown the warmup is the
+        // cheapest opportunity to validate refreshed cookies; never skip it there.
+        if (this.getActiveCooldown(context)) {
+            return true
+        }
+        if (!sessionFingerprint) {
+            return true
+        }
+        const last = this.warmedBrowserSessions.get(sessionFingerprint)
+        return !last || Date.now() - last >= SpiderPools.X_WARMUP_REFRESH_MS
+    }
+
+    private async primeBrowserSessionIfNeeded(
+        page: Page,
+        url: URL,
+        sessionFingerprint: string | undefined,
+        context: CrawlTargetContext,
+        log?: Logger,
+    ): Promise<void> {
+        if (!this.shouldPrimeBrowserSession(page, url, sessionFingerprint, context)) {
+            return
+        }
+        await this.primeBrowserSession(page, url, log)
+        if (sessionFingerprint) {
+            this.warmedBrowserSessions.set(sessionFingerprint, Date.now())
+            if (this.warmedBrowserSessions.size > 512) {
+                const oldest = Array.from(this.warmedBrowserSessions.entries()).sort((a, b) => a[1] - b[1])[0]
+                if (oldest) {
+                    this.warmedBrowserSessions.delete(oldest[0])
+                }
+            }
+        }
+    }
+
     private async primeBrowserSession(page: Page, url: URL, log?: Logger) {
         try {
             await page.goto(url.href, {
@@ -2084,13 +2166,16 @@ class SpiderPools extends BaseCompatibleModel {
                                   : undefined,
                       }),
                   {
-                      retries: RETRY_LIMIT,
+                      retries: CRAWL_RETRY_LIMIT,
                       shouldRetry: (error) => shouldRetryCrawlErrorForPlatform(error, platform),
-                      onFailedAttempt: (error) => {
+                      onFailedAttempt: async (error) => {
                           const classification = classifyCrawlError(error)
                           ctx.log?.error(
                               `[${url.href}] Crawl article failed (${classification}), there are ${error.retriesLeft} retries left: ${error.originalError.message}`,
                           )
+                          if (classification === 'transient' || classification === 'timeout') {
+                              await delay(500 * error.attemptNumber)
+                          }
                       },
                   },
               )

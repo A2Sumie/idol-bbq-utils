@@ -261,6 +261,38 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+function websiteErrorMessage(error: unknown) {
+    return error instanceof Error ? error.message : String(error)
+}
+
+function isAuthOrRateLimitWebsiteError(error: unknown) {
+    return /login|csrf|cookie|session expired|challenge|checkpoint|rate limit|too many requests|temporarily blocked|forbidden|401|403|429/i.test(
+        websiteErrorMessage(error),
+    )
+}
+
+function isTransientWebsiteError(error: unknown) {
+    return /timeout|timed out|navigation|econnreset|socket hang up|network|fetch failed|temporarily unavailable|bad gateway|service unavailable|net::err|aborted/i.test(
+        websiteErrorMessage(error),
+    )
+}
+
+async function retryTransient<T>(operation: () => Promise<T>, context: string, retries = 1): Promise<T> {
+    let lastError: unknown
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+        try {
+            return await operation()
+        } catch (error) {
+            lastError = error
+            if (!isTransientWebsiteError(error) || attempt >= retries) {
+                throw error
+            }
+            await sleep(600 * (attempt + 1))
+        }
+    }
+    throw lastError
+}
+
 export function resolveWebsiteFeedResourceBlocking(feed: FeedKind, blockResourceTypes: Array<string>) {
     if (feed === 'radio' || feed === 'movie' || feed === 'photo') {
         return blockResourceTypes.filter((type) => type === 'font')
@@ -1828,7 +1860,10 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
         let pageCount = 0
 
         while (currentUrl && pageCount < options.maxListPages) {
-            const result = await extractListPage(page, feedConfig, currentUrl)
+            const result = await retryTransient(
+                () => extractListPage(page, feedConfig, currentUrl as string),
+                `list page ${currentUrl}`,
+            )
             result.items.forEach((item) => {
                 const detailKey = getDetailKey(feedConfig, item.detailUrl)
                 if (!discovered.has(detailKey)) {
@@ -1845,6 +1880,7 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             `Website crawl budget feed=${feedConfig.feed} pages=${pageCount}/${options.maxListPages} details=${listItems.length}/${options.maxDetailCount} blocked=${options.blockResourceTypes.join(',') || 'none'}`,
         )
 
+        const failedDetails = [] as Array<{ url: string; error: unknown }>
         for (const [index, item] of listItems.entries()) {
             if (index > 0) {
                 const waitTime = randomInterval(options.detailIntervalTime)
@@ -1862,7 +1898,27 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
                     // fall through to a full re-fetch on lookup error
                 }
             }
-            articles.push(...(await this.crawlSingleDetail(page, feedConfig, item)))
+            try {
+                articles.push(
+                    ...(await retryTransient(
+                        () => this.crawlSingleDetail(page, feedConfig, item),
+                        `detail ${item.detailUrl}`,
+                    )),
+                )
+            } catch (error) {
+                // Auth/rate-limit and structural (parser) failures keep the original
+                // whole-round semantics. Only exhausted transient failures degrade to a
+                // partial round instead of re-running every page and detail from scratch.
+                if (!isTransientWebsiteError(error)) {
+                    throw error
+                }
+                failedDetails.push({ url: item.detailUrl, error })
+                this.log?.warn(`Website crawl partial: detail failed after retry ${formatSafeWebsiteUrl(item.detailUrl)}: ${websiteErrorMessage(error)}`)
+            }
+        }
+
+        if (articles.length === 0 && failedDetails.length > 0) {
+            throw failedDetails[0].error
         }
 
         return articles.sort((a, b) => b.created_at - a.created_at)

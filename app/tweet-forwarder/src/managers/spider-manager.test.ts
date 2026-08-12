@@ -1441,3 +1441,41 @@ test('shouldRetryCrawlErrorForPlatform defers Instagram throttle instead of in-r
     expect(shouldRetryCrawlErrorForPlatform(throttleRedirect, Platform.Instagram)).toBe(false)
     expect(shouldRetryCrawlErrorForPlatform(new Error('fetch failed'), Platform.Instagram)).toBe(true)
 })
+
+test('SpiderPools warms browser sessions once per profile and honors cooldown recovery', async () => {
+    const emitter = new EventEmitter()
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools-warmup', emitter)
+    const url = new URL('https://x.com/some_profile')
+    const context = {
+        url,
+        platform: Platform.X,
+        sessionProfile: 'desktop_chrome',
+        deviceProfile: 'desktop_chrome',
+    }
+
+    const fakePage: any = { url: () => 'about:blank' }
+
+    expect((pools as any).shouldPrimeBrowserSession(fakePage, url, 'fp-1', context)).toBe(true)
+    ;(pools as any).warmedBrowserSessions.set('fp-1', Date.now())
+    expect((pools as any).shouldPrimeBrowserSession(fakePage, url, 'fp-1', context)).toBe(false)
+
+    // A page already on the same host was warmed this round; no second warmup.
+    fakePage.url = () => 'https://x.com/some_profile'
+    ;(pools as any).warmedBrowserSessions.delete('fp-1')
+    expect((pools as any).shouldPrimeBrowserSession(fakePage, url, 'fp-1', context)).toBe(false)
+
+    // An active cooldown forces a warmup even with a fresh record.
+    fakePage.url = () => 'about:blank'
+    ;(pools as any).warmedBrowserSessions.set('fp-1', Date.now())
+    ;(pools as any).riskCooldowns.set(`${Platform.X}:x.com:desktop_chrome`, {
+        expiresAt: Date.now() + 60_000,
+        classification: 'auth',
+        message: 'auth',
+    })
+    expect((pools as any).shouldPrimeBrowserSession(fakePage, url, 'fp-1', context)).toBe(true)
+
+    // Expired record warms again.
+    ;(pools as any).riskCooldowns.clear()
+    ;(pools as any).warmedBrowserSessions.set('fp-1', Date.now() - 31 * 60 * 1000)
+    expect((pools as any).shouldPrimeBrowserSession(fakePage, url, 'fp-1', context)).toBe(true)
+})

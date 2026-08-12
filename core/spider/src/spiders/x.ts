@@ -73,6 +73,11 @@ const X_UNIFIED_LIST_DEFAULT_CONCURRENCY = 2
 const X_UNIFIED_LIST_MAX_CONCURRENCY = 4
 const X_UNIFIED_LIST_MEMBER_CURSORS = new Map<string, number>()
 const X_UNIFIED_LIST_MEMBER_CACHE = new Map<string, Array<string>>()
+// Must match the `count` variable of XApiClient.grabTweets. The list timeline
+// (count=20) covers a member's latest tweets; when the discovery window already
+// contains at least this many tweets from a member, their UserTweets hydration
+// request would only return a subset of tweets we already have, so it is skipped.
+const X_USER_TIMELINE_HYDRATE_COUNT = 5
 const X_FETCH_TIMEOUT_MS = 20_000
 // Cross-crawl cache TTLs. X operation profiles (query ids + headers) and rest ids are
 // stable for long periods; caching them on the spider instance removes the per-crawl
@@ -98,6 +103,11 @@ function normalizeRequestHeaders(headers?: Record<string, string>) {
 
 function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function normalizeHydrationUserId(userId?: string | null) {
+    const trimmed = typeof userId === 'string' ? userId.trim().replace(/^@+/, '') : ''
+    return trimmed ? trimmed.toLowerCase() : ''
 }
 
 function clampPositiveInteger(value: unknown, fallback: number, max: number) {
@@ -519,6 +529,15 @@ class XStatusSpider extends BaseSpider {
             !restrictToMembers ||
             (typeof userId === 'string' && memberAllowSet.has(userId.trim().replace(/^@+/, '').toLowerCase()))
         const discoveryTweets = discoveryTweetsRaw.filter((tweet) => isAllowedMember(tweet?.u_id))
+        // Per-member count of tweets already covered by the list timeline. A member
+        // whose latest tweets are fully inside the discovery window needs no separate
+        // UserTweets hydration request (the merge stage dedupes by a_id anyway).
+        const discoveryCoverage = new Map<string, number>()
+        for (const tweet of discoveryTweets) {
+            const key = normalizeHydrationUserId(tweet?.u_id)
+            if (!key) continue
+            discoveryCoverage.set(key, (discoveryCoverage.get(key) || 0) + 1)
+        }
         const activeUserIds = this.sanitizeUserIds([
             ...(discoveryTweets.map((tweet) => tweet?.u_id?.trim()).filter(Boolean) as Array<string>),
             ...sampledViewportUsers,
@@ -554,7 +573,10 @@ class XStatusSpider extends BaseSpider {
             })
         }
 
-        const hydratedArticles = await this.hydrateUsersFromListActivity(selectedUserIds, client, cookie, options)
+        const hydratedArticles = await this.hydrateUsersFromListActivity(selectedUserIds, client, cookie, {
+            ...options,
+            discoveryCoverage,
+        })
         return this.attachListContextToArticles(
             this.mergeArticles(options.fetchTweets ? discoveryTweets : [], hydratedArticles),
             {
@@ -576,6 +598,7 @@ class XStatusSpider extends BaseSpider {
                 min?: number
                 max?: number
             }
+            discoveryCoverage?: Map<string, number>
         },
     ) {
         const articles = [] as Array<GenericArticle<Platform.X>>
@@ -597,7 +620,8 @@ class XStatusSpider extends BaseSpider {
                 }> => {
                     const userArticles = [] as Array<GenericArticle<Platform.X>>
                     const failures = [] as Array<{ scope: 'tweets' | 'replies'; error: unknown }>
-                    if (options.fetchTweets) {
+                    const coveredTweetCount = options.discoveryCoverage?.get(normalizeHydrationUserId(userId)) ?? 0
+                    if (options.fetchTweets && coveredTweetCount < X_USER_TIMELINE_HYDRATE_COUNT) {
                         try {
                             userArticles.push(...(await client.grabTweets(userId, cookie)))
                         } catch (error) {
@@ -606,6 +630,10 @@ class XStatusSpider extends BaseSpider {
                                 return { userId, articles: userArticles, failures, rateLimited: true }
                             }
                         }
+                    } else if (options.fetchTweets) {
+                        this.log?.debug(
+                            `Unified list hydration skipped tweets for @${userId}: covered by list timeline (${coveredTweetCount} tweets).`,
+                        )
                     }
                     if (options.fetchReplies) {
                         try {
@@ -998,6 +1026,40 @@ class XApiClient {
 
     private operationProfileCacheKey(operation: XApis) {
         return `x-op:${operation}`
+    }
+
+    /**
+     * Per-request transient retry for X data fetchers. Absorbs 5xx and network blips with one
+     * short-backoff retry so a single flaky request no longer forces the manager to re-run the
+     * whole per-URL fan-out. Auth (401/403), rate limit (429) and 404 pass through untouched so
+     * the caller's invalidation and early-stop logic keeps its semantics.
+     */
+    private async fetchWithTransientRetry(
+        url: string,
+        init: RequestInit,
+        context: string,
+        retries = 1,
+    ): Promise<Response> {
+        for (let attempt = 0; attempt <= retries; attempt += 1) {
+            let res: Response
+            try {
+                res = await fetchWithTimeout(url, init)
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error)
+                if (!/timed out|network|fetch failed|econnreset|socket hang up/i.test(message) || attempt >= retries) {
+                    throw error
+                }
+                this.log?.warn(`X fetch ${context} transient network error, retrying (attempt ${attempt + 1}): ${message}`)
+                await sleep(500 * (attempt + 1))
+                continue
+            }
+            if (res.ok || res.status < 500 || attempt >= retries) {
+                return res
+            }
+            this.log?.warn(`X fetch ${context} transient ${res.status}, retrying (attempt ${attempt + 1})`)
+            await sleep(500 * (attempt + 1))
+        }
+        throw new Error(`Failed to fetch ${context}: retries exhausted`)
     }
 
     private invalidateOperationProfile(operation: XApis) {
@@ -1553,8 +1615,7 @@ class XApiClient {
         })
         const variables = {
             userId: rest_id,
-            // TODO: configurable
-            count: 5,
+            count: X_USER_TIMELINE_HYDRATE_COUNT,
             includePromotedContent: true,
             withQuickPromoteEligibilityTweetFields: true,
             withVoice: true,
@@ -1596,12 +1657,16 @@ class XApiClient {
         const query = this.generateParams(features, variables, fieldToggles)
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetchWithTimeout(url, {
-            headers: this.buildOperationHeaders(XApis.UserTweets, cookie, {
-                extraHeaders: { 'x-client-uuid': uuid },
-                referer: `${this.BASE_URL}/${id}`,
-            }),
-        })
+        const res = await this.fetchWithTransientRetry(
+            url,
+            {
+                headers: this.buildOperationHeaders(XApis.UserTweets, cookie, {
+                    extraHeaders: { 'x-client-uuid': uuid },
+                    referer: `${this.BASE_URL}/${id}`,
+                }),
+            },
+            'tweets',
+        )
         this.assertOkOrInvalidate(res, 'tweets', XApis.UserTweets, id)
         const json = await res.json()
         if (json.errors) {
@@ -1663,13 +1728,17 @@ class XApiClient {
         const fieldToggles = { withArticlePlainText: false }
         const query = this.generateParams(features, variables, fieldToggles)
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetchWithTimeout(url, {
-            headers: this.buildOperationHeaders(XApis.UserTweetsAndReplies, cookie, {
-                extraHeaders: { 'x-client-uuid': uuid },
-                fallbackOperations: [XApis.UserTweets],
-                referer: `${this.BASE_URL}/${id}/with_replies`,
-            }),
-        })
+        const res = await this.fetchWithTransientRetry(
+            url,
+            {
+                headers: this.buildOperationHeaders(XApis.UserTweetsAndReplies, cookie, {
+                    extraHeaders: { 'x-client-uuid': uuid },
+                    fallbackOperations: [XApis.UserTweets],
+                    referer: `${this.BASE_URL}/${id}/with_replies`,
+                }),
+            },
+            'replies',
+        )
         this.assertOkOrInvalidate(res, 'replies', XApis.UserTweetsAndReplies, id)
         const json = await res.json()
         if (json.errors) {
@@ -1739,12 +1808,16 @@ class XApiClient {
             url = `${this.BASE_URL}${query_path}?${query.toString()}`
         }
 
-        const res = await fetchWithTimeout(url, {
-            headers: this.buildOperationHeaders(XApis.TweetDetail, cookie, {
-                fallbackOperations: [XApis.UserTweets],
-                referer,
-            }),
-        })
+        const res = await this.fetchWithTransientRetry(
+            url,
+            {
+                headers: this.buildOperationHeaders(XApis.TweetDetail, cookie, {
+                    fallbackOperations: [XApis.UserTweets],
+                    referer,
+                }),
+            },
+            'tweet detail',
+        )
         this.assertOkOrInvalidate(res, 'tweet detail', XApis.TweetDetail, screenName)
         const json = await res.json()
         if (json.errors) {
@@ -1808,11 +1881,15 @@ class XApiClient {
         const query = this.generateParams(features, variables)
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetchWithTimeout(url, {
-            headers: this.buildOperationHeaders(XApis.ListLatestTweetsTimeline, cookie, {
-                referer: `${this.BASE_URL}/i/lists/${list_id}`,
-            }),
-        })
+        const res = await this.fetchWithTransientRetry(
+            url,
+            {
+                headers: this.buildOperationHeaders(XApis.ListLatestTweetsTimeline, cookie, {
+                    referer: `${this.BASE_URL}/i/lists/${list_id}`,
+                }),
+            },
+            'tweets',
+        )
         this.assertOkOrInvalidate(res, 'tweets', XApis.ListLatestTweetsTimeline)
         const json = await res.json()
         if (json.errors) {
@@ -1867,12 +1944,16 @@ class XApiClient {
         const query = this.generateParams(features, variables)
 
         const url = `${this.BASE_URL}${query_path}?${query.toString()}`
-        const res = await fetchWithTimeout(url, {
-            headers: this.buildOperationHeaders(XApis.ListMembers, cookie, {
-                fallbackOperations: [XApis.ListLatestTweetsTimeline],
-                referer: `${this.BASE_URL}/i/lists/${list_id}`,
-            }),
-        })
+        const res = await this.fetchWithTransientRetry(
+            url,
+            {
+                headers: this.buildOperationHeaders(XApis.ListMembers, cookie, {
+                    fallbackOperations: [XApis.ListLatestTweetsTimeline],
+                    referer: `${this.BASE_URL}/i/lists/${list_id}`,
+                }),
+            },
+            'follows',
+        )
         this.assertOkOrInvalidate(res, 'tweets', XApis.ListMembers)
         const json = await res.json()
         if (json.errors) {

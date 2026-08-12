@@ -731,6 +731,56 @@ test('X unified list hydration stops after rate limit response', async () => {
     expect(requestedUsers).toEqual(['alpha'])
 })
 
+test('X unified list hydration skips tweets already covered by the list timeline', async () => {
+    const spider = new X.XListSpider()
+    let grabTweetsCalls = 0
+    let grabRepliesCalls = 0
+    const client = {
+        grabTweets: async () => {
+            grabTweetsCalls += 1
+            return []
+        },
+        grabReplies: async () => {
+            grabRepliesCalls += 1
+            return []
+        },
+    }
+
+    await (spider as any).hydrateUsersFromListActivity(['alpha', 'beta'], client, 'cookie', {
+        fetchTweets: true,
+        fetchReplies: true,
+        hydrateConcurrency: 2,
+        discoveryCoverage: new Map([
+            ['alpha', 5],
+            ['beta', 1],
+        ]),
+    })
+
+    expect(grabTweetsCalls).toBe(1)
+    expect(grabRepliesCalls).toBe(2)
+})
+
+test('X unified list hydration coverage lookup tolerates @ prefixes and casing', async () => {
+    const spider = new X.XListSpider()
+    let grabTweetsCalls = 0
+    const client = {
+        grabTweets: async () => {
+            grabTweetsCalls += 1
+            return []
+        },
+        grabReplies: async () => [],
+    }
+
+    await (spider as any).hydrateUsersFromListActivity(['@ALPHA'], client, 'cookie', {
+        fetchTweets: true,
+        fetchReplies: false,
+        hydrateConcurrency: 1,
+        discoveryCoverage: new Map([['alpha', 6]]),
+    })
+
+    expect(grabTweetsCalls).toBe(0)
+})
+
 test('assertXResponseOk passes through a 2xx response without throwing', () => {
     expect(() => assertXResponseOk({ ok: true, status: 200, statusText: 'OK' } as Response, 'tweets')).not.toThrow()
 })
