@@ -554,10 +554,12 @@ namespace InsApiJsonParser {
                     } catch {
                         return
                     }
-                    const hasTimeline =
-                        JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json }).length > 0 ||
-                        JSONPath({ path: '$..xdt_api__v1__feed__user_timeline_graphql_connection.edges', json })
-                            .length > 0
+                    const legacyEdges = JSONPath({ path: '$..edge_owner_to_timeline_media.edges', json })
+                    const newEdges = JSONPath({ path: '$..xdt_api__v1__feed__user_timeline_graphql_connection.edges', json })
+                    console.log(
+                        'DEBUG ig timeline resp url=' + url.slice(0, 80) + ' fn=' + friendlyName + ' legacy_edges=' + legacyEdges.length + ' new_edges=' + newEdges.length,
+                    )
+                    const hasTimeline = legacyEdges.length > 0 || newEdges.length > 0
                     if (!hasTimeline) {
                         return
                     }
