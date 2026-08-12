@@ -571,16 +571,7 @@ namespace InsApiJsonParser {
                     return
                 }
                 try {
-                    const json = await response.json()
-                    const xdtEdges = JSONPath({ path: '$..xdt_api__v1__feed__user_timeline_graphql_connection.edges', json })[0] || []
-                    for (const edge of xdtEdges.slice(0, 3)) {
-                        const node = edge?.node || {}
-                        const keys = Object.keys(node)
-                        const duration = node.video_duration || node.media_duration || node.duration || null
-                        const mediaKeys = Object.keys(node.video_versions?.[0] || {}).slice(0, 6)
-                        console.log('DEBUG xdt-node code=' + String(node.code || '').slice(0, 20) + ' duration=' + duration + ' has_video_versions=' + Boolean(node.video_versions) + ' media0_keys=' + mediaKeys.join(',') + ' top_keys=' + keys.slice(0, 40).join(','))
-                    }
-                    done(json)
+                    done(await response.json())
                 } catch (e) {
                     fail(e)
                 }
