@@ -533,57 +533,75 @@ namespace InsApiJsonParser {
             }
         } = {},
     ): Promise<Array<GenericArticle<Platform.Instagram>>> {
-        const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
-            const url = response.url()
-            const request = response.request()
-            const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
-            if (friendlyName !== PROFILE_POSTS_KEY) {
-                return
-            }
-            if (response.status() >= 300 && response.status() < 400) {
-                // A redirected GraphQL response has no readable body in Puppeteer. Instagram answers with a
-                // 302 both for login bounces (expired session) and for rate-limit/challenge throttling;
-                // only the Location header tells them apart.
-                const location = response.headers()['location'] || ''
-                if (/login/i.test(location)) {
-                    fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
-                } else {
-                    fail(
-                        new Error(
-                            `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
-                        ),
-                    )
+        const fetchOnce = async (viaReload: boolean) => {
+            const { cleanup, promise: waitForTweets } = waitForResponse(page, async (response, { done, fail }) => {
+                const url = response.url()
+                const request = response.request()
+                const friendlyName = graphQLFriendlyNameFromRequest(url, request.method(), request.postData())
+                if (friendlyName !== PROFILE_POSTS_KEY) {
+                    return
                 }
-                return
-            }
-            if (response.status() >= 400) {
-                fail(new Error(`Error: ${response.status()}`))
-                return
+                if (response.status() >= 300 && response.status() < 400) {
+                    const location = response.headers()['location'] || ''
+                    if (/login/i.test(location)) {
+                        fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    } else {
+                        fail(
+                            new Error(
+                                `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
+                            ),
+                        )
+                    }
+                    return
+                }
+                if (response.status() >= 400) {
+                    fail(new Error(`Error: ${response.status()}`))
+                    return
+                }
+                try {
+                    done(await response.json())
+                } catch (e) {
+                    fail(e)
+                }
+            }, 60000)
+            if (config.viewport) {
+                await page.setViewport(config.viewport)
             }
             try {
-                done(await response.json())
-            } catch (e) {
-                fail(e)
+                if (viaReload) {
+                    await page.reload({ waitUntil: 'domcontentloaded' })
+                } else {
+                    await page.goto(url)
+                }
+            } catch (error) {
+                cleanup()
+                throw error
             }
-        })
-        if (config.viewport) {
-            await page.setViewport(config.viewport)
-        }
-        await page.goto(url)
-        try {
-            await checkLogin(page)
-            await checkSomethingWrong(page)
-        } catch (error) {
-            cleanup()
-            throw error
-        }
+            try {
+                await checkLogin(page)
+                await checkSomethingWrong(page)
+            } catch (error) {
+                cleanup()
+                throw error
+            }
 
-        const data = await waitForTweets
-        if (!data.success) {
-            throw data.error
+            const data = await waitForTweets
+            if (!data.success) {
+                throw data.error
+            }
+            return postsParser(data.data)
         }
-        const posts = postsParser(data.data)
-        return posts
+        const posts = await fetchOnce(false)
+        try {
+            const reloaded = await fetchOnce(true)
+            const byId = new Map(posts.map((post) => [post.a_id, post]))
+            for (const post of reloaded) {
+                byId.set(post.a_id, post)
+            }
+            return Array.from(byId.values())
+        } catch {
+            return posts
+        }
     }
 
     export async function grabHighlights(

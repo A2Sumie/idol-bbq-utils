@@ -156,6 +156,55 @@ test('Instagram grabPosts resolves after posts query without waiting for highlig
     expect(listeners.has('response')).toBeFalse()
 })
 
+test('Instagram grabPosts merges reloaded posts when a cache-bust reload returns newer data', async () => {
+    const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
+    const listeners = new Map<string, (data: any) => void>()
+    const makeResponse = (json: any) => ({
+        url: () => 'https://www.instagram.com/ajax/bulk-route-definitions/',
+        status: () => 200,
+        json: async () => json,
+        request: () => ({
+            method: () => 'POST',
+            postData: () => 'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D',
+        }),
+    })
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(eventName, handler)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            if (listeners.get(eventName) === handler) {
+                listeners.delete(eventName)
+            }
+        },
+        goto: async () => {
+            listeners.get('response')?.(makeResponse(posts_json))
+        },
+        reload: async () => {
+            const withNewer = JSON.parse(JSON.stringify(posts_json))
+            const edges = withNewer?.data?.xdt_api__v1__feed__user_timeline_graphql_connection?.edges || []
+            const template = edges[0]?.node
+            edges.unshift({
+                node: {
+                    ...template,
+                    id: '9999999999999999999',
+                    taken_at_timestamp: 1786600000,
+                    shortcode: 'NEWPOST',
+                    code: 'NEWPOST',
+                },
+            })
+            listeners.get('response')?.(makeResponse(withNewer))
+        },
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+    } as any
+
+    const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/instagram/')
+    expect(posts.some((post) => post.a_id === 'NEWPOST')).toBe(true)
+    expect(listeners.has('response')).toBeFalse()
+})
+
 test('Instagram parser drops generated media summaries while preserving real captions', () => {
     const posts = InsApiJsonParser.postsParser({
         data: {
