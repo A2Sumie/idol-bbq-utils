@@ -22,6 +22,7 @@ import {
     type ArticleTextOptions,
 } from '@idol-bbq-utils/render'
 import { existsSync, readFileSync, statSync, unlinkSync } from 'fs'
+import { createHash } from 'crypto'
 import path from 'path'
 import { cloneDeep } from 'lodash'
 import { platformPresetHeadersMap, platformNameMap } from '@idol-bbq-utils/spider/const'
@@ -141,8 +142,10 @@ export class RenderService {
     // the same dead URL. 5xx/network errors are transient and never cached.
     private mediaDownloadFailureCache = new Map<string, number>()
     private mediaReadCache = new Map<string, { mtimeMs: number; entry: { dataUrl: string; dimensions: { width: number; height: number } | null } }>()
+    private cardRenderCache = new Map<string, Buffer>()
     private static readonly MEDIA_FAILURE_CACHE_MS = 30 * 60 * 1000
     private static readonly MEDIA_FAILURE_CACHE_LIMIT = 1000
+    private static readonly CARD_RENDER_CACHE_LIMIT = 16
 
     private isMediaDownloadCachedFailed(url: string): boolean {
         const until = this.mediaDownloadFailureCache.get(url)
@@ -267,9 +270,22 @@ export class RenderService {
                     hydratedArticle = dropped.article
                 }
             }
+            // Exact-content render cache: the hydrated article is precisely what
+            // satori consumes (media inlined as dataURLs), so a stable hash of it
+            // plus template/features identifies the render output. Summary-card
+            // retry flushes, per-target translation variants and repeated cycles
+            // previously re-ran the full satori+resvg pipeline for identical input.
+            const cacheKey = `${render_type}:${this.renderCacheKey(hydratedArticle, config)}`
+            const cachedBuffer = this.cardRenderCache.get(cacheKey)
+            if (cachedBuffer) {
+                const path = writeImgToFile(cachedBuffer, `${taskId}-${article.a_id}-rendered.png`)
+                this.log?.debug(`Reused cached rendered card for ${article.platform}:${article.a_id}`)
+                return path
+            }
             try {
                 this.log?.debug(`Converting article ${article.a_id} to img...`)
                 const imgBuffer = await renderArticleImage(hydratedArticle)
+                this.putCardRenderCache(cacheKey, imgBuffer)
                 const path = writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
                 this.log?.debug(`Generated rendered image at ${path}`)
                 return path
@@ -283,7 +299,13 @@ export class RenderService {
                                     e,
                                 )}`,
                         )
+                        const fallbackKey = `${cacheKey}:stripped:${fallback.removed}`
+                        const fallbackCached = this.cardRenderCache.get(fallbackKey)
+                        if (fallbackCached) {
+                            return writeImgToFile(fallbackCached, `${taskId}-${article.a_id}-rendered.png`)
+                        }
                         const imgBuffer = await renderArticleImage(fallback.article)
+                        this.putCardRenderCache(fallbackKey, imgBuffer)
                         const path = writeImgToFile(imgBuffer, `${taskId}-${article.a_id}-rendered.png`)
                         this.log?.debug(`Generated rendered image at ${path}`)
                         return path
@@ -804,6 +826,37 @@ export class RenderService {
      * cached across renders (summary-card flush previously read and base64-
      * encoded every embedded image twice per variant).
      */
+    /**
+     * Stable hash of the exact render input: the hydrated article is what satori
+     * consumes (media already inlined), so hashing it plus template/features is
+     * correct by construction — created_at/id included because the card header
+     * renders the post time.
+     */
+    private renderCacheKey(hydratedArticle: Article, config: { render_type?: string; card_features?: Array<string> }) {
+        return createHash('sha256')
+            .update(
+                JSON.stringify({
+                    article: hydratedArticle,
+                    features: this.resolveCardFeatures(config.card_features),
+                }),
+            )
+            .digest('hex')
+            .slice(0, 40)
+    }
+
+    private putCardRenderCache(key: string, buffer: Buffer) {
+        if (this.cardRenderCache.has(key)) {
+            this.cardRenderCache.delete(key)
+        }
+        this.cardRenderCache.set(key, buffer)
+        if (this.cardRenderCache.size > RenderService.CARD_RENDER_CACHE_LIMIT) {
+            const oldest = this.cardRenderCache.keys().next().value
+            if (oldest !== undefined) {
+                this.cardRenderCache.delete(oldest)
+            }
+        }
+    }
+
     private readMediaFileOnce(filePath: string): { dataUrl: string; dimensions: { width: number; height: number } | null } | null {
         let mtimeMs: number
         try {

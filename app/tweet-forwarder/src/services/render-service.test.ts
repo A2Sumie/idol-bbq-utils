@@ -1953,3 +1953,50 @@ describe('RenderService img-tag ordering', () => {
         service.cleanup(result.mediaFiles)
     })
 })
+
+test('RenderService reuses a cached render for identical article+features input', async () => {
+    const service = new RenderService()
+    const sourcePath = mkdtempSync(path.join(os.tmpdir(), 'render-cache-'))
+
+    const article: any = {
+        platform: 1,
+        a_id: 'cache-article',
+        u_id: 'member',
+        username: 'member',
+        created_at: 1786500000,
+        content: 'cache me',
+        translation: '缓存我',
+        url: 'https://x.com/member/status/cache-article',
+        type: 'tweet',
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+    const config: any = { taskId: 'render-cache-test', render_type: 'text-card' }
+    const originalRender = (service as any).ArticleConverter.articleToImg
+    let renderCalls = 0
+    ;(service as any).ArticleConverter.articleToImg = async () => {
+        renderCalls += 1
+        return Buffer.from(`png-${Math.random()}`)
+    }
+    ;(service as any).mediaFileDimensions = () => ({ width: 100, height: 100 })
+
+    try {
+        const first = await (service as any).process(article, config)
+        const second = await (service as any).process(article, config)
+
+        expect(renderCalls).toBe(1)
+        expect(first.cardMediaFiles[0]?.path).toBeTruthy()
+        expect(second.cardMediaFiles[0]?.path).toBeTruthy()
+        const firstBytes = readFileSync(first.cardMediaFiles[0]!.path)
+        const secondBytes = readFileSync(second.cardMediaFiles[0]!.path)
+        expect(Buffer.compare(firstBytes, secondBytes)).toBe(0)
+        service.cleanup(first.mediaFiles)
+        service.cleanup(second.mediaFiles)
+    } finally {
+        ;(service as any).ArticleConverter.articleToImg = originalRender
+        rmSync(sourcePath, { recursive: true, force: true })
+    }
+})
