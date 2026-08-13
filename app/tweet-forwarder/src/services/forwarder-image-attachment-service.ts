@@ -12,6 +12,9 @@ const DEFAULT_FORWARDER_IMAGE_MAX_BYTES = 4_000_000
 const DEFAULT_FORWARDER_IMAGE_MAX_EDGE_PX = 20_000
 const DEFAULT_FORWARDER_IMAGE_MAX_PIXELS = 40_000_000
 const COMPRESSED_IMAGE_DIR = path.join(CACHE_DIR_ROOT, 'media', 'forwarder-compressed')
+// Bump when ffmpeg flags/output semantics change so stale cache entries never
+// get reused. Old entries are reaped by the media-cache cleanup job (24h).
+const COMPRESSION_CACHE_VERSION = 'v1'
 
 type ImageAttachmentLogger = Partial<Pick<Logger, 'debug' | 'info' | 'warn'>>
 
@@ -163,39 +166,114 @@ function probeImageDimensions(filePath: string, ffprobePath: string): ImageDimen
     }
 }
 
-function compressedOutputPath(sourcePath: string, attempt: CompressionAttempt) {
+function compressedOutputPath(identity: string, attempt: CompressionAttempt) {
     ensureDirectory(COMPRESSED_IMAGE_DIR)
     const hash = crypto
         .createHash('sha1')
-        .update(`${sourcePath}:${Date.now()}:${Math.random()}:${attempt.maxDimension}:${attempt.quality}`)
+        .update(`${COMPRESSION_CACHE_VERSION}:${identity}:${attempt.maxDimension}:${attempt.quality}`)
         .digest('hex')
-        .slice(0, 16)
-    const base = path.basename(sourcePath, path.extname(sourcePath)).replace(/[^a-zA-Z0-9._-]+/g, '_') || 'image'
+        .slice(0, 20)
+    const base = path.basename(identity, path.extname(identity)).replace(/[^a-zA-Z0-9._-]+/g, '_') || 'image'
     return path.join(COMPRESSED_IMAGE_DIR, `${base}-${attempt.maxDimension}-q${attempt.quality}-${hash}.jpg`)
+}
+
+function splitChunkOutputPath(identity: string, partIndex: number) {
+    ensureDirectory(COMPRESSED_IMAGE_DIR)
+    const hash = crypto
+        .createHash('sha1')
+        .update(`${COMPRESSION_CACHE_VERSION}:${identity}:split:${partIndex}`)
+        .digest('hex')
+        .slice(0, 20)
+    const base = path.basename(identity, path.extname(identity)).replace(/[^a-zA-Z0-9._-]+/g, '_') || 'image'
+    return path.join(COMPRESSED_IMAGE_DIR, `${base}-part${String(partIndex + 1).padStart(2, '0')}-${hash}.jpg`)
+}
+
+function resolveContentIdentity(
+    item: MediaFile,
+    sourcePath: string,
+    limits: { maxEdgePx: number; maxPixels: number },
+    maxImageBytes: number,
+) {
+    const limitsPart = `${maxImageBytes}:${limits.maxEdgePx}:${limits.maxPixels}`
+    if (item.content_hash) {
+        return `hash:${item.content_hash}:${limitsPart}`
+    }
+    const size = statSize(sourcePath)
+    if (size === null) {
+        return null
+    }
+    let mtimeMs = 0
+    try {
+        mtimeMs = fs.statSync(sourcePath).mtimeMs
+    } catch {
+        return null
+    }
+    return `path:${sourcePath}:${size}:${mtimeMs}:${limitsPart}`
+}
+
+function cachedOutputSizes(identity: string, attempts: CompressionAttempt[]): Array<{ path: string; size: number }> {
+    const found: Array<{ path: string; size: number }> = []
+    for (const attempt of attempts) {
+        const outputPath = compressedOutputPath(identity, attempt)
+        const size = statSize(outputPath)
+        if (size !== null && size > 0) {
+            found.push({ path: outputPath, size })
+        }
+    }
+    return found
+}
+
+function splitCachedResults(
+    identity: string,
+    chunkCount: number,
+    maxImageBytes: number,
+): NormalizedImageResult[] | null {
+    const results: NormalizedImageResult[] = []
+    for (let index = 0; index < chunkCount; index += 1) {
+        const outputPath = splitChunkOutputPath(identity, index)
+        const size = statSize(outputPath)
+        if (size === null || size <= 0 || size > maxImageBytes) {
+            return null
+        }
+        results.push({ path: outputPath, size_bytes: size })
+    }
+    return results.length > 0 ? results : null
 }
 
 function splitTallImageUnderLimit(
     sourcePath: string,
+    identity: string | null,
     dimensions: ImageDimensions | null,
     maxImageBytes: number,
     limits: { maxEdgePx: number; maxPixels: number },
     options: NormalizeForwarderImageAttachmentsOptions,
-): NormalizedImageResult[] | null {
+): { results: NormalizedImageResult[] | null; fromCache: boolean } {
     if (!dimensions || dimensions.width <= 0 || dimensions.height <= limits.maxEdgePx) {
-        return null
+        return { results: null, fromCache: false }
     }
     const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg'
     const chunkHeight = Math.max(2, safeEvenDimension(Math.min(limits.maxEdgePx, Math.floor(limits.maxPixels / dimensions.width))))
     if (chunkHeight <= 0 || dimensions.height <= chunkHeight) {
-        return null
+        return { results: null, fromCache: false }
+    }
+    const chunkCount = Math.ceil(dimensions.height / chunkHeight)
+    if (identity) {
+        const cached = splitCachedResults(identity, chunkCount, maxImageBytes)
+        if (cached) {
+            return { results: cached, fromCache: true }
+        }
     }
     const results: NormalizedImageResult[] = []
-    const base = path.basename(sourcePath, path.extname(sourcePath)).replace(/[^a-zA-Z0-9._-]+/g, '_') || 'image'
-    const runHash = crypto.createHash('sha1').update(`${sourcePath}:${Date.now()}:${Math.random()}:split`).digest('hex').slice(0, 12)
     try {
         for (let top = 0, index = 0; top < dimensions.height; top += chunkHeight, index += 1) {
             const height = Math.min(chunkHeight, dimensions.height - top)
-            const outputPath = path.join(COMPRESSED_IMAGE_DIR, `${base}-part${String(index + 1).padStart(2, '0')}-${runHash}.jpg`)
+            const outputPath = identity
+                ? splitChunkOutputPath(identity, index)
+                : path.join(
+                      COMPRESSED_IMAGE_DIR,
+                      `${crypto.createHash('sha1').update(`${sourcePath}:${Date.now()}:${Math.random()}:split:${index}`).digest('hex').slice(0, 12)}.jpg`,
+                  )
+            const tmpPath = path.join(COMPRESSED_IMAGE_DIR, `.tmp-${process.pid}-${path.basename(outputPath)}`)
             execFileSync(
                 ffmpegPath,
                 [
@@ -214,10 +292,11 @@ function splitTallImageUnderLimit(
                     'yuvj420p',
                     '-map_metadata',
                     '-1',
-                    outputPath,
+                    tmpPath,
                 ],
                 { stdio: 'ignore', timeout: 30_000 },
             )
+            fs.renameSync(tmpPath, outputPath)
             const size = statSize(outputPath)
             if (size === null || size > maxImageBytes) {
                 fs.rmSync(outputPath, { force: true })
@@ -225,12 +304,12 @@ function splitTallImageUnderLimit(
             }
             results.push({ path: outputPath, size_bytes: size })
         }
-        return results.length > 0 ? results : null
+        return { results: results.length > 0 ? results : null, fromCache: false }
     } catch {
         for (const result of results) {
             fs.rmSync(result.path, { force: true })
         }
-        return null
+        return { results: null, fromCache: false }
     }
 }
 
@@ -240,28 +319,63 @@ function compressImageUnderLimit(
     maxImageBytes: number,
     limits: { maxEdgePx: number; maxPixels: number },
     options: NormalizeForwarderImageAttachmentsOptions,
-) {
+    identity?: string | null,
+): { results: NormalizedImageResult[] | null; fromCache: boolean } {
     const originalSize = statSize(sourcePath)
     if (originalSize === null) {
-        return null
+        return { results: null, fromCache: false }
     }
 
     const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg'
     const ffprobePath = options.ffprobePath || process.env.FFPROBE_PATH || 'ffprobe'
+
+    // Content-addressed cache fast path: previous runs with the same source
+    // bytes + limits left deterministic outputs; reuse the smallest cached
+    // variant under the byte limit without ffprobe or ffmpeg.
+    if (identity) {
+        const cached = cachedOutputSizes(identity, COMPRESSION_ATTEMPTS)
+            .filter((entry) => entry.size <= maxImageBytes)
+            .sort((a, b) => a.size - b.size)
+        if (cached.length > 0) {
+            const best = cached[0]!
+            options.log?.debug?.(`Reused cached compressed attachment for ${path.basename(sourcePath)} (${best.size} bytes)`)
+            return { results: [{ path: best.path, size_bytes: best.size }], fromCache: true }
+        }
+    }
+
     const dimensions = probeImageDimensions(sourcePath, ffprobePath)
-    const splitResults = splitTallImageUnderLimit(sourcePath, dimensions, maxImageBytes, limits, options)
-    if (splitResults) {
-        return splitResults
+    const splitOutcome = splitTallImageUnderLimit(sourcePath, identity, dimensions, maxImageBytes, limits, options)
+    if (splitOutcome.results) {
+        return splitOutcome
     }
     const dimensionLimited = exceedsImageDimensionLimit(dimensions, limits.maxEdgePx, limits.maxPixels)
     if (originalSize <= maxImageBytes && !dimensionLimited) {
-        return null
+        return { results: null, fromCache: false }
     }
     let bestPath: string | null = null
     let bestSize = Number.POSITIVE_INFINITY
 
     for (const attempt of COMPRESSION_ATTEMPTS) {
-        const outputPath = compressedOutputPath(sourcePath, attempt)
+        const outputPath = identity
+            ? compressedOutputPath(identity, attempt)
+            : path.join(
+                  COMPRESSED_IMAGE_DIR,
+                  `${crypto.createHash('sha1').update(`${sourcePath}:${Date.now()}:${Math.random()}:${attempt.maxDimension}:${attempt.quality}`).digest('hex').slice(0, 16)}.jpg`,
+              )
+        // A cached attempt that still exceeds the limit is a deterministic miss:
+        // skip re-running ffmpeg for it (the source and flags are unchanged).
+        const existingSize = statSize(outputPath)
+        if (existingSize !== null && existingSize > 0 && existingSize > maxImageBytes) {
+            continue
+        }
+        if (existingSize !== null && existingSize > 0) {
+            if (existingSize < bestSize) {
+                bestPath = outputPath
+                bestSize = existingSize
+            }
+            return { results: [{ path: outputPath, size_bytes: existingSize }], fromCache: true }
+        }
+        const tmpPath = path.join(COMPRESSED_IMAGE_DIR, `.tmp-${process.pid}-${path.basename(outputPath)}`)
         try {
             execFileSync(
                 ffmpegPath,
@@ -281,55 +395,56 @@ function compressImageUnderLimit(
                     'yuvj420p',
                     '-map_metadata',
                     '-1',
-                    outputPath,
+                    tmpPath,
                 ],
                 { stdio: 'ignore', timeout: 30_000 },
             )
+            fs.renameSync(tmpPath, outputPath)
             const compressedSize = statSize(outputPath)
             if (compressedSize === null) {
                 continue
             }
             if (compressedSize < bestSize) {
-                if (bestPath && bestPath !== outputPath) {
-                    fs.rmSync(bestPath, { force: true })
-                }
                 bestPath = outputPath
                 bestSize = compressedSize
-            } else {
-                fs.rmSync(outputPath, { force: true })
             }
             if (compressedSize <= maxImageBytes) {
                 options.log?.info?.(
                     `Compressed image attachment ${path.basename(sourcePath)} from ${originalSize} to ${compressedSize} bytes`,
                 )
-                return [
-                    {
-                        path: outputPath,
-                        size_bytes: compressedSize,
-                    },
-                ]
+                return {
+                    results: [
+                        {
+                            path: outputPath,
+                            size_bytes: compressedSize,
+                        },
+                    ],
+                    fromCache: false,
+                }
             }
         } catch {
-            fs.rmSync(outputPath, { force: true })
+            fs.rmSync(tmpPath, { force: true })
         }
     }
 
     if (bestPath) {
         if (bestSize <= maxImageBytes) {
-            return [
-                {
-                    path: bestPath,
-                    size_bytes: bestSize,
-                },
-            ]
+            return {
+                results: [
+                    {
+                        path: bestPath,
+                        size_bytes: bestSize,
+                    },
+                ],
+                fromCache: false,
+            }
         }
-        fs.rmSync(bestPath, { force: true })
     }
 
     options.log?.warn?.(
         `Could not compress image attachment ${path.basename(sourcePath)} under ${maxImageBytes} bytes; keeping original`,
     )
-    return null
+    return { results: null, fromCache: false }
 }
 
 function normalizeForwarderImageAttachments(
@@ -359,8 +474,9 @@ function normalizeForwarderImageAttachments(
             }))
         }
 
-        const result = compressImageUnderLimit(item.path, maxImageBytes, limits, options)
-        if (!result) {
+        const identity = resolveContentIdentity(item, item.path, limits, maxImageBytes)
+        const outcome = compressImageUnderLimit(item.path, maxImageBytes, limits, options, identity)
+        if (!outcome.results) {
             const size = statSize(item.path)
             return [
                 size === null
@@ -372,10 +488,14 @@ function normalizeForwarderImageAttachments(
             ]
         }
 
-        compressedByPath.set(item.path, result)
-        cleanupPaths.push(...result.map((entry) => entry.path))
-        compressedCount += result.length
-        return result.map((entry) => ({
+        compressedByPath.set(item.path, outcome.results)
+        // Only newly-created outputs are cleaned up after the send; cached
+        // variants survive for reuse and are reaped by the media-cache job.
+        if (!outcome.fromCache) {
+            cleanupPaths.push(...outcome.results.map((entry) => entry.path))
+        }
+        compressedCount += outcome.results.length
+        return outcome.results.map((entry) => ({
             ...item,
             path: entry.path,
             size_bytes: entry.size_bytes,

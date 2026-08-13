@@ -1371,39 +1371,46 @@ class InstagramLiveRelayService {
         page.on('response', responseListener)
 
         try {
-            // Single navigation: the live page emits manifest + web_info requests.
-            // (The old profileUrl second navigation was a redundant fallback —
-            // the direct web_info fetch below covers stream discovery with one
-            // cheap XHR instead of a full page load.)
-            try {
-                await page.goto(liveUrl, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 30000,
-                })
-            } catch (error) {
-                log?.warn(`Instagram live capture navigation failed for ${liveUrl}: ${error}`)
-            }
-
-            await page.waitForSelector('video', { timeout: 5000 }).catch(() => null)
-
-            const deadline = Date.now() + STREAM_CAPTURE_TIMEOUT_MS
-            while (Date.now() < deadline) {
-                if (capturedStreams.size > 0) {
-                    break
-                }
-                await sleep(500)
-            }
-
-            if (capturedStreams.size === 0 && userId) {
+            // XHR-first: the profile payload already resolved the numeric user id;
+            // a page-local web_info fetch discovers streams without a full live
+            // page navigation (full navigations are the 429 driver). Only when
+            // the XHR finds no streams do we fall back to the live page load.
+            let xhrFoundStreams = false
+            if (userId) {
                 try {
                     const liveWebInfo = await this.fetchLiveWebInfo(page, liveUrl, userId)
                     const directHeaders = this.mergeCaptureHeaders(baseHeaders, cookieEntries, {
                         accept: '*/*',
                         'x-requested-with': 'XMLHttpRequest',
                     }, liveUrl)
-                    analysisTasks.push(this.captureStreamsFromLiveWebInfo(capturedStreams, liveWebInfo, directHeaders, log))
+                    await this.captureStreamsFromLiveWebInfo(capturedStreams, liveWebInfo, directHeaders, log)
+                    xhrFoundStreams = capturedStreams.size > 0
+                    if (xhrFoundStreams) {
+                        log?.info(`Instagram live capture found ${capturedStreams.size} stream(s) via web_info XHR (no navigation)`)
+                    }
                 } catch (error) {
-                    log?.warn(`Instagram live web_info fallback failed for ${userId}: ${error}`)
+                    log?.warn(`Instagram live web_info XHR failed for ${userId}: ${error}`)
+                }
+            }
+
+            if (!xhrFoundStreams) {
+                try {
+                    await page.goto(liveUrl, {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 30000,
+                    })
+                } catch (error) {
+                    log?.warn(`Instagram live capture navigation failed for ${liveUrl}: ${error}`)
+                }
+
+                await page.waitForSelector('video', { timeout: 5000 }).catch(() => null)
+
+                const deadline = Date.now() + STREAM_CAPTURE_TIMEOUT_MS
+                while (Date.now() < deadline) {
+                    if (capturedStreams.size > 0) {
+                        break
+                    }
+                    await sleep(500)
                 }
             }
         } finally {

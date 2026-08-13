@@ -172,8 +172,6 @@ export function buildShowroomCaptureCommand(
             m3u8Url,
             '-c',
             'copy',
-            '-movflags',
-            '+faststart',
             output,
         ],
     }
@@ -398,7 +396,7 @@ class CaptureSession {
     }
 
     private async startCapture() {
-        if (this.capturing || this.captureStarting) {
+        if (this.capturing || this.captureStarting || this.stopping) {
             return
         }
         this.captureStarting = true
@@ -563,7 +561,12 @@ export class LiveCaptureExecutor {
                 continue
             }
             if (task.status === 'planned') {
-                await DB.TaskQueue.updateTaskStatus(task.id, { status: 'pending' })
+                // CAS-claim so a second executor instance (hot migration window)
+                // cannot double-capture the same plan: only the claimer proceeds.
+                const claimedTask = await DB.TaskQueue.claimPlanned(task.id).catch(() => null)
+                if (!claimedTask) {
+                    continue
+                }
             }
             const sessionFactory = this.options.sessionFactory || ((t, o) => new CaptureSession(t, o))
             const session = sessionFactory(task, this.options)

@@ -170,9 +170,15 @@ test('LiveCaptureExecutor completes expired plans and claims open windows', asyn
 
     const originalGetDue = DB.TaskQueue.getDue
     const originalUpdate = DB.TaskQueue.updateTaskStatus
+    const originalClaimPlanned = DB.TaskQueue.claimPlanned
+    const claimedPlans: Array<number> = []
     DB.TaskQueue.getDue = (async () => tasks) as any
     DB.TaskQueue.updateTaskStatus = (async (id: number, data: { status: string }) => {
         updates.push({ id, status: data.status })
+    }) as any
+    DB.TaskQueue.claimPlanned = (async (id: number) => {
+        claimedPlans.push(id)
+        return { id, status: 'pending' }
     }) as any
 
     const fakeFactory = (task: { id: number; payload: any }): CaptureSessionLike => {
@@ -193,12 +199,13 @@ test('LiveCaptureExecutor completes expired plans and claims open windows', asyn
         })
         await executor.tick()
         expect(updates).toContainEqual({ id: 2, status: 'completed' })
-        expect(updates).toContainEqual({ id: 1, status: 'pending' })
+        expect(claimedPlans).toEqual([1])
         expect(startedSessions).toContain(1)
         await executor.stop()
     } finally {
         DB.TaskQueue.getDue = originalGetDue
         DB.TaskQueue.updateTaskStatus = originalUpdate
+        DB.TaskQueue.claimPlanned = originalClaimPlanned
     }
 })
 

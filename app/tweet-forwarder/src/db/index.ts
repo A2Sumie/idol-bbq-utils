@@ -276,6 +276,78 @@ namespace DB {
             return rootWithChain(article, platform)
         }
 
+        /**
+         * Batch chain resolution: the per-row getSingleArticle walk used to issue
+         * 1+chain-length queries per row (N+1 across list/time-range/query paths).
+         * Fetch all roots plus their transitive refs with a handful of `IN` queries,
+         * then stitch the chains in memory with the same cycle/depth truncation.
+         */
+        export async function getArticlesByIdsWithChains(
+            platform: Platform,
+            ids: Array<number>,
+        ): Promise<Array<ArticleWithId>> {
+            if (ids.length === 0) {
+                return []
+            }
+            const delegate = getDelegate(platform)
+            const maxDepth = 100
+            const byId = new Map<number, DBArticle>()
+
+            const rootRows = await delegate.findMany({ where: { id: { in: ids } } })
+            for (const row of rootRows) {
+                byId.set(Number(row.id), row)
+            }
+
+            const missing = new Set<number>()
+            for (const row of rootRows) {
+                if (typeof row.ref === 'number' && !byId.has(row.ref)) {
+                    missing.add(row.ref)
+                }
+            }
+            while (missing.size > 0) {
+                const batch = await delegate.findMany({ where: { id: { in: [...missing] } } })
+                missing.clear()
+                for (const row of batch) {
+                    byId.set(Number(row.id), row)
+                    if (typeof row.ref === 'number' && !byId.has(row.ref)) {
+                        missing.add(row.ref)
+                    }
+                }
+            }
+
+            const attach = (root: DBArticle): ArticleWithId => {
+                const rootWithP = { ...root, platform } as unknown as ArticleWithId
+                const visitedIds = new Set<number>([Number(root.id)])
+                let current = rootWithP
+                let depth = 0
+                while (current.ref && typeof current.ref === 'number') {
+                    const refId = current.ref as unknown as number
+                    // Corrupt imports can create cycles; truncate instead of blocking restore/query paths.
+                    if (visitedIds.has(refId) || depth >= maxDepth) {
+                        current.ref = null
+                        break
+                    }
+                    const found = byId.get(refId)
+                    if (found) {
+                        visitedIds.add(refId)
+                        depth += 1
+                        const foundWithP = { ...found, platform } as unknown as ArticleWithId
+                        current.ref = foundWithP
+                        current = foundWithP
+                    } else {
+                        break
+                    }
+                }
+                return rootWithP
+            }
+
+            // Preserve the caller's row order (findMany with IN does not).
+            const byRequestOrder = new Map<number, number>(ids.map((id, index) => [id, index]))
+            return rootRows
+                .sort((a, b) => (byRequestOrder.get(Number(a.id)) ?? 0) - (byRequestOrder.get(Number(b.id)) ?? 0))
+                .map((row) => attach(row))
+        }
+
         export async function getArticlesByName(u_id: string, platform: Platform, count = 10) {
             const delegate = getDelegate(platform)
             const res = await delegate.findMany({
@@ -287,7 +359,10 @@ namespace DB {
                 },
                 take: count,
             })
-            const articles = await Promise.all(res.map(async ({ id }: any) => getSingleArticle(id, platform)))
+            const articles = await getArticlesByIdsWithChains(
+                platform,
+                res.map(({ id }: any) => Number(id)),
+            )
             return normalizeWebsitePhotoArticles(articles.filter((item) => item) as ArticleWithId[])
         }
 
@@ -306,8 +381,10 @@ namespace DB {
                     created_at: 'asc', // Ascending for aggregation? Or Desc?
                 },
             })
-            // No need for full chain probably if just for summary, but safer to get it
-            const articles = await Promise.all(res.map(async ({ id }: any) => getSingleArticle(id, platform)))
+            const articles = await getArticlesByIdsWithChains(
+                platform,
+                res.map(({ id }: any) => Number(id)),
+            )
             return normalizeWebsitePhotoArticles(articles.filter((item) => item) as ArticleWithId[])
         }
 
@@ -349,8 +426,11 @@ namespace DB {
                     },
                     take: limit,
                 })
-                for (const row of rows) {
-                    const article = await getSingleArticle(row.id, platform)
+                const chained = await getArticlesByIdsWithChains(
+                    platform,
+                    rows.map((row) => Number(row.id)),
+                )
+                for (const article of chained) {
                     if (article) {
                         results.push(article)
                     }
@@ -467,18 +547,12 @@ namespace DB {
             bot_id: string,
             task_type: string,
         ) {
-            let exist_one = await checkExist(ref_id, platform, bot_id, task_type)
-            if (!exist_one) {
-                return
-            }
-            return await prisma.forward_by.delete({
+            await prisma.forward_by.deleteMany({
                 where: {
-                    ref_id_platform_bot_id_task_type: {
-                        ref_id,
-                        platform: String(platform),
-                        bot_id,
-                        task_type,
-                    },
+                    ref_id,
+                    platform: String(platform),
+                    bot_id,
+                    task_type,
                 },
             })
         }
@@ -795,6 +869,32 @@ namespace DB {
                 },
                 data: {
                     status: STATUS.Processing,
+                    updated_at: now,
+                    finished_at: null,
+                    last_error: null,
+                },
+            })
+            if (updated.count === 0) {
+                return null
+            }
+            return await prisma.task_queue.findUnique({
+                where: { id },
+            })
+        }
+
+        /**
+         * CAS-claim a planned task into pending: exactly one caller wins the
+         * transition, so concurrent executors cannot double-capture a plan.
+         */
+        export async function claimPlanned(id: number) {
+            const now = Math.floor(Date.now() / 1000)
+            const updated = await prisma.task_queue.updateMany({
+                where: {
+                    id,
+                    status: STATUS.Planned,
+                },
+                data: {
+                    status: STATUS.Pending,
                     updated_at: now,
                     finished_at: null,
                     last_error: null,

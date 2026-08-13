@@ -16,13 +16,25 @@ const TRANSPARENT_SVG_DATA_URL = `data:image/svg+xml;base64,${Buffer.from(
     'utf8',
 ).toString('base64')}`
 
-function withCache(fn: Function) {
+function withCache(fn: Function, maxEntries = 300) {
     const cache = new Map()
     return async (...args: string[]) => {
         const key = args.join(':')
-        if (cache.has(key)) return cache.get(key)
+        if (cache.has(key)) {
+            // Refresh recency so hot assets survive the LRU eviction.
+            const value = cache.get(key)
+            cache.delete(key)
+            cache.set(key, value)
+            return value
+        }
         const result = await fn(...args)
         cache.set(key, result)
+        if (cache.size > maxEntries) {
+            const oldest = cache.keys().next().value
+            if (oldest !== undefined) {
+                cache.delete(oldest)
+            }
+        }
         return result
     }
 }

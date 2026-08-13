@@ -346,7 +346,12 @@ function startArchive() {
   fs.mkdirSync(archiveDir, { recursive: true })
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const out = path.join(archiveDir, `${handle}-${stamp}.mkv`)
-  const first = capturedStreams.values().next().value as CapturedStream | undefined
+  // Prefer an unencrypted HLS stream when available; ffmpeg copy of an
+  // encrypted DASH source produces an unplayable file.
+  const streams = [...capturedStreams.values()]
+  const first = streams.find((s: any) => (s.type || '').toUpperCase().includes('HLS') && !s.mediaInfo?.encrypted) ||
+    streams.find((s: any) => (s.type || '').toUpperCase().includes('HLS')) ||
+    streams[0] as CapturedStream | undefined
   if (!first) return
   const headerLines = Object.entries(first.headers).map(([k, v]) => `${k}: ${v}`).join('\r\n')
   const args = [
@@ -362,7 +367,13 @@ function startArchive() {
   ]
   const child = spawn('/usr/bin/python3', ['-c', 'import ctypes,signal,sys,subprocess\nchild=None\ndef stop(s,f):\n    if child and child.poll() is None: child.send_signal(signal.SIGINT)\nsignal.signal(signal.SIGINT, stop)\nsignal.signal(signal.SIGTERM, stop)\nctypes.CDLL(None).prctl(1, signal.SIGTERM)\nchild=subprocess.Popen(sys.argv[1:])\ntry:\n    sys.exit(child.wait())\nexcept BaseException:\n    if child.poll() is None:\n        child.send_signal(signal.SIGINT)\n        try: child.wait(timeout=10)\n        except subprocess.TimeoutExpired: child.kill()\n    raise', ...args], { stdio: 'ignore' })
   ffmpegChild = child
-  log(`archive start -> ${out}`)
+  // Clear the handle on exit so a mid-live ffmpeg crash (source 403, disk full)
+  // restarts the archive on the next live probe instead of silently losing it.
+  child.on('exit', (code) => {
+    log(`archive ffmpeg exit=${code}; archive will restart on next live probe`)
+    ffmpegChild = null
+  })
+  log(`archive start -> ${out} (${first.type || 'unknown'})`)
 }
 
 async function syncRelay() {

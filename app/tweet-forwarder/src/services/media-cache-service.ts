@@ -1012,6 +1012,9 @@ function resolveCleanupRoots(cacheRoot = CACHE_DIR_ROOT) {
             path.join(mediaRoot, 'plain'),
             path.join(mediaRoot, 'gallery-dl'),
             path.join(mediaRoot, 'yt-dlp'),
+            // Content-addressed compressed attachments (forwarder-image-attachment-service):
+            // reused across sends, reaped by age here.
+            path.join(mediaRoot, 'forwarder-compressed'),
         ],
     }
 }

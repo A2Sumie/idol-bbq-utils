@@ -295,50 +295,9 @@ async function persistentBrowserProbe(): Promise<Probe> {
   }
 }
 
-async function probeLive(): Promise<Probe> {
-  const userDataDir = `/tmp/tt-watch-${handle}-${process.pid}-${Date.now()}`
-  const browser = await puppeteer.launch({
-    executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable',
-    headless: true,
-    userDataDir,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-  })
-  activeProfileDirs.add(userDataDir)
-  try {
-    const page = await browser.newPage()
-    await page.setExtraHTTPHeaders({ 'accept-language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7' })
-    const cookies = parseCookies(cookiePath)
-    if (cookies.length) await page.setCookie(...cookies)
-    await page.goto(`https://www.tiktok.com/@${handle}/live`, { waitUntil: 'networkidle2', timeout: 45000 }).catch(() => {})
-    await new Promise((r) => setTimeout(r, 4000))
-    const roomId = await page.evaluate(() => {
-      const s = (window as any).SIGI_STATE
-      const room = s?.LiveRoom?.liveRoomUserInfo?.liveRoom
-      const user = s?.LiveRoom?.liveRoomUserInfo?.user
-      return user?.roomId || room?.roomId || null
-    }).catch(() => null)
-    if (!roomId) { log('no roomId found (user not live / not found)'); return { handle, roomId: null, status: null, candidates: [] } }
-    const api = await page.evaluate(async (rid) => {
-      const url = `https://webcast.tiktok.com/webcast/room/info/?aid=1988&app_language=ja&room_id=${rid}`
-      const r = await fetch(url, { credentials: 'include' })
-      return { status: r.status, text: await r.text() }
-    }, roomId).catch((e) => ({ status: 0, text: String(e) }))
-    let roomData: any = null
-    try { roomData = JSON.parse(api.text)?.data } catch {}
-    const status = roomData?.status ?? null
-    log(`roomId=${roomId} api=${api.status} room.status=${status} (2=living,4=ended)`)
-    if (status !== 2) return { handle, roomId, status, candidates: [] }
-    const candidates = pickPullUrls(roomData).sort((a, b) => rank(b) - rank(a))
-    return { handle, roomId, status, candidates }
-  } catch (e) {
-    log(`probe error: ${e instanceof Error ? e.message : String(e)}`)
-    return { handle, roomId: null, status: null, candidates: [] }
-  } finally {
-    await browser.close().catch(() => {})
-    try { fs.rmSync(userDataDir, { recursive: true, force: true }) } catch {}
-    activeProfileDirs.delete(userDataDir)
-  }
-}
+// probeLive (fresh-browser cold start per candidate) was replaced by
+// persistentBrowserProbe: the main loop uses probeLiveHttp (lightweight GET) and
+// falls back to the persistent browser, whose WAF challenge is passed once.
 
 function buildHeaders(): string {
   const cookies = parseCookies(cookiePath)
