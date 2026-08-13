@@ -41,6 +41,8 @@ type ResolvedCrawlerSchedule = {
     source: 'hot_schedule' | 'legacy_cron'
     timezone: string
     timezoneOffsetMinutes: number
+    /** True when the configured timezone is unsupported and JST was applied instead. */
+    timezoneUnsupported?: boolean
     slots: Array<CrawlerScheduleSlot>
     minGapSeconds: number
     jitterSeconds: number
@@ -77,8 +79,24 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
     return Math.max(min, Math.min(Math.trunc(normalized), max))
 }
 
-function timezoneOffsetMinutes(timezone: string | undefined) {
-    return String(timezone || DEFAULT_TIMEZONE) === DEFAULT_TIMEZONE ? JST_OFFSET_MINUTES : 0
+function resolveTimezoneLabel() {
+    return DEFAULT_TIMEZONE
+}
+
+/**
+ * Resolve a timezone string to its offset; unsupported values fall back to
+ * the default but are surfaced to the caller for a warning (a misconfigured
+ * timezone silently scheduling on UTC is a correctness trap).
+ */
+function resolveTimezoneOffset(timezone: string | undefined): { offsetMinutes: number; valid: boolean } {
+    const normalized = String(timezone || DEFAULT_TIMEZONE).trim()
+    if (normalized === DEFAULT_TIMEZONE) {
+        return { offsetMinutes: JST_OFFSET_MINUTES, valid: true }
+    }
+    if (normalized === 'UTC') {
+        return { offsetMinutes: 0, valid: true }
+    }
+    return { offsetMinutes: JST_OFFSET_MINUTES, valid: false }
 }
 
 function parseClockToMinuteOfDay(value: string): number | null {
@@ -195,13 +213,34 @@ function expandLegacyCronToDailySlots(cron: string | undefined | null): Array<Cr
 }
 
 function normalizeSlots(slots: Array<CrawlerScheduleSlot>) {
-    const dedup = new Map<string, CrawlerScheduleSlot>()
+    // Group by minute-of-day first, then union the day sets: an unrestricted
+    // slot (no days) covers every day and absorbs restricted duplicates at the
+    // same minute. Previously same-minute slots with different day sets
+    // overwrote each other (last-writer-wins) and '*' + restricted coexisting
+    // could double-hit a restricted day.
+    const byMinute = new Map<number, Set<number> | null>()
     for (const slot of slots) {
         const minuteOfDay = ((slot.minuteOfDay % 1440) + 1440) % 1440
-        const days = slot.days?.length ? [...slot.days].sort((a, b) => a - b) : undefined
-        dedup.set(`${minuteOfDay}:${days?.join(',') || '*'}`, { minuteOfDay, days })
+        const days = slot.days?.length ? slot.days : undefined
+        const existing = byMinute.get(minuteOfDay)
+        if (existing === null || days === undefined) {
+            byMinute.set(minuteOfDay, null)
+            continue
+        }
+        if (existing === undefined) {
+            byMinute.set(minuteOfDay, new Set(days))
+            continue
+        }
+        for (const day of days) {
+            existing.add(day)
+        }
     }
-    return Array.from(dedup.values()).sort((a, b) => a.minuteOfDay - b.minuteOfDay)
+    return Array.from(byMinute.entries())
+        .map(([minuteOfDay, daySet]) => ({
+            minuteOfDay,
+            days: daySet ? Array.from(daySet).sort((a, b) => a - b) : undefined,
+        }))
+        .sort((a, b) => a.minuteOfDay - b.minuteOfDay)
 }
 
 function getScheduleConfig(config?: CrawlerConfig): CrawlerHotScheduleConfig | null {
@@ -240,10 +279,12 @@ function resolveCrawlerSchedule(crawler: Crawler): ResolvedCrawlerSchedule | nul
         return null
     }
     const timezone = schedule?.timezone || cfg.timezone || DEFAULT_TIMEZONE
+    const { offsetMinutes, valid: timezoneValid } = resolveTimezoneOffset(timezone)
     return {
         source,
         timezone,
-        timezoneOffsetMinutes: timezoneOffsetMinutes(timezone),
+        timezoneOffsetMinutes: offsetMinutes,
+        timezoneUnsupported: !timezoneValid,
         slots: normalizedSlots,
         minGapSeconds: clampInteger(schedule?.min_gap_seconds, DEFAULT_MIN_GAP_SECONDS, 0, 24 * 60 * 60),
         jitterSeconds: clampInteger(schedule?.jitter_seconds, 0, 0, 10 * 60),
@@ -429,6 +470,7 @@ export {
     formatMinuteOfDay,
     nextCrawlerRunAt,
     resolveCrawlerSchedule,
+    resolveTimezoneLabel,
 }
 export type {
     CrawlerHotScheduleConfig,

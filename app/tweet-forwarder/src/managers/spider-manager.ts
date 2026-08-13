@@ -51,6 +51,7 @@ import {
     buildScheduleSnapshot,
     nextCrawlerRunAt,
     resolveCrawlerSchedule,
+    resolveTimezoneLabel,
     type CrawlerHotScheduleConfig,
     type ResolvedCrawlerSchedule,
 } from '@/services/crawler-schedule-service'
@@ -239,6 +240,10 @@ type CrawlerRuntimeSchedule = {
     schedule: ResolvedCrawlerSchedule
     nextRunAt: number | null
     lastRunAt: number | null
+    /** Slots consumed while the previous task was still active (skipped by design). */
+    deferredSlots: number
+    /** Last time the active-task skip warning was emitted (once per active run). */
+    lastActiveWarnAt: number | null
 }
 
 type ScheduledCrawlerRunPayload = {
@@ -462,12 +467,19 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             this.crawlersByName.set(crawler.name, crawler)
             const schedule = resolveCrawlerSchedule(crawler)
             if (schedule) {
+                if (schedule.timezoneUnsupported) {
+                    this.log?.warn(
+                        `Crawler ${crawler.name} uses an unsupported timezone "${schedule.timezone}"; falling back to ${resolveTimezoneLabel()}`,
+                    )
+                }
                 const nextRunAt = nextCrawlerRunAt(schedule, Math.floor(Date.now() / 1000), crawler.name)
                 this.runtimeSchedules.set(crawler.name, {
                     crawlerName: crawler.name,
                     schedule,
                     nextRunAt,
                     lastRunAt: null,
+                    deferredSlots: 0,
+                    lastActiveWarnAt: null,
                 })
                 this.scheduleTickSeconds = Math.min(this.scheduleTickSeconds, schedule.tickSeconds)
                 this.log?.info(
@@ -758,6 +770,31 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 )
                 continue
             }
+            // Active-task skip: the slot is consumed (nextRunAt advances) but the
+            // crawler is not dispatched — this is the intended de-throttling when
+            // a round takes longer than the window spacing. Log once per active
+            // run instead of once per consumed slot (X 2-min windows produced a
+            // warn every ~2 minutes for the same active round).
+            if (this.hasActiveCrawlerTask(crawler.name)) {
+                runtimeSchedule.deferredSlots += 1
+                const lastWarn = runtimeSchedule.lastActiveWarnAt
+                if (!lastWarn || now - lastWarn >= 60) {
+                    runtimeSchedule.lastActiveWarnAt = now
+                    this.log?.warn(
+                        `Skipping crawler ${crawler.name}: previous task is still active (${runtimeSchedule.deferredSlots} slot(s) deferred this active run).`,
+                    )
+                }
+                runtimeSchedule.nextRunAt = nextCrawlerRunAt(
+                    runtimeSchedule.schedule,
+                    Math.max(now, runtimeSchedule.nextRunAt) + runtimeSchedule.schedule.minGapSeconds,
+                    runtimeSchedule.crawlerName,
+                )
+                continue
+            }
+            if (runtimeSchedule.deferredSlots > 0) {
+                runtimeSchedule.deferredSlots = 0
+                runtimeSchedule.lastActiveWarnAt = null
+            }
             const dispatched = await this.dispatchCrawlerTask(crawler, {
                 source: runtimeSchedule.schedule.source,
                 taskIdPrefix: 'schedule',
@@ -765,8 +802,8 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             })
             if (dispatched) {
                 dispatchedThisTick += 1
+                runtimeSchedule.lastRunAt = now
             }
-            runtimeSchedule.lastRunAt = now
             runtimeSchedule.nextRunAt = nextCrawlerRunAt(
                 runtimeSchedule.schedule,
                 Math.max(now, runtimeSchedule.nextRunAt) + runtimeSchedule.schedule.minGapSeconds,
@@ -803,7 +840,9 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 continue
             }
             if (this.hasActiveCrawlerTask(crawler.name)) {
-                const retryAt = now + 60
+                // Retry on a longer horizon: an active round lasts minutes, and a
+                // 60s retry re-writes the queued row on every 10-15s executor tick.
+                const retryAt = now + 300
                 await DB.TaskQueue.retryLater(claimedTask.id, retryAt, {
                     last_error: 'Crawler already active; delayed scheduled run',
                     result_summary: `scheduled crawler run delayed until ${dayjs.unix(retryAt).format()}`,
@@ -908,6 +947,8 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             schedule,
             nextRunAt,
             lastRunAt: previous?.lastRunAt || null,
+            deferredSlots: previous?.deferredSlots || 0,
+            lastActiveWarnAt: previous?.lastActiveWarnAt || null,
         })
         const nextTickSeconds = Math.min(this.scheduleTickSeconds, schedule.tickSeconds)
         if (nextTickSeconds !== this.scheduleTickSeconds) {
