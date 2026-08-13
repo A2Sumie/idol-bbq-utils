@@ -330,3 +330,9 @@ model video_pairings {
   @@index([target_video_id])
   @@index([target_article_key])
 }
+
+model service_state {
+  key        String @id
+  value      String
+  updated_at Int    @default(0)
+}

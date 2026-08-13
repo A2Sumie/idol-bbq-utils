@@ -335,7 +335,9 @@ function nextCrawlerRunAt(schedule: ResolvedCrawlerSchedule, afterEpochSeconds: 
                 continue
             }
             const base = midnight + slot.minuteOfDay * 60
-            const jittered = base + stableJitterSeconds(`${crawlerName}:${base}`, schedule.jitterSeconds)
+            let jittered = base + stableJitterSeconds(`${crawlerName}:${base}`, schedule.jitterSeconds)
+            // Negative jitter must never pull a run below the configured min gap.
+            jittered = Math.max(jittered, afterEpochSeconds + schedule.minGapSeconds)
             if (jittered > afterEpochSeconds) {
                 return jittered
             }

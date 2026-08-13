@@ -2059,6 +2059,22 @@ namespace DB {
         }
     }
 
+    export namespace ServiceState {
+        export async function get(key: string): Promise<string | null> {
+            const row = await prisma.service_state.findUnique({ where: { key } })
+            return row?.value ?? null
+        }
+
+        export async function set(key: string, value: string): Promise<void> {
+            const now = Math.floor(Date.now() / 1000)
+            await prisma.service_state.upsert({
+                where: { key },
+                create: { key, value, updated_at: now },
+                update: { value, updated_at: now },
+            })
+        }
+    }
+
     export namespace TargetHealth {
         export async function mark(data: {
             target_id: string

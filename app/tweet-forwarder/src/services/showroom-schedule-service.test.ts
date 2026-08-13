@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
+import DB from '@/db'
 import {
     extractShowroomEventsByRule,
     isShowroomCandidatePost,
     normalizeLlmEvents,
+    ShowroomScheduleService,
 } from './showroom-schedule-service'
 
 const STAFF_POST_FIXTURE = `#227出演情報
@@ -81,4 +83,30 @@ test('normalizeLlmEvents filters malformed events', () => {
     )
     expect(events).toHaveLength(1)
     expect(events[0]?.slug).toBe('kawaseuta')
+})
+
+test('ShowroomScheduleService restores the scan cursor and seenIds from service_state', async () => {
+    const originalGet = DB.ServiceState.get
+    const originalSet = DB.ServiceState.set
+    const reads: string[] = []
+    ;(DB.ServiceState as any).get = async (key: string) => {
+        reads.push(key)
+        if (key === 'showroom-schedule-scan') {
+            return JSON.stringify({ lastScanFrom: Math.floor(Date.now() / 1000) - 60, seenIds: [11, 12] })
+        }
+        return null
+    }
+    ;(DB.ServiceState as any).set = async () => undefined
+
+    try {
+        const service = new ShowroomScheduleService({} as any, undefined, {})
+        await (service as any).loadState()
+        expect((service as any).lastScanFrom).toBeGreaterThan(Math.floor(Date.now() / 1000) - 3600)
+        expect((service as any).seenIds.has(11)).toBe(true)
+        expect((service as any).seenIds.has(12)).toBe(true)
+        expect(reads).toContain('showroom-schedule-scan')
+    } finally {
+        ;(DB.ServiceState as any).get = originalGet
+        ;(DB.ServiceState as any).set = originalSet
+    }
 })

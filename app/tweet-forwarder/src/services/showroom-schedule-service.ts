@@ -173,6 +173,8 @@ export function normalizeLlmEvents(raw: unknown, fallback: ShowroomEvent[]): Sho
 }
 
 export class ShowroomScheduleService {
+    private static readonly STATE_KEY = 'showroom-schedule-scan'
+
     private readonly config: AppConfig
     private readonly log?: Logger
     private readonly options: Required<
@@ -186,6 +188,7 @@ export class ShowroomScheduleService {
     private seenIds = new Set<number>()
     private lastScanFrom = Math.floor(Date.now() / 1000) - 60 * 60
     private lastScanFinishedAt: number | null = null
+    private stateLoaded = false
 
     constructor(config: AppConfig, log?: Logger, options: ShowroomScheduleOptions = {}) {
         this.config = config
@@ -197,6 +200,59 @@ export class ShowroomScheduleService {
             slowScanSeconds: options.slowScanSeconds ?? DEFAULT_SLOW_SCAN_SECONDS,
             minConfidence: options.minConfidence ?? DEFAULT_MIN_CONFIDENCE,
             processorId: options.processorId ?? DEFAULT_PROCESSOR_ID,
+        }
+    }
+
+    /**
+     * The scan cursor used to be memory-only: any downtime longer than the 1h
+     * initial window permanently lost staff posts published while stopped. The
+     * cursor now survives restarts via the service_state KV table.
+     */
+    private async loadState() {
+        if (this.stateLoaded) {
+            return
+        }
+        this.stateLoaded = true
+        try {
+            const raw = await DB.ServiceState.get(ShowroomScheduleService.STATE_KEY)
+            if (!raw) {
+                return
+            }
+            const state = JSON.parse(raw)
+            const lastScanFrom = Number(state?.lastScanFrom)
+            if (Number.isFinite(lastScanFrom) && lastScanFrom > this.lastScanFrom) {
+                this.lastScanFrom = lastScanFrom
+            }
+            if (Array.isArray(state?.seenIds)) {
+                for (const id of state.seenIds) {
+                    if (Number.isInteger(id)) {
+                        this.seenIds.add(id)
+                    }
+                }
+                if (this.seenIds.size > 500) {
+                    this.seenIds.clear()
+                }
+            }
+        } catch (error) {
+            this.log?.warn(
+                `Showroom schedule state load failed; starting from the default window: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+        }
+    }
+
+    private async persistState() {
+        try {
+            const seenIds = Array.from(this.seenIds).slice(-500)
+            await DB.ServiceState.set(
+                ShowroomScheduleService.STATE_KEY,
+                JSON.stringify({ lastScanFrom: this.lastScanFrom, seenIds }),
+            )
+        } catch (error) {
+            this.log?.warn(
+                `Showroom schedule state persist failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
         }
     }
 
@@ -246,12 +302,14 @@ export class ShowroomScheduleService {
         }
         this.running = true
         try {
+            await this.loadState()
             const from = this.lastScanFrom
             const to = Math.floor(Date.now() / 1000)
             const posts = await this.findNewStaffPosts(from, to)
             // Only advance the window once the query actually succeeded: a DB
             // error must not permanently skip this window's posts.
             this.lastScanFrom = to
+            await this.persistState()
             if (posts.length === 0) {
                 return
             }
@@ -264,6 +322,7 @@ export class ShowroomScheduleService {
                     // Mark only after processing succeeded so a failed plan
                     // creation is retried on the next scan.
                     this.seenIds.add(post.id)
+                    await this.persistState()
                 } catch (error) {
                     this.log?.warn(
                         `Showroom schedule: post ${post.a_id} processing failed; retrying next scan: ${
@@ -274,6 +333,7 @@ export class ShowroomScheduleService {
             }
             if (this.seenIds.size > 500) {
                 this.seenIds.clear()
+                await this.persistState()
             }
         } finally {
             this.running = false
