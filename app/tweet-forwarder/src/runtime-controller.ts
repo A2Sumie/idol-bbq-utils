@@ -310,6 +310,7 @@ export class RuntimeController {
         if (crawlers && crawlers.length > 0) {
             spiderPools = new SpiderPools(this.cacheRoot, emitter, log, {
                 onSchedulePoke: () => spiderTaskScheduler?.pokeSchedules() ?? Promise.resolve(),
+                crawlers,
             })
             compatibleModels.push(spiderPools)
             spiderTaskScheduler = new SpiderTaskScheduler(

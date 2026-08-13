@@ -1036,6 +1036,7 @@ class SpiderPools extends BaseCompatibleModel {
     private dispatchListener: (payload: unknown) => Promise<void>
     private readonly onSchedulePoke?: () => Promise<void>
     private readonly enqueueExternalMediaLinks: typeof enqueueMissingExternalMediaLinksFromXArticle
+    private readonly scheduledWebsitesByCrawler = new Map<string, Array<string>>()
     private stopping = false
     // private workers:
     constructor(
@@ -1045,6 +1046,7 @@ class SpiderPools extends BaseCompatibleModel {
         options?: {
             onSchedulePoke?: () => Promise<void>
             enqueueExternalMediaLinks?: typeof enqueueMissingExternalMediaLinksFromXArticle
+            crawlers?: Array<Crawler>
         },
     ) {
         super()
@@ -1052,6 +1054,9 @@ class SpiderPools extends BaseCompatibleModel {
         this.emitter = emitter
         this.onSchedulePoke = options?.onSchedulePoke
         this.enqueueExternalMediaLinks = options?.enqueueExternalMediaLinks || enqueueMissingExternalMediaLinksFromXArticle
+        for (const crawler of options?.crawlers || []) {
+            this.scheduledWebsitesByCrawler.set(crawler.name, sanitizeWebsites(crawler))
+        }
         this.browserPool = new BrowserSessionPool(cacheRoot, this.log)
         this.instagramLiveRelay = new InstagramLiveRelayService(cacheRoot, this.log)
         this.dispatchListener = this.onDispatchReceived.bind(this)
@@ -2423,6 +2428,8 @@ class SpiderPools extends BaseCompatibleModel {
                 const ingestedLinks = await this.enqueueExternalMediaLinks(article, {
                     crawlerConfig: cfg_crawler,
                     log: ctx.log,
+                    getScheduledWebsitesForCrawler: (crawlerName) =>
+                        this.scheduledWebsitesByCrawler.get(crawlerName) || [],
                 })
                 const queuedExternalLinks =
                     (ingestedLinks?.tiktok?.length || 0) +

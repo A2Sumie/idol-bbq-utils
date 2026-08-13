@@ -33,6 +33,8 @@ type EnqueueOptions = {
     log?: MinimalLog
     fetchImpl?: typeof fetch
     now?: number
+    /** Resolve the target crawler's scheduled websites (regular high-frequency runs). */
+    getScheduledWebsitesForCrawler?: (crawlerName: string) => Array<string>
 }
 
 const TIKTOK_URL_RE = /https?:\/\/(?:www\.|vm\.|vt\.)?tiktok\.com\/[^\s<>"'，。！？、）)\]}]+/gi
@@ -46,6 +48,29 @@ const MAX_YOUTUBE_LINKS_PER_X_ARTICLE = 5
 const MAX_INSTAGRAM_LINKS_PER_X_ARTICLE = 5
 const TIKTOK_LINK_RESOLVE_TIMEOUT_MS = 10_000
 const YOUTUBE_VIDEO_ID_RE = /^[A-Za-z0-9_-]{6,128}$/
+
+function normalizeComparableUrl(value: string) {
+    try {
+        const url = new URL(value)
+        const path = url.pathname.replace(/\/+$/, '') || '/'
+        return `${url.origin}${path}`
+    } catch {
+        return value.replace(/\/+$/, '')
+    }
+}
+
+/**
+ * A target already covered by the crawler's own high-frequency schedule gains
+ * nothing from a one-shot ingest run: skip the duplicate instead of delaying
+ * it (uncovered targets, e.g. individual videos, still enqueue immediately).
+ */
+function isCoveredByScheduledWebsites(targetUrl: string, scheduled?: Array<string>) {
+    if (!scheduled || scheduled.length === 0) {
+        return false
+    }
+    const normalized = normalizeComparableUrl(targetUrl)
+    return scheduled.some((entry) => normalizeComparableUrl(entry) === normalized)
+}
 
 function cleanExternalUrl(value: string) {
     return value.replace(/[.,!?;:，。！？、）)\]}]+$/g, '')
@@ -307,6 +332,23 @@ async function enqueueMissingTikTokLinksFromXArticle(article: Article, options: 
             }
         }
 
+        // Profile links only: the crawler's own schedule already crawls its
+        // configured profiles every few minutes, so a one-shot run for a
+        // scheduled profile is pure duplication. Video links are never covered
+        // by the schedule and always enqueue immediately.
+        if (
+            !resolved.videoId &&
+            isCoveredByScheduledWebsites(
+                resolved.profileUrl || resolved.resolvedUrl,
+                options.getScheduledWebsitesForCrawler?.(crawlerName),
+            )
+        ) {
+            options.log?.debug?.(
+                `X TikTok link ingest skipped profile ${resolved.profileUrl}: already covered by the crawler schedule`,
+            )
+            continue
+        }
+
         const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
         const payload = {
             crawler: crawlerName,
@@ -369,6 +411,20 @@ async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options:
             if (existing) {
                 continue
             }
+        }
+
+        // Channel URLs never appear here (only watch URLs), and the schedule
+        // crawls channels, so this is normally a no-op guard for completeness.
+        if (
+            isCoveredByScheduledWebsites(
+                resolved.watchUrl,
+                options.getScheduledWebsitesForCrawler?.(crawlerName),
+            )
+        ) {
+            options.log?.debug?.(
+                `X YouTube link ingest skipped ${resolved.watchUrl}: already covered by the crawler schedule`,
+            )
+            continue
         }
 
         const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
@@ -435,6 +491,24 @@ async function enqueueMissingInstagramLinksFromXArticle(article: Article, option
             continue
         }
         seenProfiles.add(idempotencyProfile)
+
+        // Coverage-aware skip: a scheduled profile gains nothing from a one-shot
+        // run; a post link without a profile dispatches the crawler's full
+        // default account set, which the schedule runs anyway.
+        const scheduledWebsites = options.getScheduledWebsitesForCrawler?.(crawlerName)
+        if (profileUrl) {
+            if (isCoveredByScheduledWebsites(profileUrl, scheduledWebsites)) {
+                options.log?.debug?.(
+                    `X Instagram link ingest skipped profile ${profileUrl}: already covered by the crawler schedule`,
+                )
+                continue
+            }
+        } else if (scheduledWebsites && scheduledWebsites.length > 0) {
+            options.log?.debug?.(
+                `X Instagram link ingest skipped: post link without profile, crawler's scheduled accounts already cover it`,
+            )
+            continue
+        }
 
         const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
         const payload: { crawler: string; websites?: Array<string>; reason: string } = {
@@ -550,6 +624,10 @@ async function enqueueMissingWebsiteLinksFromXArticle(article: Article, options:
     for (const link of links) {
         const existing = await DB.Article.findByUrl(link).catch(() => null)
         if (existing) {
+            continue
+        }
+        if (isCoveredByScheduledWebsites(link, options.getScheduledWebsitesForCrawler?.(ingestConfig.crawler))) {
+            options.log?.debug?.(`X website link ingest skipped ${link}: already covered by the crawler schedule`)
             continue
         }
         const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun

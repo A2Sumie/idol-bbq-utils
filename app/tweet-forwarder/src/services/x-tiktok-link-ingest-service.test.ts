@@ -624,3 +624,98 @@ test('enqueueMissingYouTubeLinksFromXArticle scans quoted/retweet ref content', 
         ;(DB.TaskQueue as any).add = originalTaskAdd
     }
 })
+
+test('enqueueMissingTikTokLinksFromXArticle skips scheduled profile links but keeps video links', async () => {
+    const originalGetByArticleCode = DB.Article.getByArticleCode
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+
+    ;(DB.Article as any).getByArticleCode = async () => null
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 231, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingTikTokLinksFromXArticle(
+            {
+                platform: Platform.X,
+                a_id: 'x-coverage',
+                content:
+                    'https://www.tiktok.com/@emma_tsukishiro https://www.tiktok.com/@emma_tsukishiro/video/7653464242506616085',
+            } as any,
+            {
+                now: 1782048000,
+                getScheduledWebsitesForCrawler: () => ['https://www.tiktok.com/@emma_tsukishiro'],
+            },
+        )
+
+        // The bare profile link is covered by the high-frequency schedule; the
+        // video link never is and must still enqueue immediately.
+        expect(queued.map((entry) => entry.profileUrl)).toEqual(['https://www.tiktok.com/@emma_tsukishiro'])
+        expect(adds).toHaveLength(1)
+        expect(adds[0].payload.websites).toEqual(['https://www.tiktok.com/@emma_tsukishiro/video/7653464242506616085'])
+    } finally {
+        ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingTikTokLinksFromXArticle enqueues scheduled profiles when coverage info is absent', async () => {
+    const originalGetByArticleCode = DB.Article.getByArticleCode
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+
+    ;(DB.Article as any).getByArticleCode = async () => null
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 232, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingTikTokLinksFromXArticle(
+            {
+                platform: Platform.X,
+                a_id: 'x-no-coverage',
+                content: 'https://www.tiktok.com/@emma_tsukishiro',
+            } as any,
+            { now: 1782048000 },
+        )
+
+        expect(queued).toHaveLength(1)
+        expect(adds).toHaveLength(1)
+    } finally {
+        ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
+
+test('enqueueMissingInstagramLinksFromXArticle skips post links when the schedule covers the accounts', async () => {
+    const originalTaskAdd = DB.TaskQueue.add
+    const adds: any[] = []
+    ;(DB.TaskQueue as any).add = async (type: string, payload: any, executeAt: number, meta: any) => {
+        adds.push({ type, payload, executeAt, meta })
+        return { id: 233, status: 'pending' }
+    }
+
+    try {
+        const queued = await enqueueMissingInstagramLinksFromXArticle(
+            {
+                platform: Platform.X,
+                a_id: 'x-ig-post',
+                content: 'IG https://www.instagram.com/reel/DbK-To2RLeF/',
+            } as any,
+            {
+                now: 1782048000,
+                getScheduledWebsitesForCrawler: () => ['https://www.instagram.com/kawase_uta'],
+            },
+        )
+
+        // A post link without a profile dispatches the crawler's whole default
+        // set; when the schedule already runs it, the one-shot adds nothing.
+        expect(queued).toEqual([])
+        expect(adds).toHaveLength(0)
+    } finally {
+        ;(DB.TaskQueue as any).add = originalTaskAdd
+    }
+})
