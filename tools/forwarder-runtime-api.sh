@@ -228,7 +228,7 @@ case "$COMMAND_NAME" in
         api_request GET /api/agent/models
         ;;
     probe-model)
-        body="$(python3 - "$PROBE_PROCESSOR_ID" "$PROBE_TEXT" "$PROBE_TIMEOUT_MS" "$PROBE_MAX_TOKENS" <<'PY'
+        body="$(python3 - "${PROBE_PROCESSOR_ID:-}" "${PROBE_TEXT:-}" "${PROBE_TIMEOUT_MS:-}" "${PROBE_MAX_TOKENS:-}" <<'PY'
 import json
 import sys
 processor_id, text, timeout_ms, max_tokens = sys.argv[1:5]
@@ -253,7 +253,7 @@ PY
         api_request GET /api/runtime/status
         ;;
     run-crawler)
-        body="$(python3 - "$CRAWLER_NAME" "$WEBSITES_JSON" <<'PY'
+        body="$(python3 - "$CRAWLER_NAME" "${WEBSITES_JSON:-}" <<'PY'
 import json
 import sys
 crawler = sys.argv[1]
