@@ -183,7 +183,10 @@ describe('shouldRunYtDlpForArticle', () => {
     test('runs yt-dlp for video posts', () => {
         expect(
             shouldRunYtDlpForArticle({
-                media: [{ url: 'https://x', type: 'video_thumbnail' }, { url: 'https://x', type: 'video' }],
+                media: [
+                    { url: 'https://x', type: 'video_thumbnail' },
+                    { url: 'https://x', type: 'video' },
+                ],
             } as any),
         ).toBe(true)
     })
@@ -1998,5 +2001,35 @@ test('RenderService reuses a cached render for identical article+features input'
     } finally {
         ;(service as any).ArticleConverter.articleToImg = originalRender
         rmSync(sourcePath, { recursive: true, force: true })
+    }
+})
+
+test('RenderService builds TikTok CDN cookie headers from the configured Netscape jar', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'idol-bbq-render-cookies-'))
+    try {
+        const cookieFile = path.join(dir, 'tcookies.txt')
+        const now = Math.floor(Date.now() / 1000)
+        writeFileSync(
+            cookieFile,
+            [
+                '# Netscape HTTP Cookie File',
+                `.tiktok.com\tTRUE\t/\tTRUE\t${now + 3600}\tttwid\twid-value`,
+                `.tiktok.com\tTRUE\t/\tTRUE\t${now + 3600}\tsessionid\tsession-value`,
+                `.tiktok.com\tTRUE\t/\tTRUE\t${now - 3600}\tmsToken\texpired-value`,
+                '.unrelated.com\tTRUE\t/\tTRUE\t9999999999\tsecret\toff-domain',
+            ].join('\n'),
+            'utf8',
+        )
+        const service = new RenderService()
+        const header = (service as any).resolveCookieHeaderForUrl(
+            'https://v16-webapp-prime.tiktok.com/video/tos/x/?a=1988',
+            cookieFile,
+        )
+        expect(header).toContain('ttwid=wid-value')
+        expect(header).toContain('sessionid=session-value')
+        expect(header).not.toContain('expired-value')
+        expect(header).not.toContain('off-domain')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
     }
 })

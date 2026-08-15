@@ -6,11 +6,11 @@ import {
     galleryDownloadMediaFile,
     getMediaType,
     plainDownloadMediaFile,
-    tryGetCookie,
     ytDlpDownloadMediaFile,
     writeImgToFile,
     extToMime,
 } from '@/middleware/media'
+import { parseNetscapeCookieToPuppeteerCookie } from '@idol-bbq-utils/spider'
 import {
     articleToText,
     compactArticleToText,
@@ -173,6 +173,41 @@ export class RenderService {
             if (oldest) {
                 this.mediaDownloadFailureCache.delete(oldest[0])
             }
+        }
+    }
+
+    /**
+     * Builds a Cookie header for a direct CDN download from the configured
+     * Netscape cookie jar. TikTok's signed CDN URLs are accepted only when the
+     * request carries the session cookies (ttwid/msToken/sessionid/...); the
+     * old tryGetCookie(page-url) path returned no Set-Cookie and every direct
+     * video fetch got 403 before yt-dlp even ran.
+     */
+    private resolveCookieHeaderForUrl(url: string, cookieFile?: string | null) {
+        if (!cookieFile) {
+            return null
+        }
+        try {
+            const hostname = new URL(url).hostname.toLowerCase()
+            const now = Math.floor(Date.now() / 1000)
+            const pairs = parseNetscapeCookieToPuppeteerCookie(cookieFile)
+                .filter((cookie) => {
+                    if (!cookie.name || !cookie.value) {
+                        return false
+                    }
+                    if (typeof cookie.expires === 'number' && cookie.expires > 0 && cookie.expires < now) {
+                        return false
+                    }
+                    const domain = String(cookie.domain || '')
+                        .replace(/^\./, '')
+                        .toLowerCase()
+                    return Boolean(domain) && (hostname === domain || hostname.endsWith(`.${domain}`))
+                })
+                .map((cookie) => `${cookie.name}=${cookie.value}`)
+            return pairs.length > 0 ? pairs.join('; ') : null
+        } catch (error) {
+            this.log?.warn(`Failed to read cookie jar for direct media download ${cookieFile}: ${error}`)
+            return null
         }
     }
 
@@ -1206,10 +1241,13 @@ export class RenderService {
                 const allMediaCachedFailed =
                     articleMediaUrls.length > 0 &&
                     articleMediaUrls.every((url) => this.isMediaDownloadCachedFailed(url))
-                let cookie: string | undefined = undefined
-                if ([Platform.TikTok].includes(currentArticle.platform) && !allMediaCachedFailed) {
-                    cookie = await tryGetCookie(currentArticle.url)
-                }
+                // TikTok signed CDN URLs require the session cookies from the
+                // configured jar; the page URL itself no longer emits Set-Cookie
+                // that the old tryGetCookie path could reuse.
+                const directMediaCookie =
+                    currentArticle.platform === Platform.TikTok && !allMediaCachedFailed
+                        ? this.resolveCookieHeaderForUrl(currentArticle.url, (media.use as any)?.cookie_file)
+                        : null
 
                 const finalizeDownloadedFile = async (path: string, sourceUrl?: string, preferredType?: MediaType) => {
                     const resolvedMediaType = preferredType || getMediaType(path)
@@ -1358,6 +1396,7 @@ export class RenderService {
                 const _handleMedia = async (
                     mediaList: Array<{ url: string; type: MediaType }>,
                     overrideType?: boolean,
+                    cookieHeader?: string | null,
                 ) => {
                     const files = [] as Array<RenderedMediaFile | undefined>
                     for (const [index, { url, type }] of mediaList.entries()) {
@@ -1369,7 +1408,7 @@ export class RenderService {
                         }
                         try {
                             const path = await plainDownloadMediaFile(url, taskId, {
-                                cookie: cookie || '',
+                                ...(cookieHeader ? { cookie: cookieHeader } : {}),
                                 ...((currentArticle?.platform && platformPresetHeadersMap[currentArticle.platform]) ||
                                     {}),
                             })
@@ -1420,10 +1459,10 @@ export class RenderService {
                 const runTool = async (tool: MediaTool): Promise<Array<RenderedMediaFile | undefined>> => {
                     if (tool.tool === MediaToolEnum.DEFAULT && currentArticle.media) {
                         this.log?.debug(`Downloading media with http downloader`)
-                        let files = await _handleMedia(currentArticle.media)
+                        let files = await _handleMedia(currentArticle.media, false, directMediaCookie)
                         const uniqueExtraMedia = getUniqueExtraMedia()
                         if (uniqueExtraMedia.length > 0) {
-                            files = files.concat(await _handleMedia(uniqueExtraMedia, true))
+                            files = files.concat(await _handleMedia(uniqueExtraMedia, true, directMediaCookie))
                         }
                         return files
                     }
@@ -1440,7 +1479,7 @@ export class RenderService {
                         )
                         const uniqueExtraMedia = getUniqueExtraMedia()
                         if (uniqueExtraMedia.length > 0) {
-                            files.push(...(await _handleMedia(uniqueExtraMedia, true)))
+                            files.push(...(await _handleMedia(uniqueExtraMedia, true, directMediaCookie)))
                         }
                         return files.filter((f) => f !== undefined)
                     }
@@ -1448,13 +1487,20 @@ export class RenderService {
                         this.log?.debug(`Downloading media with yt-dlp`)
                         let files: Array<RenderedMediaFile | undefined> = []
                         if (currentArticle.media) {
-                            files = await _handleMedia(currentArticle.media)
+                            files = await _handleMedia(currentArticle.media, false, directMediaCookie)
                         }
                         // yt-dlp re-resolves the video page and gets a fresh signed URL, which matters
                         // when the stored CDN URL (e.g. tiktokcdn) has expired or is session-bound.
                         // Only run it for articles that actually contain video media; image-only posts
-                        // must not be duplicated by an extra yt-dlp pass.
-                        if (shouldRunYtDlpForArticle(currentArticle)) {
+                        // must not be duplicated by an extra yt-dlp pass. TikTok is the exception in
+                        // the other direction: when the direct CDN download already produced a video,
+                        // skip yt-dlp entirely because its curl_cffi fingerprint is currently denied
+                        // by TikTok/Akamai and only burns ~15s per article with an "Unexpected
+                        // response from webpage request" error.
+                        const directVideoDownloaded =
+                            currentArticle.platform === Platform.TikTok &&
+                            files.some((file) => file?.media_type === 'video')
+                        if (shouldRunYtDlpForArticle(currentArticle) && !directVideoDownloaded) {
                             const ytDlpCacheKey = `ytdlp:${currentArticle.url}`
                             if (this.isMediaDownloadCachedFailed(ytDlpCacheKey)) {
                                 this.log?.debug(`Skipping cached-failed yt-dlp download for ${currentArticle.url}`)
@@ -1483,7 +1529,7 @@ export class RenderService {
                         }
                         const uniqueExtraMedia = getUniqueExtraMedia()
                         if (uniqueExtraMedia.length > 0) {
-                            files = files.concat(await _handleMedia(uniqueExtraMedia, true))
+                            files = files.concat(await _handleMedia(uniqueExtraMedia, true, directMediaCookie))
                         }
                         return files
                     }
