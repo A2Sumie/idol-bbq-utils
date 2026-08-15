@@ -390,22 +390,40 @@ for target_id, status, count in rows:
 dry_run_count = int(status_counts.get("dry_run", 0))
 
 with open(metrics_path, "w", encoding="utf-8") as handle:
-    handle.write(f"capture_count={capture_count}\n")
-    handle.write(f"matching_capture_count={matching_capture_count}\n")
-    handle.write(f"unmatched_capture_count={capture_count - matching_capture_count}\n")
-    handle.write(f"malformed_capture_count={malformed_capture_count}\n")
-    handle.write(f"matching_outbound_count={matching_outbound_count}\n")
-    handle.write(f"dry_run_count={dry_run_count}\n")
-    handle.write(f"disallowed_capture_count={disallowed_capture_count}\n")
-    handle.write(f"disallowed_outbound_count={disallowed_outbound_count}\n")
-    handle.write(f"captured_target_ids={','.join(sorted(captured_target_ids))}\n")
-    handle.write(f"matching_outbound_target_ids={','.join(sorted(matching_outbound_target_ids))}\n")
+    handle.write(f"capture_count\t{capture_count}\n")
+    handle.write(f"matching_capture_count\t{matching_capture_count}\n")
+    handle.write(f"unmatched_capture_count\t{capture_count - matching_capture_count}\n")
+    handle.write(f"malformed_capture_count\t{malformed_capture_count}\n")
+    handle.write(f"matching_outbound_count\t{matching_outbound_count}\n")
+    handle.write(f"dry_run_count\t{dry_run_count}\n")
+    handle.write(f"disallowed_capture_count\t{disallowed_capture_count}\n")
+    handle.write(f"disallowed_outbound_count\t{disallowed_outbound_count}\n")
+    handle.write(f"captured_target_ids\t{','.join(sorted(captured_target_ids))}\n")
+    handle.write(f"matching_outbound_target_ids\t{','.join(sorted(matching_outbound_target_ids))}\n")
     handle.write(
-        "outbound_status_counts="
+        "outbound_status_counts\t"
         + ",".join(f"{key}:{value}" for key, value in sorted(status_counts.items()))
         + "\n"
     )
 PY
+}
+
+read_metrics_file() {
+    while IFS=$'\t' read -r key value; do
+        case "$key" in
+            capture_count) capture_count="$value" ;;
+            matching_capture_count) matching_capture_count="$value" ;;
+            unmatched_capture_count) unmatched_capture_count="$value" ;;
+            malformed_capture_count) malformed_capture_count="$value" ;;
+            matching_outbound_count) matching_outbound_count="$value" ;;
+            dry_run_count) dry_run_count="$value" ;;
+            disallowed_capture_count) disallowed_capture_count="$value" ;;
+            disallowed_outbound_count) disallowed_outbound_count="$value" ;;
+            captured_target_ids) captured_target_ids="$value" ;;
+            matching_outbound_target_ids) matching_outbound_target_ids="$value" ;;
+            outbound_status_counts) outbound_status_counts="$value" ;;
+        esac
+    done < "$1"
 }
 
 repo="${REMOTE_REPO:-$HOME/idol-bbq-utils}"
@@ -421,6 +439,13 @@ prefix="${CAPTURE_SMOKE_CONTAINER_PREFIX:-idol-bbq-capture-smoke}"
 target_filter="${CAPTURE_SMOKE_TARGET_IDS:-}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 root="${CAPTURE_SMOKE_ROOT:-/tmp/idol-bbq-capture-smoke-$stamp}"
+case "$root" in
+    /tmp/idol-bbq-capture-smoke-*)
+        ;;
+    *)
+        die "CAPTURE_SMOKE_ROOT must be under /tmp/idol-bbq-capture-smoke-*"
+        ;;
+esac
 smoke_container="$prefix-$stamp"
 tmp_root="$root/tmp"
 tmp_config="$root/config.yaml"
@@ -583,16 +608,14 @@ PY
 
 for _ in $(seq 1 "$timeout_seconds"); do
     count_capture_and_outbound "$capture_file" "$tmp_db" "$article_id" "$allowed_target_ids" "$metrics_file"
-    # shellcheck disable=SC1090
-    . "$metrics_file"
+    read_metrics_file "$metrics_file"
     if [ "${matching_capture_count:-0}" -gt 0 ] && [ "${dry_run_count:-0}" -gt 0 ]; then
         break
     fi
     sleep 1
 done
 
-# shellcheck disable=SC1090
-. "$metrics_file"
+read_metrics_file "$metrics_file"
 [ "${capture_count:-0}" -gt 0 ] || die "no capture records were written"
 [ "${matching_capture_count:-0}" -gt 0 ] || die "no capture record matched smoke article"
 [ "${unmatched_capture_count:-0}" = "0" ] || die "unexpected non-smoke capture records: $unmatched_capture_count"

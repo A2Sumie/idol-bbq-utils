@@ -410,8 +410,13 @@ export class RenderService {
                 text = this.renderText(article, config)
                 textCollapseMode = this.resolveArticleTextCollapseMode(render_type)
             } else {
-                // Standard Card Logic
-                text = this.formatPlatformFrom(article)
+                // Standard Card Logic. Website already renders its full text into
+                // the card; sending formatWebsiteCardText as the text block as well
+                // duplicates the title/link/attribution in the same message.
+                text =
+                    article.platform === Platform.Website
+                        ? formatPlatformTag(article, this.log)
+                        : this.formatPlatformFrom(article)
                 textCollapseMode = 'none'
                 await appendRenderedCardToMedia('start')
             }
@@ -436,13 +441,15 @@ export class RenderService {
                 }
 
                 const fullText = this.renderText(article, config)
-                // If converted to image, usually only want the metaline
-                text = articleToImgSuccess ? formatMetaline(article) : fullText
-                textCollapseMode = articleToImgSuccess ? 'none' : this.resolveArticleTextCollapseMode(render_type)
-
+                // If converted to image, usually only want the metaline (or no
+                // text at all for pure img). If card render failed, keep the
+                // full text so a failed card can never produce an empty message.
                 if (render_type === 'img') {
-                    text = '' // No text for pure img mode
-                    textCollapseMode = 'none'
+                    text = articleToImgSuccess ? '' : fullText
+                    textCollapseMode = articleToImgSuccess ? 'none' : this.resolveArticleTextCollapseMode(render_type)
+                } else {
+                    text = articleToImgSuccess ? formatMetaline(article) : fullText
+                    textCollapseMode = articleToImgSuccess ? 'none' : this.resolveArticleTextCollapseMode(render_type)
                 }
             }
         } else if (render_type === 'text-card' || render_type === 'text-compact-card') {
@@ -504,7 +511,7 @@ export class RenderService {
     }
 
     private formatPlatformFrom(article: Article): string {
-        if (article.platform === Platform.X || article.platform === Platform.Twitter) {
+        if (article.platform === Platform.X) {
             return [article.username?.trim(), formatArticleTimeToken(article.created_at), 'X'].filter(Boolean).join(' ')
         }
         if (article.platform === Platform.Website) {
@@ -712,7 +719,7 @@ export class RenderService {
                         if (!srcMatch) {
                             return tag
                         }
-                        const sourceUrl = this.resolveCardMediaSourceUrl(srcMatch[2], cloned.url)
+                        const sourceUrl = this.resolveCardMediaSourceUrl(srcMatch[2]!, cloned.url)
                         if (!this.isRemoteCardMediaUrl(sourceUrl)) {
                             return tag
                         }
@@ -733,9 +740,10 @@ export class RenderService {
                 removed += 1
             }
             if (Array.isArray(currentArticle.media)) {
-                const kept = stripRemoteMediaList(currentArticle.media) as Article['media']
-                currentArticle.media = kept as Article['media']
-                currentArticle.has_media = kept.length > 0
+                const kept = stripRemoteMediaList(currentArticle.media)
+                const keptMedia = (Array.isArray(kept) ? kept : []) as NonNullable<Article['media']>
+                currentArticle.media = keptMedia
+                currentArticle.has_media = keptMedia.length > 0
             }
             stripInlineHtmlRemoteImages(currentArticle.extra?.data)
             if (currentArticle.ref && typeof currentArticle.ref === 'object') {
@@ -947,7 +955,7 @@ export class RenderService {
                 offset += 1
                 continue
             }
-            const marker = buffer[offset + 1]
+            const marker = buffer[offset + 1]!
             offset += 2
             if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
                 continue
@@ -1233,6 +1241,7 @@ export class RenderService {
         const DB = (await import('@/db')).default
 
         while (currentArticle) {
+            const articleContext = currentArticle
             const currentIsRootArticle = articleDepth === 0
             let new_files = [] as Array<RenderedMediaFile | undefined>
             if (currentArticle.has_media) {
@@ -1457,9 +1466,9 @@ export class RenderService {
                 }
 
                 const runTool = async (tool: MediaTool): Promise<Array<RenderedMediaFile | undefined>> => {
-                    if (tool.tool === MediaToolEnum.DEFAULT && currentArticle.media) {
+                    if (tool.tool === MediaToolEnum.DEFAULT && articleContext.media) {
                         this.log?.debug(`Downloading media with http downloader`)
-                        let files = await _handleMedia(currentArticle.media, false, directMediaCookie)
+                        let files = await _handleMedia(articleContext.media, false, directMediaCookie)
                         const uniqueExtraMedia = getUniqueExtraMedia()
                         if (uniqueExtraMedia.length > 0) {
                             files = files.concat(await _handleMedia(uniqueExtraMedia, true, directMediaCookie))
@@ -1471,10 +1480,10 @@ export class RenderService {
                         // galleryDownloadMediaFile throws on tool failure and returns
                         // [] when the tool ran but genuinely produced nothing.
                         const paths = await galleryDownloadMediaFile(
-                            currentArticle.url,
+                            articleContext.url,
                             tool as MediaTool<MediaToolEnum.GALLERY_DL>,
                         )
-                        const files = await Promise.all(
+                        const files: Array<RenderedMediaFile | undefined> = await Promise.all(
                             paths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
                         )
                         const uniqueExtraMedia = getUniqueExtraMedia()
@@ -1486,8 +1495,8 @@ export class RenderService {
                     if (tool.tool === MediaToolEnum.YT_DLP) {
                         this.log?.debug(`Downloading media with yt-dlp`)
                         let files: Array<RenderedMediaFile | undefined> = []
-                        if (currentArticle.media) {
-                            files = await _handleMedia(currentArticle.media, false, directMediaCookie)
+                        if (articleContext.media) {
+                            files = await _handleMedia(articleContext.media, false, directMediaCookie)
                         }
                         // yt-dlp re-resolves the video page and gets a fresh signed URL, which matters
                         // when the stored CDN URL (e.g. tiktokcdn) has expired or is session-bound.
@@ -1498,18 +1507,18 @@ export class RenderService {
                         // by TikTok/Akamai and only burns ~15s per article with an "Unexpected
                         // response from webpage request" error.
                         const directVideoDownloaded =
-                            currentArticle.platform === Platform.TikTok &&
+                            articleContext.platform === Platform.TikTok &&
                             files.some((file) => file?.media_type === 'video')
-                        if (shouldRunYtDlpForArticle(currentArticle) && !directVideoDownloaded) {
-                            const ytDlpCacheKey = `ytdlp:${currentArticle.url}`
+                        if (shouldRunYtDlpForArticle(articleContext) && !directVideoDownloaded) {
+                            const ytDlpCacheKey = `ytdlp:${articleContext.url}`
                             if (this.isMediaDownloadCachedFailed(ytDlpCacheKey)) {
-                                this.log?.debug(`Skipping cached-failed yt-dlp download for ${currentArticle.url}`)
+                                this.log?.debug(`Skipping cached-failed yt-dlp download for ${articleContext.url}`)
                             } else {
                                 try {
                                     const videoPaths = await ytDlpDownloadMediaFile(
-                                        currentArticle.url,
+                                        articleContext.url,
                                         tool as MediaTool<MediaToolEnum.YT_DLP>,
-                                        `${taskId}-${currentArticle.a_id}`,
+                                        `${taskId}-${articleContext.a_id}`,
                                     )
                                     files = files.concat(
                                         await Promise.all(

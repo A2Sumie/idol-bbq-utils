@@ -274,8 +274,8 @@ test('disabled pipelines are visible but not compiled into runtime connections',
         ],
     } as any)
 
-    expect(model.pipelines[0].enabled).toBe(false)
-    expect(model.pipelines[0].review.warnings).toContain(
+    expect((model.pipelines[0] as any).enabled).toBe(false)
+    expect((model.pipelines[0] as any).review.warnings).toContain(
         'pipeline is disabled and will not be compiled into runtime connections',
     )
     expect(() =>
@@ -331,7 +331,7 @@ test('multi-processor pipelines are diagnosed because runtime currently compiles
         ],
     } as any)
 
-    expect(model.pipelines[0].compiled_processor_id).toBe('processor-summary')
+    expect((model.pipelines[0] as any).compiled_processor_id).toBe('processor-summary')
     expect(model.diagnostics.some((item) => item.code === 'pipeline_extra_processors_ignored')).toBe(true)
 })
 

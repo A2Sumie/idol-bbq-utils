@@ -33,9 +33,7 @@
     <td rowspan="12">
         <a href="https://ai.google.dev/gemini-api/docs/api-key?hl=zh-cn" target="_blank" style="display: block;">谷歌 gemini（免费，api有区域限制）</a>
         <br>
-        <a href="https://bigmodel.cn/dev/api/normal-model/glm-4" target="_blank" style="display: block;">智谱 glm-4-flash（免费）</a>
-        <br>
-        <a href="https://www.volcengine.com/docs/82379/1263594#%E9%80%82%E7%94%A8%E8%8C%83%E5%9B%B4" target="_blank" style="display: block;">字节豆包 doubao-128k-pro</a>
+        <a href="https://platform.deepseek.com" target="_blank" style="display: block;">DeepSeek</a>
     </td>
     <td rowspan="12">
         转发原推文并翻译<br>转发带图/视频推文<br>粉丝数统计

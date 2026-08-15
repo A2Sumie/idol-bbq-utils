@@ -11,9 +11,11 @@ export BROWSER_PROFILE_DIR="${BROWSER_PROFILE_DIR:-/app/assets/cookies/browser-p
 XVFB_PID=""
 APP_PID=""
 HOLD_PID=""
+COOKIE_MAINT_PID=""
 MIGRATION_LOCK_DIR=""
 release_migration_lock() {
     if [ -n "$MIGRATION_LOCK_DIR" ] && [ -d "$MIGRATION_LOCK_DIR" ]; then
+        rm -f "$MIGRATION_LOCK_DIR/pid"
         rmdir "$MIGRATION_LOCK_DIR" >/dev/null 2>&1 || true
     fi
     MIGRATION_LOCK_DIR=""
@@ -21,6 +23,10 @@ release_migration_lock() {
 
 cleanup() {
     release_migration_lock
+    if [ -n "$COOKIE_MAINT_PID" ]; then
+        kill "$COOKIE_MAINT_PID" >/dev/null 2>&1 || true
+        wait "$COOKIE_MAINT_PID" >/dev/null 2>&1 || true
+    fi
     if [ -n "$HOLD_PID" ]; then
         kill "$HOLD_PID" >/dev/null 2>&1 || true
         wait "$HOLD_PID" >/dev/null 2>&1 || true
@@ -45,7 +51,7 @@ trap terminate INT TERM
 
 sqlite_quick_check() {
     quick_check_db_path="$1"
-    quick_check_script="/tmp/tweet-forwarder/sqlite-quick-check.$$.js"
+    quick_check_script="$(mktemp "${TMPDIR:-/tmp}/sqlite-quick-check.XXXXXX.js")"
     cat > "$quick_check_script" <<'JS'
 import { Database } from 'bun:sqlite'
 
@@ -143,8 +149,9 @@ recover_sqlite_db_if_needed() {
 
     if sqlite_quick_check "$recovery_db_path"; then
         return 0
+    else
+        recovery_check_status=$?
     fi
-    recovery_check_status=$?
 
     if [ "${IDOL_BBQ_AUTO_RESTORE_DB_BACKUP:-1}" != "1" ]; then
         echo "SQLite quick_check failed and automatic backup restore is disabled: $recovery_db_path" >&2
@@ -250,9 +257,20 @@ prepare_migration_backup() {
     lock_parent="$backup_dir"
     MIGRATION_LOCK_DIR="${IDOL_BBQ_DB_MIGRATION_LOCK_DIR:-$lock_parent/migration.lock}"
     if ! mkdir "$MIGRATION_LOCK_DIR" 2>/dev/null; then
-        echo "Migration lock already exists: $MIGRATION_LOCK_DIR" >&2
-        exit 75
+        # A previous migration may have been SIGKILLed. Recover when the
+        # recorded owner PID no longer exists; never steal a live lock.
+        lock_pid="$(cat "$MIGRATION_LOCK_DIR/pid" 2>/dev/null || true)"
+        if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+            echo "Migration lock is held by live process $lock_pid: $MIGRATION_LOCK_DIR" >&2
+            exit 75
+        fi
+        rm -f "$MIGRATION_LOCK_DIR/pid"
+        if ! rmdir "$MIGRATION_LOCK_DIR" 2>/dev/null || ! mkdir "$MIGRATION_LOCK_DIR" 2>/dev/null; then
+            echo "Unable to recover stale migration lock: $MIGRATION_LOCK_DIR" >&2
+            exit 75
+        fi
     fi
+    printf '%s\n' "$$" > "$MIGRATION_LOCK_DIR/pid"
 
     sqlite_quick_check "$migration_db_path"
 
@@ -345,6 +363,10 @@ if [ "$runtime_mode" = "online" ] && [ "${ENABLE_XVFB:-1}" != "0" ] && command -
     Xvfb "$DISPLAY" -screen "$1" "$2" -ac +extension RANDR -nolisten tcp >/tmp/tweet-forwarder-xvfb.log 2>&1 &
     XVFB_PID=$!
     sleep 1
+    if ! kill -0 "$XVFB_PID" >/dev/null 2>&1; then
+        echo "Xvfb failed to start; see /tmp/tweet-forwarder-xvfb.log" >&2
+        exit 1
+    fi
 fi
 
 refresh_media_tools="${IDOL_BBQ_REFRESH_MEDIA_TOOLS:-auto}"
@@ -419,6 +441,7 @@ if [ "$runtime_mode" = "online" ]; then
         mkdir -p /tmp/tweet-forwarder/logs
         bun /app/tools/startup-cookie-maintenance.js >> /tmp/tweet-forwarder/logs/startup-cookie-maintenance.log 2>&1
     ) &
+    COOKIE_MAINT_PID=$!
 fi
 
 wait "$APP_PID"

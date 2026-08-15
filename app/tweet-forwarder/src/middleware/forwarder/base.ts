@@ -109,7 +109,7 @@ export type ForwarderSendResult =
           status: 'dry_run'
           reason: string
           details: OutboundSendDryRunDetails
-}
+      }
 
 export function isForwarderSendResult(value: unknown): value is ForwarderSendResult {
     if (!value || typeof value !== 'object') {
@@ -130,6 +130,7 @@ class PartialForwarderSendError extends Error {
     readonly partialResults: unknown[]
     readonly failedSegment: string
     readonly originalError: unknown
+    batchOutbounds?: string[]
 
     constructor(message: string, partialResults: unknown[], failedSegment: string, originalError: unknown) {
         super(message)
@@ -235,8 +236,12 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         try {
             const result = await blockCheckPipeline.execute(context)
             return !result
-        } catch {
-            return true
+        } catch (error) {
+            // A broken block rule/regex must not silently block every message.
+            this.log?.error(
+                `Block check failed for ${this.id}; sending unblocked: ${error instanceof Error ? error.message : String(error)}`,
+            )
+            return false
         }
     }
 
@@ -523,15 +528,27 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         }
 
         if (cardItems.length > 0) {
-            await sendSegment('card', this.buildTextChunksFromItems(cardItems), cardItems.flatMap((item) => item.cardMedia))
+            await sendSegment(
+                'card',
+                this.buildTextChunksFromItems(cardItems),
+                cardItems.flatMap((item) => item.cardMedia),
+            )
         }
 
         if (normalItems.length > 0) {
-            await sendSegment('normal', this.buildTextChunksFromItems(normalItems), normalItems.flatMap((item) => item.media))
+            await sendSegment(
+                'normal',
+                this.buildTextChunksFromItems(normalItems),
+                normalItems.flatMap((item) => item.media),
+            )
         }
 
         if (splitMediaItems.length > 0) {
-            await sendSegment('content_media', [], splitMediaItems.flatMap((item) => item.contentMedia))
+            await sendSegment(
+                'content_media',
+                [],
+                splitMediaItems.flatMap((item) => item.contentMedia),
+            )
         }
         return {
             status: 'sent',
@@ -583,10 +600,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         // batch twice and appear twice in one visible message. Production sends
         // always carry the outboundKey; direct calls without one keep the old
         // append behavior.
-        if (
-            item.outboundKey &&
-            batch.items.some((existing) => existing.outboundKey === item.outboundKey)
-        ) {
+        if (item.outboundKey && batch.items.some((existing) => existing.outboundKey === item.outboundKey)) {
             this.log?.debug(`Media batch item ${item.outboundKey} already queued for ${this.id}; skipping duplicate`)
             return {
                 status: 'queued',
@@ -607,7 +621,22 @@ abstract class BaseForwarder extends BaseCompatibleModel {
 
         if (batch.unitCount >= batchConfig.threshold) {
             this.pendingMediaBatches.delete(batchKey)
-            return await this.sendPreparedBatchItems(batch.items, batch.config)
+            try {
+                return await this.sendPreparedBatchItems(batch.items, batch.config)
+            } catch (error) {
+                // The triggering outbound is handled by the manager, but every
+                // other queued member of this batch would otherwise stay
+                // `queued` forever (the batch map entry is already gone).
+                const batchOutbounds = batch.items
+                    .map((item) => item.outboundKey)
+                    .filter((key): key is string => Boolean(key))
+                if (error instanceof PartialForwarderSendError) {
+                    error.batchOutbounds = batchOutbounds
+                } else {
+                    ;(error as any).batchOutbounds = batchOutbounds
+                }
+                throw error
+            }
         }
 
         return {
@@ -683,7 +712,7 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             ...(article
                 ? {
                       article: {
-                          id: article.id,
+                          id: (article as any).id ?? null,
                           a_id: article.a_id,
                           platform: String(article.platform),
                           ...(article.url ? { url: article.url } : {}),

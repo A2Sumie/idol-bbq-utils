@@ -37,74 +37,81 @@ const officialChannelHeaderFixture = {
 const videosFixture = {
     header: channelHeaderFixture,
     richGridRenderer: {
-        contents: [{
-            richItemRenderer: {
-                content: {
-                    videoRenderer: {
-                        videoId: 'bBRUMp_WNUU',
-                        title: {
-                            runs: [{ text: 'New music video' }],
-                        },
-                        descriptionSnippet: {
-                            runs: [{ text: 'Official upload' }],
-                        },
-                        publishedTimeText: {
-                            simpleText: '4 days ago',
-                        },
-                        thumbnail: {
-                            thumbnails: [
-                                { url: 'https://i.ytimg.com/vi/bBRUMp_WNUU/hqdefault.jpg', width: 480 },
-                            ],
+        contents: [
+            {
+                richItemRenderer: {
+                    content: {
+                        videoRenderer: {
+                            videoId: 'bBRUMp_WNUU',
+                            title: {
+                                runs: [{ text: 'New music video' }],
+                            },
+                            descriptionSnippet: {
+                                runs: [{ text: 'Official upload' }],
+                            },
+                            publishedTimeText: {
+                                simpleText: '4 days ago',
+                            },
+                            thumbnail: {
+                                thumbnails: [{ url: 'https://i.ytimg.com/vi/bBRUMp_WNUU/hqdefault.jpg', width: 480 }],
+                            },
                         },
                     },
                 },
             },
-        }],
+        ],
     },
 }
 
 const lockupVideosFixture = {
     header: officialChannelHeaderFixture,
     richGridRenderer: {
-        contents: [{
-            richItemRenderer: {
-                content: {
-                    lockupViewModel: {
-                        contentId: 'X6J9TphDexM',
-                        contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
-                        contentImage: {
-                            thumbnailViewModel: {
-                                image: {
-                                    sources: [
-                                        { url: 'https://i.ytimg.com/vi/X6J9TphDexM/hqdefault.jpg', width: 168 },
-                                        { url: 'https://i.ytimg.com/vi/X6J9TphDexM/hqdefault.jpg', width: 336 },
-                                    ],
-                                },
-                            },
-                        },
-                        metadata: {
-                            lockupMetadataViewModel: {
-                                title: {
-                                    content: '22/7_the 3rd AUDITION DOCUMENTARY -Misaki Kitahara-',
-                                },
-                                metadata: {
-                                    contentMetadataViewModel: {
-                                        metadataRows: [{
-                                            metadataParts: [
-                                                { text: { content: '412 views' } },
-                                                { text: { content: '46 minutes ago' }, accessibilityLabel: '46 minutes ago' },
-                                            ],
-                                        }],
+        contents: [
+            {
+                richItemRenderer: {
+                    content: {
+                        lockupViewModel: {
+                            contentId: 'X6J9TphDexM',
+                            contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
+                            contentImage: {
+                                thumbnailViewModel: {
+                                    image: {
+                                        sources: [
+                                            { url: 'https://i.ytimg.com/vi/X6J9TphDexM/hqdefault.jpg', width: 168 },
+                                            { url: 'https://i.ytimg.com/vi/X6J9TphDexM/hqdefault.jpg', width: 336 },
+                                        ],
                                     },
                                 },
                             },
-                        },
-                        rendererContext: {
-                            commandContext: {
-                                onTap: {
-                                    innertubeCommand: {
-                                        watchEndpoint: {
-                                            videoId: 'X6J9TphDexM',
+                            metadata: {
+                                lockupMetadataViewModel: {
+                                    title: {
+                                        content: '22/7_the 3rd AUDITION DOCUMENTARY -Misaki Kitahara-',
+                                    },
+                                    metadata: {
+                                        contentMetadataViewModel: {
+                                            metadataRows: [
+                                                {
+                                                    metadataParts: [
+                                                        { text: { content: '412 views' } },
+                                                        {
+                                                            text: { content: '46 minutes ago' },
+                                                            accessibilityLabel: '46 minutes ago',
+                                                        },
+                                                    ],
+                                                },
+                                            ],
+                                        },
+                                    },
+                                },
+                            },
+                            rendererContext: {
+                                commandContext: {
+                                    onTap: {
+                                        innertubeCommand: {
+                                            watchEndpoint: {
+                                                videoId: 'X6J9TphDexM',
+                                            },
                                         },
                                     },
                                 },
@@ -113,39 +120,39 @@ const lockupVideosFixture = {
                     },
                 },
             },
-        }],
+        ],
     },
 }
 
 const shortsFixture = {
     header: channelHeaderFixture,
     richGridRenderer: {
-        contents: [{
-            richItemRenderer: {
-                content: {
-                    shortsLockupViewModel: {
-                        entityId: 'shorts-shelf-item-NYnbjoDltqA',
-                        overlayMetadata: {
-                            primaryText: {
-                                content: 'Behind the scenes short',
+        contents: [
+            {
+                richItemRenderer: {
+                    content: {
+                        shortsLockupViewModel: {
+                            entityId: 'shorts-shelf-item-NYnbjoDltqA',
+                            overlayMetadata: {
+                                primaryText: {
+                                    content: 'Behind the scenes short',
+                                },
                             },
-                        },
-                        thumbnail: {
-                            sources: [
-                                { url: 'https://i.ytimg.com/vi/NYnbjoDltqA/oar2.jpg', width: 720 },
-                            ],
-                        },
-                        onTap: {
-                            innertubeCommand: {
-                                reelWatchEndpoint: {
-                                    videoId: 'NYnbjoDltqA',
+                            thumbnail: {
+                                sources: [{ url: 'https://i.ytimg.com/vi/NYnbjoDltqA/oar2.jpg', width: 720 }],
+                            },
+                            onTap: {
+                                innertubeCommand: {
+                                    reelWatchEndpoint: {
+                                        videoId: 'NYnbjoDltqA',
+                                    },
                                 },
                             },
                         },
                     },
                 },
             },
-        }],
+        ],
     },
 }
 
@@ -229,11 +236,11 @@ test('YouTube videos parser extracts current lockup view model videos', () => {
 
 test('YouTube videos parser marks members-only lockups', () => {
     const fixture = structuredClone(lockupVideosFixture)
-    const lockup = fixture.richGridRenderer.contents[0].richItemRenderer.content.lockupViewModel
+    const lockup = fixture.richGridRenderer.contents[0]!.richItemRenderer.content.lockupViewModel
     lockup.contentId = 'members-only-video'
     lockup.metadata.lockupMetadataViewModel.metadata.contentMetadataViewModel.metadataRows.push({
         badges: [{ badgeViewModel: { badgeText: 'Members only', badgeStyle: 'BADGE_MEMBERS_ONLY' } }],
-    })
+    } as any)
 
     const channelMeta = YoutubeApiJsonParser.channelMetaParser(fixture, '@fallback')
     const videos = YoutubeApiJsonParser.videosParser(fixture, channelMeta)
@@ -260,9 +267,7 @@ test('YouTube detail parser extracts publish date and metadata', () => {
             title: 'Fresh upload',
             shortDescription: 'A brand new clip',
             thumbnail: {
-                thumbnails: [
-                    { url: 'https://i.ytimg.com/vi/bBRUMp_WNUU/maxresdefault.jpg', width: 1280 },
-                ],
+                thumbnails: [{ url: 'https://i.ytimg.com/vi/bBRUMp_WNUU/maxresdefault.jpg', width: 1280 }],
             },
         },
         microformat: {
@@ -270,9 +275,7 @@ test('YouTube detail parser extracts publish date and metadata', () => {
                 publishDate: '2026-03-17',
                 uploadDate: '2026-03-17',
                 thumbnail: {
-                    thumbnails: [
-                        { url: 'https://i.ytimg.com/vi/bBRUMp_WNUU/hqdefault.jpg', width: 480 },
-                    ],
+                    thumbnails: [{ url: 'https://i.ytimg.com/vi/bBRUMp_WNUU/hqdefault.jpg', width: 480 }],
                 },
             },
         },
@@ -392,18 +395,24 @@ test('YouTube grabArticles rehydrates known premiere placeholders', async () => 
     const premiereVideos = {
         header: officialChannelHeaderFixture,
         richGridRenderer: {
-            contents: [{
-                richItemRenderer: {
-                    content: {
-                        videoRenderer: {
-                            videoId: 'premiere-known',
-                            title: { runs: [{ text: 'Coming Soon...' }] },
-                            publishedTimeText: { simpleText: 'Upcoming' },
-                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-known/hqdefault.jpg', width: 480 }] },
+            contents: [
+                {
+                    richItemRenderer: {
+                        content: {
+                            videoRenderer: {
+                                videoId: 'premiere-known',
+                                title: { runs: [{ text: 'Coming Soon...' }] },
+                                publishedTimeText: { simpleText: 'Upcoming' },
+                                thumbnail: {
+                                    thumbnails: [
+                                        { url: 'https://i.ytimg.com/vi/premiere-known/hqdefault.jpg', width: 480 },
+                                    ],
+                                },
+                            },
                         },
                     },
                 },
-            }],
+            ],
         },
     }
     ;(HTTPClient as any).download_webpage = async (url: string) => {
@@ -418,14 +427,20 @@ test('YouTube grabArticles rehydrates known premiere placeholders', async () => 
     }
 
     try {
-        const articles = await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', {
-            hydrate_limit: 8,
-            hydrate_concurrency: 1,
-            isArticleKnown: (a_id) => a_id === 'premiere-known',
-        })
+        const articles = await YoutubeApiJsonParser.grabArticles(
+            buildYoutubePage(),
+            'https://www.youtube.com/@227SMEJ',
+            {
+                hydrate_limit: 8,
+                hydrate_concurrency: 1,
+                isArticleKnown: (a_id) => a_id === 'premiere-known',
+            },
+        )
 
         expect(requestedUrls.some((url) => url.includes('/watch?') && url.includes('premiere-known'))).toBeTrue()
-        expect(articles.find((article) => article.a_id === 'premiere-known')?.content).toContain('Hydrated premiere-known')
+        expect(articles.find((article) => article.a_id === 'premiere-known')?.content).toContain(
+            'Hydrated premiere-known',
+        )
     } finally {
         ;(HTTPClient as any).download_webpage = originalDownload
     }
@@ -437,18 +452,24 @@ test('YouTube grabArticles rehydrates stored-pending premieres with real titles 
     const realTitleVideos = {
         header: officialChannelHeaderFixture,
         richGridRenderer: {
-            contents: [{
-                richItemRenderer: {
-                    content: {
-                        videoRenderer: {
-                            videoId: 'premiere-real-title',
-                            title: { runs: [{ text: '【MV】Real Title' }] },
-                            publishedTimeText: { simpleText: 'Upcoming' },
-                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-real-title/hqdefault.jpg', width: 480 }] },
+            contents: [
+                {
+                    richItemRenderer: {
+                        content: {
+                            videoRenderer: {
+                                videoId: 'premiere-real-title',
+                                title: { runs: [{ text: '【MV】Real Title' }] },
+                                publishedTimeText: { simpleText: 'Upcoming' },
+                                thumbnail: {
+                                    thumbnails: [
+                                        { url: 'https://i.ytimg.com/vi/premiere-real-title/hqdefault.jpg', width: 480 },
+                                    ],
+                                },
+                            },
                         },
                     },
                 },
-            }],
+            ],
         },
     }
     ;(HTTPClient as any).download_webpage = async (url: string) => {
@@ -463,12 +484,16 @@ test('YouTube grabArticles rehydrates stored-pending premieres with real titles 
     }
 
     try {
-        const articles = await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', {
-            hydrate_limit: 8,
-            hydrate_concurrency: 1,
-            isArticleKnown: () => true,
-            isStoredPremierePending: (a_id) => a_id === 'premiere-real-title',
-        })
+        const articles = await YoutubeApiJsonParser.grabArticles(
+            buildYoutubePage(),
+            'https://www.youtube.com/@227SMEJ',
+            {
+                hydrate_limit: 8,
+                hydrate_concurrency: 1,
+                isArticleKnown: () => true,
+                isStoredPremierePending: (a_id) => a_id === 'premiere-real-title',
+            },
+        )
 
         // A real-titled list item must still be re-hydrated when the stored row is pending...
         expect(requestedUrls.some((url) => url.includes('/watch?') && url.includes('premiere-real-title'))).toBeTrue()
@@ -487,18 +512,27 @@ test('YouTube grabArticles keeps stored-pending premieres pending when detail st
     const realTitleVideos = {
         header: officialChannelHeaderFixture,
         richGridRenderer: {
-            contents: [{
-                richItemRenderer: {
-                    content: {
-                        videoRenderer: {
-                            videoId: 'premiere-still-upcoming',
-                            title: { runs: [{ text: '【MV】Still Upcoming' }] },
-                            publishedTimeText: { simpleText: 'Upcoming' },
-                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-still-upcoming/hqdefault.jpg', width: 480 }] },
+            contents: [
+                {
+                    richItemRenderer: {
+                        content: {
+                            videoRenderer: {
+                                videoId: 'premiere-still-upcoming',
+                                title: { runs: [{ text: '【MV】Still Upcoming' }] },
+                                publishedTimeText: { simpleText: 'Upcoming' },
+                                thumbnail: {
+                                    thumbnails: [
+                                        {
+                                            url: 'https://i.ytimg.com/vi/premiere-still-upcoming/hqdefault.jpg',
+                                            width: 480,
+                                        },
+                                    ],
+                                },
+                            },
                         },
                     },
                 },
-            }],
+            ],
         },
     }
     const upcomingDetailHtml = `<script>var ytInitialPlayerResponse = ${JSON.stringify({
@@ -507,7 +541,9 @@ test('YouTube grabArticles keeps stored-pending premieres pending when detail st
             title: '【MV】Still Upcoming',
             isUpcoming: true,
             shortDescription: '',
-            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-still-upcoming/maxresdefault.jpg', width: 1280 }] },
+            thumbnail: {
+                thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-still-upcoming/maxresdefault.jpg', width: 1280 }],
+            },
         },
         microformat: {
             playerMicroformatRenderer: {
@@ -526,12 +562,16 @@ test('YouTube grabArticles keeps stored-pending premieres pending when detail st
     }
 
     try {
-        const articles = await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@227SMEJ', {
-            hydrate_limit: 8,
-            hydrate_concurrency: 1,
-            isArticleKnown: () => true,
-            isStoredPremierePending: () => true,
-        })
+        const articles = await YoutubeApiJsonParser.grabArticles(
+            buildYoutubePage(),
+            'https://www.youtube.com/@227SMEJ',
+            {
+                hydrate_limit: 8,
+                hydrate_concurrency: 1,
+                isArticleKnown: () => true,
+                isStoredPremierePending: () => true,
+            },
+        )
 
         const premiere = articles.find((article) => article.a_id === 'premiere-still-upcoming')
         expect((premiere?.extra as any)?.data?.premiere?.pending).toBe(true)
@@ -577,18 +617,24 @@ test('YouTube grabArticles throttles stored-pending premiere detail rechecks to 
     const realTitleVideos = {
         header: officialChannelHeaderFixture,
         richGridRenderer: {
-            contents: [{
-                richItemRenderer: {
-                    content: {
-                        videoRenderer: {
-                            videoId: 'premiere-ttl',
-                            title: { runs: [{ text: '【MV】TTL Premiere' }] },
-                            publishedTimeText: { simpleText: 'Upcoming' },
-                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/premiere-ttl/hqdefault.jpg', width: 480 }] },
+            contents: [
+                {
+                    richItemRenderer: {
+                        content: {
+                            videoRenderer: {
+                                videoId: 'premiere-ttl',
+                                title: { runs: [{ text: '【MV】TTL Premiere' }] },
+                                publishedTimeText: { simpleText: 'Upcoming' },
+                                thumbnail: {
+                                    thumbnails: [
+                                        { url: 'https://i.ytimg.com/vi/premiere-ttl/hqdefault.jpg', width: 480 },
+                                    ],
+                                },
+                            },
                         },
                     },
                 },
-            }],
+            ],
         },
     }
     ;(HTTPClient as any).download_webpage = async (url: string) => {
@@ -637,18 +683,24 @@ test('YouTube grabArticles serves known + premiere state from a single merged lo
     const realTitleVideos = {
         header: officialChannelHeaderFixture,
         richGridRenderer: {
-            contents: [{
-                richItemRenderer: {
-                    content: {
-                        videoRenderer: {
-                            videoId: 'merged-lookup',
-                            title: { runs: [{ text: '【MV】Merged' }] },
-                            publishedTimeText: { simpleText: 'Upcoming' },
-                            thumbnail: { thumbnails: [{ url: 'https://i.ytimg.com/vi/merged-lookup/hqdefault.jpg', width: 480 }] },
+            contents: [
+                {
+                    richItemRenderer: {
+                        content: {
+                            videoRenderer: {
+                                videoId: 'merged-lookup',
+                                title: { runs: [{ text: '【MV】Merged' }] },
+                                publishedTimeText: { simpleText: 'Upcoming' },
+                                thumbnail: {
+                                    thumbnails: [
+                                        { url: 'https://i.ytimg.com/vi/merged-lookup/hqdefault.jpg', width: 480 },
+                                    ],
+                                },
+                            },
                         },
                     },
                 },
-            }],
+            ],
         },
     }
     ;(HTTPClient as any).download_webpage = async (url: string) => {
@@ -701,9 +753,13 @@ test('YouTube grabArticles retries a transient list fetch once before failing', 
     }
 
     try {
-        const articles = await YoutubeApiJsonParser.grabArticles(buildYoutubePage(), 'https://www.youtube.com/@anime-english-club', {
-            hydrate_limit: 8,
-        })
+        const articles = await YoutubeApiJsonParser.grabArticles(
+            buildYoutubePage(),
+            'https://www.youtube.com/@anime-english-club',
+            {
+                hydrate_limit: 8,
+            },
+        )
         expect(articles.length).toBeGreaterThan(0)
         expect(calls.filter((entry) => entry.includes('/videos?')).length).toBe(2)
     } finally {

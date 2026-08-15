@@ -124,12 +124,14 @@ Tail live logs:
 ssh 3020e 'docker logs --tail 200 -f forwarder-new'
 ```
 
-Redeploy backend:
+Redeploy backend (stopped deploy from clean git archive; do not build from the remote worktree):
 
 ```bash
-cd /Users/zou/ytdlp/subPrep/livestr/idol-bbq-utils
+cd <local-idol-bbq-utils-repo>
 git push origin main
-ssh 3020e 'cd ~/idol-bbq-utils && git pull --ff-only && docker compose up -d --build spider'
+bash tools/deploy-forwarder-stopped.sh
+# deliberate production start afterwards:
+# IDOL_BBQ_RUNTIME_MODE=online IDOL_BBQ_RESTART_POLICY=always docker compose up -d spider
 ```
 
 Check container state after deploy:

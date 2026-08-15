@@ -52,7 +52,7 @@ test('outbound message API redaction summarizes provider state without identifie
             previous_segment_results: [{ message_id: 'remote-private-message-id' }],
         },
         last_error: 'remote-private-send-error',
-    })
+    }) as any
     const serialized = JSON.stringify(redacted)
 
     expect(redacted.idempotency_key).toBe('[redacted]')
@@ -133,7 +133,7 @@ test('target health API redaction summarizes details without target ids or disab
                 message: 'remote-private-provider-message',
             },
         },
-    })
+    }) as any
     const serialized = JSON.stringify(redacted)
 
     expect(redacted.target_id).toBe('[redacted]')

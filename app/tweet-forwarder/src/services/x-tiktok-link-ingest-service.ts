@@ -6,6 +6,7 @@ import type { CrawlerConfig } from '@/types'
 type MinimalLog = {
     info?: (...args: any[]) => void
     warn?: (...args: any[]) => void
+    debug?: (...args: any[]) => void
 }
 
 type TikTokLinkInfo = {
@@ -225,7 +226,10 @@ function parseYouTubeUrl(rawUrl: string): YouTubeLinkInfo | null {
 const TIKTOK_LINK_RESOLVE_CACHE_TTL_MS = 10 * 60 * 1000
 const TIKTOK_LINK_RESOLVE_CACHE = new Map<string, Promise<TikTokLinkInfo | null>>()
 
-async function resolveTikTokLinkCached(rawUrl: string, fetchImpl: typeof fetch = fetch): Promise<TikTokLinkInfo | null> {
+async function resolveTikTokLinkCached(
+    rawUrl: string,
+    fetchImpl: typeof fetch = fetch,
+): Promise<TikTokLinkInfo | null> {
     const existing = TIKTOK_LINK_RESOLVE_CACHE.get(rawUrl)
     if (existing) {
         return existing
@@ -292,7 +296,7 @@ function resolveInstagramCrawlerName(crawlerConfig?: CrawlerConfig) {
 }
 
 async function enqueueMissingTikTokLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
-    if (article.platform !== Platform.X && article.platform !== Platform.Twitter) {
+    if (article.platform !== Platform.X) {
         return []
     }
 
@@ -353,17 +357,17 @@ async function enqueueMissingTikTokLinksFromXArticle(article: Article, options: 
         const payload = {
             crawler: crawlerName,
             websites: [resolved.videoId ? resolved.resolvedUrl : resolved.profileUrl],
-            reason: `x tiktok link ${article.a_id || article.id || ''}`.trim().slice(0, 200),
+            reason: `x tiktok link ${article.a_id || ''}`.trim().slice(0, 200),
         }
         const task = await DB.TaskQueue.add(taskType, payload, now, {
-            source_ref: `x-tiktok-link:${article.a_id || article.id || resolved.profileUrl}`,
+            source_ref: `x-tiktok-link:${article.a_id || resolved.profileUrl}`,
             action_type: 'x_tiktok_link_ingest',
             idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, {
                 crawler: crawlerName,
                 profileUrl: resolved.profileUrl,
                 videoId: resolved.videoId || null,
                 sourcePlatform: 'x',
-                sourceArticleId: article.a_id || article.id || null,
+                sourceArticleId: article.a_id || null,
             }),
         })
         queued.push({
@@ -376,14 +380,14 @@ async function enqueueMissingTikTokLinksFromXArticle(article: Article, options: 
 
     if (queued.length > 0) {
         options.log?.info?.(
-            `Queued ${queued.length} TikTok ingest task(s) from X article ${article.a_id || article.id || '(unknown)'}`,
+            `Queued ${queued.length} TikTok ingest task(s) from X article ${article.a_id || '(unknown)'}`,
         )
     }
     return queued
 }
 
 async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
-    if (article.platform !== Platform.X && article.platform !== Platform.Twitter) {
+    if (article.platform !== Platform.X) {
         return []
     }
 
@@ -415,12 +419,7 @@ async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options:
 
         // Channel URLs never appear here (only watch URLs), and the schedule
         // crawls channels, so this is normally a no-op guard for completeness.
-        if (
-            isCoveredByScheduledWebsites(
-                resolved.watchUrl,
-                options.getScheduledWebsitesForCrawler?.(crawlerName),
-            )
-        ) {
+        if (isCoveredByScheduledWebsites(resolved.watchUrl, options.getScheduledWebsitesForCrawler?.(crawlerName))) {
             options.log?.debug?.(
                 `X YouTube link ingest skipped ${resolved.watchUrl}: already covered by the crawler schedule`,
             )
@@ -433,17 +432,17 @@ async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options:
             // Without `websites` the dispatched task crawls the crawler's default
             // channel list and never touches the linked video.
             websites: [resolved.watchUrl],
-            reason: `x youtube link ${article.a_id || article.id || ''}`.trim().slice(0, 200),
+            reason: `x youtube link ${article.a_id || ''}`.trim().slice(0, 200),
         }
         const task = await DB.TaskQueue.add(taskType, payload, now, {
-            source_ref: `x-youtube-link:${article.a_id || article.id || resolved.watchUrl}`,
+            source_ref: `x-youtube-link:${article.a_id || resolved.watchUrl}`,
             action_type: 'x_youtube_link_ingest',
             idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, {
                 crawler: crawlerName,
                 videoId: resolved.videoId || null,
                 watchUrl: resolved.watchUrl,
                 sourcePlatform: 'x',
-                sourceArticleId: article.a_id || article.id || null,
+                sourceArticleId: article.a_id || null,
             }),
         })
         queued.push({
@@ -456,14 +455,14 @@ async function enqueueMissingYouTubeLinksFromXArticle(article: Article, options:
 
     if (queued.length > 0) {
         options.log?.info?.(
-            `Queued ${queued.length} YouTube ingest task(s) from X article ${article.a_id || article.id || '(unknown)'}`,
+            `Queued ${queued.length} YouTube ingest task(s) from X article ${article.a_id || '(unknown)'}`,
         )
     }
     return queued
 }
 
 async function enqueueMissingInstagramLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
-    if (article.platform !== Platform.X && article.platform !== Platform.Twitter) {
+    if (article.platform !== Platform.X) {
         return []
     }
 
@@ -513,19 +512,19 @@ async function enqueueMissingInstagramLinksFromXArticle(article: Article, option
         const taskType = DB.TaskQueue.TYPE.ScheduledCrawlerRun
         const payload: { crawler: string; websites?: Array<string>; reason: string } = {
             crawler: crawlerName,
-            reason: `x instagram link ${article.a_id || article.id || ''}`.trim().slice(0, 200),
+            reason: `x instagram link ${article.a_id || ''}`.trim().slice(0, 200),
         }
         if (profileUrl) {
             payload.websites = [profileUrl]
         }
         const task = await DB.TaskQueue.add(taskType, payload, now, {
-            source_ref: `x-instagram-link:${article.a_id || article.id || idempotencyProfile}`,
+            source_ref: `x-instagram-link:${article.a_id || idempotencyProfile}`,
             action_type: 'x_instagram_link_ingest',
             idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, {
                 crawler: crawlerName,
                 profileUrl: profileUrl || null,
                 sourcePlatform: 'x',
-                sourceArticleId: article.a_id || article.id || null,
+                sourceArticleId: article.a_id || null,
             }),
         })
         queued.push({ profileUrl, taskQueueId: task.id, status: task.status })
@@ -533,7 +532,7 @@ async function enqueueMissingInstagramLinksFromXArticle(article: Article, option
 
     if (queued.length > 0) {
         options.log?.info?.(
-            `Queued ${queued.length} Instagram ingest task(s) from X article ${article.a_id || article.id || '(unknown)'}`,
+            `Queued ${queued.length} Instagram ingest task(s) from X article ${article.a_id || '(unknown)'}`,
         )
     }
     return queued
@@ -605,7 +604,7 @@ function resolveWebsiteIngestConfig(crawlerConfig?: CrawlerConfig): { crawler: s
 }
 
 async function enqueueMissingWebsiteLinksFromXArticle(article: Article, options: EnqueueOptions = {}) {
-    if (article.platform !== Platform.X && article.platform !== Platform.Twitter) {
+    if (article.platform !== Platform.X) {
         return []
     }
 
@@ -634,16 +633,16 @@ async function enqueueMissingWebsiteLinksFromXArticle(article: Article, options:
         const payload = {
             crawler: ingestConfig.crawler,
             websites: [link],
-            reason: `x website link ${article.a_id || article.id || ''}`.trim().slice(0, 200),
+            reason: `x website link ${article.a_id || ''}`.trim().slice(0, 200),
         }
         const task = await DB.TaskQueue.add(taskType, payload, now, {
-            source_ref: `x-website-link:${article.a_id || article.id || link}`,
+            source_ref: `x-website-link:${article.a_id || link}`,
             action_type: 'x_website_link_ingest',
             idempotency_key: DB.TaskQueue.buildIdempotencyKey(taskType, {
                 crawler: ingestConfig.crawler,
                 url: link,
                 sourcePlatform: 'x',
-                sourceArticleId: article.a_id || article.id || null,
+                sourceArticleId: article.a_id || null,
             }),
         })
         queued.push({ url: link, taskQueueId: task.id, status: task.status })
@@ -651,7 +650,7 @@ async function enqueueMissingWebsiteLinksFromXArticle(article: Article, options:
 
     if (queued.length > 0) {
         options.log?.info?.(
-            `Queued ${queued.length} website ingest task(s) from X article ${article.a_id || article.id || '(unknown)'}`,
+            `Queued ${queued.length} website ingest task(s) from X article ${article.a_id || '(unknown)'}`,
         )
     }
     return queued

@@ -6,7 +6,7 @@ import {
     UserAgent,
     type NetscapeCookieFileAudit,
 } from '@idol-bbq-utils/spider'
-import type { CookieData } from 'puppeteer-core'
+import type { CookieData, Page } from 'puppeteer-core'
 import type { AppConfig } from '@/types'
 import {
     inferCookieHealthPlatform,

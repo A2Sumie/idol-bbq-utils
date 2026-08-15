@@ -29,6 +29,7 @@ if [ -z "$WAF_HEADER" ]; then
   echo "LIVE_PLAYER_SCHEDULE_WAF_BYPASS_HEADER (or WAF_HEADER) is required" >&2
   exit 1
 fi
+export AUTH_PASSWORD WAF_HEADER
 ARCHIVE="${ARCHIVE:-0}"
 
 usage() {
@@ -68,9 +69,6 @@ deadline() {
 
 DEADLINE="$(deadline)"
 
-ARCHIVE_ARGS=()
-if [ "$ARCHIVE" = "1" ]; then ARCHIVE_ARGS=(--archive); fi
-
 ensure_container() {
   if ! docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
     echo "[monitor $(date '+%F %T %Z')] container $CONTAINER_NAME missing; starting"
@@ -92,24 +90,28 @@ relaunch() {
   # Do not remove the lock here: the watcher's acquireLock already reclaims stale
   # locks via PID liveness, and an unconditional rm can race a healthy watcher
   # into running two instances for the same handle.
-  docker exec -e AUTH_PASSWORD="$AUTH_PASSWORD" "$CONTAINER_NAME" sh -lc \
-    "mkdir -p /app/archive/instagram-live; \
-     nohup bun /app/instagram-live-watch.ts $HANDLE --until $UNTIL --poll $POLL \
-       --player-id \"$PLAYER_ID\" --player-name \"$PLAYER_NAME\" --live-player-url $LIVE_PLAYER_URL \
-       --auth-username $AUTH_USERNAME --auth-password \"\$AUTH_PASSWORD\" --waf-header \"$WAF_HEADER\" \
-       --cookie /app/assets/cookies/inscks0318.txt ${ARCHIVE_ARGS[*]:-} \
-       >> /app/archive/instagram-live/watch-$HANDLE.log 2>&1 & echo started=\$!"
+  docker exec -e AUTH_PASSWORD -e WAF_HEADER -e ARCHIVE="$ARCHIVE" "$CONTAINER_NAME" sh -c '
+    mkdir -p /app/archive/instagram-live
+    archive_args=""
+    if [ "$ARCHIVE" = "1" ]; then archive_args="--archive"; fi
+    nohup bun /app/instagram-live-watch.ts "$1" --until "$2" --poll "$3" \
+      --player-id "$4" --player-name "$5" --live-player-url "$6" \
+      --auth-username "$7" --auth-password "$AUTH_PASSWORD" --waf-header "$WAF_HEADER" \
+      --cookie /app/assets/cookies/inscks0318.txt $archive_args \
+      >> "/app/archive/instagram-live/watch-$1.log" 2>&1 & echo "started=$!"
+  ' _ "$HANDLE" "$UNTIL" "$POLL" "$PLAYER_ID" "$PLAYER_NAME" "$LIVE_PLAYER_URL" "$AUTH_USERNAME"
 }
 
 watcher_alive() {
-  docker exec "$CONTAINER_NAME" sh -lc '
+  docker exec "$CONTAINER_NAME" sh -c '
+    needle="$1"
     for d in /proc/[0-9]*; do
-      if tr "\0" " " < "$d/cmdline" 2>/dev/null | grep -q "instagram-live-watch.ts '"$HANDLE"'"; then
+      if tr "\0" " " < "$d/cmdline" 2>/dev/null | grep -qF "$needle"; then
         exit 0
       fi
     done
     exit 1
-  ' 2>/dev/null
+  ' _ "instagram-live-watch.ts $HANDLE" 2>/dev/null
 }
 
 echo "[monitor] start handle=$HANDLE until=$UNTIL deadline=$(date -d @"$DEADLINE" '+%F %T %Z') check_every=${CHECK_EVERY}s"

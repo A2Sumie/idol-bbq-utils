@@ -88,12 +88,10 @@ function filterBilibiliCookies(
     }>,
 ) {
     return cookies.filter((cookie) => {
-        const domain = String(cookie.domain || '').replace(/^\./, '').toLowerCase()
-        return (
-            domain.endsWith('bilibili.com')
-            || domain.endsWith('hdslb.com')
-            || domain.endsWith('bilivideo.com')
-        )
+        const domain = String(cookie.domain || '')
+            .replace(/^\./, '')
+            .toLowerCase()
+        return domain.endsWith('bilibili.com') || domain.endsWith('hdslb.com') || domain.endsWith('bilivideo.com')
     })
 }
 
@@ -186,9 +184,11 @@ async function main() {
             waitUntil: 'domcontentloaded',
             timeout: 20000,
         })
-        await page.waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', {
-            timeout: 5000,
-        }).catch(() => null)
+        await page
+            .waitForFunction(() => document.readyState === 'interactive' || document.readyState === 'complete', {
+                timeout: 5000,
+            })
+            .catch(() => null)
 
         const cookies = filterBilibiliCookies(
             (await page.browserContext().cookies()).map((cookie) => ({
@@ -205,7 +205,7 @@ async function main() {
         assertUsableLogin(cookies)
 
         const document = buildCookieDocument(cookies)
-        fs.writeFileSync(args.output, JSON.stringify(document, null, 2), 'utf8')
+        fs.writeFileSync(args.output, JSON.stringify(document, null, 2), { encoding: 'utf8', mode: 0o600 })
 
         process.stdout.write(
             `${JSON.stringify(

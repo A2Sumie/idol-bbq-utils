@@ -23,7 +23,9 @@ function asString(value: unknown): string | null {
     return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-function getWebsitePhotoData(article: Pick<ArticleWithIdLike, 'platform' | 'u_id' | 'extra'>): WebsitePhotoExtraData | null {
+function getWebsitePhotoData(
+    article: Pick<ArticleWithIdLike, 'platform' | 'u_id' | 'extra'>,
+): WebsitePhotoExtraData | null {
     if (article.platform !== Platform.Website || article.u_id !== '22/7:photo') {
         return null
     }
@@ -94,15 +96,15 @@ function isMixedDateLegacyAlbum(article: Pick<ArticleWithIdLike, 'platform' | 'u
 
     const entries = (getWebsitePhotoData(article)?.entries as Array<Record<string, unknown>> | undefined) || []
     const uniqueDates = new Set(
-        entries
-            .map((entry) => asString(entry?.dateText))
-            .filter((value): value is string => Boolean(value)),
+        entries.map((entry) => asString(entry?.dateText)).filter((value): value is string => Boolean(value)),
     )
 
     return uniqueDates.size > 1
 }
 
-export function getWebsitePhotoBatchKey(article: Pick<ArticleWithIdLike, 'platform' | 'u_id' | 'extra' | 'created_at'>) {
+export function getWebsitePhotoBatchKey(
+    article: Pick<ArticleWithIdLike, 'platform' | 'u_id' | 'extra' | 'created_at'>,
+) {
     const data = getWebsitePhotoData(article)
     const albumId = asString(data?.album_id)
     if (!albumId) {
@@ -118,6 +120,9 @@ export function buildWebsitePhotoAlbumArticle(articles: Array<ArticleWithIdLike>
 
     const ordered = [...articles].sort((a, b) => a.id - b.id)
     const first = ordered[0]
+    if (!first) {
+        return null
+    }
     const firstData = getWebsitePhotoData(first)
     const albumId = asString(firstData?.album_id)
     if (!albumId) {
@@ -125,11 +130,11 @@ export function buildWebsitePhotoAlbumArticle(articles: Array<ArticleWithIdLike>
     }
 
     const theme =
-        asString(firstData?.theme)
-        || asString(firstData?.summary)
-        || asString(firstData?.title)?.split(' - ')[0]
-        || asString(first.content)?.match(/^【(.+?)】/)?.[1]
-        || '22/7 Photo'
+        asString(firstData?.theme) ||
+        asString(firstData?.summary) ||
+        asString(firstData?.title)?.split(' - ')[0] ||
+        asString(first.content)?.match(/^【(.+?)】/)?.[1] ||
+        '22/7 Photo'
 
     const entries = ordered.map((article) => {
         const data = getWebsitePhotoData(article)
@@ -163,10 +168,10 @@ export function buildWebsitePhotoAlbumArticle(articles: Array<ArticleWithIdLike>
     const mergedMedia = dedupeMedia(entries.flatMap((entry) => entry.media || []))
     const members = Array.from(new Set(entries.map((entry) => entry.member).filter(Boolean))) as string[]
     const albumAnchor =
-        asString(entries[0]?.extraData?.photo_code)
-        || asString(firstData?.photo_code)
-        || first.a_id.split(':').pop()
-        || String(first.id)
+        asString(entries[0]?.extraData?.photo_code) ||
+        asString(firstData?.photo_code) ||
+        first.a_id.split(':').pop() ||
+        String(first.id)
     const baseUrl = stripHash(first.url) || first.url
 
     return {
@@ -186,7 +191,10 @@ export function buildWebsitePhotoAlbumArticle(articles: Array<ArticleWithIdLike>
                 title: theme,
                 member: null,
                 summary: theme,
-                raw_html: entries.map((entry) => entry.bodyHtml).filter(Boolean).join('\n<hr />\n'),
+                raw_html: entries
+                    .map((entry) => entry.bodyHtml)
+                    .filter(Boolean)
+                    .join('\n<hr />\n'),
                 album_id: albumId,
                 album_anchor: albumAnchor,
                 entry_count: entries.length,

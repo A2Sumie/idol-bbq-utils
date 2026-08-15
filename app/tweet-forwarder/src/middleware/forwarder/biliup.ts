@@ -617,7 +617,10 @@ function resolveDetectedBiliupMemberFacts(
     article: Pick<Article, 'content' | 'username' | 'u_id'> & { translation?: string | null },
     texts: string[] = [],
 ) {
-    return uniqueBiliupMemberFacts([resolveBiliupMemberFact(article), ...resolveMentionedBiliupMemberFacts(article, texts)])
+    return uniqueBiliupMemberFacts([
+        resolveBiliupMemberFact(article),
+        ...resolveMentionedBiliupMemberFacts(article, texts),
+    ])
 }
 
 function cleanupBiliupDisplayName(value: string | null | undefined) {
@@ -906,8 +909,7 @@ function isYoutubeTitleAnnouncementLine(line: string, originalTitle: string, sum
     }
 
     const lowerText = text.toLocaleLowerCase()
-    const hasAnnouncement =
-        /公開|已公开|已發布|已发布|发布|發布|公開しました|released|is out|now available/i.test(text)
+    const hasAnnouncement = /公開|已公开|已發布|已发布|发布|發布|公開しました|released|is out|now available/i.test(text)
     if (!hasAnnouncement) {
         return false
     }
@@ -939,15 +941,18 @@ function stripLeadingYoutubeTitleAnnouncements(body: string, originalTitle: stri
     return changed ? lines.join('\n').trim() : body
 }
 
-function resolveDescriptionBody(
-    article: Pick<Article, 'content' | 'platform' | 'type'>,
-    context: TemplateContext,
-) {
-    const body = context.body_or_summary
+function resolveDescriptionBody(article: Pick<Article, 'content' | 'platform' | 'type'>, context: TemplateContext) {
+    const body = context.body_or_summary || ''
     if (!hasOriginalVideoTitle(article)) {
         return body
     }
-    return stripLeadingYoutubeTitleAnnouncements(body, extractOriginalBiliupTitleLine(article), context.summary) || body
+    return (
+        stripLeadingYoutubeTitleAnnouncements(
+            body,
+            extractOriginalBiliupTitleLine(article),
+            String(context.summary || ''),
+        ) || body
+    )
 }
 
 function prependOriginalBiliupTitle(description: string, originalTitle: string) {
@@ -971,7 +976,9 @@ function prependOriginalBiliupTitle(description: string, originalTitle: string) 
     }
 
     const body = cleanupTemplateOutput(lines.join('\n'))
-    return cleanupTemplateOutput([`${BILIUP_ORIGINAL_TITLE_LABEL} ${originalNormalized}`, body].filter(Boolean).join('\n\n'))
+    return cleanupTemplateOutput(
+        [`${BILIUP_ORIGINAL_TITLE_LABEL} ${originalNormalized}`, body].filter(Boolean).join('\n\n'),
+    )
 }
 
 function deriveDescription(
@@ -1097,7 +1104,10 @@ function deriveMemberTags(
 ) {
     const facts = resolveDetectedBiliupMemberFacts(article, texts)
     const displayName = normalizeBiliupUploadTag(resolveDisplayName(article, texts))
-    const tags = facts.length > 0 || isBiliupCollectionDisplayName(displayName) ? facts.map((fact) => fact.names?.ja || '') : [displayName]
+    const tags =
+        facts.length > 0 || isBiliupCollectionDisplayName(displayName)
+            ? facts.map((fact) => fact.names?.ja || '')
+            : [displayName]
     if (facts.some((fact) => fact.official_section === '22/7_the_3rd')) {
         tags.push('22/7三期生')
     }
@@ -1271,7 +1281,9 @@ function escapeRegExpLiteral(value: string) {
 }
 
 function looseLiteralPattern(value: string) {
-    return Array.from(value).map((char) => escapeRegExpLiteral(char)).join('\\s*')
+    return Array.from(value)
+        .map((char) => escapeRegExpLiteral(char))
+        .join('\\s*')
 }
 
 function collectGeneratedTitleContextTerms(currentTitle: string) {
@@ -1292,8 +1304,9 @@ function collectGeneratedTitleContextTerms(currentTitle: string) {
         terms.push(...forcedNameMatch[1].split(/\s+/))
     }
 
-    return Array.from(new Set(terms.map((term) => normalizeTextBlock(term)).filter((term) => Array.from(term).length >= 2)))
-        .sort((a, b) => Array.from(b).length - Array.from(a).length)
+    return Array.from(
+        new Set(terms.map((term) => normalizeTextBlock(term)).filter((term) => Array.from(term).length >= 2)),
+    ).sort((a, b) => Array.from(b).length - Array.from(a).length)
 }
 
 function stripLeadingGeneratedTitleContext(value: string, currentTitle: string) {
@@ -1303,7 +1316,10 @@ function stripLeadingGeneratedTitleContext(value: string, currentTitle: string) 
     for (let index = 0; index < 8; index += 1) {
         const before = title
         title = title
-            .replace(/^\s*(?:\d{2}[./-]\d{2}[./-]\d{2}|20\d{2}[./-]\d{1,2}[./-]\d{1,2})\s*(?:[:：,，、\-ー－—–|｜/／・])?\s*/u, '')
+            .replace(
+                /^\s*(?:\d{2}[./-]\d{2}[./-]\d{2}|20\d{2}[./-]\d{1,2}[./-]\d{1,2})\s*(?:[:：,，、\-ー－—–|｜/／・])?\s*/u,
+                '',
+            )
             .trim()
 
         for (const term of terms) {
@@ -1411,16 +1427,14 @@ function stableProcessorConfigFingerprint(config?: ProcessorConfig) {
     return config ? stableJsonStringify(config) : ''
 }
 
-function isSameBiliupMetadataProcessor(
-    left?: BiliupMetadataProcessorConfig,
-    right?: BiliupMetadataProcessorConfig,
-) {
+function isSameBiliupMetadataProcessor(left?: BiliupMetadataProcessorConfig, right?: BiliupMetadataProcessorConfig) {
     return Boolean(
         left &&
             right &&
             String(left.provider) === String(right.provider) &&
             String(left.api_key) === String(right.api_key) &&
-            stableProcessorConfigFingerprint(left.cfg_processor) === stableProcessorConfigFingerprint(right.cfg_processor),
+            stableProcessorConfigFingerprint(left.cfg_processor) ===
+                stableProcessorConfigFingerprint(right.cfg_processor),
     )
 }
 
@@ -1661,8 +1675,8 @@ function resolveConfiguredPath(candidate?: string) {
     return path.isAbsolute(candidate) ? candidate : path.resolve(process.cwd(), candidate)
 }
 
-function normalizeBrowserMode(value?: BrowserMode) {
-    return value === 'headed' || value === 'headed-xvfb' || value === 'headless' ? value : 'headless'
+function normalizeBrowserMode(value?: BrowserMode): BrowserMode {
+    return value === 'headed-xvfb' || value === 'headless' ? value : 'headless'
 }
 
 function resolveBrowserCookieSyncConfig(
@@ -1985,6 +1999,7 @@ async function runBiliupUpload(
     }).finally(() => {
         try {
             fs.rmSync(cookieFile, { force: true })
+            fs.rmSync(uploadDir, { recursive: true, force: true })
         } catch {}
     })
 

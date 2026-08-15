@@ -23,7 +23,7 @@ test('archive list redaction removes host paths from summaries and defaults', ()
             pythonPath: '/usr/bin/python3',
             tid: 17,
         },
-    })
+    }) as any
     const serialized = JSON.stringify(payload)
 
     expect(payload.redacted).toBe(true)
@@ -60,7 +60,7 @@ test('archive detail redaction removes related file paths and suggested upload p
             description: '本地文件: /home/sumie/private/archive-a.mp4',
             cookieSourcePath: '/home/sumie/private/cookies.txt',
         },
-    })
+    }) as any
     const serialized = JSON.stringify(payload)
 
     expect(payload.localPath).toBe('[redacted]')
@@ -91,7 +91,7 @@ test('archive upload result redaction summarizes paths stdout and accepts redact
     })
     expect(normalizeRedactedArchiveUploadRequest({ cookieSourcePath: '[redacted]', title: 'Archive A' })).toEqual({
         title: 'Archive A',
-    })
+    } as any)
     expect(serialized).not.toContain('/tmp/private')
     expect(serialized).not.toContain('D:\\private')
     expect(serialized).not.toContain('private upload stdout')

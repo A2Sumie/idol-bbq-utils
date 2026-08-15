@@ -541,7 +541,7 @@ function buildShortVideoDedupCandidate(
     return {
         storagePlatform: `cross-short-video:${group}`,
         articleMarker,
-        signature: signaturesToStore[0] || coarseFallbackSignaturesToStore[0],
+        signature: signaturesToStore[0] || coarseFallbackSignaturesToStore[0] || articleMarker,
         signaturesToStore: Array.from(new Set([...signaturesToStore, ...coarseFallbackSignaturesToStore])).sort(),
         signaturesToCheck: Array.from(new Set([...textSignaturesToCheck, ...coarseFallbackSignaturesToCheck])).sort(),
         coarseFallbackSignaturesToCheck: Array.from(new Set(coarseFallbackSignaturesToCheck)).sort(),
@@ -551,12 +551,8 @@ function buildShortVideoDedupCandidate(
         ...(isIgTtPair && coarseFallbackKeys.length > 0
             ? {
                   crossPlatformStoragePlatform: CROSS_PLATFORM_SHORT_VIDEO_STORAGE,
-                  crossPlatformFallbackSignaturesToStore: Array.from(
-                      new Set(coarseFallbackSignaturesToStore),
-                  ).sort(),
-                  crossPlatformFallbackSignaturesToCheck: Array.from(
-                      new Set(coarseFallbackSignaturesToCheck),
-                  ).sort(),
+                  crossPlatformFallbackSignaturesToStore: Array.from(new Set(coarseFallbackSignaturesToStore)).sort(),
+                  crossPlatformFallbackSignaturesToCheck: Array.from(new Set(coarseFallbackSignaturesToCheck)).sort(),
               }
             : {}),
     }
@@ -635,11 +631,7 @@ async function markShortVideoCrossPlatformSeen(candidate: ShortVideoDedupCandida
     if (candidate.crossPlatformStoragePlatform && candidate.crossPlatformFallbackSignaturesToStore) {
         await Promise.all(
             Array.from(new Set(candidate.crossPlatformFallbackSignaturesToStore)).map((signature) =>
-                DB.MediaHash.save(
-                    candidate.crossPlatformStoragePlatform as string,
-                    signature,
-                    candidate.articleMarker,
-                ),
+                DB.MediaHash.save(candidate.crossPlatformStoragePlatform as string, signature, candidate.articleMarker),
             ),
         )
     }
@@ -765,11 +757,7 @@ async function checkVideoFingerprintDuplicate(candidate: VideoFingerprintCandida
             : []),
     ]
     for (const { storagePlatform, bandKeys } of namespaces) {
-        const existing = await checkVideoFingerprintDuplicateInNamespace(
-            candidate,
-            storagePlatform,
-            bandKeys,
-        )
+        const existing = await checkVideoFingerprintDuplicateInNamespace(candidate, storagePlatform, bandKeys)
         if (existing) {
             return existing
         }

@@ -140,7 +140,7 @@ class MechanicalProcessor extends BaseProcessor {
                 current = [article]
                 continue
             }
-            if (this.shouldMerge(current[current.length - 1], article, mergeWindowSeconds, options)) {
+            if (this.shouldMerge(current[current.length - 1]!, article, mergeWindowSeconds, options)) {
                 current.push(article)
                 continue
             }
@@ -191,7 +191,12 @@ class MechanicalProcessor extends BaseProcessor {
         if (options.group_by_user !== false && previous.user_id && next.user_id && previous.user_id !== next.user_id) {
             return false
         }
-        if (options.group_by_platform !== false && previous.platform && next.platform && previous.platform !== next.platform) {
+        if (
+            options.group_by_platform !== false &&
+            previous.platform &&
+            next.platform &&
+            previous.platform !== next.platform
+        ) {
             return false
         }
         if (previous.created_at !== null && next.created_at !== null) {
@@ -210,8 +215,8 @@ class MechanicalProcessor extends BaseProcessor {
             }
             return a.index - b.index
         })
-        const start = sorted[0]
-        const end = sorted[sorted.length - 1]
+        const start = sorted[0]!
+        const end = sorted[sorted.length - 1]!
         const webpages = this.collectWebpageCandidates(sorted)
         const combinedText = sorted
             .map((item) => {
@@ -255,8 +260,8 @@ class MechanicalProcessor extends BaseProcessor {
     }
 
     private buildGroupKey(items: DigestArticle[]) {
-        const first = items[0]
-        const last = items[items.length - 1]
+        const first = items[0]!
+        const last = items[items.length - 1]!
         return [
             first.platform || 'unknown',
             first.user_id || 'unknown',
@@ -316,8 +321,8 @@ class MechanicalProcessor extends BaseProcessor {
             if (lineIndex === 0) {
                 const timestampMatch = line.match(/^\[(.+)\]$/)
                 if (timestampMatch) {
-                    article.timestamp = timestampMatch[1]
-                    const parsed = dayjs(timestampMatch[1])
+                    article.timestamp = timestampMatch[1]!
+                    const parsed = dayjs(timestampMatch[1]!)
                     article.created_at = parsed.isValid() ? parsed.unix() : null
                     continue
                 }
@@ -338,37 +343,37 @@ class MechanicalProcessor extends BaseProcessor {
 
             const dbIdMatch = line.match(/^Article DB ID:\s*(\d+)$/)
             if (dbIdMatch) {
-                article.db_id = Number(dbIdMatch[1])
+                article.db_id = Number(dbIdMatch[1]!)
                 section = null
                 continue
             }
             const articleIdMatch = line.match(/^Article ID:\s*(.+)$/)
             if (articleIdMatch) {
-                article.article_id = articleIdMatch[1].trim()
+                article.article_id = articleIdMatch[1]!.trim()
                 section = null
                 continue
             }
             const platformMatch = line.match(/^Platform:\s*(.+)$/)
             if (platformMatch) {
-                article.platform = platformMatch[1].trim()
+                article.platform = platformMatch[1]!.trim()
                 section = null
                 continue
             }
             const userIdMatch = line.match(/^User ID:\s*(.+)$/)
             if (userIdMatch) {
-                article.user_id = userIdMatch[1].trim()
+                article.user_id = userIdMatch[1]!.trim()
                 section = null
                 continue
             }
             const usernameMatch = line.match(/^Username:\s*(.+)$/)
             if (usernameMatch) {
-                article.username = usernameMatch[1].trim()
+                article.username = usernameMatch[1]!.trim()
                 section = null
                 continue
             }
             const urlMatch = line.match(/^URL:\s*(.+)$/)
             if (urlMatch) {
-                article.url = urlMatch[1].trim()
+                article.url = urlMatch[1]!.trim()
                 section = null
                 continue
             }
@@ -376,8 +381,8 @@ class MechanicalProcessor extends BaseProcessor {
             if (!section && !article.username && !article.user_id) {
                 const legacyAuthor = line.match(/^(.+?)\s+\(([^()]+)\)$/)
                 if (legacyAuthor) {
-                    article.username = legacyAuthor[1].trim()
-                    article.user_id = legacyAuthor[2].trim()
+                    article.username = legacyAuthor[1]!.trim()
+                    article.user_id = legacyAuthor[2]!.trim()
                     continue
                 }
             }
@@ -442,8 +447,12 @@ class MechanicalProcessor extends BaseProcessor {
                     continue
                 }
                 current.occurrences += candidate.occurrences
-                current.matched_from = this.unique([...current.matched_from, ...candidate.matched_from]) as Array<'content' | 'extra_content' | 'article_url'>
-                current.source_kinds = this.unique([...current.source_kinds, ...candidate.source_kinds]) as Array<'linked' | 'source'>
+                current.matched_from = this.unique([...current.matched_from, ...candidate.matched_from]) as Array<
+                    'content' | 'extra_content' | 'article_url'
+                >
+                current.source_kinds = this.unique([...current.source_kinds, ...candidate.source_kinds]) as Array<
+                    'linked' | 'source'
+                >
                 current.article_ids = this.unique([...current.article_ids, ...candidate.article_ids])
                 current.db_ids = this.uniqueNumbers([...current.db_ids, ...candidate.db_ids])
                 current.platforms = this.unique([...current.platforms, ...candidate.platforms])
@@ -513,7 +522,9 @@ class MechanicalProcessor extends BaseProcessor {
                 return
             }
             current.occurrences += 1
-            current.matched_from = this.unique([...current.matched_from, matchedFrom]) as Array<'content' | 'extra_content' | 'article_url'>
+            current.matched_from = this.unique([...current.matched_from, matchedFrom]) as Array<
+                'content' | 'extra_content' | 'article_url'
+            >
             current.source_kinds = this.unique([...current.source_kinds, sourceKind]) as Array<'linked' | 'source'>
             current.article_ids = this.unique(
                 article.article_id ? [...current.article_ids, article.article_id] : current.article_ids,
@@ -524,9 +535,7 @@ class MechanicalProcessor extends BaseProcessor {
             current.platforms = this.unique(
                 article.platform ? [...current.platforms, article.platform] : current.platforms,
             )
-            current.user_ids = this.unique(
-                article.user_id ? [...current.user_ids, article.user_id] : current.user_ids,
-            )
+            current.user_ids = this.unique(article.user_id ? [...current.user_ids, article.user_id] : current.user_ids)
             current.usernames = this.unique(
                 article.username ? [...current.usernames, article.username] : current.usernames,
             )
@@ -549,9 +558,7 @@ class MechanicalProcessor extends BaseProcessor {
 
     private extractUrls(text: string) {
         const matches = text.match(/https?:\/\/[^\s<>"']+/g) || []
-        return matches
-            .map((item) => item.replace(/[)\],.;!?]+$/g, ''))
-            .filter(Boolean)
+        return matches.map((item) => item.replace(/[)\],.;!?]+$/g, '')).filter(Boolean)
     }
 
     private normalizeUrl(rawUrl: string) {

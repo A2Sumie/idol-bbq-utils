@@ -43,6 +43,7 @@ class DeepSeekLLMTranslator extends BaseDeepSeek {
                 headers: {
                     Authorization: `Bearer ${this.api_key}`,
                 },
+                timeout: this.config?.request_timeout_ms || 30_000,
             },
         )
         return res.data.choices[0].message.content as string

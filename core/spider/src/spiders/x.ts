@@ -30,7 +30,7 @@ enum ArticleTypeEnum {
     CONVERSATION = 'conversation',
 }
 
-const X_BASE_VALID_URL = /(https:\/\/)?(www\.)?x\.com\//
+const X_BASE_VALID_URL = /^(?:https:\/\/)?(?:www\.)?x\.com\//
 
 enum XApis {
     UserTweets = 'UserTweets',
@@ -79,7 +79,13 @@ const X_REST_ID_IN_FLIGHT = new Map<string, Promise<string>>()
 // GraphQL requests observed on a page outside capture windows (e.g. during the
 // manager's warmup navigation). Buffered per page so the first capture attempt
 // can consume what warmup already triggered instead of reloading the page.
-const X_PAGE_REQUEST_BUFFER = new WeakMap<object, Array<{ url: string; headers: Record<string, string> }>>()
+const X_PAGE_REQUEST_BUFFER = new WeakMap<
+    object,
+    {
+        buffer: Array<{ url: string; headers: Record<string, string> }>
+        handler: (request: { url: () => string; headers: () => Record<string, string> }) => void
+    }
+>()
 const X_PAGE_REQUEST_BUFFER_LIMIT = 500
 
 /**
@@ -92,8 +98,7 @@ export function beginXOperationCapture(page: Page) {
         return
     }
     const buffer: Array<{ url: string; headers: Record<string, string> }> = []
-    X_PAGE_REQUEST_BUFFER.set(page, buffer)
-    page.on('request', (request) => {
+    const handler = (request: { url: () => string; headers: () => Record<string, string> }) => {
         if (!/\/i\/api\/graphql\//.test(request.url())) {
             return
         }
@@ -101,16 +106,22 @@ export function beginXOperationCapture(page: Page) {
         if (buffer.length > X_PAGE_REQUEST_BUFFER_LIMIT) {
             buffer.shift()
         }
-    })
+    }
+    X_PAGE_REQUEST_BUFFER.set(page, { buffer, handler })
+    page.on('request', handler)
 }
 
 /**
  * Returns (and clears) the GraphQL requests buffered on a page.
  */
 export function drainCapturedXOperations(page: Page) {
-    const buffer = X_PAGE_REQUEST_BUFFER.get(page)
+    const entry = X_PAGE_REQUEST_BUFFER.get(page)
+    if (!entry) {
+        return []
+    }
     X_PAGE_REQUEST_BUFFER.delete(page)
-    return buffer || []
+    page.off('request', entry.handler)
+    return entry.buffer
 }
 // Must match the `count` variable of XApiClient.grabTweets. The list timeline
 // (count=20) covers a member's latest tweets; when the discovery window already
@@ -314,9 +325,7 @@ class XUserTimeLineSpider extends BaseSpider {
                 }
             } catch (e) {
                 apiError = e
-                this.log?.error(
-                    `[Engine Api] Failed to crawl for ${id}: ${e}${page ? ', fallback to browser' : ''}`,
-                )
+                this.log?.error(`[Engine Api] Failed to crawl for ${id}: ${e}${page ? ', fallback to browser' : ''}`)
                 if (!page) {
                     throw e
                 }
@@ -403,7 +412,8 @@ class XStatusSpider extends BaseSpider {
         const article = await apiClient.grabTweetDetail(id, statusId, cookieString)
         return (article ? [article] : []) as TaskTypeResult<T, Platform.X>
     }
-}class XListSpider extends BaseSpider {
+}
+class XListSpider extends BaseSpider {
     static _VALID_URL = new RegExp(X_BASE_VALID_URL.source + /\i\/lists\/(?<id>\d+)/.source)
     static _PLATFORM = Platform.X
     BASE_URL: string = 'https://x.com/'
@@ -561,9 +571,13 @@ class XStatusSpider extends BaseSpider {
             const cached = X_UNIFIED_LIST_MEMBER_CACHE.get(list_id)
             if (cached && cached.length > 0) {
                 listMemberUserIds = cached
-                this.log?.warn(`Unified list crawl reused ${cached.length} cached members for ${list_id} after member lookup failure`)
+                this.log?.warn(
+                    `Unified list crawl reused ${cached.length} cached members for ${list_id} after member lookup failure`,
+                )
             } else {
-                this.log?.warn(`Unified list crawl has no member cache for ${list_id}; restricting to configured users this round`)
+                this.log?.warn(
+                    `Unified list crawl has no member cache for ${list_id}; restricting to configured users this round`,
+                )
             }
         }
         // Only confirmed list members (plus explicitly configured users) are valid
@@ -665,49 +679,51 @@ class XStatusSpider extends BaseSpider {
         for (let index = 0; index < userIds.length && !rateLimited; index += concurrency) {
             const chunk = userIds.slice(index, index + concurrency)
             const chunkResults = await Promise.allSettled(
-                chunk.map(async (userId): Promise<{
-                    userId: string
-                    articles: Array<GenericArticle<Platform.X>>
-                    failures: Array<{ scope: 'tweets' | 'replies'; error: unknown }>
-                    rateLimited: boolean
-                }> => {
-                    const userArticles = [] as Array<GenericArticle<Platform.X>>
-                    const failures = [] as Array<{ scope: 'tweets' | 'replies'; error: unknown }>
-                    const coveredTweetCount = options.discoveryCoverage?.get(normalizeHydrationUserId(userId)) ?? 0
-                    if (options.fetchTweets && coveredTweetCount < X_USER_TIMELINE_HYDRATE_COUNT) {
-                        try {
-                            userArticles.push(...(await client.grabTweets(userId, cookie)))
-                        } catch (error) {
-                            failures.push({ scope: 'tweets', error })
-                            if (isAuthOrRateLimitError(error)) {
-                                return { userId, articles: userArticles, failures, rateLimited: true }
-                            }
-                        }
-                    } else if (options.fetchTweets) {
-                        coverageSkippedCount += 1
-                        this.log?.debug(
-                            `Unified list hydration skipped tweets for @${userId}: covered by list timeline (${coveredTweetCount} tweets).`,
-                        )
-                    }
-                    if (options.fetchReplies) {
-                        if (client.isReplies404Cached?.(userId)) {
-                            replies404SkippedCount += 1
-                            this.log?.debug(
-                                `Unified list hydration skipped replies for @${userId}: recent 404`,
-                            )
-                        } else {
+                chunk.map(
+                    async (
+                        userId,
+                    ): Promise<{
+                        userId: string
+                        articles: Array<GenericArticle<Platform.X>>
+                        failures: Array<{ scope: 'tweets' | 'replies'; error: unknown }>
+                        rateLimited: boolean
+                    }> => {
+                        const userArticles = [] as Array<GenericArticle<Platform.X>>
+                        const failures = [] as Array<{ scope: 'tweets' | 'replies'; error: unknown }>
+                        const coveredTweetCount = options.discoveryCoverage?.get(normalizeHydrationUserId(userId)) ?? 0
+                        if (options.fetchTweets && coveredTweetCount < X_USER_TIMELINE_HYDRATE_COUNT) {
                             try {
-                                userArticles.push(...(await client.grabReplies(userId, cookie)))
+                                userArticles.push(...(await client.grabTweets(userId, cookie)))
                             } catch (error) {
-                                failures.push({ scope: 'replies', error })
+                                failures.push({ scope: 'tweets', error })
                                 if (isAuthOrRateLimitError(error)) {
                                     return { userId, articles: userArticles, failures, rateLimited: true }
                                 }
                             }
+                        } else if (options.fetchTweets) {
+                            coverageSkippedCount += 1
+                            this.log?.debug(
+                                `Unified list hydration skipped tweets for @${userId}: covered by list timeline (${coveredTweetCount} tweets).`,
+                            )
                         }
-                    }
-                    return { userId, articles: userArticles, failures, rateLimited: false }
-                }),
+                        if (options.fetchReplies) {
+                            if (client.isReplies404Cached?.(userId)) {
+                                replies404SkippedCount += 1
+                                this.log?.debug(`Unified list hydration skipped replies for @${userId}: recent 404`)
+                            } else {
+                                try {
+                                    userArticles.push(...(await client.grabReplies(userId, cookie)))
+                                } catch (error) {
+                                    failures.push({ scope: 'replies', error })
+                                    if (isAuthOrRateLimitError(error)) {
+                                        return { userId, articles: userArticles, failures, rateLimited: true }
+                                    }
+                                }
+                            }
+                        }
+                        return { userId, articles: userArticles, failures, rateLimited: false }
+                    },
+                ),
             )
 
             chunkResults.forEach((result, chunkIndex) => {
@@ -715,7 +731,11 @@ class XStatusSpider extends BaseSpider {
                 if (result.status === 'fulfilled') {
                     articles.push(...result.value.articles)
                     if (result.value.failures.length > 0) {
-                        this.logHydrationFailures(result.value.userId, result.value.failures, result.value.articles.length)
+                        this.logHydrationFailures(
+                            result.value.userId,
+                            result.value.failures,
+                            result.value.articles.length,
+                        )
                     }
                     if (result.value.rateLimited) {
                         rateLimited = true
@@ -759,12 +779,16 @@ class XStatusSpider extends BaseSpider {
         failures: Array<{ scope: 'tweets' | 'replies'; error: unknown }>,
         preservedArticleCount: number,
     ) {
-        const formatted = failures.map((failure) => `${failure.scope}: ${formatHydrationError(failure.error)}`).join('; ')
+        const formatted = failures
+            .map((failure) => `${failure.scope}: ${formatHydrationError(failure.error)}`)
+            .join('; ')
         const onlyRepliesNotFound = failures.every(
             (failure) => failure.scope === 'replies' && isNotFoundError(failure.error),
         )
         if (preservedArticleCount > 0 && onlyRepliesNotFound) {
-            this.log?.debug(`Unified list replies unavailable for @${userId}, preserved ${preservedArticleCount} tweet(s): ${formatted}`)
+            this.log?.debug(
+                `Unified list replies unavailable for @${userId}, preserved ${preservedArticleCount} tweet(s): ${formatted}`,
+            )
             return
         }
 
@@ -839,7 +863,7 @@ class XStatusSpider extends BaseSpider {
                 },
                 extra_type: existingExtra?.extra_type || 'x_list_meta',
             },
-        } as GenericArticle<Platform.X>
+        } as unknown as GenericArticle<Platform.X>
     }
 
     private selectHydrationUsers(options: {
@@ -855,7 +879,9 @@ class XStatusSpider extends BaseSpider {
         )
         const configuredUsers = this.sanitizeUserIds(options.configuredUsers).slice(0, effectiveLimit)
         const configuredSet = new Set(configuredUsers)
-        const memberPool = this.sanitizeUserIds(options.listMemberUserIds).filter((userId) => !configuredSet.has(userId))
+        const memberPool = this.sanitizeUserIds(options.listMemberUserIds).filter(
+            (userId) => !configuredSet.has(userId),
+        )
         const memberSet = new Set(memberPool)
         // Activity samples are ranking hints only, never authorization to monitor a
         // new account. Non-members (often retweet original authors) must not enter
@@ -1135,7 +1161,9 @@ export class XApiClient {
                 if (!/timed out|network|fetch failed|econnreset|socket hang up/i.test(message) || attempt >= retries) {
                     throw error
                 }
-                this.log?.warn(`X fetch ${context} transient network error, retrying (attempt ${attempt + 1}): ${message}`)
+                this.log?.warn(
+                    `X fetch ${context} transient network error, retrying (attempt ${attempt + 1}): ${message}`,
+                )
                 await sleep(500 * (attempt + 1))
                 continue
             }
@@ -1154,12 +1182,7 @@ export class XApiClient {
         this.api_with_queryid[operation] = undefined
     }
 
-    private assertOkOrInvalidate(
-        res: Response,
-        context: string,
-        operation: XApis,
-        userId?: string,
-    ): void {
+    private assertOkOrInvalidate(res: Response, context: string, operation: XApis, userId?: string): void {
         if (res.ok) {
             return
         }
@@ -1414,7 +1437,7 @@ export class XApiClient {
             }
 
             const scrollAmount = 800 + Math.floor(Math.random() * 1200)
-            await this.page.mouse.wheel(0, scrollAmount).catch(() => null)
+            await this.page.mouse.wheel({ deltaY: scrollAmount }).catch(() => null)
             await this.page
                 .evaluate((amount) => {
                     const primaryColumn = document.querySelector('[data-testid="primaryColumn"]') as HTMLElement | null
@@ -1456,7 +1479,11 @@ export class XApiClient {
         }
         this.api_with_queryid[parsed.operationName] = parsed.queryId
         if (this.cache) {
-            this.cache.set(this.operationProfileCacheKey(parsed.operationName), this.operationProfiles[parsed.operationName], X_CACHE_OPERATION_PROFILE_TTL_S)
+            this.cache.set(
+                this.operationProfileCacheKey(parsed.operationName),
+                this.operationProfiles[parsed.operationName],
+                X_CACHE_OPERATION_PROFILE_TTL_S,
+            )
         }
     }
 
@@ -1468,7 +1495,7 @@ export class XApiClient {
 
         const queryId = match[1]
         const operationName = match[2] as XApis
-        if (!Object.values(XApis).includes(operationName)) {
+        if (!queryId || !Object.values(XApis).includes(operationName)) {
             return null
         }
 
@@ -1558,8 +1585,12 @@ export class XApiClient {
     private extractJavascriptUrls(html: string) {
         const urls = Array.from(html.matchAll(/(?:src|href)="([^"]+\.js)"/g))
             .map((match) => {
+                const src = match[1]
+                if (!src) {
+                    return null
+                }
                 try {
-                    return new URL(match[1], this.BASE_URL).toString()
+                    return new URL(src, this.BASE_URL).toString()
                 } catch {
                     return null
                 }
@@ -1597,7 +1628,7 @@ export class XApiClient {
     ) {
         const profile = this.getOperationProfile(operation, options?.fallbackOperations)
         const csrfToken = this.getCsrfToken(cookie)
-        const headers = {
+        const headers: Record<string, string> = {
             ...this.BASE_HEADER,
             ...(profile?.headers || {}),
             ...(options?.referer ? { referer: options.referer } : {}),
@@ -2121,10 +2152,10 @@ export class XApiClient {
             },
             'follows',
         )
-        this.assertOkOrInvalidate(res, 'tweets', XApis.ListMembers)
+        this.assertOkOrInvalidate(res, 'list members', XApis.ListMembers)
         const json = await res.json()
         if (json.errors) {
-            throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)
+            throw new Error(`Failed to fetch list members: ${json.errors[0].message}`)
         }
         return XApiJsonParser.tweetsFollowsFromListParser(json)
     }
@@ -2267,10 +2298,13 @@ namespace XApiJsonParser {
                     .filter(Boolean)
                     .join('\n')
             }
-            media.push({
-                type: 'photo',
-                url: (_card as Card<CardTypeEnum.IMAGE | CardTypeEnum.PLAYER>).thumbnail_url || '',
-            })
+            const thumbnailUrl = (_card as Card<CardTypeEnum.IMAGE | CardTypeEnum.PLAYER>).thumbnail_url || ''
+            if (thumbnailUrl) {
+                media.push({
+                    type: 'photo',
+                    url: thumbnailUrl,
+                })
+            }
 
             if (_card.type === CardTypeEnum.CHOICE) {
                 const choices = binding_values.filter((v: any) => v.key.startsWith('choice'))
@@ -2351,11 +2385,7 @@ namespace XApiJsonParser {
     }
 
     function unescapeHtmlText(text: string) {
-        return text
-            .replaceAll('&amp;', '&')
-            .replaceAll('&lt;', '<')
-            .replaceAll('&gt;', '>')
-            .replaceAll('&quot;', '"')
+        return text.replaceAll('&amp;', '&').replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"')
     }
 
     /**
@@ -2522,7 +2552,9 @@ namespace XApiJsonParser {
                 tweet.content = tweet.content?.replace(u.url, '') ?? null
             }
         }
-        const note_media_urls = useNoteText ? noteTweet?.entity_set?.media?.map((m: { url: string }) => m.url) || [] : []
+        const note_media_urls = useNoteText
+            ? noteTweet?.entity_set?.media?.map((m: { url: string }) => m.url) || []
+            : []
         let media_urls = legacy.entities?.media?.map((m: { url: string }) => m.url) || []
         for (const url of [...note_media_urls, ...media_urls]) {
             tweet.content = tweet.content?.replace(url, '') ?? null
@@ -2591,58 +2623,27 @@ namespace XApiJsonParser {
 
     export function oldTweetMemeberParser(json: any): GenericArticle<Platform.X> | null {
         const legacy = json?.status
-        const userLegacy = json
-        let type: ArticleTypeEnum = ArticleTypeEnum.TWEET
-        if (legacy?.retweeted_status) {
-            // high priority
-            type = ArticleTypeEnum.RETWEET
-        } else if (legacy?.is_quote_status) {
-            type = ArticleTypeEnum.QUOTED
-        } else if (legacy?.in_reply_to_status_id_str) {
-            type = ArticleTypeEnum.CONVERSATION
-        }
-        if (type !== ArticleTypeEnum.TWEET) {
+        if (!legacy?.id_str) {
             return null
         }
-        // 主推文解析
-        const tweet = {
-            platform: Platform.X,
-            a_id: legacy?.id_str,
-            u_id: userLegacy?.screen_name,
-            username: userLegacy?.name,
-            created_at: Math.floor(parseTwitterDate(legacy?.created_at) / 1000),
-            content: legacy?.text || legacy?.full_text,
-            url: userLegacy?.screen_name ? `https://x.com/${userLegacy.screen_name}/status/${legacy?.id_str}` : '',
-            type: type,
-            ref: null,
-            // extended_entities里是video，但entities里只是图片
-            media: mediaParser(legacy?.extended_entities?.media || legacy?.entities?.media),
-            has_media: !!legacy?.extended_entities?.media || !!legacy?.entities?.media,
-            extra: Card.cardParser(legacy.card),
-            u_avatar: userLegacy?.profile_image_url_https?.replace('_normal', ''),
-        } as GenericArticle<Platform.X>
-
-        let urls = legacy.entities?.urls || []
-        let media_urls = legacy.entities?.media?.map((m: { url: string }) => m.url) || []
-        for (const u of urls) {
-            if (u.expanded_url && !u.expanded_url.startsWith('https://x.com/')) {
-                tweet.content = tweet.content?.replace(u.url, u.expanded_url) ?? null
-            } else {
-                tweet.content = tweet.content?.replace(u.url, '') ?? null
-            }
+        // Member-list payloads keep the author at the envelope level instead of
+        // `status.user`. Normalize once and reuse the full tweet parser so
+        // retweets/quotes/conversations keep the same ref semantics as the main
+        // timeline instead of being silently dropped.
+        const normalizedLegacy = {
+            ...legacy,
+            full_text: legacy.full_text || legacy.text,
+            user: json?.user || json,
         }
-        for (const url of media_urls) {
-            tweet.content = tweet.content?.replace(url, '') ?? null
-        }
-        return tweet as GenericArticle<Platform.X>
+        return oldTweetParser(normalizedLegacy)
     }
 
     export function tweetsArticleParser(json: any) {
         let tweets = sanitizeTweetsJson(json)
         tweets = tweets
             .filter(
-                (t: { entryId: string }) =>
-                    t.entryId.startsWith('tweet-') && !t.entryId.startsWith('profile-conversation'),
+                (t: { entryId?: string }) =>
+                    t.entryId?.startsWith('tweet-') && !t.entryId.startsWith('profile-conversation'),
             )
             .map(extractTweetResultFromTimelineItem)
             .filter(Boolean)
@@ -2741,7 +2742,11 @@ namespace XApiJsonParser {
                     if (/login/i.test(location)) {
                         fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
                     } else {
-                        fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                        fail(
+                            new Error(
+                                `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
+                            ),
+                        )
                     }
                     return
                 }
@@ -2803,7 +2808,11 @@ namespace XApiJsonParser {
                     if (/login/i.test(location)) {
                         fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
                     } else {
-                        fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                        fail(
+                            new Error(
+                                `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
+                            ),
+                        )
                     }
                     return
                 }
@@ -2821,11 +2830,11 @@ namespace XApiJsonParser {
                     })
             }
         })
-        if (config.viewport) {
-            await page.setViewport(config.viewport)
-        }
-        await page.goto(url, { waitUntil: 'domcontentloaded' })
         try {
+            if (config.viewport) {
+                await page.setViewport(config.viewport)
+            }
+            await page.goto(url, { waitUntil: 'domcontentloaded' })
             await checkLogin(page)
             await checkSomethingWrong(page)
         } catch (error) {
@@ -2853,7 +2862,11 @@ namespace XApiJsonParser {
                     if (/login/i.test(location)) {
                         fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
                     } else {
-                        fail(new Error(`Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`))
+                        fail(
+                            new Error(
+                                `Error: redirect (${response.status()}) to ${location || 'unknown'} - likely rate limit or challenge`,
+                            ),
+                        )
                     }
                     return
                 }

@@ -1568,7 +1568,7 @@ test('SpiderPools passes a working articleStateLookup to Website crawls (duplica
         // variant of the same object key and arrived as undefined for Website crawls.
         expect(typeof capturedConfig?.articleStateLookup).toBe('function')
         const state = await capturedConfig.articleStateLookup('known-detail')
-        expect(state).toEqual({ known: true, createdAt: 1000 })
+        expect(state).toEqual({ known: true, createdAt: 1000, crawledAt: null })
         expect(typeof capturedConfig?.articlePrefixStateLookup).toBe('function')
     } finally {
         ;(DB.TaskQueue as any).updateStatus = originalTaskUpdateStatus

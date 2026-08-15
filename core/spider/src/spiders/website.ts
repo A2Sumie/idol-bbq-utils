@@ -1,22 +1,14 @@
 import dayjs from 'dayjs'
 import { Page, type HTTPRequest } from 'puppeteer-core'
-import { Platform } from '@/types'
-import type { CrawlEngine, GenericArticle, GenericMediaInfo, TaskType, TaskTypeResult } from '@/types'
+import { Platform } from '../types'
+import type { CrawlEngine, GenericArticle, GenericMediaInfo, TaskType, TaskTypeResult } from '../types'
 import { BaseSpider } from './base'
 
 export enum ArticleTypeEnum {
     ARTICLE = 'article',
 }
 
-type FeedKind =
-    | 'fc-news'
-    | 'official-news'
-    | 'official-blog'
-    | 'ticket'
-    | 'radio'
-    | 'movie'
-    | 'photo'
-    | 'live-report'
+type FeedKind = 'fc-news' | 'official-news' | 'official-blog' | 'ticket' | 'radio' | 'movie' | 'photo' | 'live-report'
 
 const IMMUTABLE_DETAIL_FEEDS = new Set<FeedKind>(['fc-news', 'official-news', 'official-blog', 'live-report'])
 // Mutable feeds re-crawl detail pages by default; once the article is stored a
@@ -211,7 +203,10 @@ const WEBSITE_RESOURCE_TYPES = new Set([
 ])
 
 function cleanText(value?: string | null): string {
-    return (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+    return (value || '')
+        .replace(/\u00a0/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
 }
 
 function cleanMultilineText(value?: string | null): string {
@@ -232,7 +227,10 @@ function cleanMultilineText(value?: string | null): string {
         return acc
     }, [])
 
-    return collapsed.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+    return collapsed
+        .join('\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
 }
 
 function clampInteger(value: unknown, fallback: number, min: number, max: number) {
@@ -245,10 +243,19 @@ function clampInteger(value: unknown, fallback: number, min: number, max: number
 
 function resolveWebsiteCrawlOptions(options: WebsiteCrawlOptions = {}): ResolvedWebsiteCrawlOptions {
     const minDelay = clampInteger(options.detail_interval_time?.min, DEFAULT_DETAIL_INTERVAL_TIME.min, 0, 60000)
-    const maxDelay = clampInteger(options.detail_interval_time?.max, Math.max(minDelay, DEFAULT_DETAIL_INTERVAL_TIME.max), minDelay, 60000)
+    const maxDelay = clampInteger(
+        options.detail_interval_time?.max,
+        Math.max(minDelay, DEFAULT_DETAIL_INTERVAL_TIME.max),
+        minDelay,
+        60000,
+    )
     const rawBlockResourceTypes = options.block_resource_types || DEFAULT_BLOCK_RESOURCE_TYPES
     const blockResourceTypes = Array.from(
-        new Set(rawBlockResourceTypes.map((value) => String(value || '').trim()).filter((value) => WEBSITE_RESOURCE_TYPES.has(value))),
+        new Set(
+            rawBlockResourceTypes
+                .map((value) => String(value || '').trim())
+                .filter((value) => WEBSITE_RESOURCE_TYPES.has(value)),
+        ),
     )
 
     return {
@@ -330,7 +337,8 @@ export function isWebsiteAuthGateSnapshot(snapshot: WebsiteAuthGateSnapshot) {
     const title = cleanText(snapshot.documentTitle).toLowerCase()
     const body = cleanText(snapshot.bodyText).toLowerCase()
     const loginTitle = /^ログイン\s*\|/.test(title) || /^login\s*\|/.test(title)
-    const loginBody = /(ログイン|login)/i.test(body) && /(新規会員登録|会員登録|password|パスワード|メールアドレス)/i.test(body)
+    const loginBody =
+        /(ログイン|login)/i.test(body) && /(新規会員登録|会員登録|password|パスワード|メールアドレス)/i.test(body)
     const loginControls = Boolean(snapshot.hasLoginForm || snapshot.hasPasswordInput || snapshot.hasLoginButton)
     const registrationGate = Boolean(snapshot.hasLoginButton && snapshot.hasRegistrationLink)
 
@@ -339,9 +347,15 @@ export function isWebsiteAuthGateSnapshot(snapshot: WebsiteAuthGateSnapshot) {
 
 async function detectWebsiteAuthGate(page: Page, detailSelector: string) {
     const snapshot = (await page.evaluate((selector) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const controls = Array.from(document.querySelectorAll('a, button, input[type="button"], input[type="submit"]'))
-        const controlTexts = controls.map((node) => clean(node.textContent || (node as HTMLInputElement).value)).filter(Boolean)
+        const controlTexts = controls
+            .map((node) => clean(node.textContent || (node as HTMLInputElement).value))
+            .filter(Boolean)
         return {
             url: location.href,
             documentTitle: document.title,
@@ -361,7 +375,13 @@ async function detectWebsiteAuthGate(page: Page, detailSelector: string) {
     return isWebsiteAuthGateSnapshot(snapshot) ? snapshot : null
 }
 
-function assertRequiredWebsiteDetail(hasDetail: boolean, authGate: WebsiteAuthGateSnapshot | null, feed: FeedKind, url: string, selectorLabel: string) {
+function assertRequiredWebsiteDetail(
+    hasDetail: boolean,
+    authGate: WebsiteAuthGateSnapshot | null,
+    feed: FeedKind,
+    url: string,
+    selectorLabel: string,
+) {
     if (hasDetail) {
         return
     }
@@ -373,10 +393,19 @@ function assertRequiredWebsiteDetail(hasDetail: boolean, authGate: WebsiteAuthGa
     throw new Error(`Website ${feed} detail missing ${selectorLabel}; format may have changed`)
 }
 
-async function waitForRequiredDetailSelector(page: Page, feed: FeedKind, url: string, detailSelector: string, timeout = 15000) {
+async function waitForRequiredDetailSelector(
+    page: Page,
+    feed: FeedKind,
+    url: string,
+    detailSelector: string,
+    timeout = 15000,
+) {
     await waitForOptionalSelector(page, `${detailSelector}, form[action*="/login"], input[type="password"]`, timeout)
     const [hasDetail, authGate] = await Promise.all([
-        page.$(detailSelector).then(Boolean).catch(() => false),
+        page
+            .$(detailSelector)
+            .then(Boolean)
+            .catch(() => false),
         detectWebsiteAuthGate(page, detailSelector),
     ])
     assertRequiredWebsiteDetail(hasDetail, authGate, feed, url, detailSelector)
@@ -467,7 +496,10 @@ function roundToNearbyHour(now: dayjs.Dayjs, windowMinutes = 15) {
     return now
 }
 
-function resolveWebsiteArticleTime(dateText?: string | null, fallbackSource: WebsiteTimeSource = 'crawl_observed'): WebsiteArticleTime {
+function resolveWebsiteArticleTime(
+    dateText?: string | null,
+    fallbackSource: WebsiteTimeSource = 'crawl_observed',
+): WebsiteArticleTime {
     const raw = cleanText(dateText)
     const normalized = raw.replace(/[./]/g, '-')
     const parsed = dayjs(normalized)
@@ -533,8 +565,8 @@ function isRadioDetail(pathname: string) {
 
 function isPhotoDetail(url: URL) {
     return (
-        /^\/s\/n110\/gallery\/[^/?#]+$/i.test(url.pathname)
-        || (url.pathname === '/s/n110/contents_list' && (url.searchParams.get('ct') || '').startsWith('member_photo_'))
+        /^\/s\/n110\/gallery\/[^/?#]+$/i.test(url.pathname) ||
+        (url.pathname === '/s/n110/contents_list' && (url.searchParams.get('ct') || '').startsWith('member_photo_'))
     )
 }
 
@@ -565,7 +597,11 @@ function isDetailUrl(feed: FeedKind, url: string) {
         case 'official-news':
             return isNewsDetail(parsed.pathname)
         case 'official-blog':
-            return isDiaryDetail(parsed.pathname) && parsed.searchParams.get('cd') !== 'nananiji_movie' && parsed.searchParams.get('cd') !== 'special'
+            return (
+                isDiaryDetail(parsed.pathname) &&
+                parsed.searchParams.get('cd') !== 'nananiji_movie' &&
+                parsed.searchParams.get('cd') !== 'special'
+            )
         case 'ticket':
             return isTicketDetail(parsed.pathname)
         case 'radio':
@@ -615,7 +651,10 @@ function getDetailKey(config: FeedConfig, detailUrl: string) {
     return extractArticleId(config, detailUrl)
 }
 
-function buildMedia(detailMedia: Array<GenericMediaInfo>, fallbackThumbnail?: string | null): Array<GenericMediaInfo> | null {
+function buildMedia(
+    detailMedia: Array<GenericMediaInfo>,
+    fallbackThumbnail?: string | null,
+): Array<GenericMediaInfo> | null {
     const dedup = new Map<string, GenericMediaInfo>()
     for (const media of detailMedia) {
         if (media.url) {
@@ -687,8 +726,8 @@ export function buildWebsiteArticle(
 
 function resolvePhotoAlbumAnchor(payload: WebsitePhotoAlbumPayload) {
     const candidate =
-        payload.entries.map((entry) => cleanText(entry.dataCode)).find(Boolean)
-        || payload.entries.map((entry) => cleanText(entry.modalId)).find(Boolean)
+        payload.entries.map((entry) => cleanText(entry.dataCode)).find(Boolean) ||
+        payload.entries.map((entry) => cleanText(entry.modalId)).find(Boolean)
 
     if (candidate) {
         return candidate
@@ -707,11 +746,12 @@ export function buildPhotoAlbumArticle(
     }
 
     const title =
-        cleanText(payload.pageTheme)
-        || cleanText(listItem.title)
-        || cleanText(payload.entries[0]?.theme)
-        || cleanText(payload.entries[0]?.title)
-    const dateText = payload.entries.map((entry) => cleanText(entry.dateText)).find(Boolean) || cleanText(listItem.dateText)
+        cleanText(payload.pageTheme) ||
+        cleanText(listItem.title) ||
+        cleanText(payload.entries[0]?.theme) ||
+        cleanText(payload.entries[0]?.title)
+    const dateText =
+        payload.entries.map((entry) => cleanText(entry.dateText)).find(Boolean) || cleanText(listItem.dateText)
     const media = payload.entries.flatMap((entry) => entry.media || [])
     const bodyText = payload.entries
         .map((entry) => {
@@ -725,9 +765,7 @@ export function buildPhotoAlbumArticle(
         .map((entry) => entry.bodyHtml)
         .filter(Boolean)
         .join('\n<hr />\n')
-    const members = Array.from(
-        new Set(payload.entries.map((entry) => cleanText(entry.member)).filter(Boolean)),
-    )
+    const members = Array.from(new Set(payload.entries.map((entry) => cleanText(entry.member)).filter(Boolean)))
     const albumAnchor = resolvePhotoAlbumAnchor(payload)
     const firstAvatar = payload.entries.map((entry) => entry.uAvatar).find(Boolean) || listItem.uAvatar || null
 
@@ -789,12 +827,20 @@ export function splitPhotoAlbumPayloadByDate(payload: WebsitePhotoAlbumPayload):
     }))
 }
 
-async function extractStandardEntryList(page: Page, url: string, options: StandardEntryListOptions): Promise<WebsiteListPageResult> {
+async function extractStandardEntryList(
+    page: Page,
+    url: string,
+    options: StandardEntryListOptions,
+): Promise<WebsiteListPageResult> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector(options.waitForSelector, { timeout: 15000 })
     return page.evaluate(
         (currentUrl, selectors) => {
-            const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+            const clean = (value?: string | null) =>
+                (value || '')
+                    .replace(/\u00a0/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim()
             const absolute = (value?: string | null) => {
                 if (!value) {
                     return null
@@ -818,8 +864,12 @@ async function extractStandardEntryList(page: Page, url: string, options: Standa
                         detailUrl,
                         title: clean(node.querySelector(selectors.titleSelector)?.textContent),
                         dateText: clean(node.querySelector(selectors.dateSelector)?.textContent),
-                        summary: selectors.summarySelector ? clean(node.querySelector(selectors.summarySelector)?.textContent) : null,
-                        member: selectors.memberSelector ? clean(node.querySelector(selectors.memberSelector)?.textContent) || null : null,
+                        summary: selectors.summarySelector
+                            ? clean(node.querySelector(selectors.summarySelector)?.textContent)
+                            : null,
+                        member: selectors.memberSelector
+                            ? clean(node.querySelector(selectors.memberSelector)?.textContent) || null
+                            : null,
                         thumbnail: thumbnailSrc,
                     }
                 })
@@ -840,7 +890,11 @@ async function extractNewsList(page: Page, url: string) {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.news_box, .entry-list .entry-item', { timeout: 15000 })
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const absolute = (value?: string | null) => {
             if (!value) {
                 return null
@@ -854,8 +908,8 @@ async function extractNewsList(page: Page, url: string) {
         const legacyItems = Array.from(document.querySelectorAll('.news_box'))
             .map((node) => {
                 const detailUrl =
-                    absolute(node.querySelector('.news_box_title a')?.getAttribute('href'))
-                    || absolute(node.querySelector('.viewmore a')?.getAttribute('href'))
+                    absolute(node.querySelector('.news_box_title a')?.getAttribute('href')) ||
+                    absolute(node.querySelector('.viewmore a')?.getAttribute('href'))
                 if (!detailUrl) {
                     return null
                 }
@@ -872,8 +926,8 @@ async function extractNewsList(page: Page, url: string) {
         const entryItems = Array.from(document.querySelectorAll('.entry-list .entry-item'))
             .map((node) => {
                 const detailUrl =
-                    absolute(node.querySelector('a.panel')?.getAttribute('href'))
-                    || absolute(node.querySelector('.entry__title a')?.getAttribute('href'))
+                    absolute(node.querySelector('a.panel')?.getAttribute('href')) ||
+                    absolute(node.querySelector('.entry__title a')?.getAttribute('href'))
                 if (!detailUrl) {
                     return null
                 }
@@ -900,7 +954,11 @@ async function extractBlogList(page: Page, url: string) {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('a[href*="/diary/detail/"]', { timeout: 15000 })
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const absolute = (value?: string | null) => {
             if (!value) {
                 return null
@@ -921,7 +979,9 @@ async function extractBlogList(page: Page, url: string) {
                 if (!detailUrl) {
                     return null
                 }
-                const thumbNode = anchor.querySelector<HTMLElement>('.blog-entry-list__thumb img, .blog-list__thumb img')
+                const thumbNode = anchor.querySelector<HTMLElement>(
+                    '.blog-entry-list__thumb img, .blog-list__thumb img',
+                )
                 const thumbFromStyle = parseBackground(thumbNode?.getAttribute('style'))
                 return {
                     detailUrl,
@@ -967,7 +1027,11 @@ async function extractRadioList(page: Page, url: string): Promise<WebsiteListPag
         return { items: [], nextUrl: null }
     }
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const absolute = (value?: string | null) => {
             if (!value) {
                 return null
@@ -981,8 +1045,8 @@ async function extractRadioList(page: Page, url: string): Promise<WebsiteListPag
         const items = Array.from(document.querySelectorAll('.section-radio .radio'))
             .map((node) => {
                 const detailUrl = absolute(
-                    node.querySelector('.radio-img')?.getAttribute('href')
-                    || node.querySelector('.radio-btn.radio')?.getAttribute('href'),
+                    node.querySelector('.radio-img')?.getAttribute('href') ||
+                        node.querySelector('.radio-btn.radio')?.getAttribute('href'),
                 )
                 if (!detailUrl) {
                     return null
@@ -1012,7 +1076,11 @@ async function extractMovieList(page: Page, url: string): Promise<WebsiteListPag
         return { items: [], nextUrl: null }
     }
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const absolute = (value?: string | null) => {
             if (!value) {
                 return null
@@ -1071,7 +1139,11 @@ async function extractPhotoList(page: Page, url: string): Promise<WebsiteListPag
         return { items: [], nextUrl: null }
     }
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const absolute = (value?: string | null) => {
             if (!value) {
                 return null
@@ -1085,7 +1157,9 @@ async function extractPhotoList(page: Page, url: string): Promise<WebsiteListPag
 
         const sectionPhoto = document.querySelector('.section-photo')
         const currentTheme = clean(sectionPhoto?.querySelector('.headline__title')?.textContent)
-        const currentDates = Array.from(sectionPhoto?.querySelectorAll('.photo__posted') || []).map((node) => clean(node.textContent))
+        const currentDates = Array.from(sectionPhoto?.querySelectorAll('.photo__posted') || []).map((node) =>
+            clean(node.textContent),
+        )
         const currentThumbnail = absolute(sectionPhoto?.querySelector('.photo__img img')?.getAttribute('src'))
 
         const items: Array<WebsiteListItem> = []
@@ -1128,7 +1202,11 @@ async function extractLiveReportList(page: Page, url: string): Promise<WebsiteLi
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await page.waitForSelector('.special_box', { timeout: 15000 })
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const absolute = (value?: string | null) => {
             if (!value) {
                 return null
@@ -1155,7 +1233,18 @@ async function extractLiveReportList(page: Page, url: string): Promise<WebsiteLi
                     thumbnail: absolute(node.querySelector('.special_thumb img')?.getAttribute('src')),
                 }
             })
-            .filter(Boolean)
+            .filter(
+                (
+                    item,
+                ): item is {
+                    detailUrl: string
+                    title: string
+                    dateText: string
+                    summary: null
+                    member: null
+                    thumbnail: string | null
+                } => item !== null,
+            )
 
         return {
             items,
@@ -1173,7 +1262,11 @@ async function extractNewsDetail(page: Page, url: string, feed: FeedKind): Promi
         '#infoDetailTitle, #infoDetail, #infoCaption, .section-article .article__title, .section-article .article-content',
     )
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
                 .replace(/\u00a0/g, ' ')
@@ -1195,8 +1288,8 @@ async function extractNewsDetail(page: Page, url: string, feed: FeedKind): Promi
             }
         }
         const body =
-            document.querySelector<HTMLElement>('#infoDetail')
-            || document.querySelector<HTMLElement>('.section-article .article-content')
+            document.querySelector<HTMLElement>('#infoDetail') ||
+            document.querySelector<HTMLElement>('.section-article .article-content')
         const media = Array.from(body?.querySelectorAll('img') || [])
             .map((img) => {
                 const src = absolute(img.getAttribute('src'))
@@ -1209,10 +1302,16 @@ async function extractNewsDetail(page: Page, url: string, feed: FeedKind): Promi
                     alt: clean(img.getAttribute('alt')) || undefined,
                 }
             })
-            .filter(Boolean)
+            .filter((media): media is { type: 'photo'; url: string; alt: string | undefined } => media !== null)
         return {
-            title: clean(document.querySelector('#infoCaption')?.textContent || document.querySelector('.section-article .article__title')?.textContent),
-            dateText: clean(document.querySelector('.infoDate')?.textContent || document.querySelector('.section-article .article__posted')?.textContent),
+            title: clean(
+                document.querySelector('#infoCaption')?.textContent ||
+                    document.querySelector('.section-article .article__title')?.textContent,
+            ),
+            dateText: clean(
+                document.querySelector('.infoDate')?.textContent ||
+                    document.querySelector('.section-article .article__posted')?.textContent,
+            ),
             bodyText: cleanMultiline(body?.innerText || body?.textContent),
             bodyHtml: body?.innerHTML || '',
             member: null,
@@ -1225,7 +1324,11 @@ async function extractBlogDetail(page: Page, url: string): Promise<WebsiteDetail
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await waitForRequiredDetailSelector(page, 'official-blog', url, '.blog_detail__title, .blog_detail__main')
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
                 .replace(/\u00a0/g, ' ')
@@ -1259,7 +1362,7 @@ async function extractBlogDetail(page: Page, url: string): Promise<WebsiteDetail
                     alt: clean(img.getAttribute('alt')) || undefined,
                 }
             })
-            .filter(Boolean)
+            .filter((media): media is { type: 'photo'; url: string; alt: string | undefined } => media !== null)
         return {
             title: clean(document.querySelector('.blog_detail__title')?.textContent),
             dateText: clean(document.querySelector('.blog_detail__date .date')?.textContent),
@@ -1275,7 +1378,11 @@ async function extractTicketDetail(page: Page, url: string): Promise<WebsiteDeta
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await waitForRequiredDetailSelector(page, 'ticket', url, '.article__title, .article-content')
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
                 .replace(/\u00a0/g, ' ')
@@ -1310,11 +1417,11 @@ async function extractTicketDetail(page: Page, url: string): Promise<WebsiteDeta
                     alt: clean(img.getAttribute('alt')) || undefined,
                 }
             })
-            .filter(Boolean)
+            .filter((media): media is { type: 'photo'; url: string; alt: string | undefined } => media !== null)
 
         const applyUrl =
-            document.querySelector<HTMLFormElement>('.article-btn form')?.getAttribute('action')
-            || document.querySelector<HTMLAnchorElement>('.article-btn a')?.getAttribute('href')
+            document.querySelector<HTMLFormElement>('.article-btn form')?.getAttribute('action') ||
+            document.querySelector<HTMLAnchorElement>('.article-btn a')?.getAttribute('href')
 
         return {
             title: clean(document.querySelector('.article__title')?.textContent),
@@ -1334,7 +1441,11 @@ async function extractRadioDetail(page: Page, url: string, listItem: WebsiteList
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await waitForRequiredDetailSelector(page, 'radio', url, '.radio__title, #modal-radio, #modal-movie')
     const detail = await page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
                 .replace(/\u00a0/g, ' ')
@@ -1362,13 +1473,15 @@ async function extractRadioDetail(page: Page, url: string, listItem: WebsiteList
 
         const thumb = absolute(document.querySelector('.radio__thumb img')?.getAttribute('src'))
         const streamMap = new Map<string, Record<string, any>>()
-        Array.from(document.querySelectorAll<HTMLElement>('#modal-radio [data-video-id], #modal-movie [data-video-id]')).forEach((node) => {
+        Array.from(
+            document.querySelectorAll<HTMLElement>('#modal-radio [data-video-id], #modal-movie [data-video-id]'),
+        ).forEach((node) => {
             const videoId = clean(node.getAttribute('data-video-id'))
             const kind = node.closest('#modal-movie') ? 'movie' : 'radio'
             const playerRoot = node.closest<HTMLElement>('.video-js')
             const poster =
-                absolute(node.getAttribute('poster'))
-                || absolute(parseBackground(playerRoot?.querySelector<HTMLElement>('.vjs-poster')?.getAttribute('style')))
+                absolute(node.getAttribute('poster')) ||
+                absolute(parseBackground(playerRoot?.querySelector<HTMLElement>('.vjs-poster')?.getAttribute('style')))
             const src = absolute(node.getAttribute('src'))
             if (!videoId && !src && !poster) {
                 return
@@ -1401,17 +1514,17 @@ async function extractRadioDetail(page: Page, url: string, listItem: WebsiteList
                       },
                   ]
                 : []),
-            ...streams
-                .map((stream: any) => {
-                    if (!stream.poster) {
-                        return null
-                    }
-                    return {
+            ...streams.flatMap((stream: any) => {
+                if (!stream.poster) {
+                    return []
+                }
+                return [
+                    {
                         type: 'video_thumbnail' as const,
-                        url: stream.poster,
-                    }
-                })
-                .filter(Boolean),
+                        url: stream.poster as string,
+                    },
+                ]
+            }),
         ]
 
         const notes = clean(document.querySelector('.radio__notes')?.textContent)
@@ -1435,7 +1548,9 @@ async function extractRadioDetail(page: Page, url: string, listItem: WebsiteList
         }
     }, url)
     if (!Array.isArray(detail.extraData?.streams) || detail.extraData.streams.length === 0) {
-        throw new Error(`Website radio detail missing video stream for ${formatSafeWebsiteUrl(url)}; format may have changed`)
+        throw new Error(
+            `Website radio detail missing video stream for ${formatSafeWebsiteUrl(url)}; format may have changed`,
+        )
     }
     return detail
 }
@@ -1444,7 +1559,11 @@ async function extractMovieDetail(page: Page, url: string, listItem: WebsiteList
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await waitForRequiredDetailSelector(page, 'movie', url, '.movie__title, .movie-player video')
     const detail = await page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
                 .replace(/\u00a0/g, ' ')
@@ -1475,8 +1594,8 @@ async function extractMovieDetail(page: Page, url: string, listItem: WebsiteList
             const videoId = clean(node.getAttribute('data-video-id'))
             const playerRoot = node.closest<HTMLElement>('.video-js')
             const poster =
-                absolute(node.getAttribute('poster'))
-                || absolute(parseBackground(playerRoot?.querySelector<HTMLElement>('.vjs-poster')?.getAttribute('style')))
+                absolute(node.getAttribute('poster')) ||
+                absolute(parseBackground(playerRoot?.querySelector<HTMLElement>('.vjs-poster')?.getAttribute('style')))
             const src = absolute(node.getAttribute('src'))
             if (!videoId && !src && !poster) {
                 return
@@ -1512,17 +1631,17 @@ async function extractMovieDetail(page: Page, url: string, listItem: WebsiteList
             bodyText: cleanMultiline(bodyText),
             bodyHtml: document.querySelector<HTMLElement>('.section-movie-content .content')?.innerHTML || '',
             member: null,
-            media: videos
-                .map((video: any) => {
-                    if (!video.poster) {
-                        return null
-                    }
-                    return {
+            media: videos.flatMap((video: any) => {
+                if (!video.poster) {
+                    return []
+                }
+                return [
+                    {
                         type: 'video_thumbnail' as const,
-                        url: video.poster,
-                    }
-                })
-                .filter(Boolean),
+                        url: video.poster as string,
+                    },
+                ]
+            }),
             extraData: {
                 notes: notes || null,
                 tags,
@@ -1531,16 +1650,27 @@ async function extractMovieDetail(page: Page, url: string, listItem: WebsiteList
         }
     }, url)
     if (!Array.isArray(detail.extraData?.streams) || detail.extraData.streams.length === 0) {
-        throw new Error(`Website movie detail missing video stream for ${formatSafeWebsiteUrl(url)}; format may have changed`)
+        throw new Error(
+            `Website movie detail missing video stream for ${formatSafeWebsiteUrl(url)}; format may have changed`,
+        )
     }
     return detail
 }
 
 async function extractLiveReportDetail(page: Page, url: string): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await waitForRequiredDetailSelector(page, 'live-report', url, '.regular-concert-content, .headline__text, .special .regular-concert')
+    await waitForRequiredDetailSelector(
+        page,
+        'live-report',
+        url,
+        '.regular-concert-content, .headline__text, .special .regular-concert',
+    )
     return page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
                 .replace(/\u00a0/g, ' ')
@@ -1562,8 +1692,8 @@ async function extractLiveReportDetail(page: Page, url: string): Promise<Website
             }
         }
         const body =
-            document.querySelector<HTMLElement>('.regular-concert-content')
-            || document.querySelector<HTMLElement>('.special .regular-concert')
+            document.querySelector<HTMLElement>('.regular-concert-content') ||
+            document.querySelector<HTMLElement>('.special .regular-concert')
         const media = Array.from(body?.querySelectorAll('img') || [])
             .map((img) => {
                 const src = absolute(img.getAttribute('src'))
@@ -1576,11 +1706,11 @@ async function extractLiveReportDetail(page: Page, url: string): Promise<Website
                     alt: clean(img.getAttribute('alt')) || undefined,
                 }
             })
-            .filter(Boolean)
+            .filter((media): media is { type: 'photo'; url: string; alt: string | undefined } => media !== null)
 
         const headline =
-            document.querySelector<HTMLElement>('.regular-concert-headline .headline__text')
-            || document.querySelector<HTMLElement>('.regular-concert-headline')
+            document.querySelector<HTMLElement>('.regular-concert-headline .headline__text') ||
+            document.querySelector<HTMLElement>('.regular-concert-headline')
 
         return {
             title: cleanMultiline(headline?.innerText || headline?.textContent)
@@ -1612,8 +1742,12 @@ async function extractPhotoDetailArticles(
     }
     await page.waitForSelector('.photo-block, .photo-modal', { timeout: 15000 })
 
-    const payload = await page.evaluate(() => {
-        const clean = (value?: string | null) => (value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
+    const payload = (await page.evaluate(() => {
+        const clean = (value?: string | null) =>
+            (value || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\s+/g, ' ')
+                .trim()
         const cleanMultiline = (value?: string | null) =>
             (value || '')
                 .replace(/\u00a0/g, ' ')
@@ -1698,7 +1832,7 @@ async function extractPhotoDetailArticles(
             pageTheme,
             entries,
         }
-    }) as WebsitePhotoAlbumPayload
+    })) as WebsitePhotoAlbumPayload
 
     return splitPhotoAlbumPayloadByDate(payload).flatMap((groupedPayload) =>
         buildPhotoAlbumArticle(config, listItem, groupedPayload),
@@ -1733,7 +1867,12 @@ function extractListPage(page: Page, feedConfig: FeedConfig, url: string): Promi
     }
 }
 
-function extractDetailPayload(page: Page, feedConfig: FeedConfig, url: string, listItem: WebsiteListItem): Promise<WebsiteDetailPayload> {
+function extractDetailPayload(
+    page: Page,
+    feedConfig: FeedConfig,
+    url: string,
+    listItem: WebsiteListItem,
+): Promise<WebsiteDetailPayload> {
     switch (feedConfig.feed) {
         case 'official-news':
         case 'fc-news':
@@ -1786,7 +1925,10 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             return FEED_CONFIGS.radio
         }
 
-        if (isMovieList(parsed) || (isDiaryDetail(parsed.pathname) && parsed.searchParams.get('cd') === 'nananiji_movie')) {
+        if (
+            isMovieList(parsed) ||
+            (isDiaryDetail(parsed.pathname) && parsed.searchParams.get('cd') === 'nananiji_movie')
+        ) {
             return FEED_CONFIGS.movie
         }
 
@@ -1794,7 +1936,10 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             return FEED_CONFIGS.photo
         }
 
-        if (isLiveReportList(parsed) || (isDiaryDetail(parsed.pathname) && parsed.searchParams.get('cd') === 'special')) {
+        if (
+            isLiveReportList(parsed) ||
+            (isDiaryDetail(parsed.pathname) && parsed.searchParams.get('cd') === 'special')
+        ) {
             return FEED_CONFIGS['live-report']
         }
 
@@ -1832,8 +1977,12 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             }
             block_resource_types?: Array<string>
             isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
-            articleStateLookup?: (a_id: string) => Promise<{ known: boolean; createdAt: number | null }>
-            articlePrefixStateLookup?: (prefix: string) => Promise<{ known: boolean; createdAt: number | null }>
+            articleStateLookup?: (
+                a_id: string,
+            ) => Promise<{ known: boolean; createdAt: number | null; crawledAt?: number | null }>
+            articlePrefixStateLookup?: (
+                prefix: string,
+            ) => Promise<{ known: boolean; createdAt: number | null; crawledAt?: number | null }>
         },
     ): Promise<TaskTypeResult<T, Platform.Website>> {
         if (config.task_type !== 'article') {
@@ -1885,15 +2034,19 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
         url: string,
         options: ResolvedWebsiteCrawlOptions,
         isArticleKnown?: (a_id: string) => Promise<boolean> | boolean,
-        articleStateLookup?: (a_id: string) => Promise<{ known: boolean; createdAt: number | null }>,
-        articlePrefixStateLookup?: (prefix: string) => Promise<{ known: boolean; createdAt: number | null }>,
+        articleStateLookup?: (
+            a_id: string,
+        ) => Promise<{ known: boolean; createdAt: number | null; crawledAt?: number | null }>,
+        articlePrefixStateLookup?: (
+            prefix: string,
+        ) => Promise<{ known: boolean; createdAt: number | null; crawledAt?: number | null }>,
     ) {
         const discovered = new Map<string, WebsiteListItem>()
         let currentUrl: string | null = url
         let pageCount = 0
 
         while (currentUrl && pageCount < options.maxListPages) {
-            const result = await retryTransient(
+            const result: WebsiteListPageResult = await retryTransient(
                 () => extractListPage(page, feedConfig, currentUrl as string),
                 `list page ${currentUrl}`,
             )
@@ -1913,7 +2066,7 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             if (IMMUTABLE_DETAIL_FEEDS.has(feedConfig.feed) && isArticleKnown && result.items.length > 0) {
                 const states = await Promise.all(
                     result.items.map((item) =>
-                        isArticleKnown(getDetailKey(feedConfig, item.detailUrl)).catch(() => false),
+                        Promise.resolve(isArticleKnown(getDetailKey(feedConfig, item.detailUrl))).catch(() => false),
                     ),
                 )
                 if (states.every(Boolean)) {
@@ -1943,10 +2096,11 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             if (mutableTtl != null && articleStateLookup) {
                 try {
                     const state = await articleStateLookup(detailKey)
+                    const lastCrawledAt = state?.crawledAt ?? state?.createdAt ?? null
                     if (
                         state?.known &&
-                        typeof state.createdAt === 'number' &&
-                        Date.now() / 1000 - state.createdAt > mutableTtl
+                        typeof lastCrawledAt === 'number' &&
+                        Date.now() / 1000 - lastCrawledAt <= mutableTtl
                     ) {
                         continue
                     }
@@ -1962,10 +2116,11 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
                     const albumId = parsed.searchParams.get('ct')
                     if (albumId) {
                         const state = await articlePrefixStateLookup(`photo:album:${albumId}:`)
+                        const lastCrawledAt = state?.crawledAt ?? state?.createdAt ?? null
                         if (
                             state?.known &&
-                            typeof state.createdAt === 'number' &&
-                            Date.now() / 1000 - state.createdAt > PHOTO_ARCHIVE_TTL_S
+                            typeof lastCrawledAt === 'number' &&
+                            Date.now() / 1000 - lastCrawledAt <= PHOTO_ARCHIVE_TTL_S
                         ) {
                             continue
                         }
@@ -1995,7 +2150,9 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
                     throw error
                 }
                 failedDetails.push({ url: item.detailUrl, error })
-                this.log?.warn(`Website crawl partial: detail failed after retry ${formatSafeWebsiteUrl(item.detailUrl)}: ${websiteErrorMessage(error)}`)
+                this.log?.warn(
+                    `Website crawl partial: detail failed after retry ${formatSafeWebsiteUrl(item.detailUrl)}: ${websiteErrorMessage(error)}`,
+                )
             }
             detailBudgetUsed += 1
             if (detailBudgetUsed >= options.maxDetailCount) {
@@ -2007,8 +2164,9 @@ class NanabunnonijyuuniWebsiteSpider extends BaseSpider {
             `Website crawl budget feed=${feedConfig.feed} pages=${pageCount}/${options.maxListPages} details=${detailBudgetUsed}/${options.maxDetailCount} discovered=${discovered.size} blocked=${options.blockResourceTypes.join(',') || 'none'}`,
         )
 
-        if (articles.length === 0 && failedDetails.length > 0) {
-            throw failedDetails[0].error
+        const firstFailure = failedDetails[0]
+        if (articles.length === 0 && firstFailure) {
+            throw firstFailure.error
         }
 
         return articles.sort((a, b) => b.created_at - a.created_at)

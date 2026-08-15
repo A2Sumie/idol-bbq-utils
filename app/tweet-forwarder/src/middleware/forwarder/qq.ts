@@ -148,7 +148,7 @@ class QQForwarder extends Forwarder {
     }
 
     private buildMediaSegmentsInOrder(media: NonNullable<SendProps['media']>): OneBotMessageSegment[] {
-        return media.flatMap((item) => {
+        return media.flatMap<OneBotMessageSegment>((item): Array<OneBotMessageSegment> => {
             if (item.media_type === 'photo') {
                 return [
                     {
@@ -201,10 +201,16 @@ class QQForwarder extends Forwarder {
 
         const MAX_PICS = 10
         const picChunks = chunk(pics, MAX_PICS)
+        // OneBot video segments are much more expensive than images and NapCat
+        // commonly rejects a single message that carries several videos. Send
+        // them one per message, after text/photo messages, so thumbnail+video
+        // posts keep their existing "text first, video second" shape.
+        const MAX_VIDEOS = 1
+        const videoChunks = chunk(videos, MAX_VIDEOS)
         const textChunks = texts.length > 0 ? texts : []
         const n = Math.max(picChunks.length, textChunks.length)
 
-        const _res = []
+        const _res: any[] = []
         const sendSegment = async (segments: Parameters<QQForwarder['sendWithPayload']>[0], label: string) => {
             try {
                 const res = await this.sendWithPayload(segments)
@@ -252,7 +258,12 @@ class QQForwarder extends Forwarder {
                 }
             }
 
-            videos.length !== 0 && (await sendSegment(videos, 'video'))
+            for (const [index, msgVideos] of videoChunks.entries()) {
+                if (msgVideos.length > 0) {
+                    await sendSegment(msgVideos as any, `video:${index + 1}/${videoChunks.length}`)
+                }
+            }
+
             return _res
         } finally {
             normalizedAttachments.cleanup()

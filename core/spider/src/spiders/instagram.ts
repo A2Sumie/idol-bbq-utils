@@ -174,7 +174,10 @@ class InstagramSpider extends BaseSpider {
         if (!result) {
             throw new Error(`Invalid URL: ${url}`)
         }
-        const { id } = result
+        const id = result.id!
+        if (RESERVED_INSTAGRAM_PATHS.has(id.toLowerCase())) {
+            throw new Error(`Invalid URL: ${url}`)
+        }
         const _url = `${this.BASE_URL}${id}`
         const { task_type, sub_task_type } = config
 

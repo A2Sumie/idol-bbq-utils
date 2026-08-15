@@ -81,6 +81,9 @@ HELP
     env_prefix="$(remote_env_prefix)"
     ssh "${SSH_ARGS[@]}" "$REMOTE_HOST" "${env_prefix}bash -s" <<'REMOTE'
 set -euo pipefail
+preflight_tmp_dir="$(mktemp -d)"
+db_container_tmp=""
+trap 'rm -rf "$preflight_tmp_dir"; if [ -n "${db_container_tmp:-}" ]; then docker exec "${CONTAINER_NAME:-forwarder-new}" rm -f "$db_container_tmp" >/dev/null 2>&1 || true; fi' EXIT
 repo="${REMOTE_REPO:-$HOME/idol-bbq-utils}"
 config_path="$repo/assets/config.yaml"
 remote_config_sha256=""
@@ -99,9 +102,9 @@ image_created_label="$(docker image inspect "$container_image" --format '{{ inde
 runtime_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_RUNTIME_MODE" { print $2; found=1 } END { if (!found) print "" }')"
 outbound_send_mode="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_OUTBOUND_SEND_MODE" { print $2; found=1 } END { if (!found) print "live" }')"
 backup_container_dir="$(docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' | awk -F= '$1 == "IDOL_BBQ_DB_BACKUP_DIR" { print $2; found=1 } END { if (!found) print "/app/backups/db-migrations" }')"
-binds_tmp="$(mktemp)"
+binds_tmp="$(mktemp "$preflight_tmp_dir/binds.XXXXXX")"
 docker inspect "$CONTAINER_NAME" --format '{{ range .HostConfig.Binds }}{{ println . }}{{ end }}' > "$binds_tmp"
-container_env_tmp="$(mktemp)"
+container_env_tmp="$(mktemp "$preflight_tmp_dir/container-env.XXXXXX")"
 docker inspect "$CONTAINER_NAME" --format '{{ range .Config.Env }}{{ println . }}{{ end }}' > "$container_env_tmp"
 mount_source() {
     awk -v target="$1" -F ':' '$2 == target { print $1; found=1; exit } END { if (!found) print "" }' "$binds_tmp"
@@ -133,10 +136,13 @@ build_commit_file="$(docker run --rm --entrypoint cat "$container_image" /app/bu
 migration_names="$(docker run --rm --entrypoint sh "$container_image" -lc 'find /app/prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf "%f\n" | sort')"
 migration_head="$(printf '%s\n' "$migration_names" | tail -1)"
 
-audit_json="$(docker run --rm --entrypoint bun -v "$config_path:/app/config.yaml:ro" "$container_image" /app/tools/config-audit.js --config /app/config.yaml --fail-on-diagnostics)"
-audit_tmp="$(mktemp)"
-printf '%s\n' "$audit_json" > "$audit_tmp"
-processor_env_tmp="$(mktemp)"
+audit_stdout_tmp="$(mktemp "$preflight_tmp_dir/audit-stdout.XXXXXX")"
+audit_stderr_tmp="$(mktemp "$preflight_tmp_dir/audit-stderr.XXXXXX")"
+audit_exit=0
+docker run --rm --entrypoint bun -v "$config_path:/app/config.yaml:ro" "$container_image" \
+    /app/tools/config-audit.js --config /app/config.yaml --fail-on-diagnostics \
+    > "$audit_stdout_tmp" 2> "$audit_stderr_tmp" || audit_exit=$?
+processor_env_tmp="$(mktemp "$preflight_tmp_dir/processor-env.XXXXXX")"
 python3 - "$config_path" "$container_env_tmp" > "$processor_env_tmp" <<'PY'
 import sys
 import yaml
@@ -177,15 +183,15 @@ if [ -d "$backup_dir" ]; then
     backup_count="$(find "$backup_dir" -maxdepth 1 -type f -name 'refactor.db.*' ! -name '*.manifest' ! -name '*-wal' ! -name '*-shm' | wc -l | tr -d ' ')"
     latest_backup="$(find "$backup_dir" -maxdepth 1 -type f -name 'refactor.db.*' ! -name '*.manifest' ! -name '*-wal' ! -name '*-shm' -printf '%T@ %p\n' | sort -nr | awk 'NR == 1 { $1=""; sub(/^ /, ""); print }')"
 fi
-migration_names_tmp="$(mktemp)"
+migration_names_tmp="$(mktemp "$preflight_tmp_dir/migration-names.XXXXXX")"
 printf '%s\n' "$migration_names" > "$migration_names_tmp"
-db_status_tmp="$(mktemp)"
+db_status_tmp="$(mktemp "$preflight_tmp_dir/db-status.XXXXXX")"
 db_read_path="$db_path"
 db_container_tmp=""
 if [ "$container_running" = "true" ]; then
     db_container_tmp="/tmp/forwarder-preflight-db-$$.sqlite"
     docker exec "$CONTAINER_NAME" python3 -c "import sqlite3; source=sqlite3.connect('/app/data.db'); target=sqlite3.connect('$db_container_tmp'); source.backup(target); target.close(); source.close()"
-    db_read_path="$(mktemp)"
+    db_read_path="$(mktemp "$preflight_tmp_dir/db-read.XXXXXX")"
     docker cp "$CONTAINER_NAME:$db_container_tmp" "$db_read_path" >/dev/null
     docker exec "$CONTAINER_NAME" rm -f "$db_container_tmp"
 fi
@@ -347,12 +353,29 @@ if [ -n "${EXPECTED_COMMIT:-}" ] && [ "$image_build_commit" = "$EXPECTED_COMMIT"
 else
     printf 'commit_match=false\n'
 fi
-python3 - "$audit_tmp" <<'PY'
+printf 'audit_exit_code=%s\n' "$audit_exit"
+audit_summary_tmp="$(mktemp "$preflight_tmp_dir/audit-summary.XXXXXX")"
+python3 - "$audit_stdout_tmp" > "$audit_summary_tmp" <<'PY'
 import json
 import sys
 
 with open(sys.argv[1], 'r', encoding='utf-8') as handle:
-    data = json.load(handle)
+    raw = handle.read()
+
+try:
+    data = json.loads(raw)
+except Exception as exc:
+    print('audit_ok=false')
+    print('redacted_config_hash=')
+    print('policy_hash=')
+    print('secret_field_count=0')
+    print('route_count=0')
+    print('route_errors=0')
+    print('route_warnings=0')
+    print('operational_crawlers=0')
+    print('summary_card_routes=0')
+    print(f'audit_parse_error={exc.__class__.__name__}')
+    raise SystemExit(0)
 
 counts = data["route_graph"]["counts"]
 print(f'audit_ok={str(data["ok"]).lower()}')
@@ -364,17 +387,14 @@ print(f'route_errors={counts["errors"]}')
 print(f'route_warnings={counts["warnings"]}')
 print(f'operational_crawlers={counts["operational_crawlers"]}')
 print(f'summary_card_routes={data["route_graph"]["summary_card_routes"]}')
+print('audit_parse_error=')
 PY
+cat "$audit_summary_tmp"
+audit_ok="$(awk -F= '$1 == "audit_ok" { print $2 }' "$audit_summary_tmp")"
 cat "$processor_env_tmp"
 processor_env_status="$(awk -F= '$1 == "processor_env_status" { print $2 }' "$processor_env_tmp")"
-rm -f "$audit_tmp"
-rm -f "$binds_tmp" "$container_env_tmp" "$processor_env_tmp"
 printf 'migration_head=%s\n' "$migration_head"
 cat "$db_status_tmp"
-rm -f "$migration_names_tmp" "$db_status_tmp"
-if [ -n "$db_container_tmp" ]; then
-    rm -f "$db_read_path"
-fi
 printf 'remote_dirty_tracked=%s\n' "$remote_dirty_tracked"
 printf 'remote_dirty_untracked=%s\n' "$remote_dirty_untracked"
 
@@ -416,6 +436,10 @@ if [ "$STRICT_CONFIG_SHA256" = "1" ] && { [ -z "${EXPECTED_CONFIG_SHA256:-}" ] |
 fi
 if [ "$STRICT_PROCESSOR_ENV" = "1" ] && [ "$processor_env_status" != "ok" ]; then
     printf 'preflight failed: processor env keys are missing\n' >&2
+    exit 1
+fi
+if [ "$audit_exit" != "0" ] || [ "${audit_ok:-false}" != "true" ]; then
+    printf 'preflight failed: config audit exit=%s ok=%s\n' "$audit_exit" "${audit_ok:-false}" >&2
     exit 1
 fi
 REMOTE

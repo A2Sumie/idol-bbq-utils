@@ -32,7 +32,7 @@ function splitNetscapeCookieLine(line: string) {
 }
 
 function isExpiredCookie(expires: number | undefined, now: number) {
-    return Number.isFinite(expires) && expires > 0 && expires <= now
+    return typeof expires === 'number' && Number.isFinite(expires) && expires > 0 && expires <= now
 }
 
 function normalizeNetscapeCookieLine(line: string) {
@@ -153,7 +153,8 @@ function auditNetscapeCookieFile(
         }
 
         audit.usable_cookie_count += 1
-        if (!Number.isFinite(parsed.cookie.expires) || parsed.cookie.expires <= 0) {
+        const expires = parsed.cookie.expires
+        if (typeof expires !== 'number' || !Number.isFinite(expires) || expires <= 0) {
             audit.session_cookie_count += 1
         }
         domains.add(parsed.cookie.domain.replace(/^\./, '').toLowerCase())
@@ -190,11 +191,14 @@ class SimpleExpiringCache {
         this.cache.set(key, { value, expiresAt })
 
         if (ttlMs > 0) {
-            setTimeout(() => {
-                if (this.cache.get(key)?.expiresAt <= Date.now()) {
-                    this.cache.delete(key)
-                }
-            }, Math.min(ttlMs, 2_147_483_647))
+            setTimeout(
+                () => {
+                    if (this.cache.get(key)?.expiresAt <= Date.now()) {
+                        this.cache.delete(key)
+                    }
+                },
+                Math.min(ttlMs, 2_147_483_647),
+            )
         }
     }
 

@@ -195,9 +195,8 @@ function sortUnique(values: Array<string>) {
     return Array.from(new Set(values.filter(Boolean))).sort((a, b) => a.localeCompare(b))
 }
 
-
-function uniquePreserveOrder(values: Array<string>) {
-    return Array.from(new Set(values.filter(Boolean)))
+function uniquePreserveOrder<T>(values: Array<T | null | undefined | false | ''>): Array<T> {
+    return Array.from(new Set(values.filter((value): value is T => Boolean(value))))
 }
 
 function articleTranslationIdentityKey(article: ArticleWithId | Article) {
@@ -215,8 +214,8 @@ function stripArticleTranslations<T extends ArticleWithId | Article>(article: T)
             return
         }
 
-        currentArticle.translation = null
-        currentArticle.translated_by = null
+        ;(currentArticle as any).translation = null
+        ;(currentArticle as any).translated_by = null
 
         if (Array.isArray(currentArticle.media)) {
             currentArticle.media = currentArticle.media.map((mediaItem) => {
@@ -835,6 +834,9 @@ class ForwarderTaskScheduler extends TaskScheduler.TaskScheduler {
     }
 
     async drop() {
+        // Stop cron jobs before clearing them; a dropped manager must not
+        // leave live timers dispatching with stale config.
+        await this.stop()
         // 清除所有任务
         this.tasks.clear()
         for (const binding of this.taskEventBindings) {
@@ -1687,7 +1689,7 @@ class ForwarderPools extends BaseCompatibleModel {
             cardFeatures.push('translated-corner-badge')
         }
         const cardResult = await this.renderService.process(cardArticle, {
-            taskId: `qq-x-link-${article.id || article.a_id}`,
+            taskId: `qq-x-link-${article.id || article.a_id}-${crypto.randomUUID().slice(0, 8)}`,
             render_type: 'text-card',
             card_features: mergeFeatureFlags(cfg_forwarder?.card_features, cardFeatures),
             mediaConfig: cfg_forwarder?.media,
@@ -1743,7 +1745,18 @@ class ForwarderPools extends BaseCompatibleModel {
                     )
                     return null
                 })
-                if (!outbound?.claimed) {
+                if (!outbound) {
+                    sends.push({
+                        target_id: target.id,
+                        part: 'merged_forward',
+                        result: {
+                            status: 'blocked',
+                            reason: 'outbound_claim_failed',
+                        } as ForwarderSendResult,
+                    })
+                    continue
+                }
+                if (!outbound.claimed) {
                     sends.push({
                         target_id: target.id,
                         part: 'merged_forward',
@@ -2004,12 +2017,13 @@ class ForwarderPools extends BaseCompatibleModel {
                     log?.warn(`[Trace] Forwarder Instance NOT found for Target ID: ${id}`)
                     return undefined
                 }
-                return {
-                    forwarder,
-                    runtime_config,
+                const instance: ForwardTargetInstanceWithRuntimeConfig = { forwarder }
+                if (runtime_config !== undefined) {
+                    instance.runtime_config = runtime_config
                 }
+                return instance
             })
-            .filter((item): item is ForwardTargetInstanceWithRuntimeConfig => Boolean(item))
+            .filter((item): item is ForwardTargetInstanceWithRuntimeConfig => item !== undefined)
     }
 
     private resolveInlineForwardingTargets(
@@ -2102,7 +2116,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 // including targets whose translation passthrough never went out (e.g. the
                 // feature landed after the article). Keep those so the passthrough can fire;
                 // the main send remains claim-blocked downstream.
-                if (await this.hasPendingTranslationPassthrough(article, forwarder.forwarder, forwarder.runtime_config)) {
+                if (
+                    await this.hasPendingTranslationPassthrough(article, forwarder.forwarder, forwarder.runtime_config)
+                ) {
                     to.push(forwarder)
                     continue
                 }
@@ -2185,7 +2201,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 // One malformed article must not abort the whole batch; record a visible failure and move on.
                 log?.error(
                     `Render process failed for article ${article.a_id}, skipping it this cycle: ${
-                        renderProcessError instanceof Error ? renderProcessError.stack || renderProcessError.message : String(renderProcessError)
+                        renderProcessError instanceof Error
+                            ? renderProcessError.stack || renderProcessError.message
+                            : String(renderProcessError)
                     }`,
                 )
                 continue
@@ -2239,6 +2257,8 @@ class ForwarderPools extends BaseCompatibleModel {
                         targetId: string
                         fingerprint: string
                     }> = []
+                    let outboundIdempotencyKey = ''
+                    let premiereResolvedForceKey: string | undefined
                     try {
                         if (this.shouldStopForShutdown(log, `sendArticles target ${target.id}`)) {
                             hadNonErrorOutcome = true
@@ -2249,7 +2269,9 @@ class ForwarderPools extends BaseCompatibleModel {
                         const targetCooldownKey = `${platform}:${cloned_article.a_id}:${target.id}`
                         const cooldownUntil = this.articleTargetCooldowns.get(targetCooldownKey)
                         if (cooldownUntil && cooldownUntil > Date.now()) {
-                            log?.debug(`Skipping article ${cloned_article.a_id} for ${target.id}: non-retryable send cooldown`)
+                            log?.debug(
+                                `Skipping article ${cloned_article.a_id} for ${target.id}: non-retryable send cooldown`,
+                            )
                             hadNonErrorOutcome = true
                             return
                         }
@@ -2450,11 +2472,11 @@ class ForwarderPools extends BaseCompatibleModel {
                             ))
                         const baseText = target.NAME === 'bilibili' ? stripUrlsFromText(resolvedText) : resolvedText
 
-                        const premiereResolvedForceKey =
+                        premiereResolvedForceKey =
                             premiereResolvedAt && !options?.forceSend
                                 ? `premiere-resolved-${article.a_id}-${premiereResolvedAt}`
                                 : undefined
-                        const outboundIdempotencyKey = articleOutboundKey(target.id, article, {
+                        outboundIdempotencyKey = articleOutboundKey(target.id, article, {
                             forceKey: options?.forceSend ? taskId : premiereResolvedForceKey,
                         })
 
@@ -2469,7 +2491,9 @@ class ForwarderPools extends BaseCompatibleModel {
                                         `Article ${article.a_id} already claimed for target ${target.id}, proceeding for premiere-resolved send`,
                                     )
                                 } else {
-                                    log?.debug(`[Trace] Article ${article.a_id} already claimed for target ${target.id}`)
+                                    log?.debug(
+                                        `[Trace] Article ${article.a_id} already claimed for target ${target.id}`,
+                                    )
                                     hadNonErrorOutcome = true
                                     return
                                 }
@@ -2570,7 +2594,9 @@ class ForwarderPools extends BaseCompatibleModel {
                             return
                         }
 
-                        const xTiktokTeaserMode = resolveXTiktokTeaserMode(target.getEffectiveConfig(runtime_config) as any)
+                        const xTiktokTeaserMode = resolveXTiktokTeaserMode(
+                            target.getEffectiveConfig(runtime_config) as any,
+                        )
                         if (
                             (xTiktokTeaserMode === 'image' || xTiktokTeaserMode === 'suppress') &&
                             isXTiktokTeaserArticle(article)
@@ -2596,7 +2622,9 @@ class ForwarderPools extends BaseCompatibleModel {
                             }
                             mediaFiles = transformXTiktokTeaserMediaToSingleImage(mediaFiles)
                             contentMediaFiles = transformXTiktokTeaserMediaToSingleImage(contentMediaFiles)
-                            log?.info(`X TikTok teaser ${article.a_id} downgraded to a single cover image for ${target.id}`)
+                            log?.info(
+                                `X TikTok teaser ${article.a_id} downgraded to a single cover image for ${target.id}`,
+                            )
                         }
 
                         const translatedCompanionCard = suppressTranslations
@@ -2756,9 +2784,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                             fingerprint: textFingerprint,
                                             article_key: articleKey(article),
                                             platform: target.NAME,
-                                            article_id: Number.isFinite(Number(article.id))
-                                                ? Number(article.id)
-                                                : null,
+                                            article_id: Number.isFinite(Number(article.id)) ? Number(article.id) : null,
                                             windowSeconds: fingerprintConfig.windowSeconds,
                                         }).catch((error) => {
                                             log?.warn(
@@ -2783,23 +2809,23 @@ class ForwarderPools extends BaseCompatibleModel {
                                                 },
                                             ).catch(() => undefined)
                                             await DB.ForwardBy.save(article.id, platform, target.id, 'article').catch(
-                                            () => undefined,
-                                        )
-                                        await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(
-                                            () => undefined,
-                                        )
-                                        error_for_all = false
-                                        hadNonErrorOutcome = true
-                                        return
-                                    }
-                                    if (textClaim && textClaim.allowed) {
-                                        contentFingerprintForRelease.push({
-                                            scope: textScope,
-                                            targetId: target.id,
-                                            fingerprint: textFingerprint,
-                                        })
-                                    }
+                                                () => undefined,
+                                            )
+                                            await this.releaseTargetMediaVisibilityClaims(visibilityForRelease).catch(
+                                                () => undefined,
+                                            )
+                                            error_for_all = false
+                                            hadNonErrorOutcome = true
+                                            return
                                         }
+                                        if (textClaim && textClaim.allowed) {
+                                            contentFingerprintForRelease.push({
+                                                scope: textScope,
+                                                targetId: target.id,
+                                                fingerprint: textFingerprint,
+                                            })
+                                        }
+                                    }
                                 }
                                 const fingerprintScope = this.buildContentFingerprintScope(target)
                                 const fingerprint = this.buildArticleContentFingerprint(text, [
@@ -2956,11 +2982,33 @@ class ForwarderPools extends BaseCompatibleModel {
                             context?.routeKey || routeKey({ source: 'system', crawlerId: 'unknown' }),
                             target.id,
                         )
-                        const outboundIdempotencyKey = articleOutboundKey(target.id, article, {
-                            forceKey: options?.forceSend ? taskId : undefined,
-                        })
+                        // Reuse the key that was actually claimed above when it exists.
+                        // Recomputing it here dropped the premiere-resolved force key for
+                        // non-force sends, so the failure was recorded against the placeholder
+                        // outbound instead of the premiere-resolved one (and batch members
+                        // could be double-marked). If the throw happened before the key was
+                        // assigned, fall back to the same derivation used for the claim.
+                        if (!outboundIdempotencyKey) {
+                            outboundIdempotencyKey = articleOutboundKey(target.id, article, {
+                                forceKey: options?.forceSend ? taskId : premiereResolvedForceKey,
+                            })
+                        }
+                        const batchOutbounds = (
+                            Array.isArray((error as any)?.batchOutbounds)
+                                ? ((error as any).batchOutbounds as string[])
+                                : []
+                        ).filter((key) => key && key !== outboundIdempotencyKey)
                         if (partialError) {
                             await applyPartialSendFailure(target, outboundIdempotencyKey, partialError, log)
+                            await Promise.all(
+                                batchOutbounds.map((key) =>
+                                    DB.OutboundMessage.markPartial(
+                                        key,
+                                        summarizeProviderResult(partialError.partialResults),
+                                        partialError,
+                                    ).catch(() => undefined),
+                                ),
+                            )
                             // Partial counts as a visible completion; keep the fingerprint claimed.
                             contentFingerprintForRelease = []
                             error_for_all = false
@@ -2977,6 +3025,11 @@ class ForwarderPools extends BaseCompatibleModel {
                                 article_key: articleKey(article),
                             },
                             log,
+                        )
+                        await Promise.all(
+                            batchOutbounds.map((key) =>
+                                DB.OutboundMessage.markFailed(key, error).catch(() => undefined),
+                            ),
                         )
                         if (!options?.forceSend) {
                             await this.releaseArticleChain(article, platform, target.id)
@@ -3046,7 +3099,11 @@ class ForwarderPools extends BaseCompatibleModel {
         runtime_config?: ForwardTargetPlatformCommonConfig,
     ) {
         const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
-        if (target.NAME !== 'bilibili' || !summaryConfig?.translatedCard || this.shouldSuppressTargetTranslations(target, runtime_config)) {
+        if (
+            target.NAME !== 'bilibili' ||
+            !summaryConfig?.translatedCard ||
+            this.shouldSuppressTargetTranslations(target, runtime_config)
+        ) {
             return null
         }
         const translation = String(article.translation || '').trim()
@@ -3109,7 +3166,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private shouldSkipRetweetOfOfficialTranslationPassthrough(article: ArticleWithId) {
         if (
-            (article.platform !== Platform.X && article.platform !== Platform.Twitter) ||
+            article.platform !== Platform.X ||
             String(article.type || '').toLowerCase() !== 'retweet' ||
             !this.articleHasRenderableRef(article)
         ) {
@@ -3153,7 +3210,6 @@ class ForwarderPools extends BaseCompatibleModel {
         }
         return this.canSendSummaryCardNow(queueKey, summaryConfig, Math.floor(Date.now() / 1000), target.id)
     }
-
 
     private async sendTranslationPassthrough(
         log: Logger | undefined,
@@ -3203,8 +3259,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 runtime_config,
                 renderResult?.originalMediaFiles || [],
             )
-            contentFiles =
-                visibility.policy?.duplicateBehavior === 'text_only' ? [] : visibility.visibleFiles
+            contentFiles = visibility.policy?.duplicateBehavior === 'text_only' ? [] : visibility.visibleFiles
         } catch (visibilityError) {
             log?.warn(
                 `Translation passthrough media visibility check failed for ${article.a_id} to ${target.id}: ${
@@ -3282,7 +3337,10 @@ class ForwarderPools extends BaseCompatibleModel {
             if (sendResult.status === 'sent') {
                 // Provider results can carry raw axios responses (cyclic); sanitize before persisting or
                 // Prisma's error formatter recurses on the JSON write.
-                await DB.OutboundMessage.markSent(passthroughKey, summarizeProviderResult(getForwarderProviderResult(sendResult)))
+                await DB.OutboundMessage.markSent(
+                    passthroughKey,
+                    summarizeProviderResult(getForwarderProviderResult(sendResult)),
+                )
                 log?.info(
                     `Sent translation passthrough for ${article.a_id} to ${target.id}: media=${mediaFiles.length} card=${cardFiles.length}`,
                 )
@@ -3301,7 +3359,11 @@ class ForwarderPools extends BaseCompatibleModel {
                     target,
                     passthroughKey,
                     new Error(`translation passthrough not sent: ${sendResult.status}`),
-                    { route_key: routeKeyForTarget, task_kind: 'translation_passthrough', article_key: articleKey(article) },
+                    {
+                        route_key: routeKeyForTarget,
+                        task_kind: 'translation_passthrough',
+                        article_key: articleKey(article),
+                    },
                     log,
                 )
                 return false
@@ -3312,7 +3374,11 @@ class ForwarderPools extends BaseCompatibleModel {
                 target,
                 passthroughKey,
                 error,
-                { route_key: routeKeyForTarget, task_kind: 'translation_passthrough', article_key: articleKey(article) },
+                {
+                    route_key: routeKeyForTarget,
+                    task_kind: 'translation_passthrough',
+                    article_key: articleKey(article),
+                },
                 log,
             )
             log?.warn(
@@ -3967,7 +4033,7 @@ class ForwarderPools extends BaseCompatibleModel {
             .trim()
             .replace(/^@+/, '')
             .toLowerCase()
-        if (article.platform === Platform.X || article.platform === Platform.Twitter) {
+        if (article.platform === Platform.X) {
             return userId === '227_staff'
         }
         if (article.platform === Platform.Website) {
@@ -4056,7 +4122,13 @@ class ForwarderPools extends BaseCompatibleModel {
         }
 
         const cardResult = await this.renderService.process(article, {
-            taskId: `summary-realtime-card-${target.id}-${article.id || article.a_id}`,
+            // Unique suffix per call: the same article/target can be sent
+            // concurrently, and a deterministic taskId previously made every
+            // concurrent sender write and delete the same rendered png (the
+            // Bilibili ENOENT upload race).
+            taskId: `summary-realtime-card-${target.id}-${article.id || article.a_id}-${crypto
+                .randomUUID()
+                .slice(0, 8)}`,
             render_type: 'text-card',
             card_features: ['no-translated-card-pattern', 'no-translated-corner-badge'],
             preloadedMediaFiles: renderResult.originalMediaFiles,
@@ -4147,7 +4219,10 @@ class ForwarderPools extends BaseCompatibleModel {
         // went out (it carries the card plus dedup-approved media), the realtime card push would be a
         // visible duplicate of the same article.
         const passthroughArticleKey = articleKey(article)
-        if (target.getEffectiveConfig(runtime_config)?.translation_passthrough && String(article.translation || '').trim()) {
+        if (
+            target.getEffectiveConfig(runtime_config)?.translation_passthrough &&
+            String(article.translation || '').trim()
+        ) {
             const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', passthroughArticleKey)
             const passthroughRecord = await DB.OutboundMessage.getByIdempotencyKey(passthroughKey).catch(() => null)
             if (passthroughRecord && isOutboundVisibleCompletionStatus(passthroughRecord.status)) {
@@ -4327,7 +4402,10 @@ class ForwarderPools extends BaseCompatibleModel {
             // card rendering between the flow-start check and here can take seconds, and the
             // passthrough send may have completed in the meantime. Posting now would duplicate the
             // article and re-upload the same photos, which trips Bilibili's upload velocity control.
-            if (target.getEffectiveConfig(runtime_config)?.translation_passthrough && String(article.translation || '').trim()) {
+            if (
+                target.getEffectiveConfig(runtime_config)?.translation_passthrough &&
+                String(article.translation || '').trim()
+            ) {
                 const passthroughKey = syntheticOutboundKey(target.id, 'translation_passthrough', currentArticleKey)
                 const passthroughRecord = await DB.OutboundMessage.getByIdempotencyKey(passthroughKey).catch(() => null)
                 if (passthroughRecord && isOutboundVisibleCompletionStatus(passthroughRecord.status)) {
@@ -4853,7 +4931,7 @@ class ForwarderPools extends BaseCompatibleModel {
         let originalCardRender: RenderResult | null = null
         if (item.formatterRenderType) {
             originalCardRender = await this.renderService.process(stripArticleTranslations(item.article), {
-                taskId: `summary-single-original-card-${queue.target.id}`,
+                taskId: `summary-single-original-card-${queue.target.id}-${crypto.randomUUID().slice(0, 8)}`,
                 render_type: item.formatterRenderType,
                 render_features: queue.config && (queue.config as any).renderFeatures,
                 card_features: queue.config && (queue.config as any).cardFeatures,
@@ -4882,7 +4960,9 @@ class ForwarderPools extends BaseCompatibleModel {
                 queue.target,
                 queue.runtime_config,
                 `summary-single-native-${queue.target.id}`,
-                originalCardRender.cardMediaFiles.length > 0 ? originalCardRender.cardMediaFiles : item.cardSourceMediaFiles,
+                originalCardRender.cardMediaFiles.length > 0
+                    ? originalCardRender.cardMediaFiles
+                    : item.cardSourceMediaFiles,
             )
             if (companion) {
                 companionMediaFiles = companion.mediaFiles
@@ -4910,10 +4990,7 @@ class ForwarderPools extends BaseCompatibleModel {
                 sourceMediaFiles,
             )
             visibilityForRelease = visibility
-            mediaFiles = [
-                ...this.filterMediaFilesByVisibility(sourceMediaFiles, visibility),
-                ...originalCardMediaFiles,
-            ]
+            mediaFiles = [...this.filterMediaFilesByVisibility(sourceMediaFiles, visibility), ...originalCardMediaFiles]
             if (visibility.policy && visibility.hiddenHashes.size > 0) {
                 text = uniquePreserveOrder([text, this.buildMediaVisibilityTextNotice(visibility.policy)]).join('\n\n')
             }
@@ -5315,21 +5392,34 @@ class ForwarderPools extends BaseCompatibleModel {
             now,
             primaryTextMode,
         )
-        const hasTranslatedContent =
-            queue.config.translatedCard && (await this.prepareSummaryCardTranslations(queue, allItems))
-        const translatedCard =
-            queue.config.translatedCard && hasTranslatedContent
-                ? await this.buildSummaryCardRenderVariant(
-                      queue,
-                      groups,
-                      allItems,
-                      title,
-                      await this.buildSummaryCardBatchContent(queue, groups, 'translated'),
-                      now,
-                      'translated',
-                      queue.config.translatedCard.badgeLabel,
-                  )
-                : null
+        const cardResults: RenderResult[] = [primaryCard.cardResult]
+        let hasTranslatedContent = false
+        let translatedCard: {
+            summaryArticle: ArticleWithId
+            cardResult: RenderResult
+            mediaUsage: SummaryCardMediaUsage
+        } | null = null
+        try {
+            hasTranslatedContent = Boolean(
+                queue.config.translatedCard && (await this.prepareSummaryCardTranslations(queue, allItems)),
+            )
+            if (queue.config.translatedCard && hasTranslatedContent) {
+                translatedCard = await this.buildSummaryCardRenderVariant(
+                    queue,
+                    groups,
+                    allItems,
+                    title,
+                    await this.buildSummaryCardBatchContent(queue, groups, 'translated'),
+                    now,
+                    'translated',
+                    queue.config.translatedCard.badgeLabel,
+                )
+                cardResults.push(translatedCard.cardResult)
+            }
+        } catch (error) {
+            this.renderService.cleanup(cardResults.flatMap((result) => result.mediaFiles))
+            throw error
+        }
         this.log?.info(
             `Prepared message pack card (${reason}) for ${queue.target.id}: ` +
                 `articles=${totalArticles} groups=${groups.length} ` +
@@ -5337,9 +5427,6 @@ class ForwarderPools extends BaseCompatibleModel {
                 `translated_cards=${translatedCard?.cardResult.cardMediaFiles.length || 0} ` +
                 `translated_enabled=${Boolean(queue.config.translatedCard)} ` +
                 `translated_content=${Boolean(hasTranslatedContent)}`,
-        )
-        const cardResults = [primaryCard.cardResult, translatedCard?.cardResult].filter(
-            (result): result is RenderResult => Boolean(result),
         )
         const cardMediaFiles = cardResults.flatMap((result) => result.cardMediaFiles)
         const originalMediaFiles = queue.config.includeOriginalMedia
@@ -5399,9 +5486,13 @@ class ForwarderPools extends BaseCompatibleModel {
                             `Summary-card batch for ${queue.target.id} stayed terminally failed across ${generation - 1} key rotations; cancelling window ${queue.windowId || 'n/a'} and dropping the queue`,
                         )
                         if (queue.windowId) {
-                            await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
-                                payload_hash: outboundPayloadHash,
-                            }).catch(() => undefined)
+                            await DB.AggregationWindow.updateStatus(
+                                queue.windowId,
+                                DB.AggregationWindow.STATUS.Cancelled,
+                                {
+                                    payload_hash: outboundPayloadHash,
+                                },
+                            ).catch(() => undefined)
                         }
                         return true
                     }
@@ -5675,17 +5766,30 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private async processSummaryCardTranslationText(processor: BaseProcessor, inputText: string, sourceText: string) {
+        let processorFailed = false
         const translateOnce = async (text: string) =>
             await pRetry(() => processor.process(text), {
                 retries: RETRY_LIMIT,
             })
                 .then((value) => preserveSourceHashtags(sourceText, value))
                 .catch((error) => {
-                    this.log?.error(`Summary-card translation processor failed: ${error}`)
+                    processorFailed = true
+                    this.log?.error(
+                        `Summary-card translation processor failed: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    )
                     return PROCESSOR_ERROR_FALLBACK
                 })
 
         const firstResult = await translateOnce(inputText)
+        if (processorFailed) {
+            // Match the processor contract (and api-manager.processText): an
+            // unreachable/failed processor yields the shared fallback marker,
+            // never null, so callers can distinguish "translation produced" from
+            // "translation failed" without a null deref.
+            return PROCESSOR_ERROR_FALLBACK
+        }
         if (this.isUsefulSummaryCardTranslation(sourceText, firstResult) || !hasJapaneseKana(sourceText)) {
             return firstResult
         }
@@ -5946,10 +6050,13 @@ class ForwarderPools extends BaseCompatibleModel {
     }
 
     private formatSummaryCardSendTextIndexList(indices: number[]) {
+        if (indices.length === 0) {
+            return ''
+        }
         const sortedIndices = indices.slice().sort((a, b) => a - b)
         const ranges: string[] = []
-        let start = sortedIndices[0]
-        let previous = sortedIndices[0]
+        let start = sortedIndices[0]!
+        let previous = sortedIndices[0]!
 
         for (const index of sortedIndices.slice(1)) {
             if (index === previous + 1) {
@@ -6009,9 +6116,9 @@ class ForwarderPools extends BaseCompatibleModel {
             let end = cursor + 1
             while (
                 end < entries.length &&
-                this.isSummaryCardRetweetQuoteParts(entries[end].parts) &&
-                entries[end].parts.actor === first.parts.actor &&
-                entries[end].parts.ref === first.parts.ref
+                this.isSummaryCardRetweetQuoteParts(entries[end]!.parts) &&
+                entries[end]!.parts.actor === first.parts.actor &&
+                entries[end]!.parts.ref === first.parts.ref
             ) {
                 end += 1
             }
@@ -6059,7 +6166,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
         for (const group of exactGroups.values()) {
             digestEntries.push({
-                firstIndex: group.indices[0],
+                firstIndex: group.indices[0]!,
                 text: this.formatSummaryCardSendTextDigestEntry(group.indices, group.parts),
             })
         }
@@ -6124,7 +6231,7 @@ class ForwarderPools extends BaseCompatibleModel {
         )
         const cardFeatures = textMode === 'translated' ? ['translated-corner-badge'] : undefined
         const cardResult = await this.renderService.process(summaryArticle, {
-            taskId: `summary-card-${queue.target.id}-${now}-${textMode}`,
+            taskId: `summary-card-${queue.target.id}-${now}-${textMode}-${crypto.randomUUID().slice(0, 8)}`,
             render_type: 'text-card',
             card_features: cardFeatures,
             deduplication: false,
@@ -6144,7 +6251,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const sortedGroups = orderBy(groups, [(group) => group.items[0]?.article.created_at || 0], ['asc'])
         const allItems = sortedGroups.flatMap((group) => group.items)
         if (sortedGroups.length === 1) {
-            const group = sortedGroups[0]
+            const group = sortedGroups[0]!
             return this.buildSummaryCardContent(queue, group.kind, group.items, textMode)
         }
 
@@ -6522,8 +6629,8 @@ class ForwarderPools extends BaseCompatibleModel {
                 }
             }
 
-            currentArticle.translation = null
-            currentArticle.translated_by = null
+            ;(currentArticle as any).translation = null
+            ;(currentArticle as any).translated_by = null
 
             if (currentArticle.ref && typeof currentArticle.ref === 'object') {
                 visit(currentArticle.ref as ArticleWithId | Article)
@@ -6777,7 +6884,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
     private getArticleThreadKey(article: ArticleWithId) {
         const root = this.getArticleThreadRoot(article) || article
-        return `${root.platform}:${root.a_id || root.id}`
+        return `${root.platform}:${root.a_id || (root as any).id}`
     }
 
     private resolveActiveTagDigestsForArticle(

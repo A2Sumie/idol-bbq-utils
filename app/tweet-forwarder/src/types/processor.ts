@@ -1,7 +1,5 @@
 import type { CommonCfgConfig } from './common'
 
-type ByteDance_LLM = 'doubao-pro-128k'
-type BigModel_LLM = 'glm-4-flash'
 type Google_LLM = 'gemini'
 type Deepseek_LLM = 'deepseek-v3' | 'deepseek-v4-flash' | 'deepseek-v4-pro'
 type Hy3_LLM = 'hy3-free' | 'hy3'
@@ -17,14 +15,6 @@ enum ProcessorProvider {
      * default model id gemini-2.0-flash
      */
     Google = 'Google',
-    /**
-     * default model id glm-4-flash
-     */
-    BigModel = 'BigModel',
-    /**
-     * default model id doubao-pro-128k
-     */
-    ByteDance = 'ByteDance',
     /**
      * default model id deepseek-v3
      */
@@ -47,10 +37,6 @@ enum ProcessorProvider {
      * (via the OpenCode Go endpoint) when the circuit breaker is frozen.
      */
     Hy3Free = 'Hy3Free',
-    /**
-     * Qwen MT model
-     */
-    QwenMT = 'QwenMT',
     /**
      * Built-in deterministic processor for rule-based extraction/merge
      */

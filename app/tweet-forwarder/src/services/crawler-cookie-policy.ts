@@ -43,7 +43,7 @@ function inferCookieHealthPlatform(crawler: any): CookieHealthPlatform {
 }
 
 function toCookieHealthPlatformFromSpiderPlatform(platform: Platform): CookieHealthPlatform {
-    if (platform === Platform.X || platform === Platform.Twitter) return 'x'
+    if (platform === Platform.X) return 'x'
     if (platform === Platform.Instagram) return 'instagram'
     if (platform === Platform.TikTok) return 'tiktok'
     if (platform === Platform.YouTube) return 'youtube'

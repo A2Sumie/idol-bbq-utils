@@ -135,7 +135,7 @@ class DeepSeekV4FlashTranslator extends OpenaiLikeLLMTranslator {
         // does not leave articles untranslated.
         if (config?.fallback) {
             const fallbackConfig = buildFallbackProcessorConfig(this.config as ProcessorConfig, config.fallback)
-            const fallbackApiKey = resolveProcessorApiKey(config.fallback.api_key)
+            const fallbackApiKey = resolveProcessorApiKey(config.fallback.api_key || '') || this.api_key
             this.fallbackProcessor = new OpenaiLikeLLMTranslator(fallbackApiKey, log, fallbackConfig)
         }
     }

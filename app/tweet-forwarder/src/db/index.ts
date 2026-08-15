@@ -293,7 +293,7 @@ namespace DB {
             const maxDepth = 100
             const byId = new Map<number, DBArticle>()
 
-            const rootRows = await delegate.findMany({ where: { id: { in: ids } } })
+            const rootRows: Array<DBArticle> = await delegate.findMany({ where: { id: { in: ids } } })
             for (const row of rootRows) {
                 byId.set(Number(row.id), row)
             }
@@ -419,7 +419,7 @@ namespace DB {
                     ]
                 }
 
-                const rows = await delegate.findMany({
+                const rows: Array<DBArticle> = await delegate.findMany({
                     where,
                     orderBy: {
                         created_at: 'desc',
@@ -994,6 +994,7 @@ namespace DB {
                 data: {
                     ...data,
                     updated_at: now,
+                    finished_at: isTerminalStatus(data.status) ? now : null,
                 },
             })
         }
@@ -1159,24 +1160,62 @@ namespace DB {
             }
 
             const platform = slots[inactiveSlot]!
-            await prisma.media_hashes.upsert({
+            // CAS-style claim: refresh a stale slot row atomically; concurrent
+            // claimants for the same inactive slot cannot both win because the
+            // second updateMany sees created_at already refreshed. When no row
+            // exists yet, the unique platform_hash constraint arbitrates the
+            // create and the loser falls through to "not allowed".
+            const refreshed = await prisma.media_hashes.updateMany({
+                where: {
+                    platform,
+                    hash: options.hash,
+                    created_at: { lt: cutoff },
+                },
+                data: {
+                    a_id: options.a_id || '',
+                    created_at: now,
+                },
+            })
+            if (refreshed.count > 0) {
+                return {
+                    allowed: true,
+                    seenCount: activeCount + 1,
+                    slot: inactiveSlot,
+                }
+            }
+            const existingSlot = await prisma.media_hashes.findUnique({
                 where: {
                     platform_hash: {
                         platform,
                         hash: options.hash,
                     },
                 },
-                create: {
-                    platform,
-                    hash: options.hash,
-                    a_id: options.a_id || '',
-                    created_at: now,
-                },
-                update: {
-                    a_id: options.a_id || '',
-                    created_at: now,
-                },
             })
+            if (existingSlot) {
+                return {
+                    allowed: false,
+                    seenCount: activeCount + 1,
+                }
+            }
+            try {
+                await prisma.media_hashes.create({
+                    data: {
+                        platform,
+                        hash: options.hash,
+                        a_id: options.a_id || '',
+                        created_at: now,
+                    },
+                })
+            } catch (error) {
+                // Another sender created the same slot between read and create.
+                if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                    return {
+                        allowed: false,
+                        seenCount: activeCount + 1,
+                    }
+                }
+                throw error
+            }
 
             return {
                 allowed: true,
@@ -1482,8 +1521,7 @@ namespace DB {
                 // 60s floor as a failed attempt so capture-mode loops do not
                 // re-render and re-"send" the same payload continuously.
                 const dryRunRetryable =
-                    existing.status === OUTBOUND_STATUS.DryRun &&
-                    existing.updated_at <= now - FAILED_RETRY_BASE_SECONDS
+                    existing.status === OUTBOUND_STATUS.DryRun && existing.updated_at <= now - FAILED_RETRY_BASE_SECONDS
                 const retryable =
                     dryRunRetryable || failedRetryable || (isOutboundStaleRetryableStatus(existing.status) && stale)
                 if (!retryable) {
@@ -2116,6 +2154,23 @@ namespace DB {
             return await prisma.target_health.findMany({
                 orderBy: { updated_at: 'desc' },
             })
+        }
+
+        /** Removes health rows for targets that no longer exist in the runtime config. */
+        export async function deleteUnknown(validTargetIds: Array<string>): Promise<number> {
+            const ids = Array.from(new Set(validTargetIds.map((id) => String(id || '').trim()).filter(Boolean)))
+            if (ids.length === 0) {
+                const result = await prisma.target_health.deleteMany({})
+                return result.count
+            }
+            const result = await prisma.target_health.deleteMany({
+                where: {
+                    target_id: {
+                        notIn: ids,
+                    },
+                },
+            })
+            return result.count
         }
     }
 }

@@ -78,11 +78,12 @@ relaunch() {
   # Do not remove the lock here: the watcher's acquireLock already reclaims stale
   # locks via PID liveness, and an unconditional rm can race a healthy watcher
   # into running two instances for the same handle.
-  docker exec "$CONTAINER_NAME" sh -lc \
-    "mkdir -p /app/archive/tiktok-live; \
-     nohup bun /app/tiktok-live-watch.ts $HANDLE --until $UNTIL --poll $POLL --max-minutes $MAX_MINUTES \
-       --cookie /app/assets/cookies/tiktok_cookies.txt \
-       >> /app/archive/tiktok-live/watch-$HANDLE.log 2>&1 & echo started=\$!"
+  docker exec "$CONTAINER_NAME" sh -c '
+    mkdir -p /app/archive/tiktok-live
+    nohup bun /app/tiktok-live-watch.ts "$1" --until "$2" --poll "$3" --max-minutes "$4" \
+      --cookie /app/assets/cookies/tiktok_cookies.txt \
+      >> "/app/archive/tiktok-live/watch-$1.log" 2>&1 & echo "started=$!"
+  ' _ "$HANDLE" "$UNTIL" "$POLL" "$MAX_MINUTES"
 }
 
 watcher_alive() {

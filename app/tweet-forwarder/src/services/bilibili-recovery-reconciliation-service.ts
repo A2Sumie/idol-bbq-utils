@@ -132,7 +132,8 @@ function resolveBilibiliTargets(config: AppConfig): ReconcileTarget[] {
     return (config.forward_targets || [])
         .filter(
             (target): target is ForwardTarget<ForwardTargetPlatformEnum.Bilibili> =>
-                target.platform === ForwardTargetPlatformEnum.Bilibili && Boolean(target.cfg_platform.video_upload?.enabled),
+                target.platform === ForwardTargetPlatformEnum.Bilibili &&
+                Boolean((target.cfg_platform as any).video_upload?.enabled),
         )
         .map((target) => ({
             id: targetIdForConfig(target),
@@ -149,8 +150,14 @@ function readMarker(markerPath: string): RecoveryMarker | undefined {
 }
 
 async function fetchBilibiliArchives(cookieHeader: string, log?: Logger) {
-    const pageSize = Math.max(1, Math.min(Number(process.env.IDOL_BBQ_BILI_RECOVERY_PAGE_SIZE || DEFAULT_PAGE_SIZE), 100))
-    const maxPages = Math.max(1, Math.min(Number(process.env.IDOL_BBQ_BILI_RECOVERY_MAX_PAGES || DEFAULT_MAX_PAGES), 200))
+    const pageSize = Math.max(
+        1,
+        Math.min(Number(process.env.IDOL_BBQ_BILI_RECOVERY_PAGE_SIZE || DEFAULT_PAGE_SIZE), 100),
+    )
+    const maxPages = Math.max(
+        1,
+        Math.min(Number(process.env.IDOL_BBQ_BILI_RECOVERY_MAX_PAGES || DEFAULT_MAX_PAGES), 200),
+    )
     const baseUrl = process.env.IDOL_BBQ_BILI_RECOVERY_ARCHIVES_URL || DEFAULT_ARCHIVES_URL
     const archives: BilibiliArchive[] = []
 
@@ -166,13 +173,16 @@ async function fetchBilibiliArchives(cookieHeader: string, log?: Logger) {
                 referer: 'https://member.bilibili.com/platform/upload-manager/article',
                 cookie: cookieHeader,
             },
+            signal: AbortSignal.timeout(30_000),
         })
         if (!response.ok) {
             throw new Error(`Bilibili archives API returned HTTP ${response.status}`)
         }
         const payload = (await response.json()) as any
         if (payload?.code !== 0) {
-            throw new Error(`Bilibili archives API returned code ${payload?.code}: ${payload?.message || payload?.msg || ''}`)
+            throw new Error(
+                `Bilibili archives API returned code ${payload?.code}: ${payload?.message || payload?.msg || ''}`,
+            )
         }
         const data = payload?.data || {}
         const items = (data.arc_audits || data.arcs || []) as Array<any>
@@ -233,7 +243,10 @@ async function consumeMarker(markerPath: string, result: ReconcileResult, log?: 
     log?.info(`Consumed DB recovery marker after Bilibili reconciliation: ${donePath}`)
 }
 
-async function reconcileBilibiliSubmissionsAfterDbRecovery(config: AppConfig, log?: Logger): Promise<ReconcileResult | null> {
+async function reconcileBilibiliSubmissionsAfterDbRecovery(
+    config: AppConfig,
+    log?: Logger,
+): Promise<ReconcileResult | null> {
     if (!normalizeBool(process.env.IDOL_BBQ_BILI_RECOVERY_RECONCILE, true)) {
         return null
     }
@@ -257,7 +270,9 @@ async function reconcileBilibiliSubmissionsAfterDbRecovery(config: AppConfig, lo
     }
 
     if (targets.length === 0) {
-        log?.warn('DB recovery marker present but no Bilibili video-upload target is configured; leaving marker for retry')
+        log?.warn(
+            'DB recovery marker present but no Bilibili video-upload target is configured; leaving marker for retry',
+        )
         return result
     }
 

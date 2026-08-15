@@ -37,7 +37,7 @@ class TiktokSpider extends BaseSpider {
     BASE_URL: string = 'https://www.tiktok.com/'
     NAME: string = 'Tiktok Generic Spider'
 
-    private cache: SimpleExpiringCache = new SimpleExpiringCache()
+    protected cache: SimpleExpiringCache = new SimpleExpiringCache()
     private expire: number = 60 * 3 // 3 minutes
 
     async _crawl<T extends TaskType>(
@@ -534,7 +534,14 @@ namespace TiktokApiJsonParser {
                 throw error
             }
         }
-        const universalData = JSON.parse(content)
+        let universalData: any
+        try {
+            universalData = JSON.parse(content)
+        } catch (error) {
+            throw new Error(
+                `TikTok universal data JSON parse failed for @${handle}: ${error instanceof Error ? error.message : String(error)}`,
+            )
+        }
         const userInfo = findUserInfoForHandle(universalData, handle)
         const userItems = Array.isArray(userInfo?.itemList) ? userInfo.itemList : []
         const fallbackItems = userItems.length > 0 ? [] : itemModuleValues(universalData)
@@ -714,9 +721,17 @@ namespace TiktokApiJsonParser {
         cookieString?: string,
     ): Promise<GenericFollows> {
         const content = await loadUniversalData(url, page, cookieString)
+        let universalData: any
+        try {
+            universalData = JSON.parse(content)
+        } catch (error) {
+            throw new Error(
+                `TikTok follows universal data JSON parse failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
+        }
         const userInfo = JSONPath({
             path: "$..['webapp.user-detail'].userInfo",
-            json: JSON.parse(content),
+            json: universalData,
             resultType: 'value',
         })[0]
         return {

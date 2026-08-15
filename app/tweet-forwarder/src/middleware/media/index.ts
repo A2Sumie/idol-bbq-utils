@@ -8,6 +8,7 @@ import { UserAgent } from '@idol-bbq-utils/spider'
 
 const MATCH_FILE_NAME = /(?<filename>[^/]+)\.(?<ext>[^.]+)$/
 const DEFAULT_YT_DLP_FORMAT = 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b'
+const PLAIN_DOWNLOAD_TIMEOUT_MS = 30_000
 
 function writeImgToFile(buffer: Buffer<ArrayBufferLike>, filename: string): string {
     const dest = `${CACHE_DIR_ROOT}/media/plain/${filename}`
@@ -33,6 +34,7 @@ async function downloadFile(
             ...headers,
         },
         redirect: 'manual',
+        signal: AbortSignal.timeout(PLAIN_DOWNLOAD_TIMEOUT_MS),
     })
     if ([301, 302, 307, 308].includes(res.status)) {
         const location = res.headers.get('location')
@@ -127,7 +129,7 @@ function galleryDownloadMediaFile(
     args.push('--directory', `${CACHE_DIR_ROOT}/media/gallery-dl`)
     args.push(url)
     log.debug(`downloading media files with args: ${args.join(' ')}`)
-    const res = execFileSync(exec_path, args, { encoding: 'utf-8' })
+    const res = execFileSync(exec_path, args, { encoding: 'utf-8', timeout: 180_000, killSignal: 'SIGKILL' })
         .split('\n')
         .filter((path) => path !== '')
         .map((path) => {

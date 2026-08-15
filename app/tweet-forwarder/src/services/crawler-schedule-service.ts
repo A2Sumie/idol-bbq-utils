@@ -126,11 +126,7 @@ function normalizeDays(days?: Array<number | string>) {
         return undefined
     }
     const normalized = Array.from(
-        new Set(
-            days
-                .map((day) => Number(day))
-                .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6),
-        ),
+        new Set(days.map((day) => Number(day)).filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)),
     ).sort((a, b) => a - b)
     return normalized.length > 0 ? normalized : undefined
 }
@@ -153,8 +149,9 @@ function expandScheduleWindow(window: CrawlerScheduleWindowInput): Array<Crawler
 }
 
 function parseNumberFieldToken(token: string, min: number, max: number): Array<number> {
-    const [rangePart, stepPart] = token.split('/')
-    const step = stepPart ? Number(stepPart) : 1
+    const [rawRangePart, rawStepPart] = token.split('/')
+    const rangePart = rawRangePart || '*'
+    const step = rawStepPart ? Number(rawStepPart) : 1
     if (!Number.isInteger(step) || step <= 0) {
         return []
     }
@@ -165,7 +162,7 @@ function parseNumberFieldToken(token: string, min: number, max: number): Array<n
         if (!rangeMatch) {
             return []
         }
-        start = Number(rangeMatch[1])
+        start = Number(rangeMatch[1]!)
         end = rangeMatch[2] === undefined ? start : Number(rangeMatch[2])
     }
     if (start < min || end > max || start > end) {
@@ -200,7 +197,11 @@ function expandLegacyCronToDailySlots(cron: string | undefined | null): Array<Cr
         return []
     }
     const cronParts = parts.length === 6 ? parts.slice(1) : parts
-    const [minuteField, hourField, dayOfMonthField, monthField, dayOfWeekField] = cronParts
+    const minuteField = cronParts[0]!
+    const hourField = cronParts[1]!
+    const dayOfMonthField = cronParts[2]!
+    const monthField = cronParts[3]!
+    const dayOfWeekField = cronParts[4]!
     if (dayOfMonthField !== '*' || monthField !== '*' || dayOfWeekField !== '*') {
         return []
     }

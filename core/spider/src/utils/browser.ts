@@ -374,7 +374,12 @@ function resolveBrowserProfile(
             ...(overrides.extraHeaders || {}),
         },
         userAgent: overrides.userAgent || preset.userAgent,
-        webgl: overrides.webgl === undefined ? (preset.isMobile ? DEFAULT_MOBILE_WEBGL : DEFAULT_DESKTOP_WEBGL) : overrides.webgl,
+        webgl:
+            overrides.webgl === undefined
+                ? preset.isMobile
+                    ? DEFAULT_MOBILE_WEBGL
+                    : DEFAULT_DESKTOP_WEBGL
+                : overrides.webgl,
     }
 }
 
@@ -436,18 +441,18 @@ async function applyBrowserProfile(
                         }
                         for (const glProto of webglProtos) {
                             const originalGetParameter = glProto.getParameter
-                            glProto.getParameter = patchNativeSource(
-                                function (this: WebGLRenderingContext, pname: number) {
-                                    if (pname === 0x9245) {
-                                        return maskedWebglVendor
-                                    }
-                                    if (pname === 0x9246) {
-                                        return maskedWebglRenderer
-                                    }
-                                    return originalGetParameter.call(this, pname)
-                                },
-                                'function getParameter() { [native code] }',
-                            )
+                            glProto.getParameter = patchNativeSource(function (
+                                this: WebGLRenderingContext,
+                                pname: number,
+                            ) {
+                                if (pname === 0x9245) {
+                                    return maskedWebglVendor
+                                }
+                                if (pname === 0x9246) {
+                                    return maskedWebglRenderer
+                                }
+                                return originalGetParameter.call(this, pname)
+                            }, 'function getParameter() { [native code] }')
                         }
                     } catch {
                         // Ignore WebGL masking failures.
@@ -487,11 +492,10 @@ async function applyBrowserProfile(
                 const mimeTypeArrayProto =
                     typeof MimeTypeArray !== 'undefined' ? MimeTypeArray.prototype : Array.prototype
                 const pluginProto = typeof Plugin !== 'undefined' ? Plugin.prototype : Object.prototype
-                const pluginArrayProto =
-                    typeof PluginArray !== 'undefined' ? PluginArray.prototype : Array.prototype
+                const pluginArrayProto = typeof PluginArray !== 'undefined' ? PluginArray.prototype : Array.prototype
                 const mimeTypeIndex = new Map<string, Record<string, unknown>>()
                 for (const plugin of fingerprint.plugins as Array<Record<string, unknown>>) {
-                    for (const mimeType of ((plugin.mimeTypes as Array<Record<string, unknown>> | undefined) || [])) {
+                    for (const mimeType of (plugin.mimeTypes as Array<Record<string, unknown>> | undefined) || []) {
                         const key = `${String(mimeType.type)}:${String(mimeType.suffixes)}`
                         if (!mimeTypeIndex.has(key)) {
                             const mimeTypeObject = {
@@ -508,7 +512,9 @@ async function applyBrowserProfile(
                 const mimeTypes = Array.from(mimeTypeIndex.values())
                 const mimeTypeArray = createNamedArray(mimeTypes, mimeTypeArrayProto, 'type')
                 const plugins = fingerprint.plugins.map((plugin: Record<string, unknown>) => {
-                    const pluginMimeTypes = ((plugin.mimeTypes as Array<Record<string, unknown>> | undefined) || []).map(
+                    const pluginMimeTypes = (
+                        (plugin.mimeTypes as Array<Record<string, unknown>> | undefined) || []
+                    ).map(
                         (mimeType) =>
                             mimeTypeIndex.get(`${String(mimeType.type)}:${String(mimeType.suffixes)}`) || null,
                     )
@@ -623,21 +629,18 @@ async function applyBrowserProfile(
                 if (originalQuery) {
                     Object.defineProperty(navigator.permissions, 'query', {
                         configurable: true,
-                        value: patchNativeSource(
-                            (parameters: { name?: string }) => {
-                                if (parameters?.name === 'notifications') {
-                                    return Promise.resolve({
-                                        state: Notification.permission,
-                                        onchange: null,
-                                        addEventListener: () => undefined,
-                                        removeEventListener: () => undefined,
-                                        dispatchEvent: () => false,
-                                    })
-                                }
-                                return originalQuery(parameters as PermissionDescriptor)
-                            },
-                            'function query() { [native code] }',
-                        ),
+                        value: patchNativeSource((parameters: { name?: string }) => {
+                            if (parameters?.name === 'notifications') {
+                                return Promise.resolve({
+                                    state: Notification.permission,
+                                    onchange: null,
+                                    addEventListener: () => undefined,
+                                    removeEventListener: () => undefined,
+                                    dispatchEvent: () => false,
+                                })
+                            }
+                            return originalQuery(parameters as PermissionDescriptor)
+                        }, 'function query() { [native code] }'),
                     })
                 }
                 if (fingerprint.chromeLike) {
@@ -671,7 +674,7 @@ async function applyBrowserProfile(
                 try {
                     for (const key of Object.getOwnPropertyNames(window)) {
                         if (key.startsWith('cdc_')) {
-                            delete (window as Record<string, unknown>)[key]
+                            delete (window as unknown as Record<string, unknown>)[key]
                         }
                     }
                 } catch {
@@ -723,10 +726,4 @@ function buildBrowserRequestHeaders(
 }
 
 export { DEVICE_PROFILE_PRESETS, applyBrowserProfile, buildBrowserRequestHeaders, resolveBrowserProfile }
-export type {
-    BrowserMode,
-    BrowserProfileConfig,
-    BrowserProfileOverrides,
-    DeviceProfile,
-    ProfileViewport,
-}
+export type { BrowserMode, BrowserProfileConfig, BrowserProfileOverrides, DeviceProfile, ProfileViewport }

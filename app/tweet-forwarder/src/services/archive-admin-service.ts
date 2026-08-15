@@ -597,7 +597,7 @@ function walkManifestFiles(dirPath: string, depth: number, maxDepth: number, col
     }
 }
 
-function createArchiveItemFromManifest(filePath: string) {
+function createArchiveItemFromManifest(filePath: string): ResolvedArchiveItem | null {
     const payload = safeJsonParse<ArchiveManifestRecord>(fs.readFileSync(filePath, 'utf8'))
     if (!payload || payload.visible === false) {
         return null
@@ -644,7 +644,7 @@ function createRemoteArchiveItemFromManifest(
     payload: RemoteArchiveManifestRecord,
     remote: RemoteArchiveConfig,
     manifestPath: string,
-) {
+): ResolvedArchiveItem | null {
     const mediaPath = String(payload.mediaPath || payload.localPath || '').trim()
     const containerPath = String(payload.containerPath || '').trim()
     if (!mediaPath || !containerPath || !isSupportedMediaFile(mediaPath)) {
@@ -934,13 +934,14 @@ function getResolvedArchives(force = false) {
             : archiveRoots.flatMap((rootDir) => scanArchiveRoot(rootDir))
     const remoteArchiveItems = scanRemoteArchiveManifestRoot()
 
-    const items = [
+    const items: ResolvedArchiveItem[] = [
         ...archiveItems,
         ...remoteArchiveItems,
         ...(shouldIncludeCacheArchives()
             ? resolveCacheRootCandidates().flatMap((rootDir) => scanCacheRoot(rootDir))
             : []),
     ]
+        .filter((item): item is ResolvedArchiveItem => item !== null && item !== undefined)
         .filter((item, index, arr) => arr.findIndex((entry) => entry.id === item.id) === index)
         .sort((left, right) => new Date(right.modifiedAt).getTime() - new Date(left.modifiedAt).getTime())
 
@@ -993,8 +994,11 @@ function resolveFfprobePath() {
     return process.env.FFPROBE_PATH || 'ffprobe'
 }
 
-function resolveFfmpegPath(uploadConfig?: ResolvedBiliupVideoUploadConfig | null) {
-    return uploadConfig?.collision_placeholder_part?.ffmpeg_path || process.env.FFMPEG_PATH || 'ffmpeg'
+function resolveFfmpegPath(_uploadConfig?: ResolvedBiliupVideoUploadConfig | null) {
+    // Deprecated `collision_placeholder_part.ffmpeg_path` is intentionally ignored
+    // (ResolvedBiliupVideoUploadConfig no longer carries it and biliup warns about
+    // the legacy field); honor the same env fallback as the rest of the pipeline.
+    return process.env.FFMPEG_PATH || 'ffmpeg'
 }
 
 function probeMediaDetails(filePath: string) {

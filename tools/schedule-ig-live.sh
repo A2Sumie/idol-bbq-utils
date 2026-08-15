@@ -140,8 +140,8 @@ PY
 )"
 
 echo "upsert schedule:"
-curl -sS -X POST -H "$auth" -H 'Content-Type: application/json' --data-binary "$schedule_body" "$api_base/api/schedules/crawlers/upsert" | python3 -m json.tool
+curl -sS --fail-with-body -X POST -H "$auth" -H 'Content-Type: application/json' --data-binary "$schedule_body" "$api_base/api/schedules/crawlers/upsert" | python3 -m json.tool
 
 echo "queue immediate probe:"
-curl -sS -X POST -H "$auth" -H 'Content-Type: application/json' --data-binary "$run_body" "$api_base/api/actions/crawlers/run" | python3 -m json.tool
+curl -sS --fail-with-body -X POST -H "$auth" -H 'Content-Type: application/json' --data-binary "$run_body" "$api_base/api/actions/crawlers/run" | python3 -m json.tool
 REMOTE

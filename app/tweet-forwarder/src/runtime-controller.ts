@@ -292,6 +292,17 @@ export class RuntimeController {
             }
         }
 
+        // Reconcile historical target_health rows when targets are removed/renamed.
+        await DB.TargetHealth.deleteUnknown(
+            (config.forward_targets || [])
+                .map((target) => String((target as any).id || (target as any).name || '').trim())
+                .filter(Boolean),
+        ).catch((error) => {
+            this.log.warn(
+                `Target health reconciliation failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
+        })
+
         if (this.runtimeMode === 'api-only') {
             this.log.warn('Runtime mode api-only: route graph loaded without crawler/forwarder schedulers or senders')
             return {
@@ -360,7 +371,7 @@ export class RuntimeController {
                 config: config.live_capture,
                 log,
             })
-            compatibleModels.push(liveCaptureExecutor)
+            compatibleModels.push(liveCaptureExecutor as any)
         }
 
         this.log.info(`[Trace] Check forwarders: ${forwarders?.length}, crawlers: ${crawlers?.length}`)

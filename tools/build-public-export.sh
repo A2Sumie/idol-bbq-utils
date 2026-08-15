@@ -19,6 +19,22 @@ set -Eeuo pipefail
 TARGET_DIR="${1:-/tmp/idol-bbq-utils-public}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
+# rm -rf below must never receive "/", $HOME, or another absolute path.
+case "$TARGET_DIR" in
+    /tmp/*)
+        ;;
+    *)
+        echo "TARGET_DIR must be an absolute path under /tmp: $TARGET_DIR" >&2
+        exit 1
+        ;;
+esac
+
+if sed --version >/dev/null 2>&1; then
+    SED_INPLACE=(-i)
+else
+    SED_INPLACE=(-i '')
+fi
+
 # Paths that must not appear in a public copy (deployment/ops-specific or
 # containing real credentials/identifiers). Everything else stays.
 EXCLUDE_PATHS=(
@@ -83,7 +99,7 @@ done
 # ships with the repo; point them at the gitignored cookie directory instead.
 if [ -d "$TARGET_DIR/assets/tweet-forwarder" ]; then
     find "$TARGET_DIR/assets/tweet-forwarder" -maxdepth 1 -name 'config.example*.yaml' -print0 \
-        | xargs -0 sed -i '' 's|./assets/tweet-forwarder/x.cookies|./assets/cookies/x.cookies.txt|g' 2>/dev/null || true
+        | xargs -0 sed "${SED_INPLACE[@]}" 's|./assets/tweet-forwarder/x.cookies|./assets/cookies/x.cookies.txt|g'
 fi
 
 # Replace deployment-specific defaults (domains/UA/host comments) with neutral
@@ -93,7 +109,7 @@ apply_scrub() {
     find "$TARGET_DIR" -type f \( \
         -name '*.ts' -o -name '*.js' -o -name '*.tsx' -o -name '*.md' -o -name '*.yaml' -o -name '*.yml' \
         -o -name '*.json' -o -name '*.py' -o -name '*.sh' -o -name 'Dockerfile' -o -name '*.mjs' \) \
-        -print0 | xargs -0 sed -i '' \
+        -print0 | xargs -0 sed "${SED_INPLACE[@]}" \
         -e 's|cic\.n2nj\.moe|cic.example.com|g' \
         -e 's|drop\.n2nj\.moe|drop.example.com|g' \
         -e 's|tv\.n2nj\.moe|live.example.com|g' \
@@ -101,8 +117,7 @@ apply_scrub() {
         -e 's|N2NJ-Stream-Bot/1\.0|IdolBBQ-RelayBot/1.0|g' \
         -e 's|actual host (3020e)|deployment host|g' \
         -e 's|3020e production DB|production DB|g' \
-        -e 's|full TLS via cloudflared|full TLS via an external tunnel|g' \
-        2>/dev/null || true
+        -e 's|full TLS via cloudflared|full TLS via an external tunnel|g'
 }
 apply_scrub
 
@@ -168,7 +183,7 @@ with live-relay capture, card rendering, and summary-card aggregation.
 1. `bun install`
 2. Generate the Prisma client (required before the first build):
    ```sh
-   bun run db:generate-client
+   bun --filter "@idol-bbq-utils/tweet-forwarder" db:generate-client
    ```
 3. `cp .env.example .env` and fill in the values you need.
 4. `cp assets/tweet-forwarder/config.example.yaml assets/config.yaml` and edit

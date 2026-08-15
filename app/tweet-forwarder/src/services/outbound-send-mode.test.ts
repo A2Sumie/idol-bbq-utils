@@ -50,7 +50,7 @@ test('captureOutboundSend appends payloads to the configured capture file', asyn
         })
         expect(resolveOutboundCaptureFile({ IDOL_BBQ_OUTBOUND_CAPTURE_FILE: captureFile })).toBe(captureFile)
         const lines = (await readFile(captureFile, 'utf8')).trim().split('\n')
-        expect(JSON.parse(lines[0]).target_id).toBe('target-a')
+        expect(JSON.parse(lines[0]!).target_id).toBe('target-a')
     } finally {
         await rm(tempRoot, { recursive: true, force: true })
     }

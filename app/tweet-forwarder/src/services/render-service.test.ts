@@ -83,7 +83,7 @@ function decodePngPixels(buffer: Buffer) {
                         : filter === 4
                           ? paeth
                           : 0
-            row[x] = (row[x] + add) & 0xff
+            row[x] = (row[x]! + add) & 0xff
         }
         rows.push(row)
     }
@@ -225,17 +225,17 @@ describe('RenderService text-compact', () => {
                 username: '匿名留言',
                 created_at: 1710000000,
                 content,
-                translation: null,
-                translated_by: null,
+                translation: undefined,
+                translated_by: undefined,
                 url: 'https://drop.example.com/',
-                type: 'article',
+                type: 'article' as any,
                 ref: null,
                 has_media: false,
                 media: [],
                 extra: null,
                 u_avatar: null,
                 platform: Platform.Website,
-            },
+            } as any,
             {
                 taskId: 'test-uie-raw',
                 render_type: 'raw-text',
@@ -258,17 +258,17 @@ describe('RenderService text-compact', () => {
                 username: '麻丘真央',
                 created_at: 1710000000,
                 content: '引用コメント',
-                translation: null,
-                translated_by: null,
+                translation: undefined,
+                translated_by: undefined,
                 url: 'https://x.com/mao_asaoka227/status/quote123',
-                type: 'quoted',
+                type: 'quoted' as any,
                 ref: null,
                 has_media: false,
                 media: [],
                 extra: null,
                 u_avatar: null,
                 platform: Platform.X,
-            },
+            } as any,
             {
                 taskId: 'test-x-quote-compact',
                 render_type: 'text-compact',
@@ -297,17 +297,17 @@ describe('RenderService text-compact', () => {
                 username: '河瀬詩',
                 created_at: 1710000000,
                 content: 'hello world',
-                translation: null,
-                translated_by: null,
+                translation: undefined,
+                translated_by: undefined,
                 url: 'https://www.instagram.com/p/abc123/',
-                type: 'post',
+                type: 'post' as any,
                 ref: null,
                 has_media: false,
                 media: [],
                 extra: null,
                 u_avatar: null,
                 platform: Platform.Instagram,
-            },
+            } as any,
             {
                 taskId: 'test-compact',
                 render_type: 'text-compact',
@@ -343,17 +343,17 @@ describe('RenderService text-compact', () => {
                 username: 'nao_aikawa227',
                 created_at: 1710000000,
                 content: null,
-                translation: null,
-                translated_by: null,
+                translation: undefined,
+                translated_by: undefined,
                 url: 'https://www.instagram.com/stories/nao_aikawa227/1/',
-                type: 'story',
+                type: 'story' as any,
                 ref: null,
                 has_media: false,
                 media: [],
                 extra: null,
                 u_avatar: null,
                 platform: Platform.Instagram,
-            },
+            } as any,
             {
                 taskId: 'test-empty-story-compact',
                 render_type: 'text-compact',
@@ -402,15 +402,15 @@ describe('RenderService text-compact', () => {
                 {
                     created_at: 1710000000,
                     content: null,
-                    translation: null,
-                    translated_by: null,
+                    translation: undefined,
+                    translated_by: undefined,
                     ref: null,
                     has_media: false,
                     media: [],
                     extra: null,
                     u_avatar: null,
                     ...testCase.article,
-                },
+                } as any,
                 {
                     taskId: testCase.name,
                     render_type: 'text-compact',
@@ -486,17 +486,17 @@ describe('RenderService text-compact', () => {
                 username: '22/7',
                 created_at: 1710000000,
                 content: `新视频标题\n\n${longDescription}`,
-                translation: null,
-                translated_by: null,
+                translation: undefined,
+                translated_by: undefined,
                 url: 'https://www.youtube.com/watch?v=yt001',
-                type: 'video',
+                type: 'video' as any,
                 ref: null,
                 has_media: false,
                 media: [],
                 extra: null,
                 u_avatar: null,
                 platform: Platform.YouTube,
-            },
+            } as any,
             {
                 taskId: 'test-youtube-compact',
                 render_type: 'text-compact',
@@ -1075,7 +1075,7 @@ describe('RenderService text-card', () => {
         expect(result.text).toContain('短文标题')
         expect(result.cardMediaFiles).toHaveLength(1)
         expect(result.mediaFiles).toHaveLength(2)
-        expect(result.mediaFiles[1]?.path).toBe(result.cardMediaFiles[0]?.path)
+        expect(result.mediaFiles[1]?.path).toBe(result.cardMediaFiles[0]!.path)
 
         service.cleanup(result.mediaFiles)
     })
@@ -1781,10 +1781,10 @@ describe('RenderService media deduplication', () => {
                 username: '22/7 Photo',
                 created_at: 1710000000,
                 content: '【春のかおり】\n\n【北原実咲】\n窓開けてみんなでお昼寝♪',
-                translation: null,
-                translated_by: null,
+                translation: undefined,
+                translated_by: undefined,
                 url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga',
-                type: 'article',
+                type: 'article' as any,
                 ref: null,
                 has_media: true,
                 media: [
@@ -1809,7 +1809,7 @@ describe('RenderService media deduplication', () => {
                 },
                 u_avatar: null,
                 platform: Platform.Website,
-            },
+            } as any,
             {
                 taskId: 'test-website-photo-no-dup',
                 render_type: 'text-compact',
@@ -1836,10 +1836,10 @@ describe('RenderService media deduplication', () => {
                 username: 'Member A',
                 created_at: 1710000000,
                 content: 'root body',
-                translation: null,
-                translated_by: null,
+                translation: undefined,
+                translated_by: undefined,
                 url: 'https://x.com/member_a/status/root-post',
-                type: 'tweet',
+                type: 'tweet' as any,
                 ref: {
                     id: 301,
                     a_id: 'ref-post',
@@ -1873,7 +1873,7 @@ describe('RenderService media deduplication', () => {
                 extra: null,
                 u_avatar: null,
                 platform: Platform.X,
-            },
+            } as any,
             {
                 taskId: 'test-source-metadata',
                 render_type: 'text-compact',
@@ -1909,10 +1909,10 @@ describe('RenderService img-tag ordering', () => {
                 username: '22/7 Photo',
                 created_at: 1710000000,
                 content: '【春のかおり】\n\n【北原実咲】\n窓開けてみんなでお昼寝♪',
-                translation: null,
-                translated_by: null,
+                translation: undefined,
+                translated_by: undefined,
                 url: 'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga',
-                type: 'article',
+                type: 'article' as any,
                 ref: null,
                 has_media: true,
                 media: [
@@ -1931,7 +1931,7 @@ describe('RenderService img-tag ordering', () => {
                 },
                 u_avatar: null,
                 platform: Platform.Website,
-            },
+            } as any,
             {
                 taskId: 'test-img-tag-order',
                 render_type: 'img-tag',
@@ -1944,8 +1944,8 @@ describe('RenderService img-tag ordering', () => {
             },
         )
 
-        expect(result.text).toContain('【22/7 PHOTO📷】')
-        expect(result.text).not.toContain('Website 22/7 Photo')
+        expect(result.text).toBe('Website 22/7 Photo')
+        expect(result.text).not.toContain('【22/7 PHOTO📷】')
         expect(result.text).not.toContain('窓開けてみんなでお昼寝')
         expect(result.mediaFiles).toHaveLength(2)
         expect(result.cardMediaFiles).toHaveLength(1)

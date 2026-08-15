@@ -32,7 +32,7 @@ test('article API redaction preserves content urls while removing host paths and
                 },
             ],
         },
-    })
+    }) as any
     const serialized = JSON.stringify(article)
 
     expect(article.content).toBe('keep visible article content with /app/ as ordinary text')
@@ -60,7 +60,7 @@ test('article API redaction maps list payloads', () => {
             id: 1,
             media: [{ type: 'photo', url: 'https://cdn.example.test/a.jpg', path: '/tmp/a.jpg' }],
         },
-    ])
+    ]) as any
 
     expect(articles[0].media[0].path).toBe('[redacted]')
 })

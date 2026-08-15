@@ -106,17 +106,24 @@ fi
 
 # Deploy watcher into the container and launch detached.
 scp -q -o BatchMode=yes -o ConnectTimeout=10 "$WATCHER_LOCAL" "$REMOTE_HOST:/tmp/tiktok-live-watch.ts"
-RUN_ARGS="$HANDLE"
-[ "$ONCE" = 1 ] && RUN_ARGS="$RUN_ARGS --once"
-[ -n "$UNTIL" ] && RUN_ARGS="$RUN_ARGS --until $UNTIL"
-RUN_ARGS="$RUN_ARGS --poll $POLL --max-minutes $MAX_MINUTES"
 
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" \
-  "CONTAINER_NAME=$(printf %q "$CONTAINER_NAME") HANDLE=$(printf %q "$HANDLE") RUN_ARGS=$(printf %q "$RUN_ARGS") bash -s" <<'REMOTE'
+  "CONTAINER_NAME=$(printf %q "$CONTAINER_NAME") HANDLE=$(printf %q "$HANDLE") ONCE=$ONCE UNTIL=$(printf %q "$UNTIL") POLL=$(printf %q "$POLL") MAX_MINUTES=$(printf %q "$MAX_MINUTES") bash -s" <<'REMOTE'
 set -Eeuo pipefail
 docker cp /tmp/tiktok-live-watch.ts "$CONTAINER_NAME":/app/tiktok-live-watch.ts
-log="/app/archive/tiktok-live/watch-$HANDLE.log"
-docker exec "$CONTAINER_NAME" sh -lc "mkdir -p /app/archive/tiktok-live && nohup bun /app/tiktok-live-watch.ts $RUN_ARGS >> $log 2>&1 & echo started-pid=\$!"
-echo "watcher launched; log: $log (inside container)"
-docker exec "$CONTAINER_NAME" sh -lc "sleep 3; tail -n 20 $log 2>/dev/null || true"
+docker exec "$CONTAINER_NAME" sh -c '
+  handle="$1"
+  once="$2"
+  until_time="$3"
+  poll="$4"
+  max_minutes="$5"
+  set -- "$handle"
+  [ "$once" = "1" ] && set -- "$@" --once
+  [ -n "$until_time" ] && set -- "$@" --until "$until_time"
+  set -- "$@" --poll "$poll" --max-minutes "$max_minutes" --cookie /app/assets/cookies/tiktok_cookies.txt
+  mkdir -p /app/archive/tiktok-live
+  nohup bun /app/tiktok-live-watch.ts "$@" >> "/app/archive/tiktok-live/watch-$handle.log" 2>&1 & echo "started-pid=$!"
+' _ "$HANDLE" "$ONCE" "$UNTIL" "$POLL" "$MAX_MINUTES"
+echo "watcher launched; log: /app/archive/tiktok-live/watch-$HANDLE.log (inside container)"
+docker exec "$CONTAINER_NAME" sh -c 'sleep 3; tail -n 20 "$1" 2>/dev/null || true' _ "/app/archive/tiktok-live/watch-$HANDLE.log"
 REMOTE

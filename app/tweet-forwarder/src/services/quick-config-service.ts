@@ -547,7 +547,8 @@ function buildQuickConfigModel(config: AppConfig) {
                 name: nodeName(target, `target-${index}`),
                 group: target.group || '',
                 platform: target.platform,
-                platform_label: platformNameMap[target.platform as any] || String(target.platform),
+                platform_label:
+                    (platformNameMap as Record<string, string>)[String(target.platform)] || String(target.platform),
                 group_id: (target.cfg_platform as any)?.group_id || null,
                 noise_profile: (target.cfg_platform as any)?.group_id === '742435777' ? 'high-realtime' : 'normal',
                 digest_threshold: (target.cfg_platform as any)?.digest_threshold ?? null,

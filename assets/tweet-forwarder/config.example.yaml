@@ -16,7 +16,7 @@ bots:
             max: 0
             min: 0
           translator:                         # (optional) translator configurations
-            type: 'none'                      # (required) translator type: 'none' | 'geminis' | 'glm-4-flash'
+            type: 'none'                      # (required) translator type: 'none' | 'geminis' | 'deepseek-v3'
     forward_to:                               # (optional) forward to multiple platforms, you can add more than one
       - type: 'telegram'                      # (optional) forward type
         token: 'telegram bot token'           # (required) telegram bot token
@@ -63,8 +63,8 @@ bots:
           path: '<path-to-gallery_dl-executable>'           # (required) path to gallery_dl executable
           cookie_file: './assets/tweet-forwarder/x.cookies'       # (required) path to cookies file
       translator:                             # (optional) translator configurations, if you want to translate the tweet
-        type: 'glm-4-flash'                   # (required) translator type: 'geminis' | 'glm-4-flash'
-        key: 'glm-token'                      # (required) translator key
+        type: 'gemini'                        # (required) translator type: 'geminis' | 'deepseek-v3'
+        key: 'gemini-token'                   # (required) translator key
   - name: 'all-follows-bot'
     websites:
       - origin: 'https://x.com'

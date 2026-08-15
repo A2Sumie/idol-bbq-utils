@@ -55,8 +55,8 @@ bots:
           path: '<path-to-gallery_dl-executable>'
           cookie_file: '/path/to/assets/x.cookies'
       translator:
-        type: 'glm-4-flash'
-        key: 'glm-token'
+        type: 'gemini'
+        key: 'gemini-token'
   - name: 'all-follows-bot'
     websites:
       - origin: 'https://x.com'

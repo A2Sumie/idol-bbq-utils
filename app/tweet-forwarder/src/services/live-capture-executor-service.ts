@@ -139,13 +139,12 @@ export async function fetchShowroomStreamingUrl(
         const json = (await response.json()) as {
             streaming_url_list?: Array<{ type?: string; url?: string }>
         }
-        if (json?.streaming_url_list === false) {
+        if (!json?.streaming_url_list) {
             return null
         }
         const list = Array.isArray(json?.streaming_url_list) ? json.streaming_url_list : []
         // Prefer the master playlist (hls_all), then plain hls — same order as StreamServ.
-        const entry =
-            list.find((item) => item?.type === 'hls_all') || list.find((item) => item?.type === 'hls') || null
+        const entry = list.find((item) => item?.type === 'hls_all') || list.find((item) => item?.type === 'hls') || null
         const hls = entry?.url || null
         return hls?.replace(/\\u0026/g, '&') || null
     } catch {
@@ -164,16 +163,7 @@ export function buildShowroomCaptureCommand(
     const output = path.join(archiveDir, `${stamp}.mkv`)
     return {
         bin: 'ffmpeg',
-        args: [
-            '-y',
-            '-headers',
-            `User-Agent: ${SHOWROOM_UA}\r\n`,
-            '-i',
-            m3u8Url,
-            '-c',
-            'copy',
-            output,
-        ],
+        args: ['-y', '-headers', `User-Agent: ${SHOWROOM_UA}\r\n`, '-i', m3u8Url, '-c', 'copy', output],
     }
 }
 
@@ -279,7 +269,9 @@ class CaptureSession {
     /** Fire-and-forget session loop; tracks completion via this.finished. */
     run() {
         this.loop().catch((error) => {
-            this.log?.warn(`[live-capture ${this.id}] session error: ${error instanceof Error ? error.message : String(error)}`)
+            this.log?.warn(
+                `[live-capture ${this.id}] session error: ${error instanceof Error ? error.message : String(error)}`,
+            )
         })
     }
 
@@ -431,7 +423,7 @@ class CaptureSession {
 
     private attachCaptureProcess(child: ChildProcess) {
         let stderrTail = ''
-        child.stderr.on('data', (chunk) => {
+        child.stderr?.on('data', (chunk) => {
             stderrTail = (stderrTail + String(chunk)).slice(-400)
         })
         child.once('exit', (code) => {
@@ -468,7 +460,14 @@ class CaptureSession {
                     files.push(entry)
                 }
             }
-        } catch {}
+        } catch (error) {
+            this.log?.warn(
+                `[live-capture ${this.id}] archive scan failed for ${this.archiveDir}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            this.result.last_error = `archive scan failed: ${error instanceof Error ? error.message : String(error)}`
+        }
         this.result.captured = files.length > 0
         this.result.files = files
         if (files.length === 0) {
@@ -487,7 +486,9 @@ class CaptureSession {
                 last_error: this.result.last_error || null,
             })
         } catch (error) {
-            this.log?.warn(`[live-capture ${this.id}] status update failed: ${error instanceof Error ? error.message : String(error)}`)
+            this.log?.warn(
+                `[live-capture ${this.id}] status update failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
         }
         this.log?.info(
             `[live-capture ${this.id}] session finished captured=${this.result.captured} files=${files.length} duration=${this.result.duration_seconds}s`,
@@ -516,8 +517,10 @@ export class LiveCaptureExecutor {
             this.log?.info('[live-capture] executor disabled')
             return
         }
-        this.log?.info('[live-capture] executor enabled, scanning every ' +
-            `${boundedPositive(this.options.config.scan_interval_seconds, DEFAULT_SCAN_INTERVAL_SECONDS)}s`)
+        this.log?.info(
+            '[live-capture] executor enabled, scanning every ' +
+                `${boundedPositive(this.options.config.scan_interval_seconds, DEFAULT_SCAN_INTERVAL_SECONDS)}s`,
+        )
         const scanMs = boundedPositive(this.options.config.scan_interval_seconds, DEFAULT_SCAN_INTERVAL_SECONDS) * 1000
         this.timer = setInterval(() => {
             this.tick().catch((error) => {
@@ -532,20 +535,16 @@ export class LiveCaptureExecutor {
             return
         }
         const now = Math.floor(Date.now() / 1000)
-        const maxConcurrent = Math.max(
-            0,
-            Math.floor(
-                this.options.config.max_concurrent_sessions === undefined
-                    ? DEFAULT_MAX_CONCURRENT_SESSIONS
-                    : Number(this.options.config.max_concurrent_sessions),
-            ),
-        )
+        const rawMaxConcurrent = Number(this.options.config.max_concurrent_sessions ?? DEFAULT_MAX_CONCURRENT_SESSIONS)
+        const maxConcurrent = Number.isFinite(rawMaxConcurrent)
+            ? Math.max(0, Math.floor(rawMaxConcurrent))
+            : DEFAULT_MAX_CONCURRENT_SESSIONS
         const due = await DB.TaskQueue.getDue(DB.TaskQueue.TYPE.LiveCapturePlan, ['planned', 'pending'], now)
         for (const task of due) {
             if (this.stopping) {
                 break
             }
-            const plan = task.payload as LiveCapturePlanPayload
+            const plan = task.payload as unknown as LiveCapturePlanPayload
             if (!plan?.window?.closes_at) {
                 continue
             }

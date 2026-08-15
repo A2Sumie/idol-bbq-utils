@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import { buildWebsitePhotoAlbumArticle, normalizeWebsitePhotoArticles } from './website-photo'
+import { buildWebsitePhotoAlbumArticle, normalizeWebsitePhotoArticles, type ArticleWithIdLike } from './website-photo'
 
-function buildSinglePhotoArticle(id: number, code: string, createdAt = 1773673200) {
+function buildSinglePhotoArticle(id: number, code: string, createdAt = 1773673200): ArticleWithIdLike {
     return {
         id,
         a_id: `photo:photoga:${code}`,
@@ -10,10 +10,10 @@ function buildSinglePhotoArticle(id: number, code: string, createdAt = 177367320
         username: id % 2 === 0 ? '黒崎ありす' : '北原実咲',
         created_at: createdAt,
         content: `【春のかおり - ${id % 2 === 0 ? '黒崎ありす' : '北原実咲'}】\n\nメッセージ${id}`,
-        translation: null,
-        translated_by: null,
+        translation: undefined,
+        translated_by: undefined,
         url: `https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ct=photoga#photo-modal-${code}`,
-        type: 'article',
+        type: 'article' as ArticleWithIdLike['type'],
         ref: null,
         has_media: true,
         media: [
@@ -63,21 +63,14 @@ test('buildWebsitePhotoAlbumArticle merges same-day single photo entries into on
     expect(article?.content).toContain('【春のかおり】')
     expect(article?.content).toContain('【北原実咲】')
     expect(article?.content).toContain('【黒崎ありす】')
-    expect(article?.extra?.data?.entry_count).toBe(2)
+    expect((article?.extra as any)?.data?.entry_count).toBe(2)
 })
 
 test('normalizeWebsitePhotoArticles prefers an album article over matching single entries', () => {
-    const singles = [
-        buildSinglePhotoArticle(51, '35054'),
-        buildSinglePhotoArticle(52, '35055'),
-    ]
+    const singles = [buildSinglePhotoArticle(51, '35054'), buildSinglePhotoArticle(52, '35055')]
     const album = buildWebsitePhotoAlbumArticle(singles)
 
-    const normalized = normalizeWebsitePhotoArticles([
-        singles[0],
-        album!,
-        singles[1],
-    ])
+    const normalized = normalizeWebsitePhotoArticles([singles[0]!, album!, singles[1]!])
 
     expect(normalized).toHaveLength(1)
     expect(normalized[0]?.a_id).toBe('photo:album:photoga:35054')
@@ -85,10 +78,7 @@ test('normalizeWebsitePhotoArticles prefers an album article over matching singl
 })
 
 test('normalizeWebsitePhotoArticles ignores legacy mixed-date albums when same-day singles are available', () => {
-    const singles = [
-        buildSinglePhotoArticle(56, '35031', 1773068400),
-        buildSinglePhotoArticle(57, '35032', 1773068400),
-    ]
+    const singles = [buildSinglePhotoArticle(56, '35031', 1773068400), buildSinglePhotoArticle(57, '35032', 1773068400)]
     const legacyAlbum = {
         ...buildWebsitePhotoAlbumArticle(singles)!,
         extra: {
@@ -104,10 +94,7 @@ test('normalizeWebsitePhotoArticles ignores legacy mixed-date albums when same-d
                 album_anchor: '35031',
                 entry_count: 4,
                 members: ['北原実咲', '黒崎ありす'],
-                entries: [
-                    { dateText: '2026.03.10' },
-                    { dateText: '2026.03.17' },
-                ],
+                entries: [{ dateText: '2026.03.10' }, { dateText: '2026.03.17' }],
             },
             content: '春のかおり',
             media: [],
@@ -115,12 +102,9 @@ test('normalizeWebsitePhotoArticles ignores legacy mixed-date albums when same-d
         },
     }
 
-    const normalized = normalizeWebsitePhotoArticles([
-        legacyAlbum,
-        ...singles,
-    ])
+    const normalized = normalizeWebsitePhotoArticles([legacyAlbum, ...singles])
 
     expect(normalized).toHaveLength(1)
     expect(normalized[0]?.a_id).toBe('photo:album:photoga:35031')
-    expect(normalized[0]?.extra?.data?.entry_count).toBe(2)
+    expect((normalized[0]?.extra as any)?.data?.entry_count).toBe(2)
 })

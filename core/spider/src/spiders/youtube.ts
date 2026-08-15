@@ -25,9 +25,44 @@ enum ArticleTypeEnum {
     SHORTS = 'shorts',
 }
 
+type YoutubeCrawlConfig<T extends TaskType> = {
+    task_type: T
+    crawl_engine: CrawlEngine
+    sub_task_type?: Array<string>
+    hydrate_users?: Array<string>
+    hydrate_limit?: number
+    hydrate_concurrency?: number
+    hydrate_interval_time?: {
+        min?: number
+        max?: number
+    }
+    cookieString?: string
+    requestHeaders?: Record<string, string>
+    max_list_pages?: number
+    max_detail_count?: number
+    detail_interval_time?: {
+        min?: number
+        max?: number
+    }
+    block_resource_types?: Array<string>
+    isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
+    articleStateLookup?: (a_id: string) => Promise<{
+        known: boolean
+        createdAt?: number | null
+        crawledAt?: number | null
+        storedPremierePending?: boolean
+    }>
+    articlePrefixStateLookup?: (prefix: string) => Promise<{
+        known: boolean
+        createdAt: number | null
+        crawledAt?: number | null
+    }>
+    isStoredPremierePending?: (a_id: string) => Promise<boolean>
+}
+
 class YoutubeSpider extends BaseSpider {
     // extends from XBaseSpider regex
-    static _VALID_URL = /(https:\/\/)?(www\.)?youtube\.com\/@(?<id>[^/?#]+)/
+    static _VALID_URL = /^(?:https:\/\/)?(?:www\.)?youtube\.com\/@(?<id>[^/?#]+)/
     static _PLATFORM = Platform.YouTube
     BASE_URL: string = 'https://www.youtube.com/'
     NAME: string = 'Youtube Generic Spider'
@@ -35,22 +70,7 @@ class YoutubeSpider extends BaseSpider {
     async _crawl<T extends TaskType>(
         url: string,
         page: Page | undefined,
-        config: {
-            task_type: T
-            crawl_engine: CrawlEngine
-            sub_task_type?: Array<string>
-            hydrate_limit?: number
-            hydrate_concurrency?: number
-            hydrate_interval_time?: {
-                min?: number
-                max?: number
-            }
-            isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
-            isStoredPremierePending?: (a_id: string) => Promise<boolean> | boolean
-            articleStateLookup?: (a_id: string) => Promise<{ known: boolean; storedPremierePending: boolean }>
-            cookieString?: string
-            requestHeaders?: Record<string, string>
-        },
+        config: YoutubeCrawlConfig<T>,
     ): Promise<TaskTypeResult<T, Platform.YouTube>> {
         const result = super._match_valid_url(url, YoutubeSpider)?.groups
         if (!result) {
@@ -112,7 +132,12 @@ namespace YoutubeApiJsonParser {
         }
         isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
         isStoredPremierePending?: (a_id: string) => Promise<boolean> | boolean
-        articleStateLookup?: (a_id: string) => Promise<{ known: boolean; storedPremierePending: boolean }>
+        articleStateLookup?: (a_id: string) => Promise<{
+            known: boolean
+            createdAt?: number | null
+            crawledAt?: number | null
+            storedPremierePending?: boolean
+        }>
         cookieString?: string
         requestHeaders?: Record<string, string>
         cache?: SimpleExpiringCache
@@ -130,9 +155,8 @@ namespace YoutubeApiJsonParser {
                 return await HTTPClient.download_webpage(url, headers, { timeout: YOUTUBE_LIST_TIMEOUT_MS })
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error)
-                const transient = /timeout|timed out|network|fetch failed|econnreset|socket hang up|(^|\s)50\d(\s|$)/i.test(
-                    message,
-                )
+                const transient =
+                    /timeout|timed out|network|fetch failed|econnreset|socket hang up|(^|\s)50\d(\s|$)/i.test(message)
                 if (!transient || attempt >= 1) {
                     throw error
                 }
@@ -723,8 +747,7 @@ namespace YoutubeApiJsonParser {
                 if (knownIds.has(article.a_id)) {
                     return false
                 }
-                const premiereCheck =
-                    storedPendingPremiereIds.has(article.a_id) || isPremierePendingArticle(article)
+                const premiereCheck = storedPendingPremiereIds.has(article.a_id) || isPremierePendingArticle(article)
                 if (!premiereCheck) {
                     return true
                 }
@@ -735,7 +758,11 @@ namespace YoutubeApiJsonParser {
                 const lastCheck = options.cache?.get(cacheKey) as number | null
                 const scheduled = (article.extra?.data?.premiere?.scheduled_start_at as number | null) || null
                 const nearSchedule = Boolean(scheduled && Date.now() / 1000 >= scheduled - 60)
-                if (typeof lastCheck === 'number' && Date.now() / 1000 - lastCheck < PREMIERE_RECHECK_TTL_S && !nearSchedule) {
+                if (
+                    typeof lastCheck === 'number' &&
+                    Date.now() / 1000 - lastCheck < PREMIERE_RECHECK_TTL_S &&
+                    !nearSchedule
+                ) {
                     return false
                 }
                 options.cache?.set(cacheKey, Math.floor(Date.now() / 1000), PREMIERE_RECHECK_TTL_S * 2)

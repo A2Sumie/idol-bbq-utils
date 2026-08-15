@@ -122,11 +122,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
     }
 
     const objectConfig = typeof raw === 'object' && raw ? raw : {}
-    const intervalSeconds = clampFiniteInt(
-        objectConfig.interval_seconds,
-        DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS,
-        60,
-    )
+    const intervalSeconds = clampFiniteInt(objectConfig.interval_seconds, DEFAULT_SUMMARY_CARD_INTERVAL_SECONDS, 60)
     const threshold = clampFiniteInt(objectConfig.threshold, DEFAULT_SUMMARY_CARD_THRESHOLD, 2)
     const maxItems = clampFiniteInt(objectConfig.max_items, DEFAULT_SUMMARY_CARD_MAX_ITEMS, 3, 30)
     const explicitDuplicateLimit = Math.floor(Number((objectConfig as any).media_duplicate_limit || 0))
@@ -179,6 +175,7 @@ function resolveSummaryCardConfig(config: ForwardTargetPlatformCommonConfig): Re
 function toSummaryCardRoutePolicy(config: ResolvedSummaryCardConfig): SummaryCardRoutePolicy {
     return {
         enabled: true,
+        no_aggregation: config.noAggregation,
         interval_seconds: config.intervalSeconds,
         threshold: config.threshold,
         max_items: config.maxItems,

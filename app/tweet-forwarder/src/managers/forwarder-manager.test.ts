@@ -16,7 +16,13 @@ import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError } 
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { normalizeCronSecond } from '@/utils/cron'
-import { articleKey, articleOutboundKey, routeKey, syntheticOutboundKey, targetRouteKey } from '@/services/outbound-message-service'
+import {
+    articleKey,
+    articleOutboundKey,
+    routeKey,
+    syntheticOutboundKey,
+    targetRouteKey,
+} from '@/services/outbound-message-service'
 import { processorRegistry } from '@/middleware/processor'
 import { ProcessorProvider } from '@/types/processor'
 import { resolveSummaryCardConfig as resolveSummaryCardPolicyConfig } from '@/services/summary-card-policy'
@@ -185,9 +191,7 @@ beforeEach(() => {
         return { allowed: true, record }
     }
     ;(DB.ContentFingerprint as any).release = async (options: any) => {
-        contentFingerprintRecords.delete(
-            contentFingerprintKey(options.scope, options.target_id, options.fingerprint),
-        )
+        contentFingerprintRecords.delete(contentFingerprintKey(options.scope, options.target_id, options.fingerprint))
     }
     ;(DB.ContentFingerprint as any).__records = contentFingerprintRecords
     ;(DB.OutboundMessage as any).claim = async (data: any) => {
@@ -620,7 +624,7 @@ test('buildAutoBoundForwarderTaskData keeps crawler identity and merges media co
     expect(forwarderTaskData.cfg_forwarder?.media).toEqual({
         type: 'no-storage',
         use: {
-            tool: 'yt-dlp',
+            tool: 'yt-dlp' as any,
             path: '/app/tools/bin/yt-dlp',
         },
     })
@@ -1085,11 +1089,11 @@ test('ForwarderPools resendArticle can limit delivery to selected targets with f
     await pools.resendArticle(article, 'Instagram抓取 - 普通时段', undefined, undefined, options)
 
     expect(capturedSends).toHaveLength(2)
-    expect(capturedSends[0].targets.map((item) => item.forwarder.id)).toEqual(['bilibili-转帖'])
-    expect(capturedSends[0].targets[0].runtime_config).toEqual({ require_media: true })
-    expect(capturedSends[0].taskId).toStartWith('manual-3916403096331382169-')
-    expect(capturedSends[1].taskId).toStartWith('manual-3916403096331382169-')
-    expect(capturedSends[0].taskId).not.toBe(capturedSends[1].taskId)
+    expect(capturedSends[0]!.targets.map((item) => item.forwarder.id)).toEqual(['bilibili-转帖'])
+    expect(capturedSends[0]!.targets[0]!.runtime_config).toEqual({ require_media: true })
+    expect(capturedSends[0]!.taskId).toStartWith('manual-3916403096331382169-')
+    expect(capturedSends[1]!.taskId).toStartWith('manual-3916403096331382169-')
+    expect(capturedSends[0]!.taskId).not.toBe(capturedSends[1]!.taskId)
 })
 
 test('ForwarderPools sendImmediateXLinkArticle sends one merged-forward parse in text media card order', async () => {
@@ -2411,7 +2415,11 @@ test('summary realtime media skips when the passthrough completes during send pr
     expect(result.visibleMediaSent).toBe(true)
     expect(result.skippedDuplicate).toBe(true)
     expect(target.sent).toHaveLength(0)
-    const outboundKey = syntheticOutboundKey(target.id, 'summary_realtime_media', `route:key:${articleKey(article as any)}`)
+    const outboundKey = syntheticOutboundKey(
+        target.id,
+        'summary_realtime_media',
+        `route:key:${articleKey(article as any)}`,
+    )
     const outboundRecord = (DB.OutboundMessage as any).__records.get(outboundKey)
     expect(outboundRecord?.status).toBe('skipped')
     expect(outboundRecord?.provider_message_ids?.reason).toBe('translation_passthrough_delivered')
@@ -2774,7 +2782,7 @@ test('sendArticles skips delivery when render service marks a cross-platform dup
     )
 
     expect(target.sent).toHaveLength(0)
-    expect(claimedArticleId).toBe(204)
+    expect(claimedArticleId).toBe(204 as any)
     expect(cleanupCalled).toBe(true)
     const outboundKey = articleOutboundKey(
         'target-duplicate',
@@ -5081,7 +5089,11 @@ test('single-item summary-card windows fall back to compact native when uncovere
     expect(target.sent[0]?.texts[0]).not.toContain('聚合')
     expect(target.sent[0]?.texts[0]).not.toContain('更新合并 1 条')
     expect(target.sent[0]?.props?.media).toEqual([
-        { media_type: 'photo', path: '/tmp/single-native-default.jpg', sourceArticleId: 'summary-single-native-default' },
+        {
+            media_type: 'photo',
+            path: '/tmp/single-native-default.jpg',
+            sourceArticleId: 'summary-single-native-default',
+        },
     ])
     expect(fallbackOutbound?.status).toBe('sent')
     expect(windows.get(queue.windowId)?.status).toBe('completed')
@@ -5521,7 +5533,7 @@ test('summary-card queues are shared across routes for the same target', async (
         )
     }
 
-    const queues = Array.from((pools as any).summaryCardQueues.values()).filter(
+    const queues: any[] = Array.from((pools as any).summaryCardQueues.values()).filter(
         (queue: any) => queue.target.id === target.id,
     )
     expect(queues).toHaveLength(1)
@@ -7149,7 +7161,7 @@ test('summary-card translation requires complete coverage for three-layer forwar
     expect(processCalls).toHaveLength(2)
     expect(processCalls[0]).toContain('【第2条/第2条发生/当前待译】')
     expect(processCalls[1]).toContain('【第3条/最后发生/当前待译】')
-    expect(middleArticle.translation).toBe('译:middle quote body')
+    expect(middleArticle.translation).toBe('译:middle quote body' as any)
     expect(outerArticle.translation).toBe('译:outer reply body')
     expect((pools as any).hasArticleChainTranslatedContent([outerArticle])).toBeTrue()
     expect(articleUpdates.map((item) => item.id).sort()).toEqual([931, 932])
@@ -10060,7 +10072,12 @@ test('summary-card policy bypasses aggregation for priority official sources exc
         false,
     )
     expect(
-        shouldUseSummaryCard({ platform: Platform.Website, u_id: '22/7:official-news', type: 'article', has_media: true }),
+        shouldUseSummaryCard({
+            platform: Platform.Website,
+            u_id: '22/7:official-news',
+            type: 'article',
+            has_media: true,
+        }),
     ).toBe(false)
     expect(
         shouldUseSummaryCard({ platform: Platform.Website, u_id: '22/7:fc-news', type: 'article', has_media: false }),
@@ -10640,7 +10657,7 @@ test('sendArticles starts a new summary-card window instead of appending to a du
     expect(packedArticles[0]?.content).not.toContain('new window text must wait')
     const queue = getSummaryCardQueueForTarget(pools, target.id)
     expect(queue?.items.size).toBe(1)
-    expect(Array.from(queue?.items.values() || [])[0]?.article?.a_id).toBe('summary-due-window-new')
+    expect((Array.from(queue?.items.values() || []) as any[])[0]?.article?.a_id).toBe('summary-due-window-new')
 })
 
 test('sendArticles allocates a replacement summary-card window after a threshold-completed aligned window', async () => {
@@ -10778,7 +10795,7 @@ test('sendArticles allocates a replacement summary-card window after a threshold
     expect(packedArticles).toHaveLength(1)
     const queue = getSummaryCardQueueForTarget(pools, target.id)
     expect(queue?.items.size).toBe(1)
-    expect(Array.from(queue?.items.values() || [])[0]?.article?.a_id).toBe('summary-threshold-reopen-next')
+    expect((Array.from(queue?.items.values() || []) as any[])[0]?.article?.a_id).toBe('summary-threshold-reopen-next')
 
     const windows = Array.from(((DB.AggregationWindow as any).__windows as Map<number, any>).values()).filter(
         (window: any) => window.target_id === target.id,
@@ -10996,7 +11013,9 @@ test('idle-first native summary-card send respects target-wide durable recent vi
     expect(target.sent).toHaveLength(0)
     const queue = getSummaryCardQueueForTarget(pools, target.id)
     expect(queue?.items.size).toBe(1)
-    expect(Array.from(queue?.items.values() || [])[0]?.article.a_id).toBe('summary-native-first-durable-cooldown')
+    expect((Array.from(queue?.items.values() || []) as any[])[0]?.article.a_id).toBe(
+        'summary-native-first-durable-cooldown',
+    )
 })
 
 test('idle-first translated summary-card targets append companion card to native sends', async () => {
@@ -11882,8 +11901,7 @@ test('content_fingerprint_dedup skips a same-content article that already sent t
     expect(
         outboundRecords.some(
             (record) =>
-                record.status === 'skipped' &&
-                record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
+                record.status === 'skipped' && record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
         ),
     ).toBeTrue()
 })
@@ -11917,7 +11935,14 @@ test('short-video text dedup suppresses identical IG/TikTok copy on the same tar
         await (pools as any).sendArticles(
             undefined,
             'st-ig-first',
-            [makeShortVideoFingerprintArticle(950, 'st-ig', '【#推しカメラ】 沖縄県出身 #桧山依子', Platform.Instagram)],
+            [
+                makeShortVideoFingerprintArticle(
+                    950,
+                    'st-ig',
+                    '【#推しカメラ】 沖縄県出身 #桧山依子',
+                    Platform.Instagram,
+                ),
+            ],
             [{ forwarder: target, runtime_config: undefined }],
             { render_type: 'text' } as any,
         )
@@ -11938,8 +11963,7 @@ test('short-video text dedup suppresses identical IG/TikTok copy on the same tar
     expect(
         outboundRecords.some(
             (record) =>
-                record.status === 'skipped' &&
-                record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
+                record.status === 'skipped' && record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
         ),
     ).toBeTrue()
 })
@@ -12193,8 +12217,7 @@ test('content_fingerprint_dedup suppresses a duplicate realtime media push witho
     expect(
         realtimeOutbound.some(
             (record: any) =>
-                record.status === 'skipped' &&
-                record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
+                record.status === 'skipped' && record.provider_message_ids?.reason === 'content_fingerprint_duplicate',
         ),
     ).toBeTrue()
     const fingerprintRecords = (DB.ContentFingerprint as any).__records as Map<string, any>

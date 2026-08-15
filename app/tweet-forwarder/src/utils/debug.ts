@@ -5,6 +5,8 @@ import type { Article } from '@/db'
 import dayjs from 'dayjs'
 import { MediaToolEnum } from '@/types/media'
 
+type DebugArticle = Article & { id: number }
+
 export async function runDebugPush(targetGroup: string, log: Logger) {
     // Unused
 }
@@ -37,7 +39,7 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
     log.info(`Target Resolved: ${targetForwarder.id}`)
 
     // 2. Define Test Cases
-    const baseArticle: Article = {
+    const baseArticle: DebugArticle = {
         id: 0,
         platform: Platform.X,
         a_id: '',
@@ -56,7 +58,7 @@ export async function runDebugPushWithPools(forwarderPools: ForwarderPools, targ
         u_avatar: 'https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png',
     }
 
-    const testCases: Array<{ name: string; article: Article; formatters: string[] }> = [
+    const testCases: Array<{ name: string; article: DebugArticle; formatters: string[] }> = [
         // Case A: Pure Text
         {
             name: 'X (Text Only)',

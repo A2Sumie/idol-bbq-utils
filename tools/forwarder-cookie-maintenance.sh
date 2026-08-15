@@ -42,7 +42,7 @@ discover_crawlers() {
 sync() {
     local crawler="$1"
     local response status
-    response="$(curl -sS -w '\n%{http_code}' -X POST "http://${API_HOST}:${API_PORT}/api/cookies/sync" \
+    response="$(curl -sS --connect-timeout 10 --max-time 300 -w '\n%{http_code}' -X POST "http://${API_HOST}:${API_PORT}/api/cookies/sync" \
         -H "$auth" -H 'Content-Type: application/json' \
         --data-binary "$(python3 -c 'import json,sys; print(json.dumps({"crawlerName": sys.argv[1]}))' "$crawler")")"
     status="${response##*$'\n'}"

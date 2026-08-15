@@ -87,11 +87,13 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" \
   "HANDLE=$(printf %q "$HANDLE") WINDOW_START=$(printf %q "$WINDOW_START") UNTIL=$(printf %q "$UNTIL") bash -s" <<'REMOTE'
 set -Eeuo pipefail
 python3 - "$HANDLE" "$WINDOW_START" "$UNTIL" <<'PY'
+import os
 import sys
+import tempfile
 import yaml
 
 handle, start, end = sys.argv[1:4]
-p = "/home/sumie/idol-bbq-utils/assets/config.yaml"
+p = os.path.expanduser("~/idol-bbq-utils/assets/config.yaml")
 cfg = yaml.safe_load(open(p, encoding="utf-8"))
 crawler = next((c for c in cfg["crawlers"] if c.get("name") == "Instagram Live 抢抓 - " + {"nao_aikawa227": "相川奈央", "shiina_satsuki227": "椎名桜月"}.get(handle, handle)), None)
 if crawler is None:
@@ -102,7 +104,17 @@ crawler.setdefault("cfg_crawler", {})["schedule"] = {
     "min_gap_seconds": 120,
     "tick_seconds": 10,
 }
-open(p, "w", encoding="utf-8").write(yaml.safe_dump(cfg, allow_unicode=True, default_flow_style=False, sort_keys=False))
+fd, tmp_path = tempfile.mkstemp(prefix="config.yaml.", dir=os.path.dirname(p))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle_file:
+        yaml.safe_dump(cfg, handle_file, allow_unicode=True, default_flow_style=False, sort_keys=False)
+    os.replace(tmp_path, p)
+except BaseException:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
 print(f"persisted window {start}..{end} for {handle}")
 PY
 REMOTE
@@ -115,23 +127,34 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker cp /tmp/instagr
 
 # 3) Launch the watcher + monitor for the window (starts immediately; probes at poll
 #    interval; the persisted config window additionally drives the crawler-side probe).
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" \
-  "CONTAINER_NAME=$(printf %q "$CONTAINER_NAME") HANDLE=$(printf %q "$HANDLE") UNTIL=$(printf %q "$UNTIL") PLAYER_ID=$(printf %q "$PLAYER_ID") PLAYER_NAME=$(printf %q "$PLAYER_NAME") AUTH_PASSWORD=$(printf %q "$AUTH_PASSWORD") WAF_HEADER=$(printf %q "$WAF_HEADER") ARCHIVE=$ARCHIVE bash -s" <<'REMOTE'
+#    Secrets travel via stdin assignments (not ssh argv or remote argv) and into the
+#    container only via `docker exec -e VAR` passthrough (no secret values in argv).
+{
+  printf 'AUTH_PASSWORD=%s\n' "$(printf %q "$AUTH_PASSWORD")"
+  printf 'WAF_HEADER=%s\n' "$(printf %q "$WAF_HEADER")"
+  cat <<'REMOTE'
 set -Eeuo pipefail
-docker exec -e AUTH_PASSWORD="$AUTH_PASSWORD" "$CONTAINER_NAME" sh -lc \
-  "rm -f /app/archive/instagram-live/watch-$HANDLE.lock; mkdir -p /app/archive/instagram-live; \
-   nohup bun /app/instagram-live-watch.ts $HANDLE --until $UNTIL --poll 90 \
-     --player-id \"$PLAYER_ID\" --player-name \"$PLAYER_NAME\" --live-player-url https://tv.n2nj.moe \
-     --auth-username sumie --auth-password \"\$AUTH_PASSWORD\" --waf-header \"$WAF_HEADER\" \
-     --cookie /app/assets/cookies/inscks0318.txt $([ "$ARCHIVE" = 1 ] && echo --archive) \
-     >> /app/archive/instagram-live/watch-$HANDLE.log 2>&1 & echo watcher-started=\$!"
-ARCHIVE_ARGS=()
-if [ "$ARCHIVE" = "1" ]; then ARCHIVE_ARGS=(--archive); fi
-nohup bash /tmp/instagram-live-monitor.sh --handle "$HANDLE" --until "$UNTIL" \
+export AUTH_PASSWORD WAF_HEADER
+ARCHIVE_ARG=""
+if [ "$ARCHIVE" = "1" ]; then ARCHIVE_ARG="--archive"; fi
+docker exec -e AUTH_PASSWORD -e WAF_HEADER "$CONTAINER_NAME" sh -c '
+  rm -f "/app/archive/instagram-live/watch-$1.lock"
+  mkdir -p /app/archive/instagram-live
+  archive_args=""
+  if [ "$5" = "1" ]; then archive_args="--archive"; fi
+  nohup bun /app/instagram-live-watch.ts "$1" --until "$2" --poll 90 \
+    --player-id "$3" --player-name "$4" --live-player-url https://tv.n2nj.moe \
+    --auth-username sumie --auth-password "$AUTH_PASSWORD" --waf-header "$WAF_HEADER" \
+    --cookie /app/assets/cookies/inscks0318.txt $archive_args \
+    >> "/app/archive/instagram-live/watch-$1.log" 2>&1 & echo "watcher-started=$!"
+' _ "$HANDLE" "$UNTIL" "$PLAYER_ID" "$PLAYER_NAME" "$ARCHIVE"
+AUTH_PASSWORD="$AUTH_PASSWORD" WAF_HEADER="$WAF_HEADER" nohup bash /tmp/instagram-live-monitor.sh --handle "$HANDLE" --until "$UNTIL" \
   --player-id "$PLAYER_ID" --player-name "$PLAYER_NAME" --check-every 15 \
-  --auth-password "$AUTH_PASSWORD" "${ARCHIVE_ARGS[@]:-}" >> /tmp/ig-live-monitor.log 2>&1 &
+  $ARCHIVE_ARG >> /tmp/ig-live-monitor.log 2>&1 &
 echo "monitor-started=$!"
 REMOTE
+} | ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" \
+  "CONTAINER_NAME=$(printf %q "$CONTAINER_NAME") HANDLE=$(printf %q "$HANDLE") UNTIL=$(printf %q "$UNTIL") PLAYER_ID=$(printf %q "$PLAYER_ID") PLAYER_NAME=$(printf %q "$PLAYER_NAME") ARCHIVE=$ARCHIVE bash -s"
 
 # 4) Restart forwarder-new so the persisted schedule takes effect.
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" 'docker restart forwarder-new >/dev/null && echo forwarder-restarted'

@@ -1,8 +1,12 @@
 import dayjs from 'dayjs'
+import utc from 'dayjs/plugin/utc'
 import { Logger } from '@idol-bbq-utils/log'
 import type { AppConfig } from '@/types'
+import type { ProcessorConfig } from '@/types/processor'
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
+
+dayjs.extend(utc)
 
 const SHOWROOM_URL_RE = /https?:\/\/(?:www\.)?showroom-live\.com\/r\/([a-z0-9_]+)/i
 const SHOWROOM_KEYWORD_RE = /SHOWROOM|ショールーム/i
@@ -72,7 +76,10 @@ function jstClockDateString(unix: number) {
 }
 
 function jstClockIso(unix: number) {
-    return dayjs.unix(unix).utcOffset(9 * 60).format('YYYY-MM-DDTHH:mm:ssZ')
+    return dayjs
+        .unix(unix)
+        .utcOffset(9 * 60)
+        .format('YYYY-MM-DDTHH:mm:ssZ')
 }
 
 export function isShowroomCandidatePost(content: string) {
@@ -107,21 +114,21 @@ export function extractShowroomEventsByRule(content: string): ShowroomEvent[] {
     }
     const lines = text.split(/\r?\n/)
     for (let index = 0; index < lines.length; index += 1) {
-        const line = lines[index]
+        const line = lines[index] ?? ''
         const urlMatch = SHOWROOM_URL_RE.exec(line)
         if (!urlMatch) {
             continue
         }
-        const slug = urlMatch[1]
+        const slug = urlMatch[1]!
         const windowStart = Math.max(0, index - 3)
         const context = lines.slice(windowStart, index + 1).join('\n')
         const timeMatch = /(\d{1,2}:\d{2})/.exec(context)
         if (!timeMatch) {
             continue
         }
-        const timeLabel = timeMatch[1]
+        const timeLabel = timeMatch[1]!
         events.push({
-            starts_at: parseRelativeDate(dateMatch[1], dateMatch[2], dateMatch[3], timeLabel),
+            starts_at: parseRelativeDate(dateMatch[1]!, dateMatch[2]!, dateMatch[3]!, timeLabel),
             date_label: `${dateMatch[2]}/${dateMatch[3]}`,
             time_label: timeLabel,
             slug,
@@ -145,7 +152,9 @@ export function normalizeLlmEvents(raw: unknown, fallback: ShowroomEvent[]): Sho
             const dateLabel = String(item?.date || item?.date_label || '').trim()
             const members = Array.isArray(item?.members)
                 ? item.members.map(String).filter(Boolean)
-                : String(item?.members || '').split(/[・、,，\s]+/).filter(Boolean)
+                : String(item?.members || '')
+                      .split(/[・、,，\s]+/)
+                      .filter(Boolean)
             if (!timeLabel || (!slug && !url)) {
                 continue
             }
@@ -180,7 +189,12 @@ export class ShowroomScheduleService {
     private readonly options: Required<
         Pick<
             ShowroomScheduleOptions,
-            'scanWindowStartHour' | 'scanWindowEndHour' | 'fastScanSeconds' | 'slowScanSeconds' | 'minConfidence' | 'processorId'
+            | 'scanWindowStartHour'
+            | 'scanWindowEndHour'
+            | 'fastScanSeconds'
+            | 'slowScanSeconds'
+            | 'minConfidence'
+            | 'processorId'
         >
     >
     private timer: ReturnType<typeof setInterval> | null = null
@@ -274,11 +288,15 @@ export class ShowroomScheduleService {
                 return
             }
             void this.runScan().catch((error) => {
-                this.log?.warn(`Showroom schedule scan failed: ${error instanceof Error ? error.message : String(error)}`)
+                this.log?.warn(
+                    `Showroom schedule scan failed: ${error instanceof Error ? error.message : String(error)}`,
+                )
             })
         }, 60 * 1000)
         void this.runScan().catch((error) => {
-            this.log?.warn(`Showroom schedule initial scan failed: ${error instanceof Error ? error.message : String(error)}`)
+            this.log?.warn(
+                `Showroom schedule initial scan failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
         })
     }
 
@@ -291,8 +309,7 @@ export class ShowroomScheduleService {
 
     private resolveScanIntervalSeconds() {
         const hour = jstClockHour()
-        const inWindow =
-            hour >= this.options.scanWindowStartHour && hour < this.options.scanWindowEndHour
+        const inWindow = hour >= this.options.scanWindowStartHour && hour < this.options.scanWindowEndHour
         return inWindow ? this.options.fastScanSeconds : this.options.slowScanSeconds
     }
 
@@ -441,12 +458,12 @@ export class ShowroomScheduleService {
             throw new Error(`showroom schedule processor ${this.options.processorId} is not configured`)
         }
         const cfg = processor.cfg_processor || {}
-        const rawKey = String(cfg.api_key || processor.api_key || '')
+        const rawKey = String((cfg as ProcessorConfig & { api_key?: string }).api_key || processor.api_key || '')
         const apiKey = rawKey.startsWith('env:') ? String(process.env[rawKey.slice(4)] || '') : rawKey
         let prompt = String(cfg.prompt || '')
         if (!prompt && Array.isArray(cfg.prompt_assets)) {
             for (const asset of cfg.prompt_assets) {
-                const assetPath = String(asset?.path || '').trim()
+                const assetPath = String(typeof asset === 'string' ? asset : asset?.path || '').trim()
                 if (!assetPath) {
                     continue
                 }
@@ -532,7 +549,9 @@ export class ShowroomScheduleService {
                 if (response.ok) {
                     break
                 }
-                lastError = new Error(`plan create failed http=${response.status}: ${(await response.text()).slice(0, 200)}`)
+                lastError = new Error(
+                    `plan create failed http=${response.status}: ${(await response.text()).slice(0, 200)}`,
+                )
             } catch (error) {
                 lastError = error
             }

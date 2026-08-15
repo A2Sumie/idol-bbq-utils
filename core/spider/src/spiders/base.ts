@@ -1,7 +1,7 @@
-import { Platform, type CrawlEngine, type TaskType, type TaskTypeResult } from '@/types'
+import { Platform, type CrawlEngine, type TaskType, type TaskTypeResult } from '../types'
 import { Logger } from '@idol-bbq-utils/log'
 import { Page, type PageEvents } from 'puppeteer-core'
-import { SimpleExpiringCache } from '@/utils'
+import { SimpleExpiringCache } from '../utils'
 type PageEvent = 'response' | 'request' | 'domcontentloaded' | 'load'
 
 export enum SpiderPriority {
@@ -123,6 +123,18 @@ abstract class BaseSpider {
              * this to skip expensive per-item hydration for already-known content, cutting load.
              */
             isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
+            articleStateLookup?: (a_id: string) => Promise<{
+                known: boolean
+                createdAt?: number | null
+                crawledAt?: number | null
+                storedPremierePending?: boolean
+            }>
+            articlePrefixStateLookup?: (prefix: string) => Promise<{
+                known: boolean
+                createdAt: number | null
+                crawledAt?: number | null
+            }>
+            isStoredPremierePending?: (a_id: string) => Promise<boolean>
         },
     ): Promise<TaskTypeResult<T, Platform>> {
         this.log = this.log?.child({ trace_id })
@@ -157,6 +169,18 @@ abstract class BaseSpider {
             }
             block_resource_types?: Array<string>
             isArticleKnown?: (a_id: string) => Promise<boolean> | boolean
+            articleStateLookup?: (a_id: string) => Promise<{
+                known: boolean
+                createdAt?: number | null
+                crawledAt?: number | null
+                storedPremierePending?: boolean
+            }>
+            articlePrefixStateLookup?: (prefix: string) => Promise<{
+                known: boolean
+                createdAt: number | null
+                crawledAt?: number | null
+            }>
+            isStoredPremierePending?: (a_id: string) => Promise<boolean>
         },
     ): Promise<TaskTypeResult<T, Platform>>
 
@@ -227,10 +251,14 @@ function waitForEvent<T extends PageEvent>(
 
     const wrappedHandler = (data: PageEvents[T]) => {
         eventData = data
-        if (handler) {
-            handler(data, control)
-        } else {
-            control.done(null)
+        try {
+            if (handler) {
+                handler(data, control)
+            } else {
+                control.done(null)
+            }
+        } catch (error) {
+            control.fail(error instanceof Error ? error : new Error(String(error)))
         }
     }
 

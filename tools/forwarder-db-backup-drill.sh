@@ -82,6 +82,7 @@ if [ ! -f "$db_path" ]; then
 fi
 
 mkdir -p "$drill_dir"
+chmod 700 "$drill_dir"
 python3 - "$db_path" "$drill_db" <<'PY'
 import os
 import sqlite3
@@ -109,7 +110,7 @@ finally:
 if not result or result[0] != "ok":
     raise SystemExit(f"backup quick_check failed: {result[0] if result else 'no result'}")
 
-os.chmod(backup_path, 0o666)
+os.chmod(backup_path, 0o600)
 PY
 
 set +e

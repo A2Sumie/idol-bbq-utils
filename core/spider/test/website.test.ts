@@ -13,23 +13,78 @@ import {
 
 describe('NanabunnonijyuuniWebsiteSpider.resolveFeed', () => {
     test('matches supported 22/7 FC and live-report routes', () => {
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/ticket/list?ima=2101')?.feed).toBe('ticket')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/news/list?ima=2148')?.feed).toBe('official-news')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/news/list?ima=2149&ct=news')?.feed).toBe('fc-news')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/official_blog/list?ima=2201')?.feed).toBe('official-blog')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/contents_list?ima=2217&cd=133&ct=radio')?.feed).toBe('radio')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/nananiji_movie?ima=2246')?.feed).toBe('movie')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ima=2342&ct=photoga')?.feed).toBe('photo')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/special/list?ima=2638')?.feed).toBe('live-report')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/ticket/list?ima=2101',
+            )?.feed,
+        ).toBe('ticket')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/news/list?ima=2148')
+                ?.feed,
+        ).toBe('official-news')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/news/list?ima=2149&ct=news',
+            )?.feed,
+        ).toBe('fc-news')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/diary/official_blog/list?ima=2201',
+            )?.feed,
+        ).toBe('official-blog')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/contents_list?ima=2217&cd=133&ct=radio',
+            )?.feed,
+        ).toBe('radio')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/diary/nananiji_movie?ima=2246',
+            )?.feed,
+        ).toBe('movie')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/gallery?ima=2342&ct=photoga',
+            )?.feed,
+        ).toBe('photo')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/diary/special/list?ima=2638',
+            )?.feed,
+        ).toBe('live-report')
     })
 
     test('treats matching detail urls as their feed family', () => {
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447001?ima=3201')?.feed).toBe('official-blog')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/contents/6390467233112?ima=3253')?.feed).toBe('radio')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447178?ima=3255&cd=nananiji_movie')?.feed).toBe('movie')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?ima=3300&cd=special')?.feed).toBe('live-report')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/gallery/p10053?ima=3257')?.feed).toBe('photo')
-        expect(NanabunnonijyuuniWebsiteSpider.resolveFeed('https://nanabunnonijyuuni-mobile.com/s/n110/contents_list?ima=3546&cd=122&ct=member_photo_053')?.feed).toBe('photo')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447001?ima=3201',
+            )?.feed,
+        ).toBe('official-blog')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/contents/6390467233112?ima=3253',
+            )?.feed,
+        ).toBe('radio')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447178?ima=3255&cd=nananiji_movie',
+            )?.feed,
+        ).toBe('movie')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/447239?ima=3300&cd=special',
+            )?.feed,
+        ).toBe('live-report')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/gallery/p10053?ima=3257',
+            )?.feed,
+        ).toBe('photo')
+        expect(
+            NanabunnonijyuuniWebsiteSpider.resolveFeed(
+                'https://nanabunnonijyuuni-mobile.com/s/n110/contents_list?ima=3546&cd=122&ct=member_photo_053',
+            )?.feed,
+        ).toBe('photo')
     })
 
     test('extractBasicInfo follows the resolved feed id', () => {
@@ -93,10 +148,26 @@ describe('resolveWebsiteCrawlOptions', () => {
 
 describe('resolveWebsiteFeedResourceBlocking', () => {
     test('keeps low-value resource blocking for text/detail feeds', () => {
-        expect(resolveWebsiteFeedResourceBlocking('official-news', ['font', 'image', 'media'])).toEqual(['font', 'image', 'media'])
-        expect(resolveWebsiteFeedResourceBlocking('official-blog', ['font', 'image', 'media'])).toEqual(['font', 'image', 'media'])
-        expect(resolveWebsiteFeedResourceBlocking('live-report', ['font', 'image', 'media'])).toEqual(['font', 'image', 'media'])
-        expect(resolveWebsiteFeedResourceBlocking('ticket', ['font', 'image', 'media'])).toEqual(['font', 'image', 'media'])
+        expect(resolveWebsiteFeedResourceBlocking('official-news', ['font', 'image', 'media'])).toEqual([
+            'font',
+            'image',
+            'media',
+        ])
+        expect(resolveWebsiteFeedResourceBlocking('official-blog', ['font', 'image', 'media'])).toEqual([
+            'font',
+            'image',
+            'media',
+        ])
+        expect(resolveWebsiteFeedResourceBlocking('live-report', ['font', 'image', 'media'])).toEqual([
+            'font',
+            'image',
+            'media',
+        ])
+        expect(resolveWebsiteFeedResourceBlocking('ticket', ['font', 'image', 'media'])).toEqual([
+            'font',
+            'image',
+            'media',
+        ])
     })
 
     test('narrows media-heavy FC content feeds to font blocking only', () => {
@@ -136,7 +207,7 @@ describe('isWebsiteAuthGateSnapshot', () => {
 
 describe('buildPhotoAlbumArticle', () => {
     test('groups a photoga page into one album article with all media and member notes', () => {
-        const [article] = buildPhotoAlbumArticle(
+        const article = buildPhotoAlbumArticle(
             {
                 feed: 'photo',
                 u_id: '22/7:photo',
@@ -191,7 +262,7 @@ describe('buildPhotoAlbumArticle', () => {
                     },
                 ],
             },
-        )
+        )[0]!
 
         expect(article.a_id).toBe('photo:album:photoga:35054')
         expect(article.username).toBe('22/7 Photo')
@@ -254,10 +325,7 @@ describe('splitPhotoAlbumPayloadByDate', () => {
         })
 
         expect(batches).toHaveLength(2)
-        expect(batches[0]?.entries.map((entry) => entry.dataCode)).toEqual([
-            'photo260210_a13',
-            'photo260210_a14',
-        ])
+        expect(batches[0]?.entries.map((entry) => entry.dataCode)).toEqual(['photo260210_a13', 'photo260210_a14'])
         expect(batches[1]?.entries.map((entry) => entry.dataCode)).toEqual(['photo260217_a17'])
 
         const articles = batches.flatMap((batch) =>

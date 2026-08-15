@@ -560,9 +560,7 @@ test('buildBiliupUploadCandidate uses detected members instead of collection acc
         },
     )
 
-    expect(candidate?.title).toBe(
-        '【22/7 北原実咲 黒崎ありす】[ins] 北原実咲 黒崎ありす 03.20_26 北原実咲 黒崎ありす',
-    )
+    expect(candidate?.title).toBe('【22/7 北原実咲 黒崎ありす】[ins] 北原実咲 黒崎ありす 03.20_26 北原実咲 黒崎ありす')
     expect(candidate?.title).not.toContain('THE 3RD')
     expect(candidate?.description).toContain('来源账号: 北原実咲 黒崎ありす')
     expect(candidate?.config.tags).toContain('北原実咲')
@@ -862,6 +860,7 @@ test('prepareUploadVideoParts ignores deprecated collision placeholder video whe
                 python_path: 'python3',
                 helper_path: '/tmp/helper.py',
                 working_dir: tempRoot,
+                metadata_timezone: 'Asia/Tokyo',
                 submit_api: 'web',
                 line: 'AUTO',
                 tid: 160,
@@ -869,18 +868,6 @@ test('prepareUploadVideoParts ignores deprecated collision placeholder video whe
                 copyright: 2,
                 tags: [],
                 exclude_uids: [],
-                collision_placeholder_part: {
-                    enabled: true,
-                    video_path: placeholderPath,
-                    image_path: path.join(tempRoot, 'unused.png'),
-                    title: 'legacy placeholder',
-                    duration_seconds: 7,
-                    width: 1920,
-                    height: 1080,
-                    fps: 30,
-                    ffmpeg_path: '/usr/bin/ffmpeg',
-                    background_color: '#d1e5fc',
-                },
             },
         },
         uploadDir,
@@ -1173,8 +1160,7 @@ test('BiliForwarder appends referenced videos as later biliup parts when root po
     const originalCheckExist = DB.MediaHash.checkExist
     const originalSave = DB.MediaHash.save
     DB.MediaHash.checkExist = async () => null
-    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') =>
-        ({ platform, hash, a_id }) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => ({ platform, hash, a_id }) as any
 
     const forwarder = new BiliForwarder(
         {
@@ -2166,7 +2152,7 @@ test('title_generation: false keeps the deterministic title even with tag_genera
 
     // Tag generation still ran (one combined call), but the generated title must be ignored.
     expect(calls).toHaveLength(1)
-    expect(candidate?.title).toBe(deterministicTitle)
+    expect(candidate!.title).toBe(deterministicTitle!)
     expect(candidate?.title).not.toContain('不应被采用的标题')
     expect(candidate?.config.tags).toContain('北原実咲')
 })
@@ -2202,7 +2188,7 @@ test('title_generation guard failure falls back to the deterministic title', asy
         ;(processorRegistry as any).create = originalCreate
     }
 
-    expect(candidate?.title).toBe(deterministicTitle)
+    expect(candidate!.title).toBe(deterministicTitle!)
     expect(candidate?.title).not.toContain('audition documentary')
 })
 
@@ -2253,7 +2239,6 @@ test('title_generation with separate credentials runs separately from tag_genera
     expect(candidate?.title).toContain('试镜纪录片')
     expect(candidate?.title).not.toContain('不应使用标签模型标题')
 })
-
 
 test('title_generation is skipped when the article has no translatable metadata', async () => {
     const originalCreate = (processorRegistry as any).create
@@ -2307,7 +2292,7 @@ test('title_generation is skipped when the article has no translatable metadata'
     // Tag generation still ran, but the title model was never invoked: nothing exists to translate,
     // so the deterministic template title is kept as-is instead of inventing a "XX发布于…" title.
     expect(calls.map((call) => call.provider)).toEqual(['TagProvider'])
-    expect(candidate?.title).toBe(deterministicTitle)
+    expect(candidate!.title).toBe(deterministicTitle!)
     expect(candidate?.title).not.toContain('不应被采用的标题')
     expect(candidate?.config.tags).toContain('月城咲舞')
 })

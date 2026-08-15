@@ -111,7 +111,11 @@ function exceedsImageDimensionLimit(dimensions: ImageDimensions | null, maxEdgeP
     if (!dimensions || dimensions.width <= 0 || dimensions.height <= 0) {
         return false
     }
-    return dimensions.width > maxEdgePx || dimensions.height > maxEdgePx || dimensions.width * dimensions.height > maxPixels
+    return (
+        dimensions.width > maxEdgePx ||
+        dimensions.height > maxEdgePx ||
+        dimensions.width * dimensions.height > maxPixels
+    )
 }
 
 function fitDimensions(
@@ -139,24 +143,25 @@ function fitDimensions(
 
 function probeImageDimensions(filePath: string, ffprobePath: string): ImageDimensions | null {
     try {
-        const output = execFileSync(
-            ffprobePath,
-            [
-                '-v',
-                'error',
-                '-select_streams',
-                'v:0',
-                '-show_entries',
-                'stream=width,height',
-                '-of',
-                'csv=s=x:p=0',
-                filePath,
-            ],
-            { encoding: 'utf8', timeout: 10_000 },
-        )
-            .trim()
-            .split('\n')[0]
-        const [width, height] = output.split('x').map((part) => Number(part))
+        const output =
+            execFileSync(
+                ffprobePath,
+                [
+                    '-v',
+                    'error',
+                    '-select_streams',
+                    'v:0',
+                    '-show_entries',
+                    'stream=width,height',
+                    '-of',
+                    'csv=s=x:p=0',
+                    filePath,
+                ],
+                { encoding: 'utf8', timeout: 10_000 },
+            )
+                .trim()
+                .split('\n')[0] || ''
+        const [width = 0, height = 0] = output.split('x').map((part) => Number(part))
         if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
             return null
         }
@@ -252,7 +257,10 @@ function splitTallImageUnderLimit(
         return { results: null, fromCache: false }
     }
     const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg'
-    const chunkHeight = Math.max(2, safeEvenDimension(Math.min(limits.maxEdgePx, Math.floor(limits.maxPixels / dimensions.width))))
+    const chunkHeight = Math.max(
+        2,
+        safeEvenDimension(Math.min(limits.maxEdgePx, Math.floor(limits.maxPixels / dimensions.width))),
+    )
     if (chunkHeight <= 0 || dimensions.height <= chunkHeight) {
         return { results: null, fromCache: false }
     }
@@ -313,7 +321,6 @@ function splitTallImageUnderLimit(
     }
 }
 
-
 function compressImageUnderLimit(
     sourcePath: string,
     maxImageBytes: number,
@@ -338,13 +345,29 @@ function compressImageUnderLimit(
             .sort((a, b) => a.size - b.size)
         if (cached.length > 0) {
             const best = cached[0]!
-            options.log?.debug?.(`Reused cached compressed attachment for ${path.basename(sourcePath)} (${best.size} bytes)`)
+            options.log?.debug?.(
+                `Reused cached compressed attachment for ${path.basename(sourcePath)} (${best.size} bytes)`,
+            )
+            // Refresh mtime: the cleanup job deletes files older than 24h, and
+            // a long-lived cache entry must not be deleted while this send is
+            // about to upload it.
+            try {
+                const now = new Date()
+                fs.utimesSync(best.path, now, now)
+            } catch {}
             return { results: [{ path: best.path, size_bytes: best.size }], fromCache: true }
         }
     }
 
     const dimensions = probeImageDimensions(sourcePath, ffprobePath)
-    const splitOutcome = splitTallImageUnderLimit(sourcePath, identity, dimensions, maxImageBytes, limits, options)
+    const splitOutcome = splitTallImageUnderLimit(
+        sourcePath,
+        identity ?? null,
+        dimensions,
+        maxImageBytes,
+        limits,
+        options,
+    )
     if (splitOutcome.results) {
         return splitOutcome
     }
@@ -517,8 +540,4 @@ function resolveForwarderImageMaxBytes(config?: { max_image_bytes?: number; imag
     return normalizeMaxImageBytes(config?.max_image_bytes ?? config?.image_max_bytes)
 }
 
-export {
-    DEFAULT_FORWARDER_IMAGE_MAX_BYTES,
-    normalizeForwarderImageAttachments,
-    resolveForwarderImageMaxBytes,
-}
+export { DEFAULT_FORWARDER_IMAGE_MAX_BYTES, normalizeForwarderImageAttachments, resolveForwarderImageMaxBytes }

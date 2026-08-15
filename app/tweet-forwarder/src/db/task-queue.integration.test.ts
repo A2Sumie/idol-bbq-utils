@@ -4,12 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import DB from '@/db'
 import { Platform } from '@idol-bbq-utils/spider/types'
-import {
-    createPrismaClient,
-    prisma as activePrisma,
-    setPrismaForTesting,
-    type PrismaClientInstance,
-} from '@/db/client'
+import { createPrismaClient, prisma as activePrisma, setPrismaForTesting, type PrismaClientInstance } from '@/db/client'
 
 let previousPrisma: PrismaClientInstance
 let testPrisma: PrismaClientInstance
@@ -33,7 +28,9 @@ async function createTaskQueueSchema(prisma: PrismaClientInstance) {
             "idempotency_key" TEXT
         )
     `)
-    await prisma.$executeRawUnsafe('CREATE INDEX "task_queue_status_execute_at_idx" ON "task_queue"("status", "execute_at")')
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "task_queue_status_execute_at_idx" ON "task_queue"("status", "execute_at")',
+    )
     await prisma.$executeRawUnsafe(
         'CREATE UNIQUE INDEX "task_queue_type_idempotency_key_key" ON "task_queue"("type", "idempotency_key")',
     )
@@ -1049,7 +1046,7 @@ test('Article getSingleArticle resolves same-platform reference chains on SQLite
             ref: null,
             has_media: false,
             media: [],
-            extra: null,
+            extra: null as any,
             u_avatar: null,
         },
     })
@@ -1067,7 +1064,7 @@ test('Article getSingleArticle resolves same-platform reference chains on SQLite
             ref: source.id,
             has_media: false,
             media: [],
-            extra: null,
+            extra: null as any,
             u_avatar: null,
         },
     })
@@ -1099,7 +1096,7 @@ test('Article getSingleArticle breaks cyclic reference chains on SQLite', async 
             ref: null,
             has_media: false,
             media: [],
-            extra: null,
+            extra: null as any,
             u_avatar: null,
         },
     })
@@ -1117,7 +1114,7 @@ test('Article getSingleArticle breaks cyclic reference chains on SQLite', async 
             ref: first.id,
             has_media: false,
             media: [],
-            extra: null,
+            extra: null as any,
             u_avatar: null,
         },
     })
@@ -1150,7 +1147,7 @@ test('AggregationWindow item platform round-trips into Article restore lookup on
             ref: null,
             has_media: true,
             media: [{ type: 'photo', url: 'https://example.test/ig.jpg' }],
-            extra: null,
+            extra: null as any,
             u_avatar: null,
         },
     })
@@ -1172,7 +1169,7 @@ test('AggregationWindow item platform round-trips into Article restore lookup on
     })
 
     const [item] = await DB.AggregationWindow.listItems(window.id)
-    const restored = await DB.Article.getSingleArticle(item.article_row_id, Number(item.platform) as Platform)
+    const restored = await DB.Article.getSingleArticle(item!.article_row_id, Number(item!.platform) as Platform)
     expect(restored).toMatchObject({
         id: articleRow.id,
         platform: Platform.Instagram,

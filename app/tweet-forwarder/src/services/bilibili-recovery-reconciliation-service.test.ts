@@ -3,12 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import DB from '@/db'
-import {
-    createPrismaClient,
-    prisma as activePrisma,
-    setPrismaForTesting,
-    type PrismaClientInstance,
-} from '@/db/client'
+import { createPrismaClient, prisma as activePrisma, setPrismaForTesting, type PrismaClientInstance } from '@/db/client'
 import { ForwardTargetPlatformEnum } from '@/types/forwarder'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import { reconcileBilibiliSubmissionsAfterDbRecovery } from './bilibili-recovery-reconciliation-service'
@@ -40,7 +35,9 @@ async function createArticleSchema(prisma: PrismaClientInstance) {
         )
     `)
     await prisma.$executeRawUnsafe('CREATE UNIQUE INDEX "youtube_article_a_id_key" ON "youtube_article"("a_id")')
-    await prisma.$executeRawUnsafe('CREATE INDEX "youtube_article_created_at_idx" ON "youtube_article"("created_at" DESC)')
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "youtube_article_created_at_idx" ON "youtube_article"("created_at" DESC)',
+    )
     for (const table of ['twitter_article', 'instagram_article', 'tiktok_article', 'website_article']) {
         await prisma.$executeRawUnsafe(`
             CREATE TABLE "${table}" (
@@ -100,8 +97,12 @@ async function createOutboundMessageSchema(prisma: PrismaClientInstance) {
             "finished_at" INTEGER
         )
     `)
-    await prisma.$executeRawUnsafe('CREATE UNIQUE INDEX "outbound_messages_idempotency_key_key" ON "outbound_messages"("idempotency_key")')
-    await prisma.$executeRawUnsafe('CREATE INDEX "outbound_messages_article_key_idx" ON "outbound_messages"("article_key")')
+    await prisma.$executeRawUnsafe(
+        'CREATE UNIQUE INDEX "outbound_messages_idempotency_key_key" ON "outbound_messages"("idempotency_key")',
+    )
+    await prisma.$executeRawUnsafe(
+        'CREATE INDEX "outbound_messages_article_key_idx" ON "outbound_messages"("article_key")',
+    )
 }
 
 function setEnv(key: string, value: string | undefined) {
@@ -181,7 +182,7 @@ test('reconciles Bilibili submissions after DB recovery marker and seeds sent st
                     ],
                 },
             }),
-        )) as typeof fetch
+        )) as unknown as typeof fetch
 
     const result = await reconcileBilibiliSubmissionsAfterDbRecovery({
         forward_targets: [

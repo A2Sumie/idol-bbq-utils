@@ -50,7 +50,7 @@ test('task queue API redaction hides notification signal identity fields', () =>
         summary_present: true,
         summary_type: 'string',
         summary_length: 'private notification result summary'.length,
-    })
+    } as any)
     expect(redacted.payload).toMatchObject({
         schema_version: 1,
         mode: 'shadow',
@@ -102,7 +102,7 @@ test('task queue API redaction keeps malformed notification payloads opaque', ()
     expect(redacted.payload).toEqual({
         schema_version: null,
         malformed_payload: true,
-    })
+    } as any)
     expect(serialized).not.toContain('private-member')
     expect(serialized).not.toContain('private-event-key')
 })

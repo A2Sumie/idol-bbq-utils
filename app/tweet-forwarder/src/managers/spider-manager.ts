@@ -481,12 +481,19 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         // Build non-Cron hot schedules for crawler dispatch. Legacy cron strings
         // are expanded into daily slots only as a compatibility source.
         for (const crawler of this.props.crawlers) {
+            const crawlerName = crawler.name
+            if (!crawlerName) {
+                this.log?.warn(
+                    `Skipping crawler ${crawler.id || '(unknown)'}: crawler name is required for scheduling.`,
+                )
+                continue
+            }
             crawler.cfg_crawler = {
                 cron: '*/30 * * * *',
                 ...this.props.cfg_crawler,
                 ...crawler.cfg_crawler,
             }
-            this.crawlersByName.set(crawler.name, crawler)
+            this.crawlersByName.set(crawlerName, crawler)
             const schedule = resolveCrawlerSchedule(crawler)
             if (schedule) {
                 if (schedule.timezoneUnsupported) {
@@ -494,9 +501,9 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                         `Crawler ${crawler.name} uses an unsupported timezone "${schedule.timezone}"; falling back to ${resolveTimezoneLabel()}`,
                     )
                 }
-                const nextRunAt = nextCrawlerRunAt(schedule, Math.floor(Date.now() / 1000), crawler.name)
-                this.runtimeSchedules.set(crawler.name, {
-                    crawlerName: crawler.name,
+                const nextRunAt = nextCrawlerRunAt(schedule, Math.floor(Date.now() / 1000), crawlerName)
+                this.runtimeSchedules.set(crawlerName, {
+                    crawlerName,
                     schedule,
                     nextRunAt,
                     lastRunAt: null,
@@ -703,6 +710,10 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
     }
 
     async drop() {
+        // Stop cron/timer machinery first: clearing the arrays without
+        // stopping the jobs would leave live timers dispatching into a
+        // dropped manager.
+        await this.stop()
         // 清除所有任务
         this.tasks.clear()
         for (const binding of this.taskEventBindings) {
@@ -730,13 +741,18 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
             reason?: string
         },
     ) {
-        if (this.hasActiveCrawlerTask(crawler.name)) {
-            this.log?.warn(`Skipping crawler ${crawler.name}: previous task is still active.`)
+        const crawlerName = crawler.name
+        if (!crawlerName) {
+            this.log?.warn('Skipping crawler dispatch: crawler is missing a name.')
+            return false
+        }
+        if (this.hasActiveCrawlerTask(crawlerName)) {
+            this.log?.warn(`Skipping crawler ${crawlerName}: previous task is still active.`)
             return false
         }
 
         const taskId = this.createCrawlerTaskId(options.taskIdPrefix || 'schedule')
-        this.log?.info(`[${taskId}] Starting to dispatch task: ${crawler.name} source=${options.source}`)
+        this.log?.info(`[${taskId}] Starting to dispatch task: ${crawlerName} source=${options.source}`)
         const task: TaskScheduler.Task = {
             id: taskId,
             status: TaskScheduler.TaskStatus.PENDING,
@@ -790,18 +806,19 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 )
                 continue
             }
+            const scheduledCrawlerName = crawler.name || runtimeSchedule.crawlerName
             // Active-task skip: the slot is consumed (nextRunAt advances) but the
             // crawler is not dispatched — this is the intended de-throttling when
             // a round takes longer than the window spacing. Log once per active
             // run instead of once per consumed slot (X 2-min windows produced a
             // warn every ~2 minutes for the same active round).
-            if (this.hasActiveCrawlerTask(crawler.name)) {
+            if (this.hasActiveCrawlerTask(scheduledCrawlerName)) {
                 runtimeSchedule.deferredSlots += 1
                 const lastWarn = runtimeSchedule.lastActiveWarnAt
                 if (!lastWarn || now - lastWarn >= 60) {
                     runtimeSchedule.lastActiveWarnAt = now
                     this.log?.warn(
-                        `Skipping crawler ${crawler.name}: previous task is still active (${runtimeSchedule.deferredSlots} slot(s) deferred this active run).`,
+                        `Skipping crawler ${scheduledCrawlerName}: previous task is still active (${runtimeSchedule.deferredSlots} slot(s) deferred this active run).`,
                     )
                 }
                 runtimeSchedule.nextRunAt = nextCrawlerRunAt(
@@ -859,7 +876,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
                 })
                 continue
             }
-            if (this.hasActiveCrawlerTask(crawler.name)) {
+            if (this.hasActiveCrawlerTask(crawlerName)) {
                 // Retry on a longer horizon: an active round lasts minutes, and a
                 // 60s retry re-writes the queued row on every 10-15s executor tick.
                 const retryAt = now + 300
@@ -1079,6 +1096,9 @@ class SpiderPools extends BaseCompatibleModel {
         this.enqueueExternalMediaLinks =
             options?.enqueueExternalMediaLinks || enqueueMissingExternalMediaLinksFromXArticle
         for (const crawler of options?.crawlers || []) {
+            if (!crawler.name) {
+                continue
+            }
             this.scheduledWebsitesByCrawler.set(crawler.name, sanitizeWebsites(crawler))
         }
         this.browserPool = new BrowserSessionPool(cacheRoot, this.log)
@@ -1920,9 +1940,7 @@ class SpiderPools extends BaseCompatibleModel {
                         },
                     )
                 }
-                if (liveProbe.status !== 'fail') {
-                    this.cookieExportProbeCache.set(probeCacheKey, Date.now())
-                }
+                this.cookieExportProbeCache.set(probeCacheKey, Date.now())
             } else if (skipVisitAndProbe) {
                 liveProbe = {
                     status: 'skipped',
@@ -2312,6 +2330,7 @@ class SpiderPools extends BaseCompatibleModel {
                                         return {
                                             known: Boolean(existing),
                                             createdAt: existing?.created_at ?? null,
+                                            crawledAt: Number((existing?.extra as any)?.data?.crawled_at) || null,
                                         }
                                     }
                                   : platform === Platform.YouTube
@@ -2336,6 +2355,7 @@ class SpiderPools extends BaseCompatibleModel {
                                         return {
                                             known: Boolean(existing),
                                             createdAt: existing?.created_at ?? null,
+                                            crawledAt: Number((existing?.extra as any)?.data?.crawled_at) || null,
                                         }
                                     }
                                   : undefined,
@@ -2387,9 +2407,10 @@ class SpiderPools extends BaseCompatibleModel {
                     ...article,
                     created_at: article.created_at || resolvedAt,
                     extra: premiereResolvedExtra(isExist, article, resolvedAt) as any,
+                    // DB columns are nullable; Article's render-side type is not.
                     translation: null,
                     translated_by: null,
-                } as Partial<Article>)
+                } as unknown as Partial<Article>)
                 premiere_dispatch_ids.push((updated as any).id || isExist.id)
                 ctx.log?.info(
                     `[${url.href}] Refreshed premiere placeholder article ${article.a_id} with public YouTube metadata.`,

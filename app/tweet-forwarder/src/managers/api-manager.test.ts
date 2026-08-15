@@ -1859,7 +1859,9 @@ test('APIManager exposes a machine-readable non-executable live capture plan sch
             properties: {
                 target: {
                     properties: {
-                        platform: { enum: ['tiktok', 'instagram', 'youtube', 'twitch', 'showroom', 'openrec', 'other'] },
+                        platform: {
+                            enum: ['tiktok', 'instagram', 'youtube', 'twitch', 'showroom', 'openrec', 'other'],
+                        },
                     },
                 },
                 capture: {
@@ -2746,8 +2748,8 @@ test('APIManager QQ X-link endpoint hydrates missing DB article and sends immedi
             },
         })
         expect(hydrateCalls).toHaveLength(1)
-        expect(hydrateCalls[0][0]).toBe('https://x.com/kyu0817a/status/2068528507651842559')
-        expect(hydrateCalls[0][1]).toMatchObject({
+        expect(hydrateCalls[0]![0]).toBe('https://x.com/kyu0817a/status/2068528507651842559')
+        expect(hydrateCalls[0]![1]).toMatchObject({
             id: 'x-list',
             cfg_crawler: {
                 engine: 'api',
@@ -2757,12 +2759,12 @@ test('APIManager QQ X-link endpoint hydrates missing DB article and sends immedi
             },
         })
         expect(sendCalls).toHaveLength(1)
-        expect(sendCalls[0][0]).toMatchObject({
+        expect(sendCalls[0]![0]).toMatchObject({
             id: 207,
             a_id: '2068528507651842559',
             platform: Platform.X,
         })
-        expect(sendCalls[0][1]).toEqual({
+        expect(sendCalls[0]![1]).toEqual({
             crawlerName: 'x-list',
             targetIds: ['qq-1'],
             processorId: 'translator',

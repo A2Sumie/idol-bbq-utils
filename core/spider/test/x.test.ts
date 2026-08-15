@@ -333,7 +333,7 @@ test('X parser keeps video variants without bitrate', async () => {
             media_url_https: 'https://pbs.twimg.com/ext_tw_video_thumb/301/pu/img/thumb.jpg',
             type: 'video',
         },
-    ]
+    ] as any
     ;(result.legacy as any).extended_entities = {
         media: [
             {
@@ -877,7 +877,10 @@ test('XApiClient dedupes concurrent rest-id lookups for the same user', async ()
         return { data: { user: { result: { rest_id: '4242' } } } }
     }
 
-    const [first, second] = await Promise.all([client.getRestId('gamma', 'cookie'), client.getRestId('@GAMMA', 'cookie')])
+    const [first, second] = await Promise.all([
+        client.getRestId('gamma', 'cookie'),
+        client.getRestId('@GAMMA', 'cookie'),
+    ])
     expect(first).toBe('4242')
     expect(second).toBe('4242')
     expect(lookupCalls).toBe(1)

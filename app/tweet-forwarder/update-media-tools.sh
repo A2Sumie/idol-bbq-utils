@@ -19,11 +19,21 @@ mkdir -p "$BIN_DIR"
 export PATH="$BIN_DIR:$PATH"
 export UV_PYTHON_INSTALL_DIR
 
+TMP_CLEANUP=""
+cleanup() {
+    rm -f ${TMP_CLEANUP:-}
+}
+trap cleanup EXIT
+
 update_yt_dlp() {
     echo "Updating yt-dlp to stable@latest..."
     tmp_file="$(mktemp "$BIN_DIR/yt-dlp.XXXXXX")"
-    trap 'rm -f "$tmp_file"' EXIT
-    curl -fsSL "$YT_DLP_URL" -o "$tmp_file"
+    TMP_CLEANUP="${TMP_CLEANUP:+$TMP_CLEANUP }$tmp_file"
+    curl -fsSL --retry 3 --connect-timeout 15 "$YT_DLP_URL" -o "$tmp_file"
+    if [ ! -s "$tmp_file" ]; then
+        echo "yt-dlp download produced an empty file from $YT_DLP_URL" >&2
+        return 1
+    fi
     chmod +x "$tmp_file"
     mv "$tmp_file" "$BIN_DIR/yt-dlp"
     YT_DLP_VERSION="$("$BIN_DIR/yt-dlp" --version)"
@@ -37,13 +47,30 @@ fi
 
 ensure_uv() {
     if [ ! -x "$BIN_DIR/uv" ]; then
-        curl -LsSf "$UV_INSTALL_URL" | UV_INSTALL_DIR="$BIN_DIR" sh
+        uv_installer="$(mktemp)"
+        TMP_CLEANUP="${TMP_CLEANUP:+$TMP_CLEANUP }$uv_installer"
+        curl -fsSL --retry 3 --connect-timeout 15 "$UV_INSTALL_URL" -o "$uv_installer"
+        if [ ! -s "$uv_installer" ]; then
+            echo "uv installer download produced an empty file" >&2
+            rm -f "$uv_installer"
+            return 1
+        fi
+        UV_INSTALL_DIR="$BIN_DIR" sh "$uv_installer"
+        rm -f "$uv_installer"
     fi
     "$BIN_DIR/uv" --version
 }
 
 ensure_tool_venv() {
     venv_dir="$1"
+    case "$venv_dir" in
+        "$TOOLS_DIR"/*)
+            ;;
+        *)
+            echo "Refusing to remove venv outside tools dir: $venv_dir" >&2
+            return 1
+            ;;
+    esac
     ensure_uv
     recreate_venv=0
     if [ ! -x "$venv_dir/bin/python" ]; then
@@ -64,9 +91,18 @@ echo "Updating deno to stable..."
 if [ -x "$BIN_DIR/deno" ]; then
     DENO_INSTALL="$TOOLS_DIR" "$BIN_DIR/deno" upgrade stable --output "$BIN_DIR/deno"
 else
-    curl -fsSL https://deno.land/install.sh | DENO_INSTALL="$TOOLS_DIR" sh
+    deno_installer="$(mktemp)"
+    TMP_CLEANUP="${TMP_CLEANUP:+$TMP_CLEANUP }$deno_installer"
+    curl -fsSL --retry 3 --connect-timeout 15 https://deno.land/install.sh -o "$deno_installer"
+    if [ ! -s "$deno_installer" ]; then
+        echo "deno installer download produced an empty file" >&2
+        rm -f "$deno_installer"
+        exit 1
+    fi
+    DENO_INSTALL="$TOOLS_DIR" sh "$deno_installer"
+    rm -f "$deno_installer"
 fi
-"$BIN_DIR/deno" --version | sed -n '1p'
+"$BIN_DIR/deno" --version
 
 echo "Updating yt-dlp to stable@latest..."
 update_yt_dlp

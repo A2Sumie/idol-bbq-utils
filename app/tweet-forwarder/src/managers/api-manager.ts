@@ -1,6 +1,7 @@
 import { BaseCompatibleModel, TaskScheduler } from '@/utils/base'
 import type { AppConfig, Processor } from '@/types'
 import { Logger } from '@idol-bbq-utils/log'
+import axios from 'axios'
 import fs from 'fs'
 import path from 'path'
 import YAML from 'yaml'
@@ -279,9 +280,9 @@ function extractXStatusLink(value: unknown): XStatusLink | null {
         return null
     }
     return {
-        username: match[1],
-        statusId: match[2],
-        url: normalizeXStatusUrl(match[1], match[2]),
+        username: match[1]!,
+        statusId: match[2]!,
+        url: normalizeXStatusUrl(match[1]!, match[2]!),
     }
 }
 
@@ -576,6 +577,11 @@ export class APIManager extends BaseCompatibleModel {
     log?: Logger
     private server?: any
     private runtime: ApiRuntimeControl
+    // Serializes all config save+reload operations. The file write and the
+    // runtime reload were previously uncoordinated: concurrent quick-config
+    // updates could interleave read/backup/write and a failed reload could
+    // roll back a newer writer's file.
+    private configSaveChain: Promise<void> = Promise.resolve()
 
     constructor(runtime: ApiRuntimeControl, log?: Logger) {
         super()
@@ -1196,15 +1202,17 @@ export class APIManager extends BaseCompatibleModel {
         try {
             const patch = (await req.json()) as QuickConfigPatch
             const compiledConfig = compileConnectionsFromQuickPatch(this.config, patch)
-            // A partial patch only changes the routes it mentions. Preserve the
-            // remaining pipelines (or the full legacy route export) instead of
-            // saving a one-pipeline config that would delete every other route on
-            // the next reload.
-            const currentPipelines = Array.isArray((this.config as any).pipelines)
-                ? ((this.config as any).pipelines as Array<any>)
-                : exportPipelineConfigs(this.config)
+            // A partial patch only changes the routes it mentions. Export the
+            // pipelines from the COMPILED connection maps (not the stale
+            // this.config), so links/routes patches survive the save, then
+            // overlay any explicit pipeline patches on top. The saved file is
+            // pipeline-native: legacy connections are intentionally stripped.
+            const { connections, pipelines: _legacyPipelines, ...configWithoutConnections } = compiledConfig as any
+            const currentPipelines = exportPipelineConfigs({
+                ...configWithoutConnections,
+                connections,
+            } as AppConfig)
             const pipelines = mergePipelinePatches(currentPipelines, patch.pipelines || [])
-            const { connections: _connections, ...configWithoutConnections } = compiledConfig
             const nextConfig = {
                 ...configWithoutConnections,
                 pipelines,
@@ -1260,49 +1268,79 @@ export class APIManager extends BaseCompatibleModel {
         config: AppConfig,
         message = 'Configuration saved and hot reloaded.',
     ): Promise<Response> {
-        const configPath = path.join(process.cwd(), 'config.yaml')
-        const previousConfigText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null
-        if (fs.existsSync(configPath)) {
-            fs.copyFileSync(configPath, `${configPath}.bak`)
-            // The container-layer .bak dies with the container. Also write a
-            // timestamped copy into the mounted assets directory so config history
-            // survives rebuilds; keep the latest 10 to avoid unbounded growth.
-            const persistentBackupDir = path.join(path.dirname(configPath), 'assets')
-            if (fs.existsSync(persistentBackupDir) && fs.statSync(persistentBackupDir).isDirectory()) {
-                const timestamp = new Date()
-                    .toISOString()
-                    .replace(/[-:]/g, '')
-                    .replace(/\.\d{3}Z$/, 'Z')
-                fs.copyFileSync(configPath, path.join(persistentBackupDir, `config.yaml.bak-api-${timestamp}`))
-                const backups = fs
-                    .readdirSync(persistentBackupDir)
-                    .filter((name) => name.startsWith('config.yaml.bak-api-'))
-                    .sort()
-                for (const stale of backups.slice(0, Math.max(0, backups.length - 10))) {
-                    fs.rmSync(path.join(persistentBackupDir, stale), { force: true })
+        const runSave = async () => {
+            const configPath = path.join(process.cwd(), 'config.yaml')
+            const previousConfigText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null
+            if (fs.existsSync(configPath)) {
+                fs.copyFileSync(configPath, `${configPath}.bak`)
+                // The container-layer .bak dies with the container. Also write a
+                // timestamped copy into the mounted assets directory so config history
+                // survives rebuilds; keep the latest 10 to avoid unbounded growth.
+                const persistentBackupDir = path.join(path.dirname(configPath), 'assets')
+                if (fs.existsSync(persistentBackupDir) && fs.statSync(persistentBackupDir).isDirectory()) {
+                    const timestamp = new Date()
+                        .toISOString()
+                        .replace(/[-:]/g, '')
+                        .replace(/\.\d{3}Z$/, 'Z')
+                    fs.copyFileSync(configPath, path.join(persistentBackupDir, `config.yaml.bak-api-${timestamp}`))
+                    const backups = fs
+                        .readdirSync(persistentBackupDir)
+                        .filter((name) => name.startsWith('config.yaml.bak-api-'))
+                        .sort()
+                    for (const stale of backups.slice(0, Math.max(0, backups.length - 10))) {
+                        fs.rmSync(path.join(persistentBackupDir, stale), { force: true })
+                    }
                 }
             }
-        }
 
-        fs.writeFileSync(configPath, YAML.stringify(config), 'utf8')
-        const runtimeConfig = normalizePipelinesForRuntime(config)
-        let runtime: ApiRuntimeReloadResult | null = null
-        try {
-            runtime = this.runtime.reloadRuntime ? await this.runtime.reloadRuntime(runtimeConfig) : null
-        } catch (reloadError) {
-            if (previousConfigText !== null) {
-                fs.writeFileSync(configPath, previousConfigText, 'utf8')
-            } else if (fs.existsSync(configPath)) {
-                fs.unlinkSync(configPath)
+            // Atomic replace: a crash between writeFileSync and reload must never
+            // leave a truncated config behind. Re-check immediately before the
+            // rename so a concurrent external editor is detected instead of
+            // silently overwritten (and so a reload failure only rolls back this
+            // writer's own bytes when they are still current).
+            const tmpConfigPath = `${configPath}.tmp-${process.pid}-${crypto.randomUUID()}`
+            // Serialize once and compare against this exact byte string. Re-serializing
+            // later (after normalizePipelinesForRuntime or reloadRuntime may have
+            // touched the object graph) could compare a mutated tree and skip the
+            // rollback that should have happened on reload failure.
+            const configYaml = YAML.stringify(config)
+            fs.writeFileSync(tmpConfigPath, configYaml, 'utf8')
+            if (previousConfigText !== null && fs.existsSync(configPath)) {
+                const currentConfigText = fs.readFileSync(configPath, 'utf8')
+                if (currentConfigText !== previousConfigText) {
+                    fs.rmSync(tmpConfigPath, { force: true })
+                    throw new Error('config.yaml changed concurrently; refusing to overwrite external edit')
+                }
             }
-            throw reloadError
+            fs.renameSync(tmpConfigPath, configPath)
+
+            const runtimeConfig = normalizePipelinesForRuntime(config)
+            let runtime: ApiRuntimeReloadResult | null = null
+            try {
+                runtime = this.runtime.reloadRuntime ? await this.runtime.reloadRuntime(runtimeConfig) : null
+            } catch (reloadError) {
+                if (previousConfigText !== null && fs.existsSync(configPath)) {
+                    const currentConfigText = fs.readFileSync(configPath, 'utf8')
+                    if (currentConfigText === configYaml) {
+                        fs.writeFileSync(configPath, previousConfigText, 'utf8')
+                    }
+                } else if (fs.existsSync(configPath)) {
+                    fs.unlinkSync(configPath)
+                }
+                throw reloadError
+            }
+
+            return jsonResponse({
+                success: true,
+                message: runtime ? message : 'Configuration saved.',
+                runtime,
+            })
         }
 
-        return jsonResponse({
-            success: true,
-            message: runtime ? message : 'Configuration saved.',
-            runtime,
-        })
+        const previous = this.configSaveChain
+        const current = previous.then(runSave, runSave)
+        this.configSaveChain = current.catch(() => undefined)
+        return await current
     }
 
     private resolveCrawlerByFinder(finder: string) {
@@ -1315,7 +1353,7 @@ export class APIManager extends BaseCompatibleModel {
         })
     }
 
-    private resolveCookieFilePath(finder: string, crawler?: AppConfig['crawlers'][number]) {
+    private resolveCookieFilePath(finder: string, crawler?: NonNullable<AppConfig['crawlers']>[number]) {
         if (crawler?.cfg_crawler?.cookie_file) {
             return resolveConfiguredCookieFilePath(crawler.cfg_crawler.cookie_file) || crawler.cfg_crawler.cookie_file
         }
@@ -2054,7 +2092,11 @@ export class APIManager extends BaseCompatibleModel {
 
     private async handleArchiveDetail(archiveId: string): Promise<Response> {
         try {
-            return jsonResponse(redactArchiveDetailForApi(getArchiveDetail(this.config, decodeURIComponent(archiveId))))
+            const detail = getArchiveDetail(this.config, decodeURIComponent(archiveId)) as unknown as Record<
+                string,
+                unknown
+            >
+            return jsonResponse(redactArchiveDetailForApi(detail))
         } catch (error) {
             const message = redactArchiveErrorMessageForApi(error)
             return new Response(message, { status: /not found/i.test(message) ? 404 : 500 })
@@ -2142,7 +2184,7 @@ export class APIManager extends BaseCompatibleModel {
                 normalizeRedactedArchiveUploadRequest(body),
                 this.log,
             )
-            return jsonResponse(redactArchiveUploadResultForApi(result))
+            return jsonResponse(redactArchiveUploadResultForApi(result as unknown as Record<string, unknown>))
         } catch (error) {
             this.log?.error('Archive upload error:', error)
             return new Response(`Failed to upload archive: ${redactArchiveErrorMessageForApi(error)}`, {

@@ -40,7 +40,7 @@ SECRET="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" \
 [ -n "$SECRET" ] || { echo "no api.secret in remote config" >&2; exit 1; }
 
 echo "== migrating showroom on-demand events =="
-ARGS=(--schedule "$LOCAL_SCHEDULE" --forwarder "$FORWARDER_URL" --secret "$SECRET")
+ARGS=(--schedule "$LOCAL_SCHEDULE" --forwarder "$FORWARDER_URL")
 if [ "$DRY_RUN" = 1 ]; then ARGS+=(--dry-run); fi
 FORWARDER_API_SECRET="$SECRET" node "$(dirname "${BASH_SOURCE[0]}")/migrate-x570-showroom-plans.mjs" "${ARGS[@]}"
 echo "== done =="
