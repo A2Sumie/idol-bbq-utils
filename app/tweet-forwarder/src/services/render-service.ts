@@ -88,9 +88,7 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function shouldRunYtDlpForArticle(
-    article: Pick<Article, 'media' | 'extra'> | null | undefined,
-): boolean {
+function shouldRunYtDlpForArticle(article: Pick<Article, 'media' | 'extra'> | null | undefined): boolean {
     if (!article) {
         return false
     }
@@ -141,7 +139,10 @@ export class RenderService {
     // Permanent (4xx) download failures, cached so repeated cycles do not re-hit
     // the same dead URL. 5xx/network errors are transient and never cached.
     private mediaDownloadFailureCache = new Map<string, number>()
-    private mediaReadCache = new Map<string, { mtimeMs: number; entry: { dataUrl: string; dimensions: { width: number; height: number } | null } }>()
+    private mediaReadCache = new Map<
+        string,
+        { mtimeMs: number; entry: { dataUrl: string; dimensions: { width: number; height: number } | null } }
+    >()
     private cardRenderCache = new Map<string, Buffer>()
     private static readonly MEDIA_FAILURE_CACHE_MS = 30 * 60 * 1000
     private static readonly MEDIA_FAILURE_CACHE_LIMIT = 1000
@@ -255,21 +256,21 @@ export class RenderService {
             })
         }
         const generateRenderedImage = async () => {
-            // Normalize before hydrate: a malformed media field must not crash the hydrate pass, which runs
-            // outside any render-failure retry.
-            let hydratedArticle = this.hydrateArticleMediaForCard(
-                sanitizeArticleForRender(article),
-                maybe_media_files,
-            )
+            // Normalize and drop failed-download media BEFORE hydration: dropping after
+            // hydrate cannot match the original URLs anymore (they were replaced by
+            // dataURLs), so the dead item stayed in the card while the fallback index
+            // shifted one good image into its slot.
+            let renderArticle = sanitizeArticleForRender(article)
             if (failedRemoteMediaUrls.size > 0) {
-                const dropped = this.dropFailedRemoteMediaForRender(hydratedArticle, failedRemoteMediaUrls)
+                const dropped = this.dropFailedRemoteMediaForRender(renderArticle, failedRemoteMediaUrls)
                 if (dropped.removed > 0) {
                     this.log?.info(
                         `Dropped ${dropped.removed} failed-download media item(s) before render for ${article.platform}:${article.a_id}`,
                     )
-                    hydratedArticle = dropped.article
+                    renderArticle = dropped.article
                 }
             }
+            const hydratedArticle = this.hydrateArticleMediaForCard(renderArticle, maybe_media_files)
             // Exact-content render cache: the hydrated article is precisely what
             // satori consumes (media inlined as dataURLs), so a stable hash of it
             // plus template/features identifies the render output. Summary-card
@@ -857,7 +858,9 @@ export class RenderService {
         }
     }
 
-    private readMediaFileOnce(filePath: string): { dataUrl: string; dimensions: { width: number; height: number } | null } | null {
+    private readMediaFileOnce(
+        filePath: string,
+    ): { dataUrl: string; dimensions: { width: number; height: number } | null } | null {
         let mtimeMs: number
         try {
             mtimeMs = statSync(filePath).mtimeMs
@@ -1188,7 +1191,9 @@ export class RenderService {
         const failedUrls = new Set<string>()
         const isRootNewTweet =
             article.platform === Platform.X &&
-            String(article.type || '').trim().toLocaleLowerCase() === 'tweet'
+            String(article.type || '')
+                .trim()
+                .toLocaleLowerCase() === 'tweet'
         // Dynamic imports to avoid top-level issues during hot-reload or circular deps, and purely for this logic
         const DB = (await import('@/db')).default
 
@@ -1199,7 +1204,8 @@ export class RenderService {
                 this.log?.debug(`Downloading media files for ${currentArticle.a_id}`)
                 const articleMediaUrls = (currentArticle.media || []).map((item) => item?.url).filter(Boolean)
                 const allMediaCachedFailed =
-                    articleMediaUrls.length > 0 && articleMediaUrls.every((url) => this.isMediaDownloadCachedFailed(url))
+                    articleMediaUrls.length > 0 &&
+                    articleMediaUrls.every((url) => this.isMediaDownloadCachedFailed(url))
                 let cookie: string | undefined = undefined
                 if ([Platform.TikTok].includes(currentArticle.platform) && !allMediaCachedFailed) {
                     cookie = await tryGetCookie(currentArticle.url)
@@ -1406,7 +1412,9 @@ export class RenderService {
                     .map((entry: unknown) => (typeof entry === 'string' ? { tool: entry } : entry))
                     .filter((entry): entry is MediaTool => Boolean(entry && (entry as MediaTool).tool))
                 if (toolChain.length === 0) {
-                    this.log?.warn(`Article ${currentArticle.a_id} has media enabled but no media tool configured; skipping download`)
+                    this.log?.warn(
+                        `Article ${currentArticle.a_id} has media enabled but no media tool configured; skipping download`,
+                    )
                 }
 
                 const runTool = async (tool: MediaTool): Promise<Array<RenderedMediaFile | undefined>> => {
@@ -1459,9 +1467,7 @@ export class RenderService {
                                     )
                                     files = files.concat(
                                         await Promise.all(
-                                            videoPaths.map((path) =>
-                                                finalizeDownloadedFile(path, currentArticle?.url),
-                                            ),
+                                            videoPaths.map((path) => finalizeDownloadedFile(path, currentArticle?.url)),
                                         ),
                                     )
                                 } catch (error) {

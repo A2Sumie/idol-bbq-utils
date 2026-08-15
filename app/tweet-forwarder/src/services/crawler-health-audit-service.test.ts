@@ -297,10 +297,12 @@ test('buildCrawlerLiveHealthAudit probes TikTok with crawler-compatible headers'
             {
                 fetch: (async (url: string, init?: RequestInit) => {
                     requests.push({ url, headers: init?.headers as Record<string, string> })
-                    return new Response(
-                        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{"ok":true}</script>',
-                        { status: 200 },
-                    )
+                    if (String(url).includes('/oembed?')) {
+                        return new Response(JSON.stringify({ version: '1.0' }), { status: 200 })
+                    }
+                    return new Response('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{"ok":true}</script>', {
+                        status: 200,
+                    })
                 }) as any,
             },
         )
@@ -316,9 +318,11 @@ test('buildCrawlerLiveHealthAudit probes TikTok with crawler-compatible headers'
             status: 'ok',
             diagnostic_codes: ['tiktok_live_probe_ok'],
         })
-        expect(requests).toHaveLength(1)
+        expect(requests).toHaveLength(2)
         expect(requests[0]?.url).toBe('https://www.tiktok.com/@tiktok')
         expect(requests[0]?.headers['user-agent']).toContain('Chrome/')
+        expect(requests[1]?.url).toContain('https://www.tiktok.com/oembed?url=')
+        expect(requests[1]?.url).toContain('https%3A%2F%2Fwww.tiktok.com%2F%40tiktok')
     } finally {
         rmSync(dir, { recursive: true, force: true })
     }
@@ -354,10 +358,12 @@ test('buildCrawlerLiveHealthAudit probes TikTok configured usernames', async () 
             {
                 fetch: (async (url: string, init?: RequestInit) => {
                     requests.push({ url, headers: init?.headers as Record<string, string> })
-                    return new Response(
-                        '<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{"ok":true}</script>',
-                        { status: 200 },
-                    )
+                    if (String(url).includes('/oembed?')) {
+                        return new Response(JSON.stringify({ version: '1.0' }), { status: 200 })
+                    }
+                    return new Response('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{"ok":true}</script>', {
+                        status: 200,
+                    })
                 }) as any,
             },
         )
@@ -373,9 +379,58 @@ test('buildCrawlerLiveHealthAudit probes TikTok configured usernames', async () 
             status: 'ok',
             diagnostic_codes: ['tiktok_live_probe_ok'],
         })
-        expect(requests).toHaveLength(1)
+        expect(requests).toHaveLength(2)
         expect(requests[0]?.url).toBe('https://www.tiktok.com/@227official')
         expect(requests[0]?.headers['user-agent']).toContain('Chrome/')
+        expect(requests[1]?.url).toContain('https%3A%2F%2Fwww.tiktok.com%2F%40227official')
+    } finally {
+        rmSync(dir, { recursive: true, force: true })
+    }
+})
+
+test('buildCrawlerLiveHealthAudit flags TikTok handles that fail oembed as invalid', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'idol-bbq-crawler-health-'))
+    try {
+        const cookieFile = join(dir, 'tiktok.cookies.txt')
+        writeFileSync(
+            cookieFile,
+            [
+                '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\tttwid\twid-value',
+                '.tiktok.com\tTRUE\t/\tTRUE\t9999999999\ttt_csrf_token\tcsrf-value',
+            ].join('\n'),
+            'utf8',
+        )
+        const audit = await buildCrawlerLiveHealthAudit(
+            {
+                crawlers: [
+                    {
+                        id: 'crawler-tiktok-invalid',
+                        name: 'crawler tiktok invalid',
+                        origin: 'https://www.tiktok.com',
+                        paths: ['@nagomi_saijo_227'],
+                        cfg_crawler: {
+                            cookie_file: cookieFile,
+                        },
+                    },
+                ],
+            } as any,
+            {
+                fetch: (async (url: string) => {
+                    if (String(url).includes('/oembed?')) {
+                        return new Response('Something went wrong', { status: 400 })
+                    }
+                    return new Response('<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__">{"ok":true}</script>', {
+                        status: 200,
+                    })
+                }) as any,
+            },
+        )
+
+        expect(audit.results[0]).toMatchObject({
+            platform: 'tiktok',
+            status: 'warn',
+            diagnostic_codes: ['tiktok_live_probe_invalid_handle'],
+        })
     } finally {
         rmSync(dir, { recursive: true, force: true })
     }

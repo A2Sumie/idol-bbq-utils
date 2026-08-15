@@ -7,8 +7,7 @@ const CONFIG_PATH = process.env.IDOL_BBQ_CONFIG_PATH || '/app/config.yaml'
 const API_BASE = process.env.IDOL_BBQ_API_BASE || 'http://127.0.0.1:3000'
 const YT_DLP_PATH = process.env.YT_DLP_PATH || '/app/tools/bin/yt-dlp'
 const YT_COOKIE_FILE = process.env.YT_COOKIE_FILE || '/app/assets/cookies/ycookies.txt'
-const STARTUP_COOKIE_MAINTENANCE_ENABLED =
-    String(process.env.IDOL_BBQ_STARTUP_COOKIE_MAINTENANCE || '1').trim() !== '0'
+const STARTUP_COOKIE_MAINTENANCE_ENABLED = String(process.env.IDOL_BBQ_STARTUP_COOKIE_MAINTENANCE || '1').trim() !== '0'
 
 function log(message: string) {
     const line = `[startup-cookie-maintenance] ${new Date().toISOString()} ${message}`
@@ -31,7 +30,8 @@ async function waitForApiReady(timeoutMs: number) {
             const response = await fetch(`${API_BASE}/api/runtime/status`, {
                 signal: AbortSignal.timeout(8000),
             })
-            if (response) {
+            // Any HTTP response (401/500) is not "ready": the API must answer 2xx.
+            if (response.ok) {
                 return true
             }
         } catch {
@@ -87,10 +87,10 @@ async function syncCrawlerCookies(name: string, secret: string) {
 }
 
 function runYoutubeKeepalive() {
-    return new Promise<void>((resolve) => {
+    return new Promise<boolean>((resolve) => {
         if (!fs.existsSync(YT_COOKIE_FILE) || !fs.existsSync(YT_DLP_PATH)) {
             log('YouTube keepalive skipped: jar or yt-dlp missing')
-            resolve()
+            resolve(false)
             return
         }
         const args = [
@@ -108,12 +108,12 @@ function runYoutubeKeepalive() {
         child.on('close', (code) => {
             clearTimeout(timer)
             log(`YouTube keepalive finished rc=${code}`)
-            resolve()
+            resolve(code === 0)
         })
         child.on('error', (error) => {
             clearTimeout(timer)
             log(`YouTube keepalive spawn error: ${error.message}`)
-            resolve()
+            resolve(false)
         })
     })
 }
@@ -145,7 +145,10 @@ async function main() {
             log(`sync failed for ${name}: ${error instanceof Error ? error.message : String(error)}`)
         }
     }
-    await runYoutubeKeepalive()
+    const youtubeKeepaliveOk = await runYoutubeKeepalive()
+    if (!youtubeKeepaliveOk) {
+        failures += 1
+    }
     log(`startup cookie maintenance done: synced=${crawlers.length} failures=${failures}`)
     process.exit(failures > 0 ? 1 : 0)
 }

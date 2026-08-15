@@ -11,6 +11,16 @@ const TIKTOK_BROWSER_HYDRATE_ATTEMPTS = 3
 const TIKTOK_BROWSER_HYDRATE_POLL_MS = 5000
 const TIKTOK_HYDRATE_BACKOFF_MS = [5000, 12000, 30000]
 const TIKTOK_SECUID_CACHE_TTL_S = 6 * 60 * 60
+const TIKTOK_INVALID_HANDLE_CACHE_TTL_S = 24 * 60 * 60
+
+class TiktokInvalidHandleError extends Error {
+    readonly code = 'tiktok_invalid_handle'
+
+    constructor(handle: string) {
+        super(`TikTok handle @${handle} appears to not exist (tiktok_invalid_handle)`)
+        this.name = 'TiktokInvalidHandleError'
+    }
+}
 
 enum ArticleTypeEnum {
     /**
@@ -64,7 +74,14 @@ class TiktokSpider extends BaseSpider {
             this.log?.info(videoUrl ? 'Trying to grab video.' : 'Trying to grab posts.')
             const res = videoUrl
                 ? await TiktokApiJsonParser.grabVideo(videoUrl, page, cookieString)
-                : await TiktokApiJsonParser.grabPosts(_url, random_hex7, Number(device_id), page, cookieString, this.cache)
+                : await TiktokApiJsonParser.grabPosts(
+                      _url,
+                      random_hex7,
+                      Number(device_id),
+                      page,
+                      cookieString,
+                      this.cache,
+                  )
             return res as TaskTypeResult<T, Platform.TikTok>
         }
 
@@ -273,7 +290,9 @@ namespace TiktokApiJsonParser {
         if (!Array.isArray(items)) {
             return []
         }
-        return items.map(postParser).filter((item: GenericArticle<Platform.TikTok>) => item.a_id && item.u_id)
+        return items
+            .map(postParser)
+            .filter((item: GenericArticle<Platform.TikTok>) => item.a_id && item.u_id && item.created_at > 0)
     }
 
     function mergePostsById(
@@ -410,9 +429,17 @@ namespace TiktokApiJsonParser {
         const secUidKey = `secuid:${handleKey}`
         const rejectedKey = `creator_api_rejected:${handleKey}`
         const hydrationKey = `hydration_missing:${handleKey}`
+        const invalidHandleKey = `invalid_handle:${handleKey}`
         const cachedSecUid = cache?.get(secUidKey)
         const apiRejectedRecently = Boolean(cache?.get(rejectedKey))
         const hydrationMissingRecently = Boolean(cache?.get(hydrationKey))
+
+        // A handle that already failed user resolution this day is not going to
+        // exist on the next schedule slot: fast fail instead of paying a full
+        // browser navigation every round.
+        if (cache?.get(invalidHandleKey)) {
+            throw new TiktokInvalidHandleError(handle)
+        }
 
         // Recent hydration failures with a cached secUid: one API attempt, then fast
         // fail. Re-navigating + re-polling the same broken page (up to ~27s of
@@ -520,6 +547,16 @@ namespace TiktokApiJsonParser {
             cache.set(secUidKey, secUid, TIKTOK_SECUID_CACHE_TTL_S)
         }
         if (!secUid) {
+            // No user detail and no posts for the requested handle means the account
+            // does not exist (TikTok still serves a 200 hydration shell for such
+            // pages). Cache it as invalid instead of silently returning "no articles"
+            // every slot forever.
+            if (pagePosts.length === 0) {
+                if (cache) {
+                    cache.set(invalidHandleKey, true, TIKTOK_INVALID_HANDLE_CACHE_TTL_S)
+                }
+                throw new TiktokInvalidHandleError(handle)
+            }
             return pagePosts
         }
         // Skip the second API call when this round already rejected the same
@@ -553,7 +590,7 @@ namespace TiktokApiJsonParser {
         cookieString?: string,
     ): Promise<{ ok: true; posts: Array<GenericArticle<Platform.TikTok>> } | { ok: false; error: unknown }> {
         try {
-            const query_obj = _build_web_query(secUid, Date.now(), device_id, random_hex7)
+            const query_obj = _build_web_query(secUid, 0, device_id, random_hex7)
             // @ts-ignore
             const query = new URLSearchParams(query_obj)
             const res = await HTTPClient.download_webpage(
@@ -691,5 +728,5 @@ namespace TiktokApiJsonParser {
     }
 }
 
-export { ArticleTypeEnum, TiktokApiJsonParser }
+export { ArticleTypeEnum, TiktokApiJsonParser, TiktokInvalidHandleError }
 export { TiktokSpider }

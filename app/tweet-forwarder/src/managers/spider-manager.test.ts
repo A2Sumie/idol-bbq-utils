@@ -1434,6 +1434,17 @@ test('classifyCrawlError keeps explicit rate-limit and status signals', () => {
     expect(classifyCrawlError(new Error('Error: 403'))).toBe('auth')
 })
 
+test('classifyCrawlError recognizes private-profile and invalid-handle breakers as non-retryable', () => {
+    expect(
+        classifyCrawlError(
+            new Error('Instagram profile shijo_luna_ is private and the current viewer is not following'),
+        ),
+    ).toBe('private_unfollowed')
+    expect(classifyCrawlError(new Error('TikTok handle @nagomi_saijo_227 appears to not exist'))).toBe('invalid_handle')
+    expect(shouldRetryCrawlErrorForPlatform(new Error('instagram_private_unfollowed'), Platform.Instagram)).toBe(false)
+    expect(shouldRetryCrawlErrorForPlatform(new Error('tiktok_invalid_handle'), Platform.TikTok)).toBe(false)
+})
+
 test('shouldRetryCrawlErrorForPlatform defers Instagram throttle instead of in-run hammering', () => {
     const throttleRedirect = new Error(
         'Error: redirect (302) to https://www.instagram.com/ - likely rate limit or challenge',
@@ -1498,7 +1509,6 @@ test('SpiderPools escalates repeat cooldowns for the same target', async () => {
     ;(pools as any).setCooldownForError(context, 'timeout', 'second timeout')
     const second = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome:some_profile')
     expect(second.expiresAt).toBeGreaterThan(firstDuration)
-
     ;(pools as any).setCooldownForError(context, 'timeout', 'third timeout')
     const third = (pools as any).riskCooldowns.get('2:www.instagram.com:desktop_chrome:some_profile')
     expect(third.expiresAt).toBeGreaterThan(second.expiresAt)

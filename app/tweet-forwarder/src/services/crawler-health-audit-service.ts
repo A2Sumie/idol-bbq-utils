@@ -115,16 +115,7 @@ const X_RESERVED_PATHS = new Set([
     'signup',
     'tos',
 ])
-const INSTAGRAM_RESERVED_PATHS = new Set([
-    '',
-    'accounts',
-    'direct',
-    'explore',
-    'p',
-    'reel',
-    'reels',
-    'stories',
-])
+const INSTAGRAM_RESERVED_PATHS = new Set(['', 'accounts', 'direct', 'explore', 'p', 'reel', 'reels', 'stories'])
 
 function emptyCookieMetadata(): NetscapeCookieFileAudit {
     return {
@@ -394,13 +385,7 @@ async function graphqlProbeResult(
         payloadNotJson: string
     },
 ): Promise<CrawlerCookieLiveProbeResult> {
-    const status = graphqlStatusFromResponse(
-        response,
-        codes.ok,
-        codes.rejected,
-        codes.rateLimited,
-        codes.unexpected,
-    )
+    const status = graphqlStatusFromResponse(response, codes.ok, codes.rejected, codes.rateLimited, codes.unexpected)
     if (status.status !== 'ok') {
         return status
     }
@@ -696,9 +681,7 @@ async function probeTikTok(
     // The universal-data script sits in the page head; reading the first 256KB is
     // enough to verify the session without downloading the whole profile page on
     // every audit/probe run.
-    const head = new TextDecoder().decode(
-        new Uint8Array(await response.arrayBuffer()).subarray(0, 256 * 1024),
-    )
+    const head = new TextDecoder().decode(new Uint8Array(await response.arrayBuffer()).subarray(0, 256 * 1024))
     if (!head.includes('__UNIVERSAL_DATA_FOR_REHYDRATION__')) {
         return {
             status: 'warn',
@@ -706,7 +689,51 @@ async function probeTikTok(
             http_status: response.status,
         }
     }
+
+    // Invalid handles also render the universal-data script, so its presence is
+    // only a session check, not an account check. oembed distinguishes the two:
+    // it returns 400 for a handle that does not exist.
+    const handleCheck = await verifyTikTokHandleViaOembed(username, fetchImpl, timeoutMs)
+    if (handleCheck === false) {
+        return {
+            status: 'warn',
+            diagnostic_codes: ['tiktok_live_probe_invalid_handle'],
+            http_status: 400,
+        }
+    }
+    if (handleCheck === null) {
+        return {
+            ...result,
+            diagnostic_codes: [...result.diagnostic_codes, 'tiktok_live_probe_handle_verification_failed'],
+        }
+    }
     return result
+}
+
+async function verifyTikTokHandleViaOembed(
+    username: string,
+    fetchImpl: typeof fetch,
+    timeoutMs: number,
+): Promise<boolean | null> {
+    try {
+        const profileUrl = `https://www.tiktok.com/@${encodeURIComponent(username)}`
+        const response = await fetchWithTimeout(
+            fetchImpl,
+            `https://www.tiktok.com/oembed?url=${encodeURIComponent(profileUrl)}`,
+            {
+                method: 'GET',
+                headers: {
+                    referer: 'https://www.tiktok.com/',
+                    'user-agent': UserAgent.CHROME,
+                    'accept-language': 'en-US,en;q=0.9',
+                },
+            },
+            timeoutMs,
+        )
+        return response.ok
+    } catch {
+        return null
+    }
 }
 
 async function runLiveProbe(
@@ -822,7 +849,11 @@ async function buildCrawlerLiveHealthAudit(
         }
 
         const staticStatus: CrawlerHealthStatus =
-            diagnosticCodes.length > 0 ? (missing.length > 0 || metadata.usable_cookie_count === 0 ? 'fail' : 'warn') : 'ok'
+            diagnosticCodes.length > 0
+                ? missing.length > 0 || metadata.usable_cookie_count === 0
+                    ? 'fail'
+                    : 'warn'
+                : 'ok'
 
         let liveProbe: CrawlerCookieLiveProbeResult = {
             status: 'skipped',

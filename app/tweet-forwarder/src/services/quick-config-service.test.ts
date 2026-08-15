@@ -4,6 +4,7 @@ import {
     buildQuickConfigModel,
     compileConnectionsFromQuickPatch,
     exportPipelineConfigs,
+    mergePipelinePatches,
     normalizePipelinesForRuntime,
 } from './quick-config-service'
 
@@ -274,7 +275,9 @@ test('disabled pipelines are visible but not compiled into runtime connections',
     } as any)
 
     expect(model.pipelines[0].enabled).toBe(false)
-    expect(model.pipelines[0].review.warnings).toContain('pipeline is disabled and will not be compiled into runtime connections')
+    expect(model.pipelines[0].review.warnings).toContain(
+        'pipeline is disabled and will not be compiled into runtime connections',
+    )
     expect(() =>
         normalizePipelinesForRuntime({
             ...baseConfig,
@@ -360,7 +363,7 @@ test('pipeline diagnostics validate nodes even when they are outside the compile
     ).toThrow('missing processor: missing-second-stage')
 })
 
-test('quick config patch compiles routes back to existing connection maps', () => {
+test('quick config route patch replaces the touched crawler edges', () => {
     const nextConfig = compileConnectionsFromQuickPatch(baseConfig, {
         routes: [
             {
@@ -373,6 +376,56 @@ test('quick config patch compiles routes back to existing connection maps', () =
         ],
     })
 
+    // The route explicitly omitted a processor, so the old crawler-processor
+    // edge must be detached; unrelated maps stay untouched.
+    expect(nextConfig.connections?.['crawler-processor']).toEqual({})
+    expect(nextConfig.connections?.['processor-formatter']).toEqual({
+        'processor-summary': ['formatter-card'],
+    })
+    expect(nextConfig.connections?.['crawler-formatter']).toEqual({
+        'crawler-x': ['formatter-card'],
+    })
+    expect(nextConfig.connections?.['formatter-target']).toEqual({
+        'formatter-card': ['target-low-noise'],
+    })
+})
+
+test('quick config link patch preserves untouched processor edges', () => {
+    const nextConfig = compileConnectionsFromQuickPatch(baseConfig, {
+        links: [
+            {
+                kind: 'formatter-target',
+                from: 'formatter-card',
+                to: 'target-low-noise',
+            },
+        ],
+    })
+
+    expect(nextConfig.connections?.['crawler-processor']).toEqual({
+        'crawler-x': 'processor-summary',
+    })
+    expect(nextConfig.connections?.['processor-formatter']).toEqual({
+        'processor-summary': ['formatter-card'],
+    })
+    expect(nextConfig.connections?.['formatter-target']).toEqual({
+        'formatter-card': ['target-low-noise'],
+    })
+})
+
+test('quick config patch can opt into full connection replacement', () => {
+    const nextConfig = compileConnectionsFromQuickPatch(baseConfig, {
+        routes: [
+            {
+                crawler_id: 'crawler-x',
+                formatter_ids: ['formatter-card'],
+                formatter_targets: {
+                    'formatter-card': ['target-low-noise'],
+                },
+            },
+        ],
+        replace_connections: true,
+    })
+
     expect(nextConfig.connections?.['crawler-processor']).toEqual({})
     expect(nextConfig.connections?.['crawler-formatter']).toEqual({
         'crawler-x': ['formatter-card'],
@@ -380,6 +433,29 @@ test('quick config patch compiles routes back to existing connection maps', () =
     expect(nextConfig.connections?.['formatter-target']).toEqual({
         'formatter-card': ['target-low-noise'],
     })
+})
+
+test('pipeline patches merge by crawler id so partial updates cannot drop other pipelines', () => {
+    const existing = exportPipelineConfigs(baseConfig)
+    const partial = [
+        {
+            source: { crawler_id: 'crawler-x' },
+            formatters: [{ formatter_id: 'formatter-card' }],
+            delivery: [{ formatter_id: 'formatter-card', target_ids: ['target-low-noise'] }],
+        },
+    ]
+
+    const mergedSingle = mergePipelinePatches(existing, partial)
+    expect(mergedSingle).toHaveLength(1)
+    expect(mergedSingle[0]?.processors?.[0]?.processor_id).toBe('processor-summary')
+    expect(
+        mergePipelinePatches(existing, [
+            {
+                source: { crawler_id: 'crawler-second' },
+                delivery: [{ formatter_id: 'formatter-card', target_ids: ['target-low-noise'] }],
+            },
+        ]),
+    ).toHaveLength(2)
 })
 
 test('quick config patch rejects unknown nodes by default', () => {

@@ -82,12 +82,22 @@ const RISK_COOLDOWN_MS: Record<CrawlErrorClass, number> = {
     transient: 0,
     parser: 0,
     unknown: 0,
+    private_unfollowed: 24 * 60 * 60 * 1000,
+    invalid_handle: 24 * 60 * 60 * 1000,
 }
 const INSTAGRAM_TIMEOUT_COOLDOWN_MS = 5 * 60 * 1000
 const INSTAGRAM_AUTH_COOLDOWN_MS = 6 * 60 * 60 * 1000
 const INSTAGRAM_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000
 
-type CrawlErrorClass = 'auth' | 'rate_limit' | 'timeout' | 'transient' | 'parser' | 'unknown'
+type CrawlErrorClass =
+    | 'auth'
+    | 'rate_limit'
+    | 'timeout'
+    | 'transient'
+    | 'parser'
+    | 'unknown'
+    | 'private_unfollowed'
+    | 'invalid_handle'
 
 interface CrawlTargetError {
     url: string
@@ -268,7 +278,6 @@ class CrawlerCookieExportError extends Error {
     }
 }
 
-
 function unwrapRetryError(error: unknown): unknown {
     let current = error
     const seen = new Set<unknown>()
@@ -347,6 +356,12 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
         // between success and "hydration missing" across runs, so treat it as retryable, not a parser break.
         return 'transient'
     }
+    if (/instagram_private_unfollowed|private and the current viewer is not following/.test(message)) {
+        return 'private_unfollowed'
+    }
+    if (/tiktok_invalid_handle|handle .* appears to not exist/.test(message)) {
+        return 'invalid_handle'
+    }
     if (/\b(format may have changed|cannot find|missing initial data|parse|parser|unexpected token)\b/.test(message)) {
         return 'parser'
     }
@@ -355,7 +370,13 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
 
 function shouldRetryCrawlError(error: unknown) {
     const classification = classifyCrawlError(error)
-    return classification !== 'auth' && classification !== 'rate_limit' && classification !== 'parser'
+    return (
+        classification !== 'auth' &&
+        classification !== 'rate_limit' &&
+        classification !== 'parser' &&
+        classification !== 'private_unfollowed' &&
+        classification !== 'invalid_handle'
+    )
 }
 
 function shouldRetryCrawlErrorForPlatform(error: unknown, platform?: Platform) {
@@ -430,7 +451,8 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         this.props = props
         this.log = log?.child({ subservice: this.NAME })
         const warmupDurationMs = Math.max(0, Number(options.warmupDurationMs) || 0)
-        this.warmupUntilMs = warmupDurationMs > 0 ? Date.now() + warmupDurationMs : Math.max(0, Number(options.warmupUntilMs) || 0)
+        this.warmupUntilMs =
+            warmupDurationMs > 0 ? Date.now() + warmupDurationMs : Math.max(0, Number(options.warmupUntilMs) || 0)
         this.warmupMaxDispatchPerTick = Math.max(1, Math.floor(Number(options.warmupMaxDispatchPerTick) || 1))
     }
 
@@ -749,9 +771,7 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
         maxDispatches = Number.POSITIVE_INFINITY,
     ) {
         const warmupActive = Date.now() < this.warmupUntilMs
-        const dispatchBudget = warmupActive
-            ? Math.min(maxDispatches, this.warmupMaxDispatchPerTick)
-            : maxDispatches
+        const dispatchBudget = warmupActive ? Math.min(maxDispatches, this.warmupMaxDispatchPerTick) : maxDispatches
         let dispatchedThisTick = 0
         for (const runtimeSchedule of this.runtimeSchedules.values()) {
             if (!runtimeSchedule.nextRunAt || runtimeSchedule.nextRunAt > now) {
@@ -962,7 +982,8 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
 
     private getActiveCrawlerTaskCount() {
         return Array.from(this.tasks.values()).filter(
-            (task) => task.status === TaskScheduler.TaskStatus.PENDING || task.status === TaskScheduler.TaskStatus.RUNNING,
+            (task) =>
+                task.status === TaskScheduler.TaskStatus.PENDING || task.status === TaskScheduler.TaskStatus.RUNNING,
         ).length
     }
 
@@ -1025,7 +1046,9 @@ class SpiderPools extends BaseCompatibleModel {
         string,
         { classification: CrawlErrorClass; consecutive: number; lastSetAt: number }
     >()
-    private seededBrowserSessions = new Set<string>()
+    // Browser-instance scoped seed bookkeeping: when the pool evicts/relaunches a
+    // session, the new Browser object gets a fresh Set and cookies are seeded again.
+    private seededBrowserSessions = new WeakMap<object, Set<string>>()
     private warmedBrowserSessions = new Map<string, number>()
     private cookieExportProbeCache = new Map<string, number>()
     private static readonly X_WARMUP_REFRESH_MS = 30 * 60 * 1000
@@ -1053,7 +1076,8 @@ class SpiderPools extends BaseCompatibleModel {
         this.log = log?.child({ subservice: this.NAME })
         this.emitter = emitter
         this.onSchedulePoke = options?.onSchedulePoke
-        this.enqueueExternalMediaLinks = options?.enqueueExternalMediaLinks || enqueueMissingExternalMediaLinksFromXArticle
+        this.enqueueExternalMediaLinks =
+            options?.enqueueExternalMediaLinks || enqueueMissingExternalMediaLinksFromXArticle
         for (const crawler of options?.crawlers || []) {
             this.scheduledWebsitesByCrawler.set(crawler.name, sanitizeWebsites(crawler))
         }
@@ -1507,19 +1531,20 @@ class SpiderPools extends BaseCompatibleModel {
                         pageKey = nextPageKey
 
                         const seedKey = browserRequest.session_profile || browserRequest.device_profile || 'default'
-                        if (
-                            cookie_file &&
-                            cfg_crawler?.seed_cookie_file !== false &&
-                            !this.seededBrowserSessions.has(seedKey)
-                        ) {
-                            await page
-                                .browserContext()
-                                .setCookie(
-                                    ...parseNetscapeCookieToPuppeteerCookie(
-                                        resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
-                                    ),
-                                )
-                            this.seededBrowserSessions.add(seedKey)
+                        if (cookie_file && cfg_crawler?.seed_cookie_file !== false) {
+                            const browserInstance = page.browser()
+                            const seededKeys = this.seededBrowserSessions.get(browserInstance) || new Set<string>()
+                            if (!seededKeys.has(seedKey)) {
+                                await page
+                                    .browserContext()
+                                    .setCookie(
+                                        ...parseNetscapeCookieToPuppeteerCookie(
+                                            resolveConfiguredCookieFilePath(cookie_file) || cookie_file,
+                                        ),
+                                    )
+                                seededKeys.add(seedKey)
+                                this.seededBrowserSessions.set(browserInstance, seededKeys)
+                            }
                         }
                     } else if (!needsBrowser) {
                         ctx.log?.debug(`Using non-browser engine: ${crawl_engine}`)
@@ -1810,8 +1835,7 @@ class SpiderPools extends BaseCompatibleModel {
             // export and re-validate on a 30-minute TTL instead.
             const probeCacheKey = `${browserRequest.session_profile || browserRequest.device_profile || 'default'}|${platformHint}`
             const lastProbeOkAt = this.cookieExportProbeCache.get(probeCacheKey)
-            const skipVisitAndProbe =
-                typeof lastProbeOkAt === 'number' && Date.now() - lastProbeOkAt < 30 * 60 * 1000
+            const skipVisitAndProbe = typeof lastProbeOkAt === 'number' && Date.now() - lastProbeOkAt < 30 * 60 * 1000
 
             if (options.visit !== false && !skipVisitAndProbe) {
                 await page
@@ -1973,9 +1997,7 @@ class SpiderPools extends BaseCompatibleModel {
         // not cool the whole shared session (11 handles used to back off together
         // after a single 45s timeout).
         const targetScope =
-            context.platform === Platform.Instagram
-                ? context.url.pathname.split('/').filter(Boolean)[0] || 'root'
-                : ''
+            context.platform === Platform.Instagram ? context.url.pathname.split('/').filter(Boolean)[0] || 'root' : ''
         return [
             context.platform,
             context.url.hostname,
@@ -2020,11 +2042,7 @@ class SpiderPools extends BaseCompatibleModel {
         // back off instead of re-attempting at full frequency forever.
         const history = this.cooldownEscalations.get(key)
         let consecutive = 1
-        if (
-            history &&
-            history.classification === classification &&
-            now - history.lastSetAt < 2 * 60 * 60 * 1000
-        ) {
+        if (history && history.classification === classification && now - history.lastSetAt < 2 * 60 * 60 * 1000) {
             consecutive = history.consecutive + 1
         }
         const multiplier = Math.min(Math.pow(2, consecutive - 1), 8)

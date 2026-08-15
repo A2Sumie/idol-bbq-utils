@@ -920,3 +920,139 @@ test('Instagram highlights failures are isolated and keep posts', async () => {
         ;(InsApiJsonParser as any).grabStories = originalStories
     }
 })
+
+test('Instagram posts parser fails fast for private profiles the viewer does not follow', () => {
+    expect(() =>
+        InsApiJsonParser.postsParser({
+            data: {
+                user: {
+                    username: 'shijo_luna_',
+                    is_private: true,
+                    friendship_status: { following: false },
+                    edge_owner_to_timeline_media: {
+                        edges: [
+                            {
+                                node: {
+                                    code: 'PRIVATEPOST',
+                                    taken_at: 1773845200,
+                                    user: {
+                                        username: 'shijo_luna_',
+                                        is_private: true,
+                                        friendship_status: { following: false },
+                                    },
+                                    image_versions2: {
+                                        candidates: [{ width: 720, url: 'https://example.com/private.jpg' }],
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+            },
+        }),
+    ).toThrow(/private and the current viewer is not following/)
+})
+
+test('Instagram media parser falls back to sidecar children and scalar video_url', () => {
+    const posts = InsApiJsonParser.postsParser({
+        data: {
+            user: {
+                username: 'nananijigram22_7',
+                full_name: '22/7',
+                edge_owner_to_timeline_media: {
+                    edges: [
+                        {
+                            node: {
+                                code: 'SIDECARVIDEO',
+                                taken_at: 1773845200,
+                                user: { username: 'nananijigram22_7' },
+                                edge_sidecar_to_children: {
+                                    edges: [
+                                        {
+                                            node: {
+                                                image_versions2: {
+                                                    candidates: [
+                                                        {
+                                                            width: 720,
+                                                            url: 'https://example.com/sidecar-photo.jpg',
+                                                        },
+                                                    ],
+                                                },
+                                            },
+                                        },
+                                        {
+                                            node: {
+                                                image_versions2: {
+                                                    candidates: [
+                                                        {
+                                                            width: 720,
+                                                            url: 'https://example.com/sidecar-cover.jpg',
+                                                        },
+                                                    ],
+                                                },
+                                                video_url: 'https://example.com/sidecar-video.mp4',
+                                            },
+                                        },
+                                    ],
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        },
+    })
+
+    expect(posts[0]?.media).toEqual([
+        { type: 'photo', url: 'https://example.com/sidecar-photo.jpg' },
+        { type: 'video_thumbnail', url: 'https://example.com/sidecar-cover.jpg' },
+        { type: 'video', url: 'https://example.com/sidecar-video.mp4' },
+    ])
+})
+
+test('Instagram grabPosts fails fast when the profile payload reveals a private unfollowed account', async () => {
+    const profile_json = {
+        data: {
+            user: {
+                username: 'shijo_luna_',
+                full_name: 'Private',
+                is_private: true,
+                friendship_status: { following: false },
+            },
+        },
+    }
+    const listeners = new Map<string, Array<(data: any) => void>>()
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            const handlers = listeners.get(eventName) || []
+            handlers.push(handler)
+            listeners.set(eventName, handlers)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(
+                eventName,
+                (listeners.get(eventName) || []).filter((entry) => entry !== handler),
+            )
+        },
+        goto: async () => {
+            for (const handler of listeners.get('response') || []) {
+                handler({
+                    url: () => 'https://www.instagram.com/graphql/query/',
+                    status: () => 200,
+                    json: async () => profile_json,
+                    request: () => ({
+                        method: () => 'POST',
+                        postData: () => 'av=0&fb_api_req_friendly_name=PolarisProfilePageContentQuery&variables=%7B%7D',
+                    }),
+                })
+            }
+        },
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+    } as any
+
+    await expect(InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/shijo_luna_/')).rejects.toThrow(
+        /private and the current viewer is not following/,
+    )
+})

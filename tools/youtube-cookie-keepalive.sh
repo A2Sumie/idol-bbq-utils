@@ -34,18 +34,29 @@ chmod 600 "$temporary_cookie_file"
     --print '%(id)s' \
     "$KEEPALIVE_URL" >/dev/null
 
-membership_result="$("$YT_DLP_PATH" \
+membership_result=""
+if "$YT_DLP_PATH" \
     --cookies "$temporary_cookie_file" \
     --simulate \
     --no-playlist \
     --print '%(id)s|%(availability)s|%(duration)s' \
-    "$MEMBERSHIP_PROBE_URL")"
+    "$MEMBERSHIP_PROBE_URL" >/tmp/yt-keepalive-membership-probe.txt 2>/dev/null; then
+    membership_result="$(cat /tmp/yt-keepalive-membership-probe.txt)"
+fi
+rm -f /tmp/yt-keepalive-membership-probe.txt
 
+# The membership probe is informational: the configured video can lose its
+# members-only requirement or change availability, and that must never block
+# ordinary public-cookie keepalive (it previously deleted the rotated jar on
+# every 6h cron run).
 case "$membership_result" in
     *'|subscriber_only|'*) ;;
+    '')
+        printf 'youtube-cookie-keepalive: membership probe failed; keeping public keepalive result\n' >&2
+        ;;
     *)
-        printf 'youtube-cookie-keepalive: membership probe did not confirm subscriber access\n' >&2
-        exit 1
+        printf 'youtube-cookie-keepalive: membership probe did not confirm subscriber access (%s); keeping public keepalive result\n' \
+            "$membership_result" >&2
         ;;
 esac
 

@@ -45,20 +45,34 @@ trap terminate INT TERM
 
 sqlite_quick_check() {
     quick_check_db_path="$1"
-python3 - "$quick_check_db_path" <<'PY'
-import sqlite3
-import sys
+    quick_check_script="/tmp/tweet-forwarder/sqlite-quick-check.$$.js"
+    cat > "$quick_check_script" <<'JS'
+import { Database } from 'bun:sqlite'
 
-db_path = sys.argv[1]
-connection = sqlite3.connect(db_path)
-try:
-    result = connection.execute("PRAGMA quick_check").fetchone()
-finally:
-    connection.close()
-
-if not result or result[0] != "ok":
-    raise SystemExit(f"SQLite quick_check failed for {db_path}: {result[0] if result else 'no result'}")
-PY
+const dbPath = process.argv[2]
+let db
+try {
+    db = new Database(dbPath, { readonly: true })
+} catch (error) {
+    console.error(`SQLite open failed for ${dbPath}: ${error instanceof Error ? error.message : String(error)}`)
+    process.exit(2)
+}
+try {
+    const rows = db.query('PRAGMA quick_check').all()
+    const value = rows[0] ? Object.values(rows[0])[0] : null
+    if (value !== 'ok') {
+        console.error(`SQLite quick_check failed for ${dbPath}: ${String(value ?? 'no result')}`)
+        process.exit(1)
+    }
+    console.log(value)
+} finally {
+    db.close()
+}
+JS
+    bun "$quick_check_script" "$quick_check_db_path"
+    quick_check_status=$?
+    rm -f "$quick_check_script"
+    return "$quick_check_status"
 }
 
 sqlite_backup() {

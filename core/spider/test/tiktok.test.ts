@@ -673,7 +673,54 @@ test('TikTok grabPosts avoids a second navigation on the login wall', async () =
     })
 
     await expect(
-        TiktokApiJsonParser.grabPosts('https://www.tiktok.com/@emma_tsukishiro', 'abc1234', 1988, fakePage, undefined, new SimpleExpiringCache()),
+        TiktokApiJsonParser.grabPosts(
+            'https://www.tiktok.com/@emma_tsukishiro',
+            'abc1234',
+            1988,
+            fakePage,
+            undefined,
+            new SimpleExpiringCache(),
+        ),
     ).rejects.toThrow(/You need to login first/)
     expect(gotoUrls).toHaveLength(1)
+})
+
+test('TikTok grabPosts caches missing user details as an invalid handle', async () => {
+    const original = HTTPClient.download_webpage
+    let calls = 0
+    ;(HTTPClient as any).download_webpage = async () => {
+        calls += 1
+        return new Response(
+            tiktokUniversalHtml({
+                __DEFAULT_SCOPE__: {},
+            }),
+        )
+    }
+
+    const cache = new SimpleExpiringCache()
+    try {
+        await expect(
+            TiktokApiJsonParser.grabPosts(
+                'https://www.tiktok.com/@nagomi_saijo_227',
+                'abcdef0',
+                12345,
+                undefined,
+                undefined,
+                cache,
+            ),
+        ).rejects.toThrow(/appears to not exist/)
+        await expect(
+            TiktokApiJsonParser.grabPosts(
+                'https://www.tiktok.com/@nagomi_saijo_227',
+                'abcdef0',
+                12345,
+                undefined,
+                undefined,
+                cache,
+            ),
+        ).rejects.toThrow(/appears to not exist/)
+        expect(calls).toBe(1)
+    } finally {
+        ;(HTTPClient as any).download_webpage = original
+    }
 })

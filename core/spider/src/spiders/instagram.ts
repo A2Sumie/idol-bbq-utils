@@ -84,6 +84,43 @@ function sanitizeInstagramGeneratedText(text: unknown): string | null {
     return INSTAGRAM_AUTO_MEDIA_SUMMARY_PATTERNS.some((pattern) => pattern.test(normalized)) ? null : normalized
 }
 
+class InstagramPrivateUnfollowedError extends Error {
+    readonly code = 'instagram_private_unfollowed'
+
+    constructor(handle: string) {
+        super(
+            `Instagram profile ${handle} is private and the current viewer is not following (instagram_private_unfollowed)`,
+        )
+        this.name = 'InstagramPrivateUnfollowedError'
+    }
+}
+
+function normalizeInstagramHandle(value: unknown) {
+    return String(value || '')
+        .trim()
+        .replace(/^@+/, '')
+        .toLowerCase()
+}
+
+function instagramProfileAccess(user: any) {
+    if (!user || (user?.is_private !== true && user?.is_private !== 'true')) {
+        return null
+    }
+    const following = user?.friendship_status?.following ?? user?.friendshipStatus?.following
+    return {
+        isPrivate: true,
+        following: following === true,
+    }
+}
+
+function userFromInstagramProfilePayload(payload: unknown) {
+    if (!payload || typeof payload !== 'object') {
+        return null
+    }
+    const data = (payload as any)?.data
+    return data?.user || (payload as any)?.user || null
+}
+
 function extractStoryAccessibilityText(caption: unknown): string | null {
     const normalized = sanitizeInstagramGeneratedText(caption)
     if (!normalized) {
@@ -169,8 +206,8 @@ class InstagramSpider extends BaseSpider {
                         // The tray query did not resolve on the shared load (rare):
                         // only pay a dedicated navigation when the profile actually
                         // renders highlight links.
-                        const hasHighlightsLinks = await page.evaluate(
-                            () => Boolean(document.querySelector('a[href*="/stories/highlights/"]')),
+                        const hasHighlightsLinks = await page.evaluate(() =>
+                            Boolean(document.querySelector('a[href*="/stories/highlights/"]')),
                         )
                         if (hasHighlightsLinks) {
                             articles.push(...(await InsApiJsonParser.grabHighlights(page, _url)))
@@ -361,7 +398,7 @@ namespace InsApiJsonParser {
         }
         const pushNodeMedia = (node: any) => {
             const imageUrl = pickBestCandidateUrl(node?.image_versions2?.candidates)
-            const videoUrl = pickBestCandidateUrl(node?.video_versions)
+            const videoUrl = pickBestCandidateUrl(node?.video_versions) || normalizeInstagramUrl(node?.video_url)
             if (videoUrl) {
                 pushMedia('video_thumbnail', imageUrl)
                 pushMedia('video', videoUrl)
@@ -376,11 +413,15 @@ namespace InsApiJsonParser {
         }
         // video
         const video_candidates = edge?.video_versions
-        if (video_candidates && !arr.some((item) => item.type === 'video')) {
-            pushMedia('video', pickBestCandidateUrl(video_candidates))
+        const videoUrlFallback = normalizeInstagramUrl(edge?.video_url)
+        if ((video_candidates || videoUrlFallback) && !arr.some((item) => item.type === 'video')) {
+            pushMedia('video', pickBestCandidateUrl(video_candidates) || videoUrlFallback)
         }
-        // carousel
-        const carousel_media = edge?.carousel_media
+        // carousel (current node.carousel_media shape, plus the legacy sidecar
+        // edge_sidecar_to_children.edges shape as a forward-compatibility fallback)
+        const carousel_media =
+            edge?.carousel_media ||
+            edge?.edge_sidecar_to_children?.edges?.map((carouselEdge: any) => carouselEdge?.node).filter(Boolean)
         if (carousel_media) {
             // If carousel exists, the top-level cover/video is only a preview for the carousel.
             arr = []
@@ -490,12 +531,37 @@ namespace InsApiJsonParser {
         const parsed = parseEdges(json)
         const crawledProfile = parsed.scoped ? profileContextFromUser(json?.data?.user) : null
         const fallbackHandle = String(options.fallbackHandle || '').trim()
-        return parsed.edges
-            .map((edge: any) => postParser(edge, crawledProfile, fallbackHandle))
-            // Drop posts whose owner cannot be identified (no node user/owner and no
-            // crawled profile context): they would otherwise be saved with an empty
-            // u_id and surface as "@<shortcode>" in forwarded notifications.
-            .filter((article: GenericArticle<Platform.Instagram>) => Boolean(article.u_id))
+
+        // Private profile breaker: when the crawled account is private and the
+        // current viewer is not following it, the posts query itself often hangs
+        // until its own timeout. Whenever the payload already exposes the profile
+        // user (classic graphql) or post nodes (XDT), fail fast with a dedicated
+        // error instead of burning the full posts timeout.
+        const edgeUsers = parsed.edges.map((edge: any) => edge?.node?.user || edge?.node?.owner).filter(Boolean)
+        const targetHandle = normalizeInstagramHandle(crawledProfile?.u_id || fallbackHandle)
+        const accessCandidates: Array<any> = parsed.scoped
+            ? [json?.data?.user].filter(Boolean)
+            : edgeUsers.filter((user: any) => {
+                  if (!targetHandle) {
+                      return edgeUsers.length === 1
+                  }
+                  return normalizeInstagramHandle(user?.username) === targetHandle
+              })
+        const blockedAccess = accessCandidates
+            .map((user: any) => instagramProfileAccess(user))
+            .find((access: any) => access && !access.following)
+        if (blockedAccess) {
+            throw new InstagramPrivateUnfollowedError(crawledProfile?.u_id || fallbackHandle || 'unknown')
+        }
+
+        return (
+            parsed.edges
+                .map((edge: any) => postParser(edge, crawledProfile, fallbackHandle))
+                // Drop posts whose owner cannot be identified (no node user/owner and no
+                // crawled profile context): they would otherwise be saved with an empty
+                // u_id and surface as "@<shortcode>" in forwarded notifications.
+                .filter((article: GenericArticle<Platform.Instagram>) => Boolean(article.u_id))
+        )
     }
 
     export function followsParser(json: any): GenericFollows {
@@ -608,7 +674,9 @@ namespace InsApiJsonParser {
         }
         PROFILE_PAYLOAD_CACHE.set(url, { payload, expiresAt: Date.now() + PROFILE_PAYLOAD_CACHE_TTL_MS })
         if (PROFILE_PAYLOAD_CACHE.size > 128) {
-            const oldest = Array.from(PROFILE_PAYLOAD_CACHE.entries()).sort((a, b) => a[1].expiresAt - b[1].expiresAt)[0]
+            const oldest = Array.from(PROFILE_PAYLOAD_CACHE.entries()).sort(
+                (a, b) => a[1].expiresAt - b[1].expiresAt,
+            )[0]
             if (oldest) {
                 PROFILE_PAYLOAD_CACHE.delete(oldest[0])
             }
@@ -634,7 +702,9 @@ namespace InsApiJsonParser {
             if (response.status() >= 300 && response.status() < 400) {
                 const location = response.headers()['location'] || ''
                 if (/login/i.test(location)) {
-                    control.fail(new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`))
+                    control.fail(
+                        new Error(`Error: login redirect (${response.status()}): session expired or checkpoint`),
+                    )
                 } else {
                     control.fail(
                         new Error(
@@ -666,14 +736,22 @@ namespace InsApiJsonParser {
             viaReload?: boolean
         },
     ): Promise<IgProfileFetchResult> {
-        const postsWait = waitForResponse(page, buildGraphQLResponseGate(PROFILE_POSTS_KEY), options.postsTimeoutMs ?? 60000)
+        const postsWait = waitForResponse(
+            page,
+            buildGraphQLResponseGate(PROFILE_POSTS_KEY),
+            options.postsTimeoutMs ?? 60000,
+        )
 
         // Highlights and profile payloads are auxiliary: they must never block or fail
         // the posts capture, so their waits are raced with a timeout and swallowed.
         // The reload path re-captures posts only; the profile payload from the first
         // navigation is already stashed.
         const highlightsWait = options.wantHighlights
-            ? waitForResponse(page, buildGraphQLResponseGate(PROFILE_HIGHLIGHTS_KEY), options.highlightsTimeoutMs ?? 12000)
+            ? waitForResponse(
+                  page,
+                  buildGraphQLResponseGate(PROFILE_HIGHLIGHTS_KEY),
+                  options.highlightsTimeoutMs ?? 12000,
+              )
             : null
         const profileWait = options.viaReload
             ? null
@@ -721,17 +799,11 @@ namespace InsApiJsonParser {
             throw error
         }
 
-        const postsData = await postsWait.promise
-        if (!postsData.success) {
-            throw postsData.error
-        }
-        const posts = postsParser(postsData.data, { fallbackHandle: parseHandleFromUrl(url) })
-
-        const trayResult = highlightsWait ? await highlightsWait.promise.catch(() => null) : null
-        const highlightsJson = trayResult && (trayResult as any).success ? (trayResult as any).data : null
-
-        // Do not block posts on the profile payload: stash the promise for the
-        // live-relay consumer and move on.
+        // Profile payloads are auxiliary, but they are also the fastest reliable
+        // signal for "private profile + viewer not following". Race it against the
+        // posts wait so that blocked profiles fail immediately instead of burning
+        // the full 60s posts timeout.
+        const targetHandle = parseHandleFromUrl(url)
         if (profileWait) {
             const profilePromise = profileWait.promise
                 .then((result: any) => {
@@ -744,7 +816,32 @@ namespace InsApiJsonParser {
                 .catch(() => null)
                 .finally(() => PENDING_PROFILE_PROMISES.delete(url))
             PENDING_PROFILE_PROMISES.set(url, profilePromise)
+
+            const earlyResult = await Promise.race([
+                profilePromise.then((payload) => ({ payload })),
+                postsWait.promise.then(
+                    () => null,
+                    () => null,
+                ),
+            ])
+            const profileUser = earlyResult ? userFromInstagramProfilePayload(earlyResult.payload) : null
+            const profileAccess = instagramProfileAccess(profileUser)
+            if (profileAccess && !profileAccess.following) {
+                postsWait.cleanup()
+                highlightsWait?.cleanup()
+                profileWait.cleanup()
+                throw new InstagramPrivateUnfollowedError(profileUser?.username || targetHandle || 'unknown')
+            }
         }
+
+        const postsData = await postsWait.promise
+        if (!postsData.success) {
+            throw postsData.error
+        }
+        const posts = postsParser(postsData.data, { fallbackHandle: targetHandle })
+
+        const trayResult = highlightsWait ? await highlightsWait.promise.catch(() => null) : null
+        const highlightsJson = trayResult && (trayResult as any).success ? (trayResult as any).data : null
 
         return { posts, highlightsJson, profileJson: null }
     }
@@ -757,7 +854,10 @@ namespace InsApiJsonParser {
             wantHighlights?: boolean
             highlightsTimeoutMs?: number
         } = {},
-    ): Promise<{ posts: Array<GenericArticle<Platform.Instagram>>; highlights: Array<GenericArticle<Platform.Instagram>> }> {
+    ): Promise<{
+        posts: Array<GenericArticle<Platform.Instagram>>
+        highlights: Array<GenericArticle<Platform.Instagram>>
+    }> {
         const wantHighlights = Boolean(config.wantHighlights)
         const first = await fetchIgProfilePayloads(page, url, {
             wantHighlights,
@@ -939,7 +1039,11 @@ namespace InsApiJsonParser {
             }
         }
 
-        const { cleanup, promise: waitForTweets } = waitForResponse(page, buildGraphQLResponseGate(PROFILE_USER_KEY), 20000)
+        const { cleanup, promise: waitForTweets } = waitForResponse(
+            page,
+            buildGraphQLResponseGate(PROFILE_USER_KEY),
+            20000,
+        )
         try {
             await page.goto(url)
         } catch (error) {
@@ -961,6 +1065,6 @@ namespace InsApiJsonParser {
     }
 }
 
-export { ArticleTypeEnum, InstagramArticleTaskType, InsApiJsonParser }
+export { ArticleTypeEnum, InstagramArticleTaskType, InstagramPrivateUnfollowedError, InsApiJsonParser }
 export type { InstagramProfileStatus }
 export { InstagramSpider }

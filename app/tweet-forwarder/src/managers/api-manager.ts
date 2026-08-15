@@ -28,6 +28,7 @@ import {
     buildQuickConfigModel,
     compileConnectionsFromQuickPatch,
     exportPipelineConfigs,
+    mergePipelinePatches,
     normalizePipelinesForRuntime,
     type QuickConfigPatch,
 } from '@/services/quick-config-service'
@@ -159,7 +160,9 @@ function verifyOneBotHttpClientSignature(rawBody: string, signature: string | nu
 }
 
 function isOneBotEventBody(value: unknown) {
-    return Boolean(value && typeof value === 'object' && typeof (value as { post_type?: unknown }).post_type === 'string')
+    return Boolean(
+        value && typeof value === 'object' && typeof (value as { post_type?: unknown }).post_type === 'string',
+    )
 }
 
 const MAX_BUN_IDLE_TIMEOUT_SECONDS = 255
@@ -1012,6 +1015,16 @@ export class APIManager extends BaseCompatibleModel {
             fs.chmodSync(temporaryCookieFile, 0o600)
             if (fs.existsSync(cookieFile)) {
                 fs.copyFileSync(cookieFile, `${cookieFile}.bak-sync-${Date.now()}`)
+                // Sync backups are rotated in the audit report's browser/cookie
+                // audit; unbounded *.bak-sync-* files were eating the host disk.
+                const baseName = path.basename(cookieFile)
+                const staleBackups = fs
+                    .readdirSync(dir)
+                    .filter((name) => name.startsWith(`${baseName}.bak-sync-`))
+                    .sort()
+                for (const stale of staleBackups.slice(0, Math.max(0, staleBackups.length - 10))) {
+                    fs.rmSync(path.join(dir, stale), { force: true })
+                }
             }
             fs.renameSync(temporaryCookieFile, cookieFile)
             this.log?.info(
@@ -1183,7 +1196,14 @@ export class APIManager extends BaseCompatibleModel {
         try {
             const patch = (await req.json()) as QuickConfigPatch
             const compiledConfig = compileConnectionsFromQuickPatch(this.config, patch)
-            const pipelines = patch.pipelines || exportPipelineConfigs(compiledConfig)
+            // A partial patch only changes the routes it mentions. Preserve the
+            // remaining pipelines (or the full legacy route export) instead of
+            // saving a one-pipeline config that would delete every other route on
+            // the next reload.
+            const currentPipelines = Array.isArray((this.config as any).pipelines)
+                ? ((this.config as any).pipelines as Array<any>)
+                : exportPipelineConfigs(this.config)
+            const pipelines = mergePipelinePatches(currentPipelines, patch.pipelines || [])
             const { connections: _connections, ...configWithoutConnections } = compiledConfig
             const nextConfig = {
                 ...configWithoutConnections,
@@ -1244,6 +1264,24 @@ export class APIManager extends BaseCompatibleModel {
         const previousConfigText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null
         if (fs.existsSync(configPath)) {
             fs.copyFileSync(configPath, `${configPath}.bak`)
+            // The container-layer .bak dies with the container. Also write a
+            // timestamped copy into the mounted assets directory so config history
+            // survives rebuilds; keep the latest 10 to avoid unbounded growth.
+            const persistentBackupDir = path.join(path.dirname(configPath), 'assets')
+            if (fs.existsSync(persistentBackupDir) && fs.statSync(persistentBackupDir).isDirectory()) {
+                const timestamp = new Date()
+                    .toISOString()
+                    .replace(/[-:]/g, '')
+                    .replace(/\.\d{3}Z$/, 'Z')
+                fs.copyFileSync(configPath, path.join(persistentBackupDir, `config.yaml.bak-api-${timestamp}`))
+                const backups = fs
+                    .readdirSync(persistentBackupDir)
+                    .filter((name) => name.startsWith('config.yaml.bak-api-'))
+                    .sort()
+                for (const stale of backups.slice(0, Math.max(0, backups.length - 10))) {
+                    fs.rmSync(path.join(persistentBackupDir, stale), { force: true })
+                }
+            }
         }
 
         fs.writeFileSync(configPath, YAML.stringify(config), 'utf8')
@@ -1746,7 +1784,9 @@ export class APIManager extends BaseCompatibleModel {
             type: DB.TaskQueue.TYPE.LiveCapturePlan,
             status: DB.TaskQueue.STATUS.Planned,
         })
-        const platform = String(url.searchParams.get('platform') || '').trim().toLowerCase()
+        const platform = String(url.searchParams.get('platform') || '')
+            .trim()
+            .toLowerCase()
         const handle = String(url.searchParams.get('handle') || '')
             .trim()
             .replace(/^@/, '')
@@ -1759,7 +1799,12 @@ export class APIManager extends BaseCompatibleModel {
                 return true
             })
             .map((task) => this.liveCapturePlanResponse(task))
-        return jsonResponse({ success: true, scheduled: this.liveCapturePlanExecutable(), executable: this.liveCapturePlanExecutable(), plans })
+        return jsonResponse({
+            success: true,
+            scheduled: this.liveCapturePlanExecutable(),
+            executable: this.liveCapturePlanExecutable(),
+            plans,
+        })
     }
 
     private async handleLiveCapturePlanGet(value: string): Promise<Response> {
@@ -2490,12 +2535,8 @@ export class APIManager extends BaseCompatibleModel {
         if (message === undefined || message === null || message === '') {
             return jsonResponse({ success: false, error: 'message_required' }, 400)
         }
-        const userId = body.user_id !== undefined && body.user_id !== null
-            ? String(body.user_id).trim()
-            : ''
-        const groupId = body.group_id !== undefined && body.group_id !== null
-            ? String(body.group_id).trim()
-            : ''
+        const userId = body.user_id !== undefined && body.user_id !== null ? String(body.user_id).trim() : ''
+        const groupId = body.group_id !== undefined && body.group_id !== null ? String(body.group_id).trim() : ''
         if (Boolean(userId) === Boolean(groupId)) {
             return jsonResponse({ success: false, error: 'exactly_one_of_user_id_group_id_required' }, 400)
         }
