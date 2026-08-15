@@ -199,6 +199,17 @@ describe('shouldRunYtDlpForArticle', () => {
         ).toBe(false)
     })
 
+    test('never runs yt-dlp for TikTok videos (Akamai fingerprint block)', () => {
+        expect(
+            shouldRunYtDlpForArticle(
+                {
+                    media: [{ url: 'https://www.tiktok.com/@x/video/1', type: 'video' }],
+                } as any,
+                Platform.TikTok,
+            ),
+        ).toBe(false)
+    })
+
     test('handles null/empty articles', () => {
         expect(shouldRunYtDlpForArticle(null)).toBe(false)
         expect(shouldRunYtDlpForArticle({ media: [] } as any)).toBe(false)

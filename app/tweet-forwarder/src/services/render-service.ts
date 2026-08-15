@@ -88,8 +88,17 @@ function sleep(ms: number) {
     return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-function shouldRunYtDlpForArticle(article: Pick<Article, 'media' | 'extra'> | null | undefined): boolean {
+function shouldRunYtDlpForArticle(
+    article: Pick<Article, 'media' | 'extra'> | null | undefined,
+    platform?: Platform,
+): boolean {
     if (!article) {
+        return false
+    }
+    // TikTok/Akamai currently rejects yt-dlp's curl_cffi fingerprint. The
+    // direct CDN + session-cookie-jar download is the supported path; yt-dlp
+    // must not be called for TikTok at all, even as a fallback.
+    if (platform === Platform.TikTok) {
         return false
     }
     const hasVideoMedia = (item: { type?: unknown } | undefined) => String(item?.type || '').includes('video')
@@ -1498,18 +1507,12 @@ export class RenderService {
                         if (articleContext.media) {
                             files = await _handleMedia(articleContext.media, false, directMediaCookie)
                         }
-                        // yt-dlp re-resolves the video page and gets a fresh signed URL, which matters
-                        // when the stored CDN URL (e.g. tiktokcdn) has expired or is session-bound.
-                        // Only run it for articles that actually contain video media; image-only posts
-                        // must not be duplicated by an extra yt-dlp pass. TikTok is the exception in
-                        // the other direction: when the direct CDN download already produced a video,
-                        // skip yt-dlp entirely because its curl_cffi fingerprint is currently denied
-                        // by TikTok/Akamai and only burns ~15s per article with an "Unexpected
-                        // response from webpage request" error.
-                        const directVideoDownloaded =
-                            articleContext.platform === Platform.TikTok &&
-                            files.some((file) => file?.media_type === 'video')
-                        if (shouldRunYtDlpForArticle(articleContext) && !directVideoDownloaded) {
+                        // yt-dlp re-resolves the video page and gets a fresh signed URL for
+                        // platforms that accept its client fingerprint. It is never a fallback
+                        // for TikTok: TikTok/Akamai rejects yt-dlp's curl_cffi fingerprint, and
+                        // calling it anyway only burns ~15s per article while masking the real
+                        // direct-CDN result. TikTok stays direct-CDN + session-cookie-jar only.
+                        if (shouldRunYtDlpForArticle(articleContext, articleContext?.platform)) {
                             const ytDlpCacheKey = `ytdlp:${articleContext.url}`
                             if (this.isMediaDownloadCachedFailed(ytDlpCacheKey)) {
                                 this.log?.debug(`Skipping cached-failed yt-dlp download for ${articleContext.url}`)

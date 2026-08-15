@@ -30,6 +30,38 @@ test('X API mode without a browser preserves the API failure reason', async () =
     ).rejects.toThrow('Cookie string is required for API mode')
 })
 
+test('X API mode surfaces 429 instead of falling back to the browser', async () => {
+    const spider = new X.XUserTimeLineSpider().init()
+    const originalPrepare = X.XApiClient.prototype.prepareUserOperations
+    const originalGrabFollows = X.XApiClient.prototype.grabFollowsNumber
+    const originalBrowserGrabFollows = (X.XApiJsonParser as any).grabFollowsNumber
+    try {
+        ;(X.XApiClient.prototype as any).prepareUserOperations = async () => undefined
+        ;(X.XApiClient.prototype as any).grabFollowsNumber = async () => {
+            throw new Error('Failed to fetch follows: 429 retry_after=900')
+        }
+        ;(X.XApiJsonParser as any).grabFollowsNumber = async () => {
+            throw new Error('browser fallback was called')
+        }
+        const page = {
+            browserContext: () => ({
+                cookies: async () => [{ name: 'auth_token', value: 'token' }],
+            }),
+        } as any
+
+        await expect(
+            spider.crawl('https://x.com/X', page, 'api-no-fallback', {
+                task_type: 'follows',
+                crawl_engine: 'api',
+            }),
+        ).rejects.toThrow('429')
+    } finally {
+        X.XApiClient.prototype.prepareUserOperations = originalPrepare
+        X.XApiClient.prototype.grabFollowsNumber = originalGrabFollows
+        ;(X.XApiJsonParser as any).grabFollowsNumber = originalBrowserGrabFollows
+    }
+})
+
 /**
  * require network access & headless browser
  */

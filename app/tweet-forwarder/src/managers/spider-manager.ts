@@ -297,6 +297,31 @@ function statusFromMessage(message: string) {
     return match ? Number(match[1]) : null
 }
 
+function retryAfterMillisFromMessage(message: string): number | null {
+    const match = message.match(/\bretry_after=([^\s]+)/)
+    if (!match) {
+        return null
+    }
+    const value = match[1]
+    if (!value || value === 'none') {
+        return null
+    }
+    if (/^\d+$/.test(value)) {
+        const seconds = Number(value)
+        if (Number.isFinite(seconds) && seconds > 0 && seconds <= 24 * 60 * 60) {
+            return seconds * 1000
+        }
+        return null
+    }
+    // X's Retry-After may be an HTTP date; spaces were encoded as '_' so the
+    // value stays a single token in the error message.
+    const timestamp = Date.parse(value.replace(/_/g, ' '))
+    if (!Number.isFinite(timestamp)) {
+        return null
+    }
+    return Math.max(0, timestamp - Date.now())
+}
+
 function classifyCrawlError(error: unknown): CrawlErrorClass {
     const root = unwrapRetryError(error)
     if (root instanceof HttpTimeoutError) {
@@ -2045,7 +2070,7 @@ class SpiderPools extends BaseCompatibleModel {
     }
 
     private setCooldownForError(context: CrawlTargetContext, classification: CrawlErrorClass, message: string) {
-        const duration =
+        let duration =
             context.platform === Platform.Instagram
                 ? classification === 'auth'
                     ? INSTAGRAM_AUTH_COOLDOWN_MS
@@ -2055,6 +2080,18 @@ class SpiderPools extends BaseCompatibleModel {
                         ? INSTAGRAM_TIMEOUT_COOLDOWN_MS
                         : RISK_COOLDOWN_MS[classification] || 0
                 : RISK_COOLDOWN_MS[classification] || 0
+        if (duration <= 0 && classification !== 'rate_limit') {
+            return
+        }
+        // Respect the platform's Retry-After hint when X embeds one in the 429
+        // error. This stops the crawler from re-hitting an endpoint the platform
+        // explicitly told us to leave alone for N seconds/minutes.
+        if (classification === 'rate_limit') {
+            const retryAfterMs = retryAfterMillisFromMessage(message)
+            if (retryAfterMs !== null && retryAfterMs > duration) {
+                duration = Math.min(retryAfterMs, 6 * 60 * 60 * 1000)
+            }
+        }
         if (duration <= 0) {
             return
         }

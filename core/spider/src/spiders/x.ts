@@ -250,7 +250,10 @@ function assertXResponseOk(res: Response, context: string): void {
         return
     }
     const statusText = res.statusText ? ` ${res.statusText}` : ''
-    throw new Error(`Failed to fetch ${context}: ${res.status}${statusText}`)
+    const retryAfterHeader = res.headers?.get?.('retry-after')
+    const retryAfter =
+        res.status === 429 && retryAfterHeader ? ` retry_after=${retryAfterHeader.replace(/\s+/g, '_')}` : ''
+    throw new Error(`Failed to fetch ${context}: ${res.status}${statusText}${retryAfter}`)
 }
 
 class XUserTimeLineSpider extends BaseSpider {
@@ -294,7 +297,6 @@ class XUserTimeLineSpider extends BaseSpider {
 
         const { crawl_engine, task_type, sub_task_type, cookieString, requestHeaders } = config
         const apiClient = new XApiClient(requestHeaders, page, this.log, this.cache)
-        let apiError: unknown
 
         if (crawl_engine === 'api') {
             this.log?.warn(`[Engine Api] API engine will be banned by X if you use it too much`)
@@ -349,20 +351,15 @@ class XUserTimeLineSpider extends BaseSpider {
                     return [await apiClient.grabFollowsNumber(id, cookie_string)] as TaskTypeResult<T, Platform.X>
                 }
             } catch (e) {
-                apiError = e
-                this.log?.error(`[Engine Api] Failed to crawl for ${id}: ${e}${page ? ', fallback to browser' : ''}`)
-                if (!page) {
-                    throw e
-                }
-            } finally {
-                noop()
+                // Deliberately NO browser fallback. The API response (429/auth/network)
+                // must surface to the scheduler's cooldown logic instead of being masked
+                // by a second browser request that compounds X risk control.
+                this.log?.error(`[Engine Api] Failed to crawl for ${id}: ${e}`)
+                throw e
             }
         }
 
         if (!page) {
-            if (apiError instanceof Error) {
-                throw apiError
-            }
             throw new Error('Browser mode requires a Page instance')
         }
 

@@ -1515,6 +1515,24 @@ test('SpiderPools escalates repeat cooldowns for the same target', async () => {
     expect(third.expiresAt - Date.now()).toBeLessThanOrEqual(6 * 60 * 60 * 1000)
 })
 
+test('SpiderPools respects X Retry-After hints embedded in 429 errors', async () => {
+    const emitter = new EventEmitter()
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools-retry-after', emitter)
+    const context = {
+        url: new URL('https://x.com/some_profile'),
+        platform: Platform.X,
+        sessionProfile: 'x-main',
+        deviceProfile: 'desktop_chrome',
+    }
+
+    ;(pools as any).setCooldownForError(context, 'rate_limit', 'Failed to fetch UserTweets: 429 retry_after=3600')
+    const cooldown = (pools as any).riskCooldowns.get('1:x.com:x-main')
+    expect(cooldown).toBeTruthy()
+    // 3600s > the default 20m rate-limit cooldown.
+    expect(cooldown.expiresAt - Date.now()).toBeGreaterThan(55 * 60 * 1000)
+    expect(cooldown.expiresAt - Date.now()).toBeLessThanOrEqual(6 * 60 * 60 * 1000)
+})
+
 test('SpiderPools passes a working articleStateLookup to Website crawls (duplicate-key regression)', async () => {
     const originalTaskUpdateStatus = DB.TaskQueue.updateStatus
     const originalCheckExist = DB.Article.checkExist
