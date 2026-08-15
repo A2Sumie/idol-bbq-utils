@@ -980,7 +980,15 @@ namespace InsApiJsonParser {
         for (const json_script_tag of json_script_tags) {
             const text = await json_script_tag.evaluate((el) => el.innerText)
             if (text.includes('xdt_api__v1__feed__reels_media')) {
-                return await storiesParser(JSON.parse(text), page)
+                try {
+                    return await storiesParser(JSON.parse(text), page)
+                } catch (error) {
+                    throw new Error(
+                        `Instagram stories JSON parse failed: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    )
+                }
             }
         }
         return []

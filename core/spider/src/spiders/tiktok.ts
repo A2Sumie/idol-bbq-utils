@@ -695,7 +695,14 @@ namespace TiktokApiJsonParser {
     ): Promise<Array<GenericArticle<Platform.TikTok>>> {
         try {
             const content = await loadUniversalData(url, page, cookieString)
-            const articles = videoParser(JSON.parse(content))
+            let articles: Array<GenericArticle<Platform.TikTok>>
+            try {
+                articles = videoParser(JSON.parse(content))
+            } catch (error) {
+                throw new Error(
+                    `TikTok video JSON parse failed: ${error instanceof Error ? error.message : String(error)}`,
+                )
+            }
             if (hasPlayableVideo(articles)) {
                 return articles
             }

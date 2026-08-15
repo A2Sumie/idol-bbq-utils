@@ -10,6 +10,7 @@ set -Eeuo pipefail
 #   tools/migrate-x570-showroom-ondemand.sh [--dry-run] [--schedule /path/to/relay_schedule.json]
 
 REMOTE_HOST="${REMOTE_HOST:-3020e}"
+REMOTE_REPO="${REMOTE_REPO:-}"
 FORWARDER_URL="${FORWARDER_URL:-http://3020e:3000}"
 WIN_REMOTE="${WIN_REMOTE:-/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor/bin/win-remote}"
 SCHEDULE_FILE=""
@@ -35,8 +36,9 @@ fi
 [ -s "$LOCAL_SCHEDULE" ] || { echo "schedule file empty: $LOCAL_SCHEDULE" >&2; exit 1; }
 
 echo "== resolving forwarder API secret from remote config =="
+remote_repo_env="REMOTE_REPO=$(printf %q "$REMOTE_REPO")"
 SECRET="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" \
-  'python3 -c "import yaml,sys; c=yaml.safe_load(open(\"/home/sumie/idol-bbq-utils/assets/config.yaml\")); print(c.get(\"api\",{}).get(\"secret\",\"\"))"')"
+  "$remote_repo_env python3 -c 'import os,yaml; base=os.environ.get(\"REMOTE_REPO\") or os.path.expanduser(\"~/idol-bbq-utils\"); c=yaml.safe_load(open(os.path.join(base, \"assets/config.yaml\"))); print(c.get(\"api\",{}).get(\"secret\",\"\"))'")"
 [ -n "$SECRET" ] || { echo "no api.secret in remote config" >&2; exit 1; }
 
 echo "== migrating showroom on-demand events =="

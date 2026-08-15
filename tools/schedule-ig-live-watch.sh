@@ -18,6 +18,7 @@ set -Eeuo pipefail
 #     --player-id relay-nao --player-name "【IG Live】相川奈央" [--archive]
 
 REMOTE_HOST="${REMOTE_HOST:-3020e}"
+REMOTE_REPO="${REMOTE_REPO:-}"
 CONTAINER_NAME="${CONTAINER_NAME:-tiktok-live-watch}"
 HANDLE=""
 START=""
@@ -84,7 +85,7 @@ fi
 # 1) Persist the probe window into the remote config (string HH:MM — verified safe against
 #    the YAML sexagesimal trap: '10:00'-style values are emitted quoted).
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" \
-  "HANDLE=$(printf %q "$HANDLE") WINDOW_START=$(printf %q "$WINDOW_START") UNTIL=$(printf %q "$UNTIL") bash -s" <<'REMOTE'
+  "REMOTE_REPO=$(printf %q "$REMOTE_REPO") HANDLE=$(printf %q "$HANDLE") WINDOW_START=$(printf %q "$WINDOW_START") UNTIL=$(printf %q "$UNTIL") bash -s" <<'REMOTE'
 set -Eeuo pipefail
 python3 - "$HANDLE" "$WINDOW_START" "$UNTIL" <<'PY'
 import os
@@ -93,7 +94,8 @@ import tempfile
 import yaml
 
 handle, start, end = sys.argv[1:4]
-p = os.path.expanduser("~/idol-bbq-utils/assets/config.yaml")
+remote_repo = os.environ.get("REMOTE_REPO") or os.path.expanduser("~/idol-bbq-utils")
+p = os.path.join(remote_repo, "assets/config.yaml")
 cfg = yaml.safe_load(open(p, encoding="utf-8"))
 crawler = next((c for c in cfg["crawlers"] if c.get("name") == "Instagram Live 抢抓 - " + {"nao_aikawa227": "相川奈央", "shiina_satsuki227": "椎名桜月"}.get(handle, handle)), None)
 if crawler is None:
@@ -130,15 +132,14 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker cp /tmp/instagr
 #    Secrets travel via stdin assignments (not ssh argv or remote argv) and into the
 #    container only via `docker exec -e VAR` passthrough (no secret values in argv).
 {
-  printf 'AUTH_PASSWORD=%s\n' "$(printf %q "$AUTH_PASSWORD")"
-  printf 'WAF_HEADER=%s\n' "$(printf %q "$WAF_HEADER")"
+  printf 'AUTH_PASSWORD=%q\n' "$AUTH_PASSWORD"
+  printf 'WAF_HEADER=%q\n' "$WAF_HEADER"
   cat <<'REMOTE'
 set -Eeuo pipefail
 export AUTH_PASSWORD WAF_HEADER
 ARCHIVE_ARG=""
 if [ "$ARCHIVE" = "1" ]; then ARCHIVE_ARG="--archive"; fi
 docker exec -e AUTH_PASSWORD -e WAF_HEADER "$CONTAINER_NAME" sh -c '
-  rm -f "/app/archive/instagram-live/watch-$1.lock"
   mkdir -p /app/archive/instagram-live
   archive_args=""
   if [ "$5" = "1" ]; then archive_args="--archive"; fi

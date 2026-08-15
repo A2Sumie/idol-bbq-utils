@@ -87,14 +87,15 @@ relaunch() {
 }
 
 watcher_alive() {
-  docker exec "$CONTAINER_NAME" sh -lc '
+  docker exec "$CONTAINER_NAME" sh -c '
+    needle="$1"
     for d in /proc/[0-9]*; do
-      if tr "\0" " " < "$d/cmdline" 2>/dev/null | grep -q "tiktok-live-watch"; then
+      if tr "\0" " " < "$d/cmdline" 2>/dev/null | grep -qF "$needle"; then
         exit 0
       fi
     done
     exit 1
-  ' 2>/dev/null
+  ' _ "tiktok-live-watch.ts $HANDLE" 2>/dev/null
 }
 
 echo "[monitor] start handle=$HANDLE until=$UNTIL deadline=$(date -d @"$DEADLINE" '+%F %T %Z') check_every=${CHECK_EVERY}s"

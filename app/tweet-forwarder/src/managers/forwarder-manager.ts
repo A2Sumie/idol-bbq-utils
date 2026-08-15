@@ -5417,8 +5417,16 @@ class ForwarderPools extends BaseCompatibleModel {
                 cardResults.push(translatedCard.cardResult)
             }
         } catch (error) {
-            this.renderService.cleanup(cardResults.flatMap((result) => result.mediaFiles))
-            throw error
+            // Translated companion cards are an optional enhancement. A processor
+            // or render failure must not discard the already-rendered primary card
+            // and must not make the retry loop replay the whole flush forever.
+            this.log?.warn(
+                `Summary-card translation prep/render failed for ${queue.target.id}; sending primary card only: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            hasTranslatedContent = false
+            translatedCard = null
         }
         this.log?.info(
             `Prepared message pack card (${reason}) for ${queue.target.id}: ` +

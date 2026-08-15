@@ -1870,7 +1870,12 @@ async function runBiliupUpload(
     }
 
     fs.mkdirSync(candidate.config.working_dir, { recursive: true })
-    const uploadDir = fs.mkdtempSync(path.join(candidate.config.working_dir, `${article.a_id}-`))
+    // Article ids can be URL-derived or otherwise contain path separators; a raw
+    // id in mkdtempSync would create a nested path and fail with ENOENT.
+    const uploadPrefix = String(article.a_id || 'article')
+        .replace(/[^A-Za-z0-9._-]/g, '_')
+        .slice(0, 80)
+    const uploadDir = fs.mkdtempSync(path.join(candidate.config.working_dir, `${uploadPrefix}-`))
     const cookieFile = path.join(uploadDir, 'cookies.json')
     let browserCookieSyncError: Error | null = null
 

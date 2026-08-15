@@ -105,7 +105,16 @@ function buildCookieHeader(target: ForwardTarget<ForwardTargetPlatformEnum.Bilib
     const videoUploadConfig = target.cfg_platform.video_upload
     const cookiePath = resolveConfiguredPath(videoUploadConfig?.cookie_file)
     if (cookiePath && fs.existsSync(cookiePath)) {
-        const document = normalizeCookieDocument(JSON.parse(fs.readFileSync(cookiePath, 'utf8')))
+        let document: CookieDocument
+        try {
+            document = normalizeCookieDocument(JSON.parse(fs.readFileSync(cookiePath, 'utf8')))
+        } catch (error) {
+            throw new Error(
+                `Bilibili recovery cookie file parse failed: ${cookiePath}: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+        }
         return cookieHeaderFromDocument(document)
     }
 

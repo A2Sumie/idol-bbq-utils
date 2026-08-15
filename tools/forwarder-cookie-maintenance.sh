@@ -13,7 +13,11 @@ if [ -z "$api_secret" ]; then
     exit 1
 fi
 
-auth="Authorization: Bearer $api_secret"
+# Keep the bearer secret out of curl argv (ps-visible on this machine).
+auth_header="$(mktemp)"
+trap 'rm -f "$auth_header"' EXIT
+chmod 600 "$auth_header"
+printf 'Authorization: Bearer %s\n' "$api_secret" > "$auth_header"
 
 discover_crawlers() {
     docker exec "$CONTAINER_NAME" bun -e '
@@ -43,7 +47,7 @@ sync() {
     local crawler="$1"
     local response status
     response="$(curl -sS --connect-timeout 10 --max-time 300 -w '\n%{http_code}' -X POST "http://${API_HOST}:${API_PORT}/api/cookies/sync" \
-        -H "$auth" -H 'Content-Type: application/json' \
+        -H @"$auth_header" -H 'Content-Type: application/json' \
         --data-binary "$(python3 -c 'import json,sys; print(json.dumps({"crawlerName": sys.argv[1]}))' "$crawler")")"
     status="${response##*$'\n'}"
     response="${response%$'\n'*}"

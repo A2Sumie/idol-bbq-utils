@@ -73,6 +73,31 @@ const X_UNIFIED_LIST_DEFAULT_CONCURRENCY = 2
 const X_UNIFIED_LIST_MAX_CONCURRENCY = 4
 const X_UNIFIED_LIST_MEMBER_CURSORS = new Map<string, number>()
 const X_UNIFIED_LIST_MEMBER_CACHE = new Map<string, Array<string>>()
+const X_UNIFIED_LIST_CACHE_LIMIT = 50
+
+function setUnifiedListMemberCache(listId: string, userIds: Array<string>) {
+    if (!X_UNIFIED_LIST_MEMBER_CACHE.has(listId) && X_UNIFIED_LIST_MEMBER_CACHE.size >= X_UNIFIED_LIST_CACHE_LIMIT) {
+        const oldestKey = X_UNIFIED_LIST_MEMBER_CACHE.keys().next().value
+        if (oldestKey !== undefined) {
+            X_UNIFIED_LIST_MEMBER_CACHE.delete(oldestKey)
+            X_UNIFIED_LIST_MEMBER_CURSORS.delete(oldestKey)
+        }
+    }
+    X_UNIFIED_LIST_MEMBER_CACHE.set(listId, userIds)
+}
+
+function setUnifiedListMemberCursor(listId: string, cursor: number) {
+    if (
+        !X_UNIFIED_LIST_MEMBER_CURSORS.has(listId) &&
+        X_UNIFIED_LIST_MEMBER_CURSORS.size >= X_UNIFIED_LIST_CACHE_LIMIT
+    ) {
+        const oldestKey = X_UNIFIED_LIST_MEMBER_CURSORS.keys().next().value
+        if (oldestKey !== undefined) {
+            X_UNIFIED_LIST_MEMBER_CURSORS.delete(oldestKey)
+        }
+    }
+    X_UNIFIED_LIST_MEMBER_CURSORS.set(listId, cursor)
+}
 // In-flight dedup for rest-id lookups across concurrent XApiClient instances:
 // the same screen name never triggers two UserByScreenName requests at once.
 const X_REST_ID_IN_FLIGHT = new Map<string, Promise<string>>()
@@ -566,7 +591,7 @@ class XListSpider extends BaseSpider {
         // hydrate_users). Reuse the last known-good membership; only if we have never
         // resolved it do we fall back to configured users for this degraded round.
         if (membersResolved) {
-            X_UNIFIED_LIST_MEMBER_CACHE.set(list_id, listMemberUserIds)
+            setUnifiedListMemberCache(list_id, listMemberUserIds)
         } else {
             const cached = X_UNIFIED_LIST_MEMBER_CACHE.get(list_id)
             if (cached && cached.length > 0) {
@@ -934,7 +959,7 @@ class XListSpider extends BaseSpider {
         const rotated = userIds.slice(normalizedOffset).concat(userIds.slice(0, normalizedOffset))
         const selected = rotated.slice(0, take)
         const advance = selected.length > 0 ? selected.length : 1
-        X_UNIFIED_LIST_MEMBER_CURSORS.set(listId, (normalizedOffset + advance) % userIds.length)
+        setUnifiedListMemberCursor(listId, (normalizedOffset + advance) % userIds.length)
         return selected
     }
 
@@ -2564,17 +2589,20 @@ namespace XApiJsonParser {
 
     export function oldTweetParser(json: any): GenericArticle<Platform.X> | null {
         const legacy = json
+        if (!legacy?.id_str || typeof legacy?.created_at !== 'string') {
+            return null
+        }
         const userLegacy = json?.user
         let type: ArticleTypeEnum = ArticleTypeEnum.TWEET
         let ref: GenericArticleRef<Platform.X> | null = null
         if (legacy?.retweeted_status) {
             // high priority
             type = ArticleTypeEnum.RETWEET
-            ref = oldTweetParser(legacy?.retweeted_status) as GenericArticleRef<Platform.X>
+            ref = oldTweetParser(legacy?.retweeted_status) ?? legacy?.retweeted_status?.id_str ?? null
         } else if (legacy?.is_quote_status) {
             type = ArticleTypeEnum.QUOTED
             ref = legacy?.quoted_status
-                ? (oldTweetParser(legacy?.quoted_status) as GenericArticleRef<Platform.X>)
+                ? (oldTweetParser(legacy?.quoted_status) ?? legacy?.quoted_status?.id_str ?? null)
                 : legacy?.quoted_status_id_str || null
         } else if (legacy?.in_reply_to_status_id_str) {
             type = ArticleTypeEnum.CONVERSATION

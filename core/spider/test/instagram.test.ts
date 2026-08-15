@@ -521,6 +521,21 @@ test('Instagram stories drop accessibility summaries', async () => {
     expect(stories[0]?.content).toBeNull()
 })
 
+test('Instagram stories throw a contextual error for malformed reels_media JSON', async () => {
+    const page = {
+        goto: async () => undefined,
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+        $$: async () => [{ evaluate: async () => 'xdt_api__v1__feed__reels_media {broken json' }],
+        $: async () => null,
+    } as any
+
+    await expect(
+        InsApiJsonParser.grabStories(page, 'https://www.instagram.com/stories/nananijigram22_7/'),
+    ).rejects.toThrow('Instagram stories JSON parse failed')
+})
+
 test('Instagram stories return empty array when reels_media is missing', async () => {
     const page = {
         goto: async () => undefined,

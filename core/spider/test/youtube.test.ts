@@ -289,6 +289,11 @@ test('YouTube detail parser extracts publish date and metadata', () => {
     expect(detail.thumbnail).toBe('https://i.ytimg.com/vi/bBRUMp_WNUU/hqdefault.jpg')
 })
 
+test('YouTube detailParser tolerates malformed ytInitialPlayerResponse assignment', () => {
+    const detailHtml = `<script>var ytInitialPlayerResponse = {broken-json;</script>`
+    expect(() => YoutubeApiJsonParser.detailParser(detailHtml)).not.toThrow()
+})
+
 test('YouTube grabArticles bounds detail hydration to the newest configured limit', async () => {
     const originalDownload = HTTPClient.download_webpage
     const requestedUrls: Array<string> = []

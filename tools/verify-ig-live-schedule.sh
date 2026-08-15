@@ -17,23 +17,42 @@ CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
 
 fail=0
 
-for name in "Instagram Live 抢抓 - 相川奈央" "Instagram Live 抢抓 - 椎名桜月"; do
-  grep_esc="Crawler schedule created for ${name}: source=[^ ]* slots=[0-9]*"
-  slot_line="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker logs --since 12h $CONTAINER_NAME 2>&1 | grep -oF 'Crawler schedule created for ${name}' | tail -1 && docker logs --since 12h $CONTAINER_NAME 2>&1 | grep -oE 'Crawler schedule created for ${name}: source=[^ ]* slots=[0-9]*' | tail -1" || true)"
-  slot_line="${slot_line##*$'
-'}"
-  if [ -z "$slot_line" ]; then
-    echo "WARN: no schedule line yet for $name (container may have just started)" >&2
-    continue
-  fi
-  slots="$(echo "$slot_line" | grep -o 'slots=[0-9]*' | grep -o '[0-9]*')"
-  if [ "${slots:-0}" -le 0 ]; then
-    echo "FAIL: $name has zero schedule slots — probe window lost (restart wiped it?)" >&2
-    fail=1
-  else
-    echo "OK: $name slots=$slots"
-  fi
-done
+# Derive the crawler names to check from the deployed config instead of a
+# hardcoded list. Hardcoding "相川奈央" produced a permanent WARN whenever that
+# crawler was not configured, which hid the distinction between "config has no
+# such live crawler" and "config has it but the schedule line is missing".
+live_crawler_names="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker exec $CONTAINER_NAME bun -e '
+const fs = require(\"fs\")
+const YAML = require(\"yaml\")
+const config = YAML.parse(fs.readFileSync(\"/app/config.yaml\", \"utf8\")) || {}
+for (const crawler of config.crawlers || []) {
+    if (crawler.cfg_crawler && crawler.cfg_crawler.live_relay && crawler.cfg_crawler.live_relay.enabled === true) {
+        const name = String(crawler.name || \"\").trim()
+        if (name) console.log(name)
+    }
+}
+'" || true)"
+
+if [ -z "$live_crawler_names" ]; then
+    echo "INFO: no crawlers with live_relay.enabled=true in /app/config.yaml" >&2
+else
+    while IFS= read -r name; do
+        [ -z "$name" ] && continue
+        slot_line="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker logs --since 12h $CONTAINER_NAME 2>&1 | grep -oE \"Crawler schedule created for ${name}: source=[^ ]* slots=[0-9]*\" | tail -1" || true)"
+        if [ -z "$slot_line" ]; then
+            echo "FAIL: $name has live_relay enabled but no schedule line in the last 12h — probe window lost" >&2
+            fail=1
+            continue
+        fi
+        slots="$(echo "$slot_line" | grep -o 'slots=[0-9]*' | grep -o '[0-9]*')"
+        if [ "${slots:-0}" -le 0 ]; then
+            echo "FAIL: $name has zero schedule slots — probe window lost (restart wiped it?)" >&2
+            fail=1
+        else
+            echo "OK: $name slots=$slots"
+        fi
+    done <<< "$live_crawler_names"
+fi
 
 # Active watcher windows must have a live watcher process.
 watcher_locks="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker exec tiktok-live-watch ls /app/archive/instagram-live/watch-*.lock 2>/dev/null" || true)"

@@ -420,6 +420,21 @@ test('X old API parser tolerates missing entities', async () => {
     })
 })
 
+test('X old API parser skips status entries without id or created_at', async () => {
+    expect(
+        X.XApiJsonParser.oldTweetParser({
+            id_str: '402',
+            full_text: 'missing timestamp',
+        }),
+    ).toBeNull()
+    expect(
+        X.XApiJsonParser.oldTweetMemeberParser({
+            status: { id_str: '403' },
+            user: { screen_name: 'legacy_member', name: 'Legacy Member' },
+        }),
+    ).toBeNull()
+})
+
 test('X parser expands premium long tweets from the note_tweet payload', async () => {
     const truncated = '【お知らせ】\n桧山依子ですが、体調不良のため下記のスケジュールを欠席とさせていただきます。'
     const full =

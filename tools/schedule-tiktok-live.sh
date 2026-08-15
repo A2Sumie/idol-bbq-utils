@@ -62,6 +62,27 @@ done
 
 [ -n "$HANDLE" ] || { usage >&2; exit 2; }
 
+# Values interpolated into a printed cron command must be single shell words.
+# TikTok/Instagram handles are ASCII slugs; reject anything else instead of
+# emitting a crontab line that injects commands or silently breaks args.
+validate_word() {
+    [[ "$1" =~ ^[A-Za-z0-9_.-]+$ ]] || {
+        echo "invalid shell-word argument: $1" >&2
+        exit 2
+    }
+}
+validate_hhmm() {
+    [[ "$1" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]] || {
+        echo "invalid HH:MM time: $1" >&2
+        exit 2
+    }
+}
+validate_word "$HANDLE"
+validate_word "$REMOTE_HOST"
+validate_word "$CONTAINER_NAME"
+[ -z "$START" ] || validate_hhmm "$START"
+[ -z "$UNTIL" ] || validate_hhmm "$UNTIL"
+
 # Locate the watcher source next to this script (or via WATCHER_LOCAL override).
 if [ -z "$WATCHER_LOCAL" ]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

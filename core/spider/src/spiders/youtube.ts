@@ -265,7 +265,11 @@ namespace YoutubeApiJsonParser {
             if (char === '}') {
                 depth -= 1
                 if (depth === 0) {
-                    return JSON.parse(text.slice(startIndex, i + 1)) as T
+                    try {
+                        return JSON.parse(text.slice(startIndex, i + 1)) as T
+                    } catch {
+                        return null
+                    }
                 }
             }
         }

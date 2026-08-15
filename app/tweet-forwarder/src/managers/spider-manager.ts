@@ -480,18 +480,23 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
 
         // Build non-Cron hot schedules for crawler dispatch. Legacy cron strings
         // are expanded into daily slots only as a compatibility source.
-        for (const crawler of this.props.crawlers) {
+        // Clone before merging: the runtime config snapshot must not be mutated
+        // with synthetic scheduler defaults or hot-schedule upserts.
+        for (const configuredCrawler of this.props.crawlers) {
+            const crawler = {
+                ...configuredCrawler,
+                cfg_crawler: {
+                    cron: '*/30 * * * *',
+                    ...this.props.cfg_crawler,
+                    ...configuredCrawler.cfg_crawler,
+                },
+            }
             const crawlerName = crawler.name
             if (!crawlerName) {
                 this.log?.warn(
                     `Skipping crawler ${crawler.id || '(unknown)'}: crawler name is required for scheduling.`,
                 )
                 continue
-            }
-            crawler.cfg_crawler = {
-                cron: '*/30 * * * *',
-                ...this.props.cfg_crawler,
-                ...crawler.cfg_crawler,
             }
             this.crawlersByName.set(crawlerName, crawler)
             const schedule = resolveCrawlerSchedule(crawler)

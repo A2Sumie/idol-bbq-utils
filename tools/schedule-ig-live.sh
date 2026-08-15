@@ -112,7 +112,12 @@ api_config="$(read_api_config)"
 api_port="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["port"])' <<<"$api_config")"
 api_secret="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read())["secret"])' <<<"$api_config")"
 api_base="http://${API_HOST}:${api_port}"
-auth="Authorization: Bearer ${api_secret}"
+# Keep the bearer secret out of curl argv: ps-visible argv would leak it on the
+# remote host. curl -H @file reads the full header from a 0600 temp file.
+auth_header="$(mktemp)"
+trap 'rm -f "$auth_header"' EXIT
+chmod 600 "$auth_header"
+printf 'Authorization: Bearer %s\n' "$api_secret" > "$auth_header"
 
 crawler_exists="$(docker exec -e CRAWLER_NAME="$CRAWLER_NAME" "$CONTAINER_NAME" bun -e '
   const fs=require("fs"), YAML=require("yaml")
@@ -140,8 +145,8 @@ PY
 )"
 
 echo "upsert schedule:"
-curl -sS --fail-with-body -X POST -H "$auth" -H 'Content-Type: application/json' --data-binary "$schedule_body" "$api_base/api/schedules/crawlers/upsert" | python3 -m json.tool
+curl -sS --fail-with-body -X POST -H @"$auth_header" -H 'Content-Type: application/json' --data-binary "$schedule_body" "$api_base/api/schedules/crawlers/upsert" | python3 -m json.tool
 
 echo "queue immediate probe:"
-curl -sS --fail-with-body -X POST -H "$auth" -H 'Content-Type: application/json' --data-binary "$run_body" "$api_base/api/actions/crawlers/run" | python3 -m json.tool
+curl -sS --fail-with-body -X POST -H @"$auth_header" -H 'Content-Type: application/json' --data-binary "$run_body" "$api_base/api/actions/crawlers/run" | python3 -m json.tool
 REMOTE
