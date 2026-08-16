@@ -1657,3 +1657,165 @@ test('SpiderPools saves articles even when no schedule poke hook is wired', asyn
         ;(DB.Article as any).getSingleArticle = originalGetSingleArticle
     }
 })
+
+test('SpiderPools refreshes changed mutable website article metadata without dispatching it', async () => {
+    const originalCheckExist = DB.Article.checkExist
+    const originalTrySave = DB.Article.trySave
+    const originalUpdate = DB.Article.update
+    let updatePatch: any = null
+    let trySaveCalled = false
+
+    const incoming = {
+        a_id: '6401901282112',
+        u_id: '22/7:radio',
+        username: '22/7 Radio',
+        created_at: 1773981283,
+        content: 'Radio body',
+        url: 'https://nanabunnonijyuuni-mobile.com/s/n110/contents/6401901282112',
+        type: 'article',
+        has_media: true,
+        media: [{ type: 'video', url: 'https://edge.api.brightcove.com/playback/v1/accounts/1/videos/2?bc_policy=pk' }],
+        ref: null,
+        u_avatar: null,
+        platform: Platform.Website,
+        extra: {
+            data: { feed: 'radio', streams: [{ video_id: '2', has_video: true }] },
+            content: 'Radio body',
+            media: [
+                { type: 'video', url: 'https://edge.api.brightcove.com/playback/v1/accounts/1/videos/2?bc_policy=pk' },
+            ],
+            extra_type: 'website_meta',
+        },
+    }
+
+    ;(DB.Article as any).checkExist = async () => ({
+        id: 909,
+        content: 'Radio body',
+        has_media: true,
+        media: [{ type: 'video_thumbnail', url: 'https://example.com/old.jpg' }],
+        username: '22/7 Radio',
+        u_avatar: null,
+        extra: {
+            data: { feed: 'radio', streams: [{ video_id: '2', has_video: false }] },
+            content: 'Radio body',
+            media: [{ type: 'video_thumbnail', url: 'https://example.com/old.jpg' }],
+            extra_type: 'website_meta',
+        },
+    })
+    ;(DB.Article as any).trySave = async () => {
+        trySaveCalled = true
+        return undefined
+    }
+    ;(DB.Article as any).update = async (id: number, platform: Platform, patch: any) => {
+        updatePatch = { id, platform, patch }
+        return { id }
+    }
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', new EventEmitter())
+        const result = await (pools as any).crawlArticle(
+            {
+                taskId: 'spider-test',
+                task: {
+                    id: 'spider-test',
+                    status: 'running',
+                    data: { cfg_crawler: {} },
+                },
+            },
+            {
+                crawl: async () => [incoming],
+            } as any,
+            new URL('https://nanabunnonijyuuni-mobile.com/s/n110/contents/6401901282112'),
+        )
+
+        expect(result).toEqual([])
+        expect(trySaveCalled).toBeFalse()
+        expect(updatePatch?.id).toBe(909)
+        expect(updatePatch?.patch?.media).toEqual([
+            { type: 'video', url: 'https://edge.api.brightcove.com/playback/v1/accounts/1/videos/2?bc_policy=pk' },
+        ])
+        expect(updatePatch?.patch?.created_at).toBeUndefined()
+    } finally {
+        ;(DB.Article as any).checkExist = originalCheckExist
+        ;(DB.Article as any).trySave = originalTrySave
+        ;(DB.Article as any).update = originalUpdate
+    }
+})
+
+test('SpiderPools skips mutable website refresh when metadata is unchanged or feed is immutable', async () => {
+    const originalCheckExist = DB.Article.checkExist
+    const originalTrySave = DB.Article.trySave
+    const originalUpdate = DB.Article.update
+    let updateCalled = 0
+
+    const extra = {
+        data: { feed: 'radio', streams: [{ video_id: '2', has_video: true }] },
+        content: 'Radio body',
+        media: [{ type: 'video_thumbnail', url: 'https://example.com/poster.jpg' }],
+        extra_type: 'website_meta',
+    }
+    const incoming = {
+        a_id: '6401901282112',
+        u_id: '22/7:radio',
+        username: '22/7 Radio',
+        created_at: 1773981283,
+        content: 'Radio body',
+        url: 'https://nanabunnonijyuuni-mobile.com/s/n110/contents/6401901282112',
+        type: 'article',
+        has_media: true,
+        media: extra.media,
+        ref: null,
+        u_avatar: null,
+        platform: Platform.Website,
+        extra: structuredClone(extra),
+    }
+
+    ;(DB.Article as any).checkExist = async () => ({
+        id: 910,
+        content: 'Radio body',
+        has_media: true,
+        media: structuredClone(extra.media),
+        username: '22/7 Radio',
+        u_avatar: null,
+        extra: structuredClone(extra),
+    })
+    ;(DB.Article as any).trySave = async () => undefined
+    ;(DB.Article as any).update = async () => {
+        updateCalled += 1
+        return { id: 910 }
+    }
+
+    try {
+        const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools', new EventEmitter())
+        const ctx = {
+            taskId: 'spider-test',
+            task: { id: 'spider-test', status: 'running', data: { cfg_crawler: {} } },
+        }
+        await (pools as any).crawlArticle(
+            ctx,
+            { crawl: async () => [incoming] } as any,
+            new URL('https://nanabunnonijyuuni-mobile.com/s/n110/contents/6401901282112'),
+        )
+        expect(updateCalled).toBe(0)
+
+        const blogArticle = {
+            ...incoming,
+            a_id: 'blog-existing',
+            u_id: '22/7:official-blog',
+            extra: {
+                ...extra,
+                data: { ...extra.data, feed: 'official-blog' },
+            },
+        }
+        await (pools as any).crawlArticle(
+            ctx,
+            { crawl: async () => [blogArticle] } as any,
+            new URL('https://nanabunnonijyuuni-mobile.com/s/n110/diary/detail/1'),
+        )
+        expect(updateCalled).toBe(0)
+    } finally {
+        ;(DB.Article as any).checkExist = originalCheckExist
+        ;(DB.Article as any).trySave = originalTrySave
+        ;(DB.Article as any).update = originalUpdate
+    }
+})

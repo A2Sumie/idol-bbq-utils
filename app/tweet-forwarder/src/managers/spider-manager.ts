@@ -1081,6 +1081,31 @@ class SpiderTaskScheduler extends TaskScheduler.TaskScheduler {
     }
 }
 
+const WEBSITE_MUTABLE_REFRESH_FEEDS = new Set(['radio', 'movie', 'ticket'])
+
+function buildMutableWebsiteArticleRefreshPatch(existing: unknown, incoming: Article) {
+    const feed = (incoming.extra as any)?.data?.feed
+    if (incoming.platform !== Platform.Website || !feed || !WEBSITE_MUTABLE_REFRESH_FEEDS.has(String(feed))) {
+        return null
+    }
+    const existingRecord = existing && typeof existing === 'object' ? (existing as Record<string, unknown>) : null
+    const changedFields = ['content', 'has_media', 'media', 'username', 'u_avatar', 'extra'] as const
+    const changed = changedFields.some(
+        (field) => JSON.stringify(existingRecord?.[field]) !== JSON.stringify(incoming[field]),
+    )
+    if (!changed) {
+        return null
+    }
+    return {
+        content: incoming.content,
+        has_media: incoming.has_media,
+        media: incoming.media,
+        username: incoming.username,
+        u_avatar: incoming.u_avatar,
+        extra: incoming.extra,
+    }
+}
+
 class SpiderPools extends BaseCompatibleModel {
     NAME = 'SpiderPools'
     log?: Logger
@@ -2456,6 +2481,16 @@ class SpiderPools extends BaseCompatibleModel {
                 premiere_dispatch_ids.push((updated as any).id || isExist.id)
                 ctx.log?.info(
                     `[${url.href}] Refreshed premiere placeholder article ${article.a_id} with public YouTube metadata.`,
+                )
+                continue
+            }
+            const mutableWebsiteRefreshPatch = buildMutableWebsiteArticleRefreshPatch(isExist, article)
+            if (mutableWebsiteRefreshPatch) {
+                await DB.Article.update(isExist.id, article.platform, mutableWebsiteRefreshPatch)
+                ctx.log?.info(
+                    `[${url.href}] Refreshed mutable website article ${article.a_id} metadata (${String(
+                        (article.extra as any)?.data?.feed || 'website',
+                    )}).`,
                 )
                 continue
             }
