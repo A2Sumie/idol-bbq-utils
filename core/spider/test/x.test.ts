@@ -19,6 +19,11 @@ test('X Spider', async () => {
     }
 })
 
+test('X timeline URL regex accepts profile URLs with a trailing slash', () => {
+    const spider = new X.XUserTimeLineSpider().init()
+    expect(spider._match_valid_url('https://x.com/X/', X.XUserTimeLineSpider)?.groups?.id).toBe('X')
+})
+
 test('X API mode without a browser preserves the API failure reason', async () => {
     const spider = new X.XUserTimeLineSpider().init()
 

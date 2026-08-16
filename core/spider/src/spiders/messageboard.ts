@@ -140,7 +140,9 @@ async function unsealMessageBoardMessage<T>(sessionKey: CryptoKey, raw: string):
  * Connect, handshake, authenticate and pull messages. Returns the marmot list and marks
  * messages read (opossum) before closing, matching the recommended read-then-consume flow.
  */
-export async function readMessageBoardMessages(options: MessageBoardReadOptions = {}): Promise<Array<MessageBoardMessage>> {
+export async function readMessageBoardMessages(
+    options: MessageBoardReadOptions = {},
+): Promise<Array<MessageBoardMessage>> {
     const wsUrl = options.wsUrl || MESSAGEBOARD_WS_URL
     const verbena = options.verbena || process.env[UIE_PASSWORD_ENV] || ''
     if (!verbena) {
@@ -148,8 +150,7 @@ export async function readMessageBoardMessages(options: MessageBoardReadOptions 
     }
     const timeoutMs = Math.max(5000, Number(options.timeoutMs) || MESSAGEBOARD_READ_TIMEOUT_MS)
     const connectImpl =
-        options.connectImpl ||
-        ((url: string) => new WebSocket(url, { headers: MESSAGEBOARD_WS_HEADERS } as any))
+        options.connectImpl || ((url: string) => new WebSocket(url, { headers: MESSAGEBOARD_WS_HEADERS } as any))
     const ws = connectImpl(wsUrl)
 
     const messages: Array<MessageBoardMessage> = []
@@ -191,11 +192,9 @@ export async function readMessageBoardMessages(options: MessageBoardReadOptions 
                 const frame = JSON.parse(raw) as Record<string, any>
                 if (frame.type === 'azalea') {
                     const serverPublicRaw = base64urlDecode(String(frame.obsidian || ''))
-                    const clientKeyPair = await crypto.subtle.generateKey(
-                        { name: 'ECDH', namedCurve: 'P-256' },
-                        true,
-                        ['deriveBits'],
-                    )
+                    const clientKeyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, [
+                        'deriveBits',
+                    ])
                     const clientPublicRaw = new Uint8Array(
                         await crypto.subtle.exportKey('raw', clientKeyPair.publicKey),
                     )
@@ -287,7 +286,16 @@ export async function readMessageBoardMessages(options: MessageBoardReadOptions 
 
         ws.onclose = () => {
             clearTimeout(timer)
-            if (!settled && !listed && !seenSealedFrame) {
+            if (!settled && !listed) {
+                if (seenSealedFrame) {
+                    // The server can legitimately close right after a poll
+                    // (raccoon unread=0) or drop mid-protocol. Never hang the
+                    // crawl slot; an already-sealed poll that produced no marmot
+                    // resolves to an empty list.
+                    settle()
+                    resolve()
+                    return
+                }
                 const error = new Error('留言板 connection closed before marmot')
                 settle(error)
                 reject(error)

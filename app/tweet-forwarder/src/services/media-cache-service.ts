@@ -147,9 +147,14 @@ function parseStoredMediaMetadata(metadataPath: string): StoredMediaMetadata | n
 }
 
 function writeStoredMediaMetadata(metadataPath: string, metadata: StoredMediaMetadata) {
-    const tempPath = `${metadataPath}.tmp`
-    fs.writeFileSync(tempPath, JSON.stringify(metadata, null, 2))
-    fs.renameSync(tempPath, metadataPath)
+    const tempPath = `${metadataPath}.${process.pid}.${crypto.randomUUID()}.tmp`
+    try {
+        fs.writeFileSync(tempPath, JSON.stringify(metadata, null, 2))
+        fs.renameSync(tempPath, metadataPath)
+    } catch (error) {
+        fs.rmSync(tempPath, { force: true })
+        throw error
+    }
 }
 
 function resolveStoreRoot(mediaType: MediaType) {

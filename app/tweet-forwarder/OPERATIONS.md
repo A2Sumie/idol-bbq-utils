@@ -17,25 +17,28 @@ Set the target and auth header first:
 export TF_HOST=3020e
 export TF_API="http://${TF_HOST}:3000"
 export API_SECRET='<read from assets/config.yaml api.secret>'
-export TF_AUTH="Authorization: Bearer ${API_SECRET}"
+TF_AUTH="$(mktemp)"
+trap 'rm -f "$TF_AUTH"' EXIT
+chmod 600 "$TF_AUTH"
+printf 'Authorization: Bearer %s\n' "$API_SECRET" > "$TF_AUTH"
 ```
 
 Check runtime status:
 
 ```bash
-curl -s -H "$TF_AUTH" "$TF_API/api/runtime/status" | jq
+curl -s -H @"$TF_AUTH" "$TF_API/api/runtime/status" | jq
 ```
 
 Trigger a true in-process hot reload:
 
 ```bash
-curl -s -X POST -H "$TF_AUTH" "$TF_API/api/runtime/reload" | jq
+curl -s -X POST -H @"$TF_AUTH" "$TF_API/api/runtime/reload" | jq
 ```
 
 Trigger a hard restart:
 
 ```bash
-curl -s -X POST -H "$TF_AUTH" "$TF_API/api/server/restart" | jq
+curl -s -X POST -H @"$TF_AUTH" "$TF_API/api/server/restart" | jq
 ```
 
 Run a crawler immediately:

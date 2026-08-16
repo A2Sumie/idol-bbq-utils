@@ -258,7 +258,7 @@ function assertXResponseOk(res: Response, context: string): void {
 
 class XUserTimeLineSpider extends BaseSpider {
     // extends from XBaseSpider regex
-    static _VALID_URL = new RegExp(X_BASE_VALID_URL.source + /(?<id>\w+)$/.source)
+    static _VALID_URL = new RegExp(X_BASE_VALID_URL.source + /(?<id>\w+)\/?$/.source)
     static _PLATFORM = Platform.X
     BASE_URL: string = 'https://x.com/'
     NAME: string = 'X TimeLine Spider'
@@ -1878,7 +1878,12 @@ export class XApiClient {
         this.assertOkOrInvalidate(res, 'tweets', XApis.UserTweets, id)
         const json = await res.json()
         if (json.errors) {
-            throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)
+            const firstError = Array.isArray(json.errors) ? json.errors[0] : json.errors
+            const message =
+                firstError && typeof firstError === 'object' && typeof firstError.message === 'string'
+                    ? firstError.message
+                    : String(json.errors).slice(0, 200)
+            throw new Error(`Failed to fetch tweets: ${message}`)
         }
         return XApiJsonParser.tweetsArticleParser(json)
     }
@@ -1962,7 +1967,12 @@ export class XApiClient {
         }
         const json = await res.json()
         if (json.errors) {
-            throw new Error(`Failed to fetch replies: ${json.errors[0].message}`)
+            const firstError = Array.isArray(json.errors) ? json.errors[0] : json.errors
+            const message =
+                firstError && typeof firstError === 'object' && typeof firstError.message === 'string'
+                    ? firstError.message
+                    : String(json.errors).slice(0, 200)
+            throw new Error(`Failed to fetch replies: ${message}`)
         }
         return XApiJsonParser.tweetsRepliesParser(json)
     }
@@ -1970,63 +1980,61 @@ export class XApiClient {
     async grabTweetDetail(screenName: string, statusId: string, cookie: string) {
         await this.prepareTweetDetailOperation(screenName, statusId)
         const referer = `${this.BASE_URL}/${screenName}/status/${statusId}`
-        const profile = this.getOperationProfile(XApis.TweetDetail)
-        let url = profile?.url
-
-        if (!url) {
-            const query_id = await this.resolveQueryId(XApis.TweetDetail)
-            const query_path = `${this.API_PREFIX}/${query_id}/${XApis.TweetDetail}`
-            const variables = {
-                focalTweetId: statusId,
-                with_rux_injections: false,
-                rankingMode: 'Relevance',
-                includePromotedContent: true,
-                withCommunity: true,
-                withQuickPromoteEligibilityTweetFields: true,
-                withBirdwatchNotes: true,
-                withVoice: true,
-            }
-            const features = {
-                rweb_video_screen_enabled: false,
-                profile_label_improvements_pcf_label_in_post_enabled: true,
-                rweb_tipjar_consumption_enabled: true,
-                verified_phone_label_enabled: false,
-                creator_subscriptions_tweet_preview_api_enabled: true,
-                responsive_web_graphql_timeline_navigation_enabled: true,
-                responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
-                premium_content_api_read_enabled: false,
-                communities_web_enable_tweet_community_results_fetch: true,
-                c9s_tweet_anatomy_moderator_badge_enabled: true,
-                responsive_web_grok_analyze_button_fetch_trends_enabled: false,
-                responsive_web_grok_analyze_post_followups_enabled: true,
-                responsive_web_jetfuel_frame: false,
-                responsive_web_grok_share_attachment_enabled: true,
-                articles_preview_enabled: true,
-                responsive_web_edit_tweet_api_enabled: true,
-                graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
-                view_counts_everywhere_api_enabled: true,
-                longform_notetweets_consumption_enabled: true,
-                responsive_web_twitter_article_tweet_consumption_enabled: true,
-                tweet_awards_web_tipping_enabled: false,
-                responsive_web_grok_show_grok_translated_post: false,
-                responsive_web_grok_analysis_button_from_backend: false,
-                creator_subscriptions_quote_tweet_preview_enabled: false,
-                freedom_of_speech_not_reach_fetch_enabled: true,
-                standardized_nudges_misinfo: true,
-                tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
-                longform_notetweets_rich_text_read_enabled: true,
-                longform_notetweets_inline_media_enabled: true,
-                responsive_web_grok_image_annotation_enabled: true,
-                responsive_web_enhance_cards_enabled: false,
-            }
-            const fieldToggles = {
-                withArticleRichContentState: true,
-                withArticlePlainText: false,
-                withGrokAnalyze: false,
-            }
-            const query = this.generateParams(features, variables, fieldToggles)
-            url = `${this.BASE_URL}${query_path}?${query.toString()}`
+        // Always build the request URL from the CURRENT statusId. The cached
+        // TweetDetail operation profile carries the full URL of the status it
+        // was captured from; reusing it would fetch that old tweet.
+        const query_id = await this.resolveQueryId(XApis.TweetDetail)
+        const query_path = `${this.API_PREFIX}/${query_id}/${XApis.TweetDetail}`
+        const variables = {
+            focalTweetId: statusId,
+            with_rux_injections: false,
+            rankingMode: 'Relevance',
+            includePromotedContent: true,
+            withCommunity: true,
+            withQuickPromoteEligibilityTweetFields: true,
+            withBirdwatchNotes: true,
+            withVoice: true,
         }
+        const features = {
+            rweb_video_screen_enabled: false,
+            profile_label_improvements_pcf_label_in_post_enabled: true,
+            rweb_tipjar_consumption_enabled: true,
+            verified_phone_label_enabled: false,
+            creator_subscriptions_tweet_preview_api_enabled: true,
+            responsive_web_graphql_timeline_navigation_enabled: true,
+            responsive_web_graphql_skip_user_profile_image_extensions_enabled: false,
+            premium_content_api_read_enabled: false,
+            communities_web_enable_tweet_community_results_fetch: true,
+            c9s_tweet_anatomy_moderator_badge_enabled: true,
+            responsive_web_grok_analyze_button_fetch_trends_enabled: false,
+            responsive_web_grok_analyze_post_followups_enabled: true,
+            responsive_web_jetfuel_frame: false,
+            responsive_web_grok_share_attachment_enabled: true,
+            articles_preview_enabled: true,
+            responsive_web_edit_tweet_api_enabled: true,
+            graphql_is_translatable_rweb_tweet_is_translatable_enabled: true,
+            view_counts_everywhere_api_enabled: true,
+            longform_notetweets_consumption_enabled: true,
+            responsive_web_twitter_article_tweet_consumption_enabled: true,
+            tweet_awards_web_tipping_enabled: false,
+            responsive_web_grok_show_grok_translated_post: false,
+            responsive_web_grok_analysis_button_from_backend: false,
+            creator_subscriptions_quote_tweet_preview_enabled: false,
+            freedom_of_speech_not_reach_fetch_enabled: true,
+            standardized_nudges_misinfo: true,
+            tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled: true,
+            longform_notetweets_rich_text_read_enabled: true,
+            longform_notetweets_inline_media_enabled: true,
+            responsive_web_grok_image_annotation_enabled: true,
+            responsive_web_enhance_cards_enabled: false,
+        }
+        const fieldToggles = {
+            withArticleRichContentState: true,
+            withArticlePlainText: false,
+            withGrokAnalyze: false,
+        }
+        const query = this.generateParams(features, variables, fieldToggles)
+        const url = `${this.BASE_URL}${query_path}?${query.toString()}`
 
         const res = await this.fetchWithTransientRetry(
             url,
@@ -2041,7 +2049,12 @@ export class XApiClient {
         this.assertOkOrInvalidate(res, 'tweet detail', XApis.TweetDetail, screenName)
         const json = await res.json()
         if (json.errors) {
-            throw new Error(`Failed to fetch tweet detail: ${json.errors[0].message}`)
+            const firstError = Array.isArray(json.errors) ? json.errors[0] : json.errors
+            const message =
+                firstError && typeof firstError === 'object' && typeof firstError.message === 'string'
+                    ? firstError.message
+                    : String(json.errors).slice(0, 200)
+            throw new Error(`Failed to fetch tweet detail: ${message}`)
         }
         return XApiJsonParser.tweetDetailParser(json, statusId)
     }
@@ -2113,7 +2126,12 @@ export class XApiClient {
         this.assertOkOrInvalidate(res, 'tweets', XApis.ListLatestTweetsTimeline)
         const json = await res.json()
         if (json.errors) {
-            throw new Error(`Failed to fetch tweets: ${json.errors[0].message}`)
+            const firstError = Array.isArray(json.errors) ? json.errors[0] : json.errors
+            const message =
+                firstError && typeof firstError === 'object' && typeof firstError.message === 'string'
+                    ? firstError.message
+                    : String(json.errors).slice(0, 200)
+            throw new Error(`Failed to fetch tweets: ${message}`)
         }
         return XApiJsonParser.tweetsArticleParser(json)
     }
@@ -2177,7 +2195,12 @@ export class XApiClient {
         this.assertOkOrInvalidate(res, 'list members', XApis.ListMembers)
         const json = await res.json()
         if (json.errors) {
-            throw new Error(`Failed to fetch list members: ${json.errors[0].message}`)
+            const firstError = Array.isArray(json.errors) ? json.errors[0] : json.errors
+            const message =
+                firstError && typeof firstError === 'object' && typeof firstError.message === 'string'
+                    ? firstError.message
+                    : String(json.errors).slice(0, 200)
+            throw new Error(`Failed to fetch list members: ${message}`)
         }
         return XApiJsonParser.tweetsFollowsFromListParser(json)
     }
@@ -2462,7 +2485,8 @@ namespace XApiJsonParser {
 
     // 时间转换辅助函数
     function parseTwitterDate(dateStr: string) {
-        return Date.parse(dateStr.replace(/( \+0000)/, ' UTC$1'))
+        const parsed = Date.parse(dateStr.replace(/( \+0000)/, ' UTC$1'))
+        return Number.isFinite(parsed) ? parsed : 0
     }
 
     function mediaParser(media: any) {

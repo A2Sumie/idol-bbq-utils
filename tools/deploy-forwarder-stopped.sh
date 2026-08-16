@@ -178,9 +178,17 @@ services:
 OVERRIDE
 cd "$repo"
 # Docker creates missing bind-mount source dirs as root:root; the container runs
-# as bun (uid 1000) and would hit EACCES on first online start. Ensure the four
-# archive/backup mounts exist before compose ever sees them.
-for dir in assets/backups assets/tiktok-live-archive assets/ig-probe assets/live-capture-archive; do
+# as bun (uid 1000) and would hit EACCES on first online start. Pre-create every
+# writable host bind source so compose never gets a chance to root-create it.
+for dir in \
+    assets/backups \
+    assets/tiktok-live-archive \
+    assets/ig-probe \
+    assets/live-capture-archive \
+    assets/cookies \
+    /tmp/tweet-forwarder/logs \
+    /tmp/tweet-forwarder/media \
+    /tmp/tweet-forwarder/instagram-live; do
     mkdir -p "$dir"
 done
 IDOL_BBQ_RUNTIME_MODE="$DEPLOY_RUNTIME_MODE" IDOL_BBQ_OUTBOUND_SEND_MODE="$DEPLOY_OUTBOUND_SEND_MODE" IDOL_BBQ_RESTART_POLICY=no \

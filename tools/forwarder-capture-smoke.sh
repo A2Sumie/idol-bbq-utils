@@ -175,13 +175,18 @@ PY
 
 write_temp_config() {
     local repo="$1" root="$2" image="$3" api_port="$4" api_secret="$5" target_filter="$6"
+    local env_file="$root/smoke-env"
+    umask 077
+    {
+        printf 'HOME=%s\n' '/tmp'
+        printf 'TEMP_API_PORT=%s\n' "$api_port"
+        printf 'TEMP_API_SECRET=%s\n' "$api_secret"
+        printf 'TEMP_TARGET_IDS=%s\n' "$target_filter"
+    } > "$env_file"
     docker run --rm --pull never \
         --entrypoint bun \
         --user "$(id -u):$(id -g)" \
-        -e HOME=/tmp \
-        -e TEMP_API_PORT="$api_port" \
-        -e TEMP_API_SECRET="$api_secret" \
-        -e TEMP_TARGET_IDS="$target_filter" \
+        --env-file "$env_file" \
         -v "$repo/assets/config.yaml:/app/config.yaml:ro" \
         -v "$root:/out" \
         "$image" \
@@ -439,11 +444,16 @@ prefix="${CAPTURE_SMOKE_CONTAINER_PREFIX:-idol-bbq-capture-smoke}"
 target_filter="${CAPTURE_SMOKE_TARGET_IDS:-}"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 root="${CAPTURE_SMOKE_ROOT:-/tmp/idol-bbq-capture-smoke-$stamp}"
-case "$root" in
+# A lexical prefix match is insufficient: /tmp/idol-bbq-capture-smoke-/../../home
+# still matches /tmp/idol-bbq-capture-smoke-* but resolves outside /tmp.
+root_parent="$(cd "$(dirname "$root")" 2>/dev/null && pwd -P || true)"
+root_base="$(basename "$root")"
+case "$root_parent/$root_base" in
     /tmp/idol-bbq-capture-smoke-*)
+        root="$root_parent/$root_base"
         ;;
     *)
-        die "CAPTURE_SMOKE_ROOT must be under /tmp/idol-bbq-capture-smoke-*"
+        die "CAPTURE_SMOKE_ROOT must resolve under /tmp/idol-bbq-capture-smoke-*"
         ;;
 esac
 smoke_container="$prefix-$stamp"
@@ -454,6 +464,7 @@ tmp_db="$root/refactor.db"
 capture_file="$tmp_root/outbound-capture.jsonl"
 log_file="$root/container.log"
 auth_header="$root/api-auth-header"
+smoke_env_file="$root/smoke-env"
 payload_file="$root/simulate-payload.json"
 response_file="$root/simulate-response.json"
 status_file="$root/runtime-status.json"
@@ -472,9 +483,9 @@ cleanup() {
             docker logs "$smoke_container" > "$log_file" 2>&1 || true
             docker rm -f "$smoke_container" >/dev/null 2>&1 || true
         fi
-        rm -f "$tmp_config" "$auth_header"
+        rm -f "$tmp_config" "$auth_header" "$smoke_env_file"
         if [ "$keep_root" != "true" ] && [ "$status" = "0" ]; then
-            rm -rf "$root"
+            rm -rf -- "$root"
         fi
     fi
     exit "$status"
@@ -495,6 +506,11 @@ if [ "$require_production_stopped" = "true" ] && [ "$prod_before_running" != "fa
 fi
 
 mkdir -p "$root" "$tmp_root"
+root_real="$(cd "$root" && pwd -P)"
+case "$root_real" in
+    /tmp/idol-bbq-capture-smoke-*) root="$root_real" ;;
+    *) die "CAPTURE_SMOKE_ROOT resolved outside the allowed prefix" ;;
+esac
 chmod 700 "$root" "$tmp_root"
 sqlite_backup "$repo/assets/refactor.db" "$tmp_db"
 prepare_temp_db "$tmp_db" "$db_prepare_file"

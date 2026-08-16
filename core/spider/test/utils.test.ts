@@ -95,24 +95,21 @@ test('Netscape cookie parser preserves HttpOnly cookies and can include expired 
 })
 
 test('Netscape cookie parser keeps session cookies loadable by omitting expires', () => {
-    withCookieFile(
-        ['.tiktok.com\tTRUE\t/\tTRUE\t0\ttt_csrf_token\tcsrf-token'].join('\n'),
-        (file) => {
-            const cookies = parseNetscapeCookieToPuppeteerCookie(file, { now: 2000 })
+    withCookieFile(['.tiktok.com\tTRUE\t/\tTRUE\t0\ttt_csrf_token\tcsrf-token'].join('\n'), (file) => {
+        const cookies = parseNetscapeCookieToPuppeteerCookie(file, { now: 2000 })
 
-            expect(cookies).toEqual([
-                {
-                    name: 'tt_csrf_token',
-                    value: 'csrf-token',
-                    domain: '.tiktok.com',
-                    path: '/',
-                    httpOnly: false,
-                    secure: true,
-                },
-            ])
-            expect(cookies[0]).not.toHaveProperty('expires')
-        },
-    )
+        expect(cookies).toEqual([
+            {
+                name: 'tt_csrf_token',
+                value: 'csrf-token',
+                domain: '.tiktok.com',
+                path: '/',
+                httpOnly: false,
+                secure: true,
+            },
+        ])
+        expect(cookies[0]).not.toHaveProperty('expires')
+    })
 })
 
 test('Netscape cookie audit returns no-value metadata', () => {
@@ -151,6 +148,13 @@ test('SimpleExpiringCache treats ttl as seconds', async () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
 
     expect(cache.get('short')).toBeNull()
+})
+
+test('SimpleExpiringCache ttl=0 deletes the key instead of storing a tombstone', () => {
+    const cache = new SimpleExpiringCache()
+    cache.set('gone', 'value', 0)
+    expect(cache.get('gone')).toBeNull()
+    expect((cache as any).cache.has('gone')).toBeFalse()
 })
 
 test('HTTPClient throws status errors for non-2xx responses by default', async () => {

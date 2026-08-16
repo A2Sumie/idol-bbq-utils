@@ -19,7 +19,8 @@ set -Eeuo pipefail
 TARGET_DIR="${1:-/tmp/idol-bbq-utils-public}"
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
-# rm -rf below must never receive "/", $HOME, or another absolute path.
+# rm -rf below must never receive "/", $HOME, or another absolute path. A
+# lexical /tmp/* match is not enough: /tmp/../Users/zou resolves outside /tmp.
 case "$TARGET_DIR" in
     /tmp/*)
         ;;
@@ -28,6 +29,13 @@ case "$TARGET_DIR" in
         exit 1
         ;;
 esac
+target_parent="$(cd "$(dirname "$TARGET_DIR")" 2>/dev/null && pwd -P || true)"
+target_base="$(basename "$TARGET_DIR")"
+if [ "$target_parent" != "/tmp" ] || [ "$target_base" = "." ] || [ "$target_base" = ".." ] || [ "$target_base" = "/" ]; then
+    echo "TARGET_DIR resolves outside /tmp: $TARGET_DIR" >&2
+    exit 1
+fi
+TARGET_DIR="/tmp/$target_base"
 
 if sed --version >/dev/null 2>&1; then
     SED_INPLACE=(-i)
@@ -86,7 +94,7 @@ SECRET_PATTERNS=(
 
 NEUTRAL_AUTHOR='idol-bbq-utils <idol-bbq-utils@users.noreply.github.com>'
 
-rm -rf "$TARGET_DIR"
+rm -rf -- "$TARGET_DIR"
 mkdir -p "$TARGET_DIR"
 
 git archive --format=tar HEAD | tar -xf - -C "$TARGET_DIR"

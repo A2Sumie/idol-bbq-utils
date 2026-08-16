@@ -134,6 +134,7 @@ type SummaryCardQueue = {
     windowStart?: number
     windowEnd?: number
     failureGeneration?: number
+    flushGeneration?: number
 }
 type SummaryCardGroup = {
     kind: 'storm' | 'thread'
@@ -1727,6 +1728,41 @@ class ForwarderPools extends BaseCompatibleModel {
                     routeKey({ source: 'system', crawlerId: options.crawlerName || 'unknown' }),
                     target.id,
                 )
+                const priorVisibleArticle = await DB.OutboundMessage.findLatestVisibleCompletion({
+                    target_id: target.id,
+                    task_kinds: [
+                        'article',
+                        'manual_article',
+                        'summary_realtime_media',
+                        'summary_single_native',
+                        'qq_x_link_merged_forward',
+                    ],
+                    article_key: articleKey(refreshedArticle),
+                }).catch((error) => {
+                    taskLog?.warn(
+                        `QQ x-link visible-completion precheck failed for ${target.id}: ${
+                            error instanceof Error ? error.message : String(error)
+                        }`,
+                    )
+                    return null
+                })
+                if (priorVisibleArticle && priorVisibleArticle.idempotency_key !== outboundKey) {
+                    taskLog?.debug(
+                        `Skipping QQ x-link for ${target.id}: already visibly delivered as ${priorVisibleArticle.status} (${priorVisibleArticle.task_kind})`,
+                    )
+                    sends.push({
+                        target_id: target.id,
+                        part: 'merged_forward',
+                        result: {
+                            status: 'blocked',
+                            reason:
+                                priorVisibleArticle.status === 'sent'
+                                    ? 'already_sent'
+                                    : `already_${priorVisibleArticle.status}`,
+                        } as ForwarderSendResult,
+                    })
+                    continue
+                }
                 const outbound = await DB.OutboundMessage.claim({
                     idempotency_key: outboundKey,
                     route_key: routeKeyForTarget,
@@ -1802,6 +1838,20 @@ class ForwarderPools extends BaseCompatibleModel {
                             { kind: 'sent', providerResult: getForwarderProviderResult(result) },
                             taskLog,
                         )
+                    } else if (result.status === 'queued') {
+                        await DB.OutboundMessage.markQueued(outboundKey, {
+                            reason: result.reason,
+                            batchKey: result.batchKey,
+                            pendingUnits: result.pendingUnits,
+                            threshold: result.threshold,
+                        }).catch(() => undefined)
+                        await markTargetHealthForSendOutcome(target, { kind: 'queued', result }, taskLog)
+                    } else if (result.status === 'blocked') {
+                        await DB.OutboundMessage.markSkipped(outboundKey, result.reason, result).catch(() => undefined)
+                        await markTargetHealthForSendOutcome(target, { kind: 'blocked', result }, taskLog)
+                    } else if (result.status === 'dry_run') {
+                        await DB.OutboundMessage.markDryRun(outboundKey, result).catch(() => undefined)
+                        await markTargetHealthForSendOutcome(target, { kind: 'dry_run', result }, taskLog)
                     } else {
                         await applyFailedSendFailure(
                             target,
@@ -2685,6 +2735,7 @@ class ForwarderPools extends BaseCompatibleModel {
                                     'manual_article',
                                     'summary_realtime_media',
                                     'summary_single_native',
+                                    'qq_x_link_merged_forward',
                                 ],
                                 article_key: articleKey(article),
                             }).catch((error) => {
@@ -3651,12 +3702,14 @@ class ForwarderPools extends BaseCompatibleModel {
         const summaryRouteKey = this.buildSummaryCardSharedRouteKey(target.id)
         const queueKey = this.getSummaryCardQueueKey(summaryRouteKey, target.id, runtime_config, summaryConfig)
         let existingQueue = this.summaryCardQueues.get(queueKey)
+        let queuedFlushGeneration = existingQueue?.flushGeneration || 0
         if (existingQueue && this.isSummaryCardQueueDue(existingQueue, now)) {
             log?.debug(
                 `Flushing due summary-card queue for ${target.id} before queuing ${article.a_id}; keeping article in next window.`,
             )
             await this.flushSummaryCardQueue(queueKey, 'interval')
             existingQueue = this.summaryCardQueues.get(queueKey)
+            queuedFlushGeneration = existingQueue?.flushGeneration || 0
         }
         const item: SummaryCardQueueItem = {
             article: cloneDeep(article),
@@ -3788,7 +3841,12 @@ class ForwarderPools extends BaseCompatibleModel {
         queue.lastQueuedAt = now
         queue.items.set(article.id, item)
         await this.persistSummaryCardItem(queue, item)
-        this.summaryCardQueues.set(queueKey, queue)
+        // A concurrent flush may have claimed the old queue while this call was
+        // suspended (realtime media preparation, DB window allocation). Do not
+        // re-insert that stale queue: its claimed items must never be replayed.
+        if (!existingQueue || existingQueue.flushGeneration === queuedFlushGeneration) {
+            this.summaryCardQueues.set(queueKey, queue)
+        }
         log?.debug(
             `Queued summary-card item ${article.a_id} for ${target.id}: ${queue.items.size}/${summaryConfig.threshold}`,
         )
@@ -4285,18 +4343,21 @@ class ForwarderPools extends BaseCompatibleModel {
             mediaFiles,
             renderResult,
         )
-        const mediaFilesWithTargetExtras = this.appendSummaryRealtimeCardMediaForTarget(
-            target,
-            mediaFiles,
-            cardRenderResult,
-        )
-        if (mediaFilesWithTargetExtras.length === 0) {
+        const cleanupRenderedRealtimeCard = () => {
             if (cardRenderResult && cardRenderResult !== renderResult) {
                 this.renderService.cleanup([
                     ...(cardRenderResult.mediaFiles || []),
                     ...(cardRenderResult.cardMediaFiles || []),
                 ])
             }
+        }
+        const mediaFilesWithTargetExtras = this.appendSummaryRealtimeCardMediaForTarget(
+            target,
+            mediaFiles,
+            cardRenderResult,
+        )
+        if (mediaFilesWithTargetExtras.length === 0) {
+            cleanupRenderedRealtimeCard()
             return {
                 hadMedia: false,
                 handled: true,
@@ -4329,6 +4390,7 @@ class ForwarderPools extends BaseCompatibleModel {
             log?.debug(
                 `Skipping summary realtime media for ${article.a_id} to ${target.id}: article already visibly completed as ${latestVisibleOutbound.status}`,
             )
+            cleanupRenderedRealtimeCard()
             return {
                 hadMedia: true,
                 handled: true,
@@ -4368,6 +4430,7 @@ class ForwarderPools extends BaseCompatibleModel {
             log?.debug(
                 `Skipping summary realtime media for ${article.a_id} to ${target.id}: target media visibility duplicate`,
             )
+            cleanupRenderedRealtimeCard()
             return {
                 hadMedia: true,
                 handled: true,
@@ -4376,6 +4439,7 @@ class ForwarderPools extends BaseCompatibleModel {
             }
         }
         if (visibleMediaFiles.length === 0) {
+            cleanupRenderedRealtimeCard()
             return {
                 hadMedia: true,
                 handled: true,
@@ -4683,12 +4747,7 @@ class ForwarderPools extends BaseCompatibleModel {
             await this.releaseContentFingerprintClaim(contentFingerprintForRelease).catch(() => undefined)
             // The translated tail card rendered inside this call is owned here;
             // its media files were never cleaned up (the caller only owns renderResult).
-            if (cardRenderResult && cardRenderResult !== renderResult) {
-                this.renderService.cleanup([
-                    ...(cardRenderResult.mediaFiles || []),
-                    ...(cardRenderResult.cardMediaFiles || []),
-                ])
-            }
+            cleanupRenderedRealtimeCard()
         }
     }
 
@@ -4826,7 +4885,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
         const latestVisibleOutbound = await DB.OutboundMessage.findLatestVisibleCompletion({
             target_id: queue.target.id,
-            task_kinds: ['article', 'manual_article', 'summary_single_native'],
+            task_kinds: ['article', 'manual_article', 'summary_single_native', 'qq_x_link_merged_forward'],
             article_key: articleKey(item.article),
         }).catch((error) => {
             this.log?.warn(
@@ -5244,6 +5303,7 @@ class ForwarderPools extends BaseCompatibleModel {
         if (cooldownUntil) {
             this.summaryCardTargetCooldowns.delete(queue.target.id)
         }
+        queue.flushGeneration = (queue.flushGeneration || 0) + 1
         this.summaryCardQueues.delete(queueKey)
         if (queue.windowId && this.isSummaryCardWindowStale({ window_end: queue.windowEnd }, queue.config, now)) {
             await DB.AggregationWindow.updateStatus(queue.windowId, DB.AggregationWindow.STATUS.Cancelled, {
@@ -5325,7 +5385,19 @@ class ForwarderPools extends BaseCompatibleModel {
                 return
             }
 
-            const ok = await this.sendSummaryCardSingleNative(queue, item, reason)
+            let ok = false
+            try {
+                ok = await this.sendSummaryCardSingleNative(queue, item, reason)
+            } catch (error) {
+                await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)
+                this.summaryCardQueues.set(queueKey, queue)
+                this.log?.error(
+                    `Summary single-native preparation failed for ${queue.target.id}; released article claim and retained queue: ${
+                        error instanceof Error ? error.message : String(error)
+                    }`,
+                )
+                return
+            }
             if (!ok) {
                 await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)
                 this.summaryCardQueues.set(queueKey, queue)
@@ -5336,7 +5408,21 @@ class ForwarderPools extends BaseCompatibleModel {
             return
         }
 
-        const ok = await this.sendSummaryCardBatch(queue, this.buildSummaryCardGroups(claimedItems), reason)
+        let ok = false
+        try {
+            ok = await this.sendSummaryCardBatch(queue, this.buildSummaryCardGroups(claimedItems), reason)
+        } catch (error) {
+            for (const item of claimedItems) {
+                await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)
+            }
+            this.summaryCardQueues.set(queueKey, queue)
+            this.log?.error(
+                `Summary-card batch preparation failed for ${queue.target.id}; released article claims and retained queue: ${
+                    error instanceof Error ? error.message : String(error)
+                }`,
+            )
+            return
+        }
         if (!ok) {
             for (const item of claimedItems) {
                 await this.releaseArticleChain(item.article, item.article.platform, queue.target.id)

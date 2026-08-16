@@ -466,6 +466,7 @@ async function applyBrowserProfile(
                     }
                 }
                 const createNamedArray = (items: Array<Record<string, unknown>>, proto: object, namedKey: string) => {
+                    const nativeFind = Array.prototype.find
                     const arrayLike = [] as Array<Record<string, unknown>>
                     Object.setPrototypeOf(arrayLike, proto)
                     Object.defineProperty(arrayLike, 'item', {
@@ -478,7 +479,11 @@ async function applyBrowserProfile(
                     Object.defineProperty(arrayLike, 'namedItem', {
                         configurable: true,
                         value: patchNativeSource(
-                            (name: string) => arrayLike.find((item) => item[namedKey] === name) || null,
+                            (name: string) =>
+                                nativeFind.call(
+                                    arrayLike,
+                                    (item: Record<string, unknown>) => item[namedKey] === name,
+                                ) || null,
                             'function namedItem() { [native code] }',
                         ),
                     })

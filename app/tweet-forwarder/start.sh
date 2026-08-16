@@ -12,13 +12,13 @@ XVFB_PID=""
 APP_PID=""
 HOLD_PID=""
 COOKIE_MAINT_PID=""
-MIGRATION_LOCK_DIR=""
+MIGRATION_LOCK_HELD=0
 release_migration_lock() {
-    if [ -n "$MIGRATION_LOCK_DIR" ] && [ -d "$MIGRATION_LOCK_DIR" ]; then
-        rm -f "$MIGRATION_LOCK_DIR/pid"
-        rmdir "$MIGRATION_LOCK_DIR" >/dev/null 2>&1 || true
+    if [ "$MIGRATION_LOCK_HELD" = "1" ]; then
+        flock -u 9 >/dev/null 2>&1 || true
+        exec 9>&- 2>/dev/null || true
+        MIGRATION_LOCK_HELD=0
     fi
-    MIGRATION_LOCK_DIR=""
 }
 
 cleanup() {
@@ -255,22 +255,16 @@ prepare_migration_backup() {
     fi
 
     lock_parent="$backup_dir"
-    MIGRATION_LOCK_DIR="${IDOL_BBQ_DB_MIGRATION_LOCK_DIR:-$lock_parent/migration.lock}"
-    if ! mkdir "$MIGRATION_LOCK_DIR" 2>/dev/null; then
-        # A previous migration may have been SIGKILLed. Recover when the
-        # recorded owner PID no longer exists; never steal a live lock.
-        lock_pid="$(cat "$MIGRATION_LOCK_DIR/pid" 2>/dev/null || true)"
-        if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
-            echo "Migration lock is held by live process $lock_pid: $MIGRATION_LOCK_DIR" >&2
-            exit 75
-        fi
-        rm -f "$MIGRATION_LOCK_DIR/pid"
-        if ! rmdir "$MIGRATION_LOCK_DIR" 2>/dev/null || ! mkdir "$MIGRATION_LOCK_DIR" 2>/dev/null; then
-            echo "Unable to recover stale migration lock: $MIGRATION_LOCK_DIR" >&2
-            exit 75
-        fi
+    migration_lock_file="${IDOL_BBQ_DB_MIGRATION_LOCK_DIR:-$lock_parent/migration.lock}"
+    exec 9>>"$migration_lock_file"
+    if ! flock -n 9; then
+        echo "Migration lock is held by another live process: $migration_lock_file" >&2
+        exit 75
     fi
-    printf '%s\n' "$$" > "$MIGRATION_LOCK_DIR/pid"
+    MIGRATION_LOCK_HELD=1
+    # Best-effort diagnostics only. The flock fd is the real mutex and the
+    # kernel releases it atomically even after SIGKILL.
+    printf '%s\n' "$$" >&9
 
     sqlite_quick_check "$migration_db_path"
 

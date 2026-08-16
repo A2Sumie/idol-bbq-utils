@@ -125,7 +125,9 @@ REMOTE
 WATCHER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/instagram-live-watch.ts"
 scp -q -o BatchMode=yes -o ConnectTimeout=10 "$WATCHER_SRC" "$REMOTE_HOST:/tmp/instagram-live-watch.ts"
 scp -q -o BatchMode=yes -o ConnectTimeout=10 "$(dirname "$WATCHER_SRC")/instagram-live-monitor.sh" "$REMOTE_HOST:/tmp/instagram-live-monitor.sh"
-ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker cp /tmp/instagram-live-watch.ts $CONTAINER_NAME:/app/instagram-live-watch.ts"
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "CONTAINER_NAME=$(printf %q "$CONTAINER_NAME") bash -s" <<'REMOTE'
+docker cp /tmp/instagram-live-watch.ts "$CONTAINER_NAME:/app/instagram-live-watch.ts"
+REMOTE
 
 # 3) Launch the watcher + monitor for the window (starts immediately; probes at poll
 #    interval; the persisted config window additionally drives the crawler-side probe).

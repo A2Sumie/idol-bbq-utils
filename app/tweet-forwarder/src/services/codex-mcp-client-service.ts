@@ -183,7 +183,16 @@ class JsonRpcStdioClient {
 
     private pumpMessages() {
         while (true) {
-            const message = this.takeNextMessage()
+            let message: JsonRpcMessage | null
+            try {
+                message = this.takeNextMessage()
+            } catch (error) {
+                // A malformed child frame must not escape the stdout data
+                // EventEmitter callback (that would crash the whole process).
+                // Reject pending requests so callers get a controlled error.
+                this.rejectAll(error instanceof Error ? error : new Error(String(error)))
+                return
+            }
             if (!message) {
                 break
             }

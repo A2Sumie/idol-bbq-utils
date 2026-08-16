@@ -105,6 +105,8 @@ function resolveOutboundCaptureFile(env: Record<string, string | undefined> = pr
     return value || DEFAULT_CAPTURE_FILE
 }
 
+const CAPTURE_OUTBOUND_FETCH_TIMEOUT_MS = 10_000
+
 async function captureOutboundSend(
     payload: OutboundCapturePayload,
     env: Record<string, string | undefined> = process.env,
@@ -118,6 +120,7 @@ async function captureOutboundSend(
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify(payload),
+                signal: AbortSignal.timeout(CAPTURE_OUTBOUND_FETCH_TIMEOUT_MS),
             })
             return {
                 kind: 'http',

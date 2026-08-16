@@ -21,24 +21,39 @@ fail=0
 # hardcoded list. Hardcoding "相川奈央" produced a permanent WARN whenever that
 # crawler was not configured, which hid the distinction between "config has no
 # such live crawler" and "config has it but the schedule line is missing".
-live_crawler_names="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker exec $CONTAINER_NAME bun -e '
-const fs = require(\"fs\")
-const YAML = require(\"yaml\")
-const config = YAML.parse(fs.readFileSync(\"/app/config.yaml\", \"utf8\")) || {}
+# CONTAINER_NAME is passed as a remote env var and quoted there; never splice it
+# into the remote shell command.
+container_env="CONTAINER_NAME=$(printf %q "$CONTAINER_NAME")"
+live_crawler_names="$(
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "$container_env bash -s" <<'REMOTE' || true
+docker exec "$CONTAINER_NAME" bun -e '
+const fs = require("fs")
+const YAML = require("yaml")
+const config = YAML.parse(fs.readFileSync("/app/config.yaml", "utf8")) || {}
 for (const crawler of config.crawlers || []) {
     if (crawler.cfg_crawler && crawler.cfg_crawler.live_relay && crawler.cfg_crawler.live_relay.enabled === true) {
-        const name = String(crawler.name || \"\").trim()
+        const name = String(crawler.name || "").trim()
         if (name) console.log(name)
     }
 }
-'" || true)"
+'
+REMOTE
+)"
 
 if [ -z "$live_crawler_names" ]; then
     echo "INFO: no crawlers with live_relay.enabled=true in /app/config.yaml" >&2
 else
     while IFS= read -r name; do
         [ -z "$name" ] && continue
-        slot_line="$(ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "docker logs --since 12h $CONTAINER_NAME 2>&1 | grep -oE \"Crawler schedule created for ${name}: source=[^ ]* slots=[0-9]*\" | tail -1" || true)"
+        name_env="NAME=$(printf %q "$name")"
+        # Match the crawler name as a fixed string, then extract only the
+        # source/slots tail. A config-derived name must never be interpolated
+        # into a remote grep regex.
+        slot_line="$(
+            ssh -o BatchMode=yes -o ConnectTimeout=10 "$REMOTE_HOST" "$container_env $name_env bash -s" <<'REMOTE' || true
+docker logs --since 12h "$CONTAINER_NAME" 2>&1 | grep -F "Crawler schedule created for $NAME:" | grep -oE 'source=[^ ]* slots=[0-9]*' | tail -1
+REMOTE
+        )"
         if [ -z "$slot_line" ]; then
             echo "FAIL: $name has live_relay enabled but no schedule line in the last 12h — probe window lost" >&2
             fail=1

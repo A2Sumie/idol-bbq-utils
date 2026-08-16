@@ -220,27 +220,35 @@ function waitForEvent<T extends PageEvent>(
     promise: Promise<WaitForEventResponse<T>>
     cleanup: () => void
 } {
-    let promiseResolve: (value: { success: true; data: any; res: PageEvents[T] }) => void
-    let promiseReject: (value: { success: false; data: any; res: PageEvents[T]; error: Error }) => void
+    let promiseResolve: (value: WaitForEventResponse<T>) => void
     let eventData: PageEvents[T]
+    let settled = false
+    let cleaned = false
+    let cleanup: () => void
 
     const promise = new Promise<WaitForEventResponse<T>>((resolve) => {
         promiseResolve = resolve
-        promiseReject = resolve
     })
+
+    const finish = (value: WaitForEventResponse<T>) => {
+        if (settled) {
+            return
+        }
+        settled = true
+        cleanup()
+        promiseResolve(value)
+    }
 
     const control = {
         done: (data?: any) => {
-            cleanup()
-            promiseResolve({
+            finish({
                 success: true,
                 data,
                 res: eventData,
             })
         },
         fail: (e: any) => {
-            cleanup()
-            promiseReject({
+            finish({
                 success: false,
                 data: null,
                 res: eventData,
@@ -263,7 +271,7 @@ function waitForEvent<T extends PageEvent>(
     }
 
     const timeoutId = setTimeout(() => {
-        promiseReject({
+        finish({
             success: false,
             data: null,
             res: eventData,
@@ -273,9 +281,22 @@ function waitForEvent<T extends PageEvent>(
 
     page.on(eventName, wrappedHandler)
 
-    const cleanup = () => {
+    cleanup = () => {
+        if (cleaned) {
+            return
+        }
+        cleaned = true
         clearTimeout(timeoutId)
         page.off(eventName, wrappedHandler)
+        if (!settled) {
+            settled = true
+            promiseResolve({
+                success: false,
+                data: null,
+                res: eventData,
+                error: new Error(`Wait for event \'${eventName.toString()}\' cleaned up`),
+            })
+        }
     }
 
     return {

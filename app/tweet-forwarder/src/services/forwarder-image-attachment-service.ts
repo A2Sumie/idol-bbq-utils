@@ -33,6 +33,39 @@ interface NormalizedForwarderImageAttachments {
     compressedCount: number
 }
 
+// Reference-counted lifetime for deterministic compressed-cache entries. A
+// newly-created file is deleted when its last borrower releases it, but a
+// cached file borrowed by another concurrent send keeps it alive until that
+// send also releases it.
+const compressedOutputRefs = new Map<string, { count: number; deleteOnRelease: boolean }>()
+
+function borrowCompressedOutputs(paths: string[], deleteOnRelease: boolean) {
+    for (const path of paths) {
+        const existing = compressedOutputRefs.get(path)
+        if (existing) {
+            existing.count += 1
+            existing.deleteOnRelease = existing.deleteOnRelease || deleteOnRelease
+        } else {
+            compressedOutputRefs.set(path, { count: 1, deleteOnRelease })
+        }
+    }
+}
+
+function releaseCompressedOutput(path: string) {
+    const entry = compressedOutputRefs.get(path)
+    if (!entry) {
+        return
+    }
+    entry.count -= 1
+    if (entry.count > 0) {
+        return
+    }
+    compressedOutputRefs.delete(path)
+    if (entry.deleteOnRelease) {
+        fs.rmSync(path, { force: true })
+    }
+}
+
 type NormalizedImageResult = {
     path: string
     size_bytes: number
@@ -282,29 +315,34 @@ function splitTallImageUnderLimit(
                       `${crypto.createHash('sha1').update(`${sourcePath}:${Date.now()}:${Math.random()}:split:${index}`).digest('hex').slice(0, 12)}.jpg`,
                   )
             const tmpPath = path.join(COMPRESSED_IMAGE_DIR, `.tmp-${process.pid}-${path.basename(outputPath)}`)
-            execFileSync(
-                ffmpegPath,
-                [
-                    '-y',
-                    '-v',
-                    'error',
-                    '-i',
-                    sourcePath,
-                    '-vf',
-                    `crop=${dimensions.width}:${height}:0:${top}`,
-                    '-frames:v',
-                    '1',
-                    '-q:v',
-                    String(SPLIT_IMAGE_QUALITY),
-                    '-pix_fmt',
-                    'yuvj420p',
-                    '-map_metadata',
-                    '-1',
-                    tmpPath,
-                ],
-                { stdio: 'ignore', timeout: 30_000 },
-            )
-            fs.renameSync(tmpPath, outputPath)
+            try {
+                execFileSync(
+                    ffmpegPath,
+                    [
+                        '-y',
+                        '-v',
+                        'error',
+                        '-i',
+                        sourcePath,
+                        '-vf',
+                        `crop=${dimensions.width}:${height}:0:${top}`,
+                        '-frames:v',
+                        '1',
+                        '-q:v',
+                        String(SPLIT_IMAGE_QUALITY),
+                        '-pix_fmt',
+                        'yuvj420p',
+                        '-map_metadata',
+                        '-1',
+                        tmpPath,
+                    ],
+                    { stdio: 'ignore', timeout: 30_000 },
+                )
+                fs.renameSync(tmpPath, outputPath)
+            } catch (error) {
+                fs.rmSync(tmpPath, { force: true })
+                throw error
+            }
             const size = statSize(outputPath)
             if (size === null || size > maxImageBytes) {
                 fs.rmSync(outputPath, { force: true })
@@ -512,11 +550,9 @@ function normalizeForwarderImageAttachments(
         }
 
         compressedByPath.set(item.path, outcome.results)
-        // Only newly-created outputs are cleaned up after the send; cached
-        // variants survive for reuse and are reaped by the media-cache job.
-        if (!outcome.fromCache) {
-            cleanupPaths.push(...outcome.results.map((entry) => entry.path))
-        }
+        const outcomePaths = outcome.results.map((entry) => entry.path)
+        borrowCompressedOutputs(outcomePaths, !outcome.fromCache)
+        cleanupPaths.push(...outcomePaths)
         compressedCount += outcome.results.length
         return outcome.results.map((entry) => ({
             ...item,
@@ -530,7 +566,7 @@ function normalizeForwarderImageAttachments(
         compressedCount,
         cleanup: () => {
             for (const filePath of cleanupPaths) {
-                fs.rmSync(filePath, { force: true })
+                releaseCompressedOutput(filePath)
             }
         },
     }

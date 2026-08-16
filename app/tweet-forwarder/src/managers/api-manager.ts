@@ -1201,30 +1201,31 @@ export class APIManager extends BaseCompatibleModel {
     private async handleQuickConfigUpdate(req: Request): Promise<Response> {
         try {
             const patch = (await req.json()) as QuickConfigPatch
-            const compiledConfig = compileConnectionsFromQuickPatch(this.config, patch)
-            // A partial patch only changes the routes it mentions. Export the
-            // pipelines from the COMPILED connection maps (not the stale
-            // this.config), so links/routes patches survive the save, then
-            // overlay any explicit pipeline patches on top. The saved file is
-            // pipeline-native: legacy connections are intentionally stripped.
-            const { connections, pipelines: _legacyPipelines, ...configWithoutConnections } = compiledConfig as any
-            const currentPipelines = exportPipelineConfigs({
-                ...configWithoutConnections,
-                connections,
-            } as AppConfig)
-            const pipelines = mergePipelinePatches(currentPipelines, patch.pipelines || [])
-            const nextConfig = {
-                ...configWithoutConnections,
-                pipelines,
-            }
-            const saveResult = await this.saveConfigAndReload(
-                nextConfig,
-                'Pipeline configuration saved and hot reloaded.',
-            )
+            let responseConfig: AppConfig | null = null
+            const saveResult = await this.saveConfigAndReload((currentConfig) => {
+                const compiledConfig = compileConnectionsFromQuickPatch(currentConfig, patch)
+                // A partial patch only changes the routes it mentions. Export the
+                // pipelines from the COMPILED connection maps (not the stale
+                // currentConfig), so links/routes patches survive the save, then
+                // overlay any explicit pipeline patches on top. The saved file is
+                // pipeline-native: legacy connections are intentionally stripped.
+                const { connections, pipelines: _legacyPipelines, ...configWithoutConnections } = compiledConfig as any
+                const currentPipelines = exportPipelineConfigs({
+                    ...configWithoutConnections,
+                    connections,
+                } as AppConfig)
+                const pipelines = mergePipelinePatches(currentPipelines, patch.pipelines || [])
+                const nextConfig = {
+                    ...configWithoutConnections,
+                    pipelines,
+                }
+                responseConfig = nextConfig
+                return nextConfig
+            }, 'Pipeline configuration saved and hot reloaded.')
             const payload = (await saveResult.json()) as Record<string, unknown>
             return jsonResponse({
                 ...payload,
-                quick_config: buildQuickConfigModel(normalizePipelinesForRuntime(nextConfig)),
+                quick_config: buildQuickConfigModel(normalizePipelinesForRuntime(responseConfig || this.config)),
             })
         } catch (error) {
             this.log?.error('Quick config update error:', error)
@@ -1265,10 +1266,14 @@ export class APIManager extends BaseCompatibleModel {
     }
 
     private async saveConfigAndReload(
-        config: AppConfig,
+        configOrFactory: AppConfig | ((current: AppConfig) => AppConfig),
         message = 'Configuration saved and hot reloaded.',
     ): Promise<Response> {
         const runSave = async () => {
+            // Quick-config patches compile against the latest runtime config.
+            // Resolve factories inside the serialized save chain so two
+            // concurrent partial updates cannot both read the same stale view.
+            const config = typeof configOrFactory === 'function' ? configOrFactory(this.config) : configOrFactory
             const configPath = path.join(process.cwd(), 'config.yaml')
             const previousConfigText = fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null
             if (fs.existsSync(configPath)) {
@@ -2653,6 +2658,9 @@ export class APIManager extends BaseCompatibleModel {
             targetIds?: Array<string>
             processorId?: string
             badgeLabel?: string
+        }
+        if (body.targetIds !== undefined && !Array.isArray(body.targetIds)) {
+            return jsonResponse({ success: false, error: 'target_ids_must_be_array' }, 400)
         }
         const link =
             extractXStatusLink(body.url) ||

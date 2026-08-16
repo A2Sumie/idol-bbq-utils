@@ -187,6 +187,10 @@ class SimpleExpiringCache {
      */
     set(key: string, value: any, ttl: number) {
         const ttlMs = Math.max(0, ttl * 1000)
+        if (ttlMs <= 0) {
+            this.cache.delete(key)
+            return
+        }
         const expiresAt = Date.now() + ttlMs
         this.cache.set(key, { value, expiresAt })
 

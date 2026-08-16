@@ -1887,66 +1887,72 @@ async function uploadArchiveToBilibili(
     }
 
     const workDir = createUploadWorkspace(title)
-    const cookie = await loadCookieDocument(
-        config,
-        String(payload.cookieSourcePath || defaults.cookieSourcePath || ''),
-        log,
-    )
-    const cookieFilePath = path.join(workDir, 'cookies.json')
-    fs.writeFileSync(cookieFilePath, JSON.stringify(cookie.document, null, 2), 'utf8')
-
-    const trimmed = trimArchiveMedia(
-        archiveMediaPath,
-        ffmpegPath,
-        workDir,
-        trimStartSeconds,
-        trimEndSeconds,
-        mediaDetails.durationSeconds,
-    )
-
-    let coverPath: string | null = null
-    if (payload.coverTimeSeconds !== null && payload.coverTimeSeconds !== undefined) {
-        coverPath = extractFrameToPath(
-            trimmed.path,
-            ffmpegPath,
-            Math.max(0, Number(payload.coverTimeSeconds || 0)),
-            path.join(workDir, 'cover.jpg'),
+    try {
+        const cookie = await loadCookieDocument(
+            config,
+            String(payload.cookieSourcePath || defaults.cookieSourcePath || ''),
+            log,
         )
-    }
+        const cookieFilePath = path.join(workDir, 'cookies.json')
+        fs.writeFileSync(cookieFilePath, JSON.stringify(cookie.document, null, 2), 'utf8')
 
-    const stdout = await runArchiveBiliupUpload(
-        uploadTarget.uploadConfig,
-        cookieFilePath,
-        {
-            title,
-            description,
-            sourceUrl,
-            tags,
-            tid,
-            threads,
-            submitApi,
-            line,
-            copyright,
-            videoPath: trimmed.path,
-            coverPath,
+        const trimmed = trimArchiveMedia(
+            archiveMediaPath,
+            ffmpegPath,
             workDir,
-        },
-        log,
-    )
+            trimStartSeconds,
+            trimEndSeconds,
+            mediaDetails.durationSeconds,
+        )
 
-    const identifiers = extractSubmitIdentifiers(stdout)
-    return {
-        ok: true,
-        title,
-        sourceUrl,
-        cookieSourcePath: cookie.sourcePath,
-        uploadedPath: archiveMediaPath,
-        trimmedPath: trimmed.trimmed ? trimmed.path : null,
-        coverPath,
-        bvid: identifiers.bvid,
-        aid: identifiers.aid,
-        videoUrl: identifiers.bvid ? `https://www.bilibili.com/video/${identifiers.bvid}` : null,
-        stdout,
+        let coverPath: string | null = null
+        if (payload.coverTimeSeconds !== null && payload.coverTimeSeconds !== undefined) {
+            coverPath = extractFrameToPath(
+                trimmed.path,
+                ffmpegPath,
+                Math.max(0, Number(payload.coverTimeSeconds || 0)),
+                path.join(workDir, 'cover.jpg'),
+            )
+        }
+
+        const stdout = await runArchiveBiliupUpload(
+            uploadTarget.uploadConfig,
+            cookieFilePath,
+            {
+                title,
+                description,
+                sourceUrl,
+                tags,
+                tid,
+                threads,
+                submitApi,
+                line,
+                copyright,
+                videoPath: trimmed.path,
+                coverPath,
+                workDir,
+            },
+            log,
+        )
+
+        const identifiers = extractSubmitIdentifiers(stdout)
+        return {
+            ok: true,
+            title,
+            sourceUrl,
+            cookieSourcePath: cookie.sourcePath,
+            uploadedPath: archiveMediaPath,
+            // workDir is deleted before the caller sees the result; these
+            // fields are informational and must not point at deleted files.
+            trimmedPath: null,
+            coverPath: null,
+            bvid: identifiers.bvid,
+            aid: identifiers.aid,
+            videoUrl: identifiers.bvid ? `https://www.bilibili.com/video/${identifiers.bvid}` : null,
+            stdout,
+        }
+    } finally {
+        fs.rmSync(workDir, { recursive: true, force: true })
     }
 }
 
