@@ -17,6 +17,10 @@ const DEEPSEEK_V4_FLASH_DEFAULT_CONFIG: ProcessorConfig = {
     name: 'OpenCode-Go-DeepSeek-v4-flash',
     model_id: 'deepseek-v4-flash',
     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
+    // DeepSeek V4 Flash: never cap output below the model ceiling (384K out /
+    // 1M ctx); reasoning models silently truncate to status=incomplete otherwise.
+    // Use reasoning_effort when a faster answer is needed, not a smaller cap.
+    max_tokens: 384000,
     temperature: 1.3,
     extended_payload: {
         thinking: {
@@ -29,6 +33,7 @@ const DEEPSEEK_V4_PRO_DEFAULT_CONFIG: ProcessorConfig = {
     name: 'OpenCode-Go-DeepSeek-v4-pro',
     model_id: 'deepseek-v4-pro',
     base_url: 'https://opencode.ai/zen/go/v1/chat/completions',
+    max_tokens: 384000,
     temperature: 1.0,
     extended_payload: {
         thinking: {
@@ -118,7 +123,12 @@ class OpenaiLikeLLMTranslator extends BaseOpenai {
             .map((item: any) => item.text)
             .join('')
         if (!text) {
-            throw new Error('Responses API returned no output_text')
+            const status = data?.status ? ` status=${data.status}` : ''
+            const reason = data?.incomplete_details?.reason ? ` reason=${data.incomplete_details.reason}` : ''
+            const outputTypes = Array.isArray(data?.output)
+                ? ` output=[${data.output.map((item: any) => item?.type).join(',')}]`
+                : ''
+            throw new Error(`Responses API returned no output_text${status}${reason}${outputTypes}`)
         }
         return text
     }

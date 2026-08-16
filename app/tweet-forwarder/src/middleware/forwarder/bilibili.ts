@@ -5,6 +5,7 @@ import { stripUrlsFromText } from '@/utils/base'
 import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 import { buildBiliupUploadCandidate, completeBiliupUploadCandidateTags, runBiliupUpload } from './biliup'
+import { Platform } from '@idol-bbq-utils/spider/types'
 import {
     normalizeForwarderImageAttachments,
     resolveForwarderImageMaxBytes,
@@ -259,6 +260,34 @@ class BiliForwarder extends Forwarder {
         return this.sendDynamicContent(urlStrippedTexts, props)
     }
 
+    private countSuppressibleMedia(props?: SendProps) {
+        const seen = new Set<string>()
+        let photos = 0
+        let videos = 0
+        for (const item of [...(props?.media || []), ...(props?.videoUploadMedia || [])]) {
+            const key = item.path
+            if (key && seen.has(key)) {
+                continue
+            }
+            if (key) {
+                seen.add(key)
+            }
+            if (item.media_type === 'video' || item.media_type === 'video_thumbnail') {
+                videos += 1
+            } else {
+                photos += 1
+            }
+        }
+        const parts: string[] = []
+        if (photos > 0) {
+            parts.push(`${photos} 张图片`)
+        }
+        if (videos > 0) {
+            parts.push(`${videos} 个视频`)
+        }
+        return parts.length > 0 ? `，已过滤 ${parts.join('、')}` : ''
+    }
+
     private resolveMediaSuppressionNotice(texts: string[], props?: SendProps) {
         const article = props?.article
         if (!article) {
@@ -271,21 +300,31 @@ class BiliForwarder extends Forwarder {
         if (suppressedUids.has(article.u_id)) {
             const label = article.u_id.split(':').pop() || article.u_id
             this.log?.info(`Suppressing Bilibili media for ${article.a_id}: source ${article.u_id}`)
-            return `FC ${label} 内容`
+            return `FC ${label} 内容${this.countSuppressibleMedia(props)}`
         }
         if (!config.suppress_members_only_media) {
             return null
         }
+        // Public official-site feeds (blog/news/live-report) legitimately mention
+        // 会員限定 when announcing FC updates; the text heuristic must not suppress
+        // their media. FC areas are covered by suppress_media_uids above, and
+        // explicit members_only flags (e.g. YouTube) still apply to every platform.
         const extra = article.extra?.data as any
+        if (extra?.members_only === true) {
+            this.log?.info(`Suppressing Bilibili media for ${article.a_id}: members-only source`)
+            return `会员限定内容${this.countSuppressibleMedia(props)}`
+        }
+        if (article.platform === Platform.Website) {
+            return null
+        }
         const haystack = [article.content || '', article.translation || '', ...texts].join('\n')
         const membersOnly =
-            extra?.members_only === true ||
             /会员限定|会員限定|メンバー限定|メン限|メンシプ|members?[-\s]?only|subscribers?[-\s]?only/i.test(
                 haystack,
             )
         if (membersOnly) {
             this.log?.info(`Suppressing Bilibili media for ${article.a_id}: members-only source`)
-            return '会员限定内容'
+            return `会员限定内容${this.countSuppressibleMedia(props)}`
         }
         return null
     }

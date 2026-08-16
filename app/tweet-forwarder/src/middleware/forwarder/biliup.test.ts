@@ -39,7 +39,7 @@ test('buildBiliupUploadCandidate prepares metadata for YouTube video uploads', (
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7】22/7 新视频标题')
+    expect(candidate?.title).toBe('【22/7】03.20_24 22/7 新视频标题')
     expect(candidate?.coverPath).toBe('/tmp/cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/video.mp4'])
     expect(candidate?.title).not.toContain('[YT]')
@@ -94,7 +94,7 @@ test('buildBiliupUploadCandidate keeps YouTube Shorts original title at descript
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7】[YT] 短视频中文标题')
+    expect(candidate?.title).toBe('【22/7】[YT] 03.20_24 短视频中文标题')
     expect(candidate?.description.split('\n')[0]).toBe('原标题: ショート動画の原題')
     expect(candidate?.description).toContain('短视频说明')
     expect(candidate?.description).not.toContain('\nショート動画の原題\n')
@@ -125,7 +125,7 @@ test('buildBiliupUploadCandidate prefers stored translations for YouTube upload 
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7】新节目的通知')
+    expect(candidate?.title).toBe('【22/7】03.20_24 新节目的通知')
     expect(candidate?.title).not.toContain('[YT]')
     expect(candidate?.description).toContain('22/7的新企划即将开始')
     expect(candidate?.description).toContain('来源平台: YouTube视频')
@@ -180,7 +180,7 @@ test('completeBiliupUploadCandidateTags formats official YouTube long video meta
 
     try {
         expect(candidate).toBeTruthy()
-        expect(candidate?.title).toBe(`【22/7 北原実咲】${translationTitle}`)
+        expect(candidate?.title).toBe(`【22/7 北原実咲】06.17_26 ${translationTitle}`)
         expect(candidate?.title).not.toContain('[YT]')
         expect(candidate?.description.split('\n')[0]).toBe(`原标题: ${originalTitle}`)
         expect(candidate?.description).toContain('22/7三期生定期公演「ナナニジライブ2026」Final 确定举办！')
@@ -212,11 +212,11 @@ test('completeBiliupUploadCandidateTags formats official YouTube long video meta
     expect(officialGenerationInput.evidence).toMatchObject({
         platform: 'YouTube',
         source_url: 'https://www.youtube.com/watch?v=X6J9TphDexM',
-        deterministic_title: `【22/7 北原実咲】${translationTitle}`,
+        deterministic_title: `【22/7 北原実咲】06.17_26 ${translationTitle}`,
         translation_first_line: translationTitle,
         original_first_line: originalTitle,
     })
-    expect(candidate?.title).toBe(`【22/7 北原実咲】${generatedTitle}`)
+    expect(candidate?.title).toBe(`【22/7 北原実咲】06.17_26 ${generatedTitle}`)
     expect(candidate?.title).not.toContain('[YT]')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
@@ -292,7 +292,7 @@ test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 椎名桜月 03.20_26')
+    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 03.20_26')
     expect(candidate?.description).toContain('来源平台: Instagram投稿')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: satsuki_shiina')
@@ -322,7 +322,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7 TikTok Member】[TT] TikTok Member 03.20_26 TT短视频正文')
+    expect(candidate?.title).toBe('【22/7 TikTok Member】[TT] 03.20_26 TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).not.toContain('TikTok')
@@ -538,7 +538,7 @@ test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7】[X] 22/7 06.07_26 22/7_the 3rd')
+    expect(candidate?.title).toBe('【22/7】[X] 06.07_26 22/7_the 3rd')
 })
 
 test('buildBiliupUploadCandidate uses detected members instead of collection account names', () => {
@@ -560,7 +560,7 @@ test('buildBiliupUploadCandidate uses detected members instead of collection acc
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 北原実咲 黒崎ありす】[ins] 北原実咲 黒崎ありす 03.20_26 北原実咲 黒崎ありす')
+    expect(candidate?.title).toBe('【22/7 北原実咲 黒崎ありす】[ins] 03.20_26 北原実咲 黒崎ありす')
     expect(candidate?.title).not.toContain('THE 3RD')
     expect(candidate?.description).toContain('来源账号: 北原実咲 黒崎ありす')
     expect(candidate?.config.tags).toContain('北原実咲')
@@ -589,7 +589,7 @@ test('buildBiliupUploadCandidate resolves staff posts to mentioned members when 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 北原実咲 03.20_26 北原実咲の紹介動画')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 03.20_26 北原実咲の紹介動画')
     expect(candidate?.title).not.toContain('22/7(ナナブンノニジュウニ)')
     expect(candidate?.description).toContain('来源账号: 北原実咲')
     expect(candidate?.config.tags).toContain('北原実咲')
@@ -616,7 +616,7 @@ test('buildBiliupUploadCandidate maps decorative X nicknames to canonical member
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 望月りの】[X] 望月りの 03.20_26 本日18:00〜 もぐもぐ配信します')
+    expect(candidate?.title).toBe('【22/7 望月りの】[X] 03.20_26 本日18:00〜 もぐもぐ配信します')
     expect(candidate?.description).toContain('来源账号: 望月りの')
 })
 
@@ -639,7 +639,7 @@ test('buildBiliupUploadCandidate maps configured Instagram handles to canonical 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 椎名桜月 03.20_26')
+    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 03.20_26')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: shiina_satsuki227')
 })
@@ -666,7 +666,7 @@ test('buildBiliupUploadCandidate maps TikTok 22/7-prefixed nicknames to canonica
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 月城咲舞】[TT] 月城咲舞 03.20_26 TikTok本文')
+    expect(candidate?.title).toBe('【22/7 月城咲舞】[TT] 03.20_26 TikTok本文')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
@@ -961,7 +961,7 @@ test('BiliForwarder applies runtime video upload metadata overrides', async () =
         })
 
         expect(result).toEqual([{ ok: true, mode: 'biliup' }])
-        expect(uploadedTitle).toBe('NEW TT TikTok Member 03.20_26 TT短视频正文')
+        expect(uploadedTitle).toBe('NEW TT 03.20_26 TT短视频正文')
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
@@ -1769,7 +1769,7 @@ test('BiliForwarder suppresses configured source media with an explicit notice',
 
     expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
     expect(videoCalls).toBe(0)
-    expect(dynamicCall.texts).toEqual(['【媒体未转载：FC photo 内容】', 'photo feed body'])
+    expect(dynamicCall.texts).toEqual(['【媒体未转载：FC photo 内容，已过滤 1 张图片】', 'photo feed body'])
     expect(dynamicCall.props.media).toEqual([])
     expect(dynamicCall.props.runtime_config.require_media).toBe(false)
 })
@@ -1804,8 +1804,47 @@ test('BiliForwarder suppresses members-only articles when configured', async () 
     })
 
     expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
-    expect(dynamicCall.texts[0]).toBe('【媒体未转载：会员限定内容】')
+    expect(dynamicCall.texts[0]).toBe('【媒体未转载：会员限定内容，已过滤 1 个视频】')
     expect(dynamicCall.props.media).toEqual([])
+})
+
+test('BiliForwarder keeps public website feed media even when text mentions members-only FC updates', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            suppress_media_uids: ['22/7:photo', '22/7:movie', '22/7:radio'],
+            suppress_members_only_media: true,
+            video_upload: { enabled: false },
+        } as any,
+        'bili-website-members-mention-test',
+    )
+
+    let videoCalls = 0
+    let dynamicCall: any = null
+    ;(forwarder as any).tryVideoUpload = async () => {
+        videoCalls += 1
+        return false
+    }
+    ;(forwarder as any).sendDynamicContent = async (texts: string[], props: any) => {
+        dynamicCall = { texts, props }
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const media = [{ media_type: 'photo', path: '/tmp/news.jpg' }]
+    const result = await (forwarder as any).realSend(['【ナナニジRADIO#222更新！】年額会員限定でラジオ収録の模様を定点カメラで'], {
+        article: {
+            a_id: '11384',
+            u_id: '22/7:official-news',
+            platform: Platform.Website,
+            content: '【ナナニジRADIO#222更新！】\n\n年額会員限定でラジオ収録の模様を定点カメラで',
+        },
+        media,
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(dynamicCall.texts[0]).not.toContain('媒体未转载')
+    expect(dynamicCall.props.media).toEqual(media)
 })
 
 test('BiliForwarder keeps public articles from non-suppressed sources', async () => {

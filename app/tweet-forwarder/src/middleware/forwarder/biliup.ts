@@ -756,12 +756,15 @@ function resolveUploadSummary(
     displayName: string,
     dateTime: ReturnType<typeof formatDateTimeParts>,
 ) {
-    const summary = primaryLine.trim()
+    // Headline is capped at 40 chars (code points, surrogate-safe) so the fixed
+    // account/source prefix keeps most of the 80-char title budget.
+    const summary = truncateText(primaryLine.trim(), 40)
     if ([Platform.Instagram, Platform.TikTok, Platform.X].includes(article.platform)) {
-        const prefix = [displayName, dateTime.date_code].filter(Boolean).join(' ').trim()
-        return [prefix, summary].filter(Boolean).join(' ').trim() || `${displayName} ${dateTime.date_code}`.trim()
+        // upload_summary drops the display name on purpose: account_title already
+        // carries it, repeating it after [TT]/[X] reads as a stutter.
+        return [dateTime.date_code, summary].filter(Boolean).join(' ').trim() || dateTime.date_code
     }
-    return summary || `${displayName} ${dateTime.datetime}`.trim()
+    return [dateTime.date_code, summary].filter(Boolean).join(' ').trim() || `${displayName} ${dateTime.datetime}`.trim()
 }
 
 function resolveBiliupAccountTitle(displayName: string) {
@@ -790,11 +793,15 @@ function buildTemplateContext(
     timeZone: string,
 ): TemplateContext {
     const blocks = collectTextBlocks(article, texts)
+    // Website articles (official blog/news/live-report) carry author-written
+    // Japanese titles; their display headline stays original, never translated.
     const primaryLine =
-        blocks
-            .flatMap((value) => value.split('\n'))
-            .map((line) => line.trim())
-            .find(Boolean) || ''
+        (article.platform === Platform.Website
+            ? firstNonEmptyLine(article.content)
+            : blocks
+                  .flatMap((value) => value.split('\n'))
+                  .map((line) => line.trim())
+                  .find(Boolean)) || ''
     const dateTime = formatDateTimeParts(article.created_at, timeZone)
     const displayName = resolveDisplayName(article, texts)
     const summary = primaryLine || dateTime.datetime
@@ -1507,7 +1514,11 @@ async function completeBiliupUploadCandidateTags(
 
     const needTags = Boolean(article && tagGeneration && candidate.config.tags.length < targetCount)
     const hasTranslatableMetadata = article ? collectTextBlocks(article, texts).length > 0 : false
-    const needTitle = Boolean(article && titleGeneration && hasTranslatableMetadata)
+    // Website articles already carry author-written display titles; never run
+    // them through LLM title translation/rewrite.
+    const needTitle = Boolean(
+        article && article.platform !== Platform.Website && titleGeneration && hasTranslatableMetadata,
+    )
 
     if (article && (needTags || needTitle)) {
         const tagProcessor = tagGeneration
