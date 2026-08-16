@@ -120,6 +120,11 @@ const CHROME_FULL_VERSION_LIST: Array<ProfileUserAgentBrandVersion> = CHROME_BRA
     brand: brand.brand,
     version: brand.brand === 'Not_A Brand' ? '99.0.0.0' : CHROME_FULL_VERSION,
 }))
+const CHROME_FULL_VERSION_HEADER =
+    '"Not_A Brand";v="99.0.0.0", ' +
+    CHROME_FULL_VERSION_LIST.slice(1)
+        .map((brand) => `"${brand.brand}";v="${brand.version}"`)
+        .join(', ')
 const PDF_MIME_TYPES: Array<ProfileMimeType> = [
     {
         type: 'application/pdf',
@@ -188,6 +193,7 @@ const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
         extraHeaders: {
             'accept-language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
             'sec-ch-ua': `"Not_A Brand";v="99", "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`,
+            'sec-ch-ua-full-version-list': CHROME_FULL_VERSION_HEADER,
             'sec-ch-ua-mobile': '?0',
             'sec-ch-ua-platform': '"Linux"',
         },
@@ -295,6 +301,7 @@ const DEVICE_PROFILE_PRESETS: Record<DeviceProfile, BrowserProfileConfig> = {
         extraHeaders: {
             'accept-language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
             'sec-ch-ua': `"Not_A Brand";v="99", "Chromium";v="${CHROME_MAJOR_VERSION}", "Google Chrome";v="${CHROME_MAJOR_VERSION}"`,
+            'sec-ch-ua-full-version-list': CHROME_FULL_VERSION_HEADER,
             'sec-ch-ua-mobile': '?1',
             'sec-ch-ua-platform': '"Android"',
         },
@@ -344,17 +351,17 @@ interface ProfileWebGL {
 }
 
 const DEFAULT_DESKTOP_WEBGL: ProfileWebGL = {
-    vendor: process.env.BROWSER_WEBGL_VENDOR || 'Google Inc. (NVIDIA)',
+    vendor: process.env.BROWSER_WEBGL_VENDOR || 'Google Inc. (AMD)',
     renderer:
         process.env.BROWSER_WEBGL_RENDERER ||
-        'ANGLE (NVIDIA, NVIDIA GeForce GTX 1080 (0x1B81) OpenGL 4.6.0 NVIDIA 545.23.08, D3D11)',
+        'ANGLE (AMD, AMD Radeon(TM) Vega 8 Graphics (0x15D8) OpenGL 4.6 (ANGLE 2.1.0), OpenGL ES 2.0)',
 }
 
 const DEFAULT_MOBILE_WEBGL: ProfileWebGL = {
     vendor: process.env.BROWSER_WEBGL_VENDOR || 'Google Inc. (Qualcomm)',
     renderer:
         process.env.BROWSER_WEBGL_RENDERER ||
-        'ANGLE (Qualcomm, Adreno (TM) 730 (0x06050300) OpenGL ES 3.2 V@0481.0 (GIT@K20MA, K20WVE), D3D11)',
+        'ANGLE (Qualcomm, Adreno (TM) 730 (0x06050300) OpenGL ES 3.2 V@0481.0 (GIT@K20MA, K20WVE))',
 }
 
 function resolveBrowserProfile(

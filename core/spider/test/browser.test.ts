@@ -20,6 +20,9 @@ describe('resolveBrowserProfile', () => {
         expect(profile.userAgent).toContain('Chrome/142.')
         expect(profile.userAgent).toContain('X11; Linux x86_64')
         expect(profile.extraHeaders?.['sec-ch-ua-platform']).toBe('"Linux"')
+        expect(profile.extraHeaders?.['sec-ch-ua-full-version-list']).toContain('142.0.7444.175')
+        expect(profile.webgl?.renderer).toContain('AMD Radeon')
+        expect(profile.webgl?.renderer).not.toContain('D3D11')
         expect(profile.plugins.length).toBeGreaterThan(0)
     })
 
@@ -43,6 +46,9 @@ describe('resolveBrowserProfile', () => {
         expect(profile.platform).toBe('Linux armv8l')
         expect(profile.extraHeaders?.['sec-ch-ua-mobile']).toBe('?1')
         expect(profile.extraHeaders?.['sec-ch-ua-platform']).toBe('"Android"')
+        expect(profile.extraHeaders?.['sec-ch-ua-full-version-list']).toContain('142.0.7444.175')
+        expect(profile.webgl?.renderer).toContain('Adreno')
+        expect(profile.webgl?.renderer).not.toContain('D3D11')
         expect(profile.userAgentData).toMatchObject({
             mobile: true,
             platform: 'Android',

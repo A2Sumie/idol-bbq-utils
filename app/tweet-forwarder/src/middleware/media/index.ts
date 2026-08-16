@@ -30,7 +30,9 @@ async function downloadFile(
     const res = await fetch(url, {
         credentials: 'include',
         headers: {
-            'user-agent': UserAgent.CHROME,
+            // Match the Linux desktop browser profile used by the crawler
+            // sessions; platform presets override this for TikTok mobile.
+            'user-agent': UserAgent.LINUX_CHROME,
             ...headers,
         },
         redirect: 'manual',
