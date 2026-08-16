@@ -1749,7 +1749,11 @@ async function extractRadioDetail(page: Page, url: string, listItem: WebsiteList
                               },
                           ]
                         : []),
-                    ...streams.flatMap((stream: any) => {
+                    // Radio pages also embed an audio-only Brightcove player whose
+                    // poster asset is not always downloadable. Attach only the
+                    // actual video rendition poster; the renderer generates a
+                    // thumbnail from the downloaded video as a fallback anyway.
+                    ...videoStreams.flatMap((stream: any) => {
                         if (!stream.poster) {
                             return []
                         }
