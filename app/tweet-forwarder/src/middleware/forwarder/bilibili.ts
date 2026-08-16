@@ -613,22 +613,29 @@ class BiliForwarder extends Forwarder {
             // reserve the dedup keys BEFORE uploading: marking after upload left a
             // minutes-long window where simultaneous IG/TT arrivals both passed the
             // check. A failed upload keeps its keys; the same article retries freely
-            // because the check skips its own marker.
-            await this.markBiliVideoUploadSeen(dedupeRecords, this.buildVideoUploadMarker(props?.article, props)).catch(
-                (error) => {
-                    this.log?.error(
-                        `Failed to reserve Bilibili video upload hash for ${props?.article?.a_id || 'unknown'}: ${error}`,
-                    )
-                },
-            )
+            // because the check skips its own marker. The keys are written once; a
+            // post-upload mark only retries when the reservation itself failed, so
+            // a successful upload never goes unrecorded.
+            let reserved = false
+            try {
+                await this.markBiliVideoUploadSeen(dedupeRecords, this.buildVideoUploadMarker(props?.article, props))
+                reserved = true
+            } catch (error) {
+                this.log?.error(
+                    `Failed to reserve Bilibili video upload hash for ${props?.article?.a_id || 'unknown'}: ${error}`,
+                )
+            }
             await this.performBiliupUpload(props?.article, candidate)
-            await this.markBiliVideoUploadSeen(dedupeRecords, this.buildVideoUploadMarker(props?.article, props)).catch(
-                (error) => {
+            if (!reserved) {
+                await this.markBiliVideoUploadSeen(
+                    dedupeRecords,
+                    this.buildVideoUploadMarker(props?.article, props),
+                ).catch((error) => {
                     this.log?.error(
                         `Failed to mark Bilibili video upload hash for ${props?.article?.a_id || 'unknown'}: ${error}`,
                     )
-                },
-            )
+                })
+            }
             if (pairedTeaserMedia?.pairing) {
                 await DB.VideoPairing.markMerged(pairedTeaserMedia.pairing.id, {
                     target_article_key: props?.article

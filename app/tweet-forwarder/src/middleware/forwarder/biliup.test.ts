@@ -909,8 +909,10 @@ test('BiliForwarder skips dynamic posting when biliup upload succeeds', async ()
 
 test('BiliForwarder applies runtime video upload metadata overrides', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.findByHashPrefix = async () => []
     DB.MediaHash.save = async () => ({ platform: 'test', hash: 'test', a_id: 'test' }) as any
 
     const forwarder = new BiliForwarder(
@@ -965,15 +967,18 @@ test('BiliForwarder applies runtime video upload metadata overrides', async () =
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
 
 test('BiliForwarder records successful video uploads for strict Bilibili dedupe', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     const saved: Array<{ platform: string; hash: string; a_id: string }> = []
     DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.findByHashPrefix = async () => []
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         saved.push({ platform, hash, a_id })
         return { platform, hash, a_id } as any
@@ -1026,17 +1031,20 @@ test('BiliForwarder records successful video uploads for strict Bilibili dedupe'
         ])
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
 
 test('BiliForwarder suppresses duplicate video uploads without dynamic fallback', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     DB.MediaHash.checkExist = async (platform: string, hash: string) =>
         platform === 'bilibili-video-upload' && hash === 'same-video-hash'
             ? ({ platform, hash, a_id: `${Platform.Instagram}:ig-video-previous` } as any)
             : null
+    DB.MediaHash.findByHashPrefix = async () => []
     DB.MediaHash.save = async () => {
         throw new Error('duplicate upload should not save')
     }
@@ -1081,12 +1089,14 @@ test('BiliForwarder suppresses duplicate video uploads without dynamic fallback'
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
 
 test('BiliForwarder ignores referenced videos when choosing biliup upload for quoted image posts', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     DB.MediaHash.checkExist = async () => {
         throw new Error('referenced video should not be considered for root biliup upload')
     }
@@ -1153,13 +1163,16 @@ test('BiliForwarder ignores referenced videos when choosing biliup upload for qu
         expect(dynamicCalls).toBe(1)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
     }
 })
 
 test('BiliForwarder appends referenced videos as later biliup parts when root post has a video', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.findByHashPrefix = async () => []
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => ({ platform, hash, a_id }) as any
 
     const forwarder = new BiliForwarder(
@@ -1226,15 +1239,19 @@ test('BiliForwarder appends referenced videos as later biliup parts when root po
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
 
 test('BiliForwarder does not suppress uploads from coarse short-video buckets alone', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -1295,15 +1312,18 @@ test('BiliForwarder does not suppress uploads from coarse short-video buckets al
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
 
 test('BiliForwarder records text-keyed short-video dedupe keys after successful upload', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     const saved: Array<{ platform: string; hash: string; a_id: string }> = []
     DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.findByHashPrefix = async () => []
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         saved.push({ platform, hash, a_id })
         return { platform, hash, a_id } as any
@@ -1355,18 +1375,29 @@ test('BiliForwarder records text-keyed short-video dedupe keys after successful 
         expect(shortVideoRecords.length).toBeGreaterThan(0)
         expect(shortVideoRecords.every((item) => item.platform === 'cross-short-video:3rd')).toBe(true)
         expect(shortVideoRecords.every((item) => item.a_id === `${Platform.X}:2063561843692716187`)).toBe(true)
-        expect(shortVideoRecords.every((item) => /^\d+:\d+:[cst]:[0-9a-f]{16}$/.test(item.hash))).toBe(true)
+        // legacy bucketed signatures `time:duration:c/t/s:<hex>` plus the
+        // unbucketed recall keys `ut:<hex>:<marker>` / `ue:<hex>:<marker>`
+        expect(
+            shortVideoRecords.every((item) => {
+                if (/^\d+:\d+:[cst]:[0-9a-f]{16}$/.test(item.hash)) return true
+                return /^(?:ut|ue):[0-9a-f]{16}:/.test(item.hash)
+            }),
+        ).toBe(true)
+        expect(shortVideoRecords.some((item) => item.hash.startsWith('ut:'))).toBe(true)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
 
 test('BiliForwarder dedupes videos supplied only through videoUploadMedia', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     const saved: Array<{ platform: string; hash: string; a_id: string }> = []
     DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.findByHashPrefix = async () => []
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         saved.push({ platform, hash, a_id })
         return { platform, hash, a_id } as any
@@ -1418,17 +1449,21 @@ test('BiliForwarder dedupes videos supplied only through videoUploadMedia', asyn
         expect(saved.some((item) => item.platform.startsWith('cross-short-video:'))).toBe(true)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
 
 test('BiliForwarder suppresses TT/INS semantic short-video duplicates without dynamic fallback', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     const originalGetSingleArticleByArticleCode = DB.Article.getSingleArticleByArticleCode
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     const articles = new Map<string, any>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -1511,6 +1546,7 @@ test('BiliForwarder suppresses TT/INS semantic short-video duplicates without dy
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
         ;(DB.Article as any).getSingleArticleByArticleCode = originalGetSingleArticleByArticleCode
     }
@@ -1518,11 +1554,14 @@ test('BiliForwarder suppresses TT/INS semantic short-video duplicates without dy
 
 test('BiliForwarder suppresses sparse-caption TT/INS short-video duplicates without dynamic fallback', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     const originalGetSingleArticleByArticleCode = DB.Article.getSingleArticleByArticleCode
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     const articles = new Map<string, any>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -1603,6 +1642,7 @@ test('BiliForwarder suppresses sparse-caption TT/INS short-video duplicates with
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
         ;(DB.Article as any).getSingleArticleByArticleCode = originalGetSingleArticleByArticleCode
     }
@@ -1610,8 +1650,10 @@ test('BiliForwarder suppresses sparse-caption TT/INS short-video duplicates with
 
 test('BiliForwarder suppresses dynamic fallback when biliup upload fails', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     DB.MediaHash.checkExist = async () => null
+    DB.MediaHash.findByHashPrefix = async () => []
     DB.MediaHash.save = async () => {
         throw new Error('failed upload should not save')
     }
@@ -1654,12 +1696,14 @@ test('BiliForwarder suppresses dynamic fallback when biliup upload fails', async
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
 
 test('BiliForwarder blocks dynamic fallback when video dedupe check fails', async () => {
     const originalCheckExist = DB.MediaHash.checkExist
+    const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
     const originalSave = DB.MediaHash.save
     DB.MediaHash.checkExist = async () => {
         throw new Error('simulated media hash database failure')
@@ -1708,6 +1752,7 @@ test('BiliForwarder blocks dynamic fallback when video dedupe check fails', asyn
         expect(dynamicCalls).toBe(0)
     } finally {
         DB.MediaHash.checkExist = originalCheckExist
+        DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
         DB.MediaHash.save = originalSave
     }
 })
