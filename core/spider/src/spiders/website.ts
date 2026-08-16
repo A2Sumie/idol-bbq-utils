@@ -280,14 +280,24 @@ function pickBrightcoveDownloadSource(sources: unknown) {
         })
         .filter((source): source is BrightcovePlaybackSource => source !== null)
 
+    const hasVideoCodec = (source: BrightcovePlaybackSource) => BRIGHTCOVE_VIDEO_CODEC_RE.test(source.codecs || '')
+    const https = (source: BrightcovePlaybackSource) => source.src.startsWith('https://')
+    const isHls = (source: BrightcovePlaybackSource) => /mpegurl/i.test(source.type)
+    const isDash = (source: BrightcovePlaybackSource) => /dash/i.test(source.type)
+    const isMp4 = (source: BrightcovePlaybackSource) => /^video\/mp4$/i.test(source.type)
+
     return (
-        normalized.find((source) => /mpegurl/i.test(source.type) && source.src.startsWith('https://')) ||
-        normalized.find((source) => /mpegurl/i.test(source.type)) ||
-        normalized.find((source) => /dash/i.test(source.type) && source.src.startsWith('https://')) ||
-        normalized.find((source) => /dash/i.test(source.type)) ||
-        normalized.find((source) => /^video\/mp4$/i.test(source.type) && source.src.startsWith('https://')) ||
-        normalized.find((source) => /^video\/mp4$/i.test(source.type)) ||
-        normalized.find((source) => source.src.startsWith('https://')) ||
+        normalized.find((source) => isHls(source) && https(source) && hasVideoCodec(source)) ||
+        normalized.find((source) => isHls(source) && hasVideoCodec(source)) ||
+        normalized.find((source) => isDash(source) && https(source) && hasVideoCodec(source)) ||
+        normalized.find((source) => isDash(source) && hasVideoCodec(source)) ||
+        normalized.find((source) => isMp4(source) && https(source)) ||
+        normalized.find((source) => isMp4(source)) ||
+        normalized.find((source) => isHls(source) && https(source)) ||
+        normalized.find((source) => isHls(source)) ||
+        normalized.find((source) => isDash(source) && https(source)) ||
+        normalized.find((source) => isDash(source)) ||
+        normalized.find((source) => https(source)) ||
         null
     )
 }
@@ -352,7 +362,7 @@ function startBrightcovePlaybackCapture(page: Page) {
                 video_id: videoId,
                 account_id: capture.accountId,
                 policy_key: policyKey,
-                api_url: buildBrightcovePlaybackApiUrl(capture.accountId, videoId, policyKey),
+                api_url: policyKey ? buildBrightcovePlaybackApiUrl(capture.accountId, videoId, policyKey) : null,
                 source_url: capture.sourceUrl,
                 source_codecs: capture.sourceCodecs,
                 has_video_codec: capture.hasVideoCodec,
