@@ -20,6 +20,11 @@ const SHORT_VIDEO_TIME_BUCKET_SECONDS = 6 * 3600
 const SHORT_VIDEO_TEXT_KEY_LIMIT = 6
 const SHORT_VIDEO_TEXT_MIN_COMPACT_LENGTH = 8
 const SHORT_VIDEO_SHARED_PHRASE_MIN_LENGTH = 8
+// unbucketed recall (replaces the brittle bucketed conjunction for matching):
+// any shared token recalls, then similarity + a wide time window judge
+const SHORT_VIDEO_RECALL_TOKEN_MIN_LENGTH = 4
+const SHORT_VIDEO_RECALL_TOKEN_LIMIT = 8
+const SHORT_VIDEO_RECALL_WINDOW_SECONDS = 7 * 24 * 3600
 const SHORT_VIDEO_INSTAGRAM_TIKTOK_FALLBACK_KEY = 'p:instagram-tiktok'
 // Shared namespaces for cross-platform short-video dedup (Instagram / TikTok / YouTube Shorts).
 // The same fan video posted on both platforms is stored under different per-account groups
@@ -69,8 +74,18 @@ interface ShortVideoDedupCandidate {
     signaturesToCheck: Array<string>
     coarseFallbackSignaturesToCheck: Array<string>
     duration_seconds: number
+    created_at: number
     group: string
     text: ShortVideoTextFingerprint
+    /**
+     * Unbucketed granular recall keys (`<keyHash>:<articleMarker>` when stored).
+     * The legacy bucketed signature is an exact conjunction of
+     * time/duration/text hashes, so cross-posts minutes apart with slightly
+     * different captions never collided; recall keys fix that by matching on
+     * any single shared token, with similarity judged AFTER recall.
+     */
+    recallKeysToStore: Array<string>
+    recallPrefixesToCheck: Array<string>
     /** Shared IG/TT namespace carrying only the coarse cross-platform fallback signature. */
     crossPlatformStoragePlatform?: string
     crossPlatformFallbackSignaturesToStore?: Array<string>
@@ -457,11 +472,8 @@ function longestCommonSubstringLength(left: string, right: string) {
     return best
 }
 
-function isLikelySameShortVideoText(left: ShortVideoTextFingerprint, right: ShortVideoTextFingerprint) {
-    if (left.keys.length === 0 || right.keys.length === 0) {
-        return false
-    }
-
+/** similarity core without the keys.length gate; recall paths guarantee information via the shared token */
+function shortVideoTextSimilarity(left: Omit<ShortVideoTextFingerprint, 'keys'>, right: Omit<ShortVideoTextFingerprint, 'keys'>) {
     const sharedPhraseLength = longestCommonSubstringLength(left.distilledCompact, right.distilledCompact)
     if (sharedPhraseLength >= SHORT_VIDEO_SHARED_PHRASE_MIN_LENGTH) {
         return true
@@ -486,6 +498,13 @@ function isLikelySameShortVideoText(left: ShortVideoTextFingerprint, right: Shor
     const jaccard = sharedTokens.length / unionSize
     const containment = sharedTokens.length / minSize
     return jaccard >= 0.45 || containment >= 0.67
+}
+
+function isLikelySameShortVideoText(left: ShortVideoTextFingerprint, right: ShortVideoTextFingerprint) {
+    if (left.keys.length === 0 || right.keys.length === 0) {
+        return false
+    }
+    return shortVideoTextSimilarity(left, right)
 }
 
 function buildShortVideoDedupCandidate(
@@ -543,6 +562,18 @@ function buildShortVideoDedupCandidate(
     )
     const isIgTtPair = isCrossPlatformShortVideoPlatform(article)
 
+    // unbucketed recall: any single shared token (or the exact distilled text)
+    // recalls the candidate pair; time/duration/similarity are judged after
+    const recallPrefixes = [
+        ...text.tokens
+            .filter((token) => token.length >= SHORT_VIDEO_RECALL_TOKEN_MIN_LENGTH)
+            .slice(0, SHORT_VIDEO_RECALL_TOKEN_LIMIT)
+            .map((token) => `${hashShortVideoTextKey('ut', token)}:`),
+        ...(text.distilledCompact.length >= SHORT_VIDEO_SHARED_PHRASE_MIN_LENGTH
+            ? [`${hashShortVideoTextKey('ue', text.distilledCompact)}:`]
+            : []),
+    ]
+
     return {
         storagePlatform: `cross-short-video:${group}`,
         articleMarker,
@@ -551,8 +582,11 @@ function buildShortVideoDedupCandidate(
         signaturesToCheck: Array.from(new Set([...textSignaturesToCheck, ...coarseFallbackSignaturesToCheck])).sort(),
         coarseFallbackSignaturesToCheck: Array.from(new Set(coarseFallbackSignaturesToCheck)).sort(),
         duration_seconds: videoFile.duration_seconds,
+        created_at: article.created_at,
         group,
         text,
+        recallPrefixesToCheck: Array.from(new Set(recallPrefixes)).sort(),
+        recallKeysToStore: recallPrefixes.map((prefix) => `${prefix}${articleMarker}`),
         ...(isIgTtPair && coarseFallbackKeys.length > 0
             ? {
                   crossPlatformStoragePlatform: CROSS_PLATFORM_SHORT_VIDEO_STORAGE,
@@ -624,6 +658,63 @@ async function checkShortVideoCrossPlatformDuplicate(candidate: ShortVideoDedupC
         }
     }
 
+    // unbucketed granular recall: the bucketed signature above only matches when
+    // time, duration AND text all hash identically — cross-posts with slightly
+    // different captions or >12h gaps systematically escaped it. Here any single
+    // shared token recalls the pair, and similarity is judged after recall.
+    const recallNamespaces = [
+        candidate.storagePlatform,
+        ...(candidate.crossPlatformStoragePlatform ? [candidate.crossPlatformStoragePlatform] : []),
+    ]
+    const recallPrefixes = Array.from(new Set(candidate.recallPrefixesToCheck ?? []))
+    const seenMarkers = new Set<string>()
+    for (const storagePlatform of recallNamespaces) {
+        for (const prefix of recallPrefixes) {
+            const rows = await DB.MediaHash.findByHashPrefix(storagePlatform, prefix, 50)
+            for (const row of rows) {
+                const existing = row
+                if (!existing.a_id || existing.a_id === candidate.articleMarker || seenMarkers.has(existing.a_id)) {
+                    continue
+                }
+                seenMarkers.add(existing.a_id)
+                const existingMarker = parseArticleMarker(existing.a_id)
+                if (!existingMarker || existingMarker.platform === candidateMarker.platform) {
+                    continue
+                }
+                if (!isCrossPlatformShortVideoPair(candidateMarker.platform, existingMarker.platform)) {
+                    continue
+                }
+                if (Math.abs(Number(row.created_at) - candidate.created_at) > SHORT_VIDEO_RECALL_WINDOW_SECONDS) {
+                    continue
+                }
+                const existingArticle = await DB.Article.getSingleArticleByArticleCode(
+                    existingMarker.a_id,
+                    existingMarker.platform,
+                )
+                if (!existingArticle) {
+                    continue
+                }
+                if (
+                    existingMarker.platform === Platform.YouTube &&
+                    String(existingArticle.type || '').toLocaleLowerCase() !== 'shorts'
+                ) {
+                    continue
+                }
+                // `ue:` keys collide only on identical distilled text; `ut:` token
+                // hits go through the similarity judgment
+                if (prefix.startsWith('ue:')) {
+                    return existing
+                }
+                const existingText = buildShortVideoTextFingerprint(existingArticle as any)
+                // recall already proved a shared token; the legacy keys.length
+                // gate would deadlock here (a keyless side could never be judged)
+                if (shortVideoTextSimilarity(candidate.text, existingText)) {
+                    return existing
+                }
+            }
+        }
+    }
+
     return null
 }
 
@@ -631,6 +722,17 @@ async function markShortVideoCrossPlatformSeen(candidate: ShortVideoDedupCandida
     await Promise.all(
         Array.from(new Set(candidate.signaturesToStore)).map((signature) =>
             DB.MediaHash.save(candidate.storagePlatform, signature, candidate.articleMarker),
+        ),
+    )
+    const recallNamespaces = [
+        candidate.storagePlatform,
+        ...(candidate.crossPlatformStoragePlatform ? [candidate.crossPlatformStoragePlatform] : []),
+    ]
+    await Promise.all(
+        recallNamespaces.flatMap((storagePlatform) =>
+            Array.from(new Set(candidate.recallKeysToStore ?? [])).map((key) =>
+                DB.MediaHash.save(storagePlatform, key, candidate.articleMarker),
+            ),
         ),
     )
     if (candidate.crossPlatformStoragePlatform && candidate.crossPlatformFallbackSignaturesToStore) {

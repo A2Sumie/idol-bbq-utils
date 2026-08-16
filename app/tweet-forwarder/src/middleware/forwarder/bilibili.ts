@@ -610,6 +610,17 @@ class BiliForwarder extends Forwarder {
         }
 
         try {
+            // reserve the dedup keys BEFORE uploading: marking after upload left a
+            // minutes-long window where simultaneous IG/TT arrivals both passed the
+            // check. A failed upload keeps its keys; the same article retries freely
+            // because the check skips its own marker.
+            await this.markBiliVideoUploadSeen(dedupeRecords, this.buildVideoUploadMarker(props?.article, props)).catch(
+                (error) => {
+                    this.log?.error(
+                        `Failed to reserve Bilibili video upload hash for ${props?.article?.a_id || 'unknown'}: ${error}`,
+                    )
+                },
+            )
             await this.performBiliupUpload(props?.article, candidate)
             await this.markBiliVideoUploadSeen(dedupeRecords, this.buildVideoUploadMarker(props?.article, props)).catch(
                 (error) => {

@@ -1100,6 +1100,18 @@ namespace DB {
             })
         }
 
+        /** prefix recall for unbucketed granular keys (`<keyHash>:<articleMarker>` rows) */
+        export async function findByHashPrefix(platform: string, hashPrefix: string, limit = 50) {
+            return await prisma.media_hashes.findMany({
+                where: {
+                    platform,
+                    hash: { startsWith: hashPrefix },
+                },
+                orderBy: { created_at: 'desc' },
+                take: Math.max(1, Math.min(limit, 500)),
+            })
+        }
+
         export async function save(platform: string, hash: string, a_id: string = '') {
             return await prisma.media_hashes.upsert({
                 where: {

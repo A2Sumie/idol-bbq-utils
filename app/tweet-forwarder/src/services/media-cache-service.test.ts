@@ -19,12 +19,14 @@ import {
 } from './media-cache-service'
 
 const originalCheckExist = DB.MediaHash.checkExist
+const originalFindByHashPrefix = DB.MediaHash.findByHashPrefix
 const originalSave = DB.MediaHash.save
 const originalGetSingleArticleByArticleCode = DB.Article.getSingleArticleByArticleCode
 const createdPaths = new Set<string>()
 
 afterEach(() => {
     DB.MediaHash.checkExist = originalCheckExist
+    DB.MediaHash.findByHashPrefix = originalFindByHashPrefix
     DB.MediaHash.save = originalSave
     ;(DB.Article as any).getSingleArticleByArticleCode = originalGetSingleArticleByArticleCode
     for (const targetPath of createdPaths) {
@@ -130,6 +132,8 @@ test('instagram/tiktok short video fallback suppresses sparse-caption cross-plat
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     const articles = new Map<string, any>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -175,6 +179,8 @@ test('instagram/tiktok short video fallback does not suppress same-platform spar
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     const articles = new Map<string, any>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -217,6 +223,8 @@ test('cross-platform short video text and duration candidates suppress same cont
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     const articles = new Map<string, any>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -263,6 +271,8 @@ test('cross-platform short video text candidates ignore different captions in ne
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     const articles = new Map<string, any>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -307,6 +317,8 @@ test('cross-platform short video text candidates ignore different captions in ne
 test('video fingerprint dedup matches re-encoded short videos by frame bands', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -354,6 +366,8 @@ test('video fingerprint dedup matches re-encoded short videos by frame bands', a
 test('video fingerprint dedup matches the same IG/TT video across different account groups', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -406,6 +420,8 @@ test('video fingerprint dedup matches the same IG/TT video across different acco
 test('video fingerprint cross-platform namespace is skipped for non IG/TT platforms', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -435,6 +451,8 @@ test('video fingerprint cross-platform namespace is skipped for non IG/TT platfo
 test('video fingerprint dedup matches YouTube Shorts against the same IG video', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -485,6 +503,8 @@ test('video fingerprint dedup matches YouTube Shorts against the same IG video',
 test('video fingerprint cross-platform namespace is skipped for YouTube long videos', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -514,6 +534,8 @@ test('video fingerprint cross-platform namespace is skipped for YouTube long vid
 test('short-video IG/TT fallback signature is shared across account groups', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -567,6 +589,8 @@ test('short-video IG/TT fallback signature is shared across account groups', asy
 test('short-video fallback signature dedups YouTube Shorts against an IG video', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -619,6 +643,8 @@ test('short-video fallback signature dedups YouTube Shorts against an IG video',
 test('video fingerprint dedup ignores low-information repeated frame bands', async () => {
     const store = new Map<string, { platform: string; hash: string; a_id: string }>()
     DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
     DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
         const value = { platform, hash, a_id }
         store.set(`${platform}:${hash}`, value)
@@ -691,4 +717,98 @@ test('ensureSatoriCompatibleImage transcodes webp content despite a .jpg extensi
     expect(ensureSatoriCompatibleImage(webpPath)).toBe(converted)
     // PNG input passes through untouched.
     expect(ensureSatoriCompatibleImage(pngPath)).toBe(pngPath)
+})
+
+test('unbucketed token recall catches cross-posts days apart that the bucketed signature misses', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    const articles = new Map<string, any>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) =>
+        articles.get(`${platform}:${a_id}`)
+
+    // short captions: no token >= 6 chars, compact differs -> legacy text keys
+    // never collide; two days apart -> even the coarse IG/TT fallback is out of
+    // its ±1 x 6h bucket range
+    const igData = {
+        platform: Platform.Instagram,
+        type: 'post',
+        a_id: 'ig-recall',
+        created_at: 1780000000,
+        u_id: 'nananijigram22_7_the.3rd',
+        username: '22/7_the 3rd',
+        content: '新曲「明日の風」公開中！#ナナニジ',
+    }
+    articles.set(`${Platform.Instagram}:${igData.a_id}`, igData)
+    const ig = buildShortVideoDedupCandidate(igData as any, [{ media_type: 'video', duration_seconds: 45.8 }])
+    expect(ig).not.toBeNull()
+    expect(ig!.text.keys).toEqual([]) // legacy path has nothing to key on
+    await markShortVideoCrossPlatformSeen(ig!)
+    // recall keys were stored unbucketed
+    expect(ig!.recallKeysToStore.length).toBeGreaterThan(0)
+    expect([...store.keys()].some((k) => k.includes(':ut:'))).toBe(true)
+
+    const tt = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.TikTok,
+            type: 'video',
+            a_id: 'tt-recall',
+            created_at: 1780000000 + 2 * 24 * 3600, // two days later
+            u_id: 'the3rd_tiktok',
+            username: '22/7_the 3rd',
+            content: '明日の風 新曲 みんな見てね #TikTok',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 45.8 }],
+    )
+    expect(tt).not.toBeNull()
+    const duplicate = await checkShortVideoCrossPlatformDuplicate(tt!)
+    expect(duplicate?.a_id).toBe(`${Platform.Instagram}:ig-recall`)
+})
+
+test('unbucketed recall still rejects genuinely different videos on the IG/TT pair', async () => {
+    const store = new Map<string, { platform: string; hash: string; a_id: string }>()
+    const articles = new Map<string, any>()
+    DB.MediaHash.checkExist = async (platform: string, hash: string) => store.get(`${platform}:${hash}`) as any
+    DB.MediaHash.findByHashPrefix = async (platform: string, prefix: string) =>
+        [...store.values()].filter((v: any) => v.platform === platform && v.hash.startsWith(prefix)) as any
+    DB.MediaHash.save = async (platform: string, hash: string, a_id: string = '') => {
+        const value = { platform, hash, a_id }
+        store.set(`${platform}:${hash}`, value)
+        return value as any
+    }
+    ;(DB.Article as any).getSingleArticleByArticleCode = async (a_id: string, platform: Platform) =>
+        articles.get(`${platform}:${a_id}`)
+
+    const igData = {
+        platform: Platform.Instagram,
+        type: 'post',
+        a_id: 'ig-cooking',
+        created_at: 1780000000,
+        u_id: 'nananijigram22_7_the.3rd',
+        username: '22/7_the 3rd',
+        content: '料理動画、カレーを作ったよ',
+    }
+    articles.set(`${Platform.Instagram}:${igData.a_id}`, igData)
+    const ig = buildShortVideoDedupCandidate(igData as any, [{ media_type: 'video', duration_seconds: 30 }])
+    await markShortVideoCrossPlatformSeen(ig!)
+
+    const tt = buildShortVideoDedupCandidate(
+        {
+            platform: Platform.TikTok,
+            type: 'video',
+            a_id: 'tt-dance',
+            created_at: 1780000100,
+            u_id: 'the3rd_tiktok',
+            username: '22/7_the 3rd',
+            content: 'ダンス練習の動画です',
+        } as any,
+        [{ media_type: 'video', duration_seconds: 30 }],
+    )
+    expect(await checkShortVideoCrossPlatformDuplicate(tt!)).toBeNull()
 })
