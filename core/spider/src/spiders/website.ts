@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import { Page, type HTTPRequest } from 'puppeteer-core'
+import { Page, type HTTPRequest, type HTTPResponse } from 'puppeteer-core'
 import { Platform } from '../types'
 import type { CrawlEngine, GenericArticle, GenericMediaInfo, TaskType, TaskTypeResult } from '../types'
 import { BaseSpider } from './base'
@@ -201,6 +201,208 @@ const WEBSITE_RESOURCE_TYPES = new Set([
     'manifest',
     'other',
 ])
+
+const BRIGHTCOVE_PLAYBACK_HOST = 'edge.api.brightcove.com'
+const BRIGHTCOVE_PLAYBACK_PATH_RE = /^\/playback\/v1\/accounts\/(\d+)\/videos\/(\d+)\/?$/i
+const BRIGHTCOVE_VIDEO_CODEC_RE = /\b(?:avc1|hvc1|hev1|av01|vp\d{1,2}|mpeg2video|theora)\b/i
+
+interface BrightcovePlaybackSource {
+    src: string
+    type: string
+    codecs: string | null
+}
+
+interface BrightcovePlaybackCapture {
+    accountId: string
+    videoId: string
+    policyKey: string | null
+    poster: string | null
+    sourceUrl: string | null
+    sourceCodecs: string | null
+    hasVideoCodec: boolean
+}
+
+interface BrightcovePlaybackRecord {
+    video_id: string
+    account_id: string
+    policy_key: string | null
+    api_url: string | null
+    source_url: string | null
+    source_codecs: string | null
+    has_video_codec: boolean
+    poster: string | null
+}
+
+function parseBrightcovePlaybackUrl(value: string) {
+    try {
+        const parsed = new URL(value)
+        if (parsed.hostname !== BRIGHTCOVE_PLAYBACK_HOST) {
+            return null
+        }
+        const match = BRIGHTCOVE_PLAYBACK_PATH_RE.exec(parsed.pathname)
+        if (!match) {
+            return null
+        }
+        return {
+            accountId: match[1]!,
+            videoId: match[2]!,
+        }
+    } catch {
+        return null
+    }
+}
+
+function buildBrightcovePlaybackApiUrl(accountId: string, videoId: string, policyKey?: string | null) {
+    const url = new URL(`https://${BRIGHTCOVE_PLAYBACK_HOST}/playback/v1/accounts/${accountId}/videos/${videoId}`)
+    if (policyKey) {
+        url.searchParams.set('bc_policy', policyKey)
+    }
+    return url.href
+}
+
+function pickBrightcoveDownloadSource(sources: unknown) {
+    if (!Array.isArray(sources)) {
+        return null
+    }
+    const normalized = sources
+        .map((source) => {
+            if (!source || typeof source !== 'object') {
+                return null
+            }
+            const record = source as Record<string, unknown>
+            const src = typeof record.src === 'string' ? record.src : null
+            const type = typeof record.type === 'string' ? record.type : null
+            const codecs = typeof record.codecs === 'string' ? record.codecs : null
+            if (!src || !type) {
+                return null
+            }
+            return { src, type, codecs }
+        })
+        .filter((source): source is BrightcovePlaybackSource => source !== null)
+
+    return (
+        normalized.find((source) => /mpegurl/i.test(source.type) && source.src.startsWith('https://')) ||
+        normalized.find((source) => /mpegurl/i.test(source.type)) ||
+        normalized.find((source) => /dash/i.test(source.type) && source.src.startsWith('https://')) ||
+        normalized.find((source) => /dash/i.test(source.type)) ||
+        normalized.find((source) => /^video\/mp4$/i.test(source.type) && source.src.startsWith('https://')) ||
+        normalized.find((source) => /^video\/mp4$/i.test(source.type)) ||
+        normalized.find((source) => source.src.startsWith('https://')) ||
+        null
+    )
+}
+
+function startBrightcovePlaybackCapture(page: Page) {
+    const captures = new Map<string, BrightcovePlaybackCapture>()
+    const policyByAccount = new Map<string, string>()
+
+    const onRequest = (request: HTTPRequest) => {
+        const parsed = parseBrightcovePlaybackUrl(request.url())
+        if (!parsed) {
+            return
+        }
+        const accept = String(request.headers()?.['accept'] || '')
+        const policyKey = /(?:^|;)\s*pk=([^;]+)/i.exec(accept)?.[1]?.trim()
+        if (policyKey) {
+            policyByAccount.set(parsed.accountId, policyKey)
+        }
+    }
+
+    const onResponse = async (response: HTTPResponse) => {
+        const parsed = parseBrightcovePlaybackUrl(response.url())
+        if (!parsed) {
+            return
+        }
+        if (response.status() < 200 || response.status() >= 300) {
+            return
+        }
+        let payload: Record<string, any> | null = null
+        try {
+            payload = JSON.parse(await response.text()) as Record<string, any>
+        } catch {
+            return
+        }
+        const sources = Array.isArray(payload?.sources) ? payload.sources : []
+        const source = pickBrightcoveDownloadSource(sources)
+        const sourceCodecs =
+            sources
+                .map((source) => (source && typeof source === 'object' ? source.codecs : null))
+                .filter((value): value is string => typeof value === 'string')
+                .join(',') || null
+        const hasVideoCodec = BRIGHTCOVE_VIDEO_CODEC_RE.test(sourceCodecs || '')
+        captures.set(parsed.videoId, {
+            accountId: parsed.accountId,
+            videoId: parsed.videoId,
+            policyKey: policyByAccount.get(parsed.accountId) || null,
+            poster: typeof payload?.poster === 'string' ? payload.poster : null,
+            sourceUrl: source?.src || null,
+            sourceCodecs,
+            hasVideoCodec,
+        })
+    }
+
+    page.on('request', onRequest)
+    page.on('response', onResponse)
+
+    const records = () => {
+        const serialized: Record<string, BrightcovePlaybackRecord> = {}
+        for (const [videoId, capture] of captures) {
+            const policyKey = capture.policyKey || policyByAccount.get(capture.accountId) || null
+            serialized[videoId] = {
+                video_id: videoId,
+                account_id: capture.accountId,
+                policy_key: policyKey,
+                api_url: buildBrightcovePlaybackApiUrl(capture.accountId, videoId, policyKey),
+                source_url: capture.sourceUrl,
+                source_codecs: capture.sourceCodecs,
+                has_video_codec: capture.hasVideoCodec,
+                poster: capture.poster,
+            }
+        }
+        return serialized
+    }
+
+    const stop = () => {
+        page.off('request', onRequest)
+        page.off('response', onResponse)
+    }
+
+    return { captures, records, stop }
+}
+
+async function waitForBrightcovePlayback(
+    page: Page,
+    capture: ReturnType<typeof startBrightcovePlaybackCapture>,
+    selector: string,
+    timeoutMs = 4000,
+) {
+    const expectedVideoIds = await page
+        .$$eval(selector, (nodes) =>
+            Array.from(
+                new Set(nodes.map((node) => String(node.getAttribute('data-video-id') || '').trim()).filter(Boolean)),
+            ),
+        )
+        .catch(() => [] as string[])
+    if (expectedVideoIds.length === 0) {
+        return
+    }
+
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+        const records = capture.records()
+        const captured = new Set(Object.keys(records))
+        if (expectedVideoIds.every((videoId) => captured.has(videoId))) {
+            return
+        }
+        // A video-capable capture is enough: radio pages also initialise an
+        // audio-only Brightcove player and we only need the movie/radio video
+        // rendition before serialising the page.
+        if (expectedVideoIds.some((videoId) => records[videoId]?.has_video_codec)) {
+            return
+        }
+        await sleep(200)
+    }
+}
 
 function cleanText(value?: string | null): string {
     return (value || '')
@@ -1438,225 +1640,315 @@ async function extractTicketDetail(page: Page, url: string): Promise<WebsiteDeta
 }
 
 async function extractRadioDetail(page: Page, url: string, listItem: WebsiteListItem): Promise<WebsiteDetailPayload> {
-    await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await waitForRequiredDetailSelector(page, 'radio', url, '.radio__title, #modal-radio, #modal-movie')
-    const detail = await page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) =>
-            (value || '')
-                .replace(/\u00a0/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim()
-        const cleanMultiline = (value?: string | null) =>
-            (value || '')
-                .replace(/\u00a0/g, ' ')
-                .replace(/\r/g, '')
-                .split('\n')
-                .map((line) => line.replace(/[ \t]+/g, ' ').trim())
-                .filter((line, index, arr) => Boolean(line) || (arr[index - 1] && arr[index + 1]))
-                .join('\n')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim()
-        const absolute = (value?: string | null) => {
-            if (!value) {
-                return null
-            }
-            try {
-                return new URL(value, currentUrl).href
-            } catch {
-                return null
-            }
-        }
-        const parseBackground = (value?: string | null) => {
-            const match = value?.match(/url\((['"]?)(.*?)\1\)/)
-            return match?.[2] || null
-        }
+    const brightcove = startBrightcovePlaybackCapture(page)
+    let detail: WebsiteDetailPayload
+    try {
+        await page.goto(url, { waitUntil: 'domcontentloaded' })
+        await waitForRequiredDetailSelector(page, 'radio', url, '.radio__title, #modal-radio, #modal-movie')
+        await waitForBrightcovePlayback(page, brightcove, '#modal-radio [data-video-id], #modal-movie [data-video-id]')
+        detail = await page.evaluate(
+            (currentUrl, playbackByVideoId) => {
+                const clean = (value?: string | null) =>
+                    (value || '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                const cleanMultiline = (value?: string | null) =>
+                    (value || '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\r/g, '')
+                        .split('\n')
+                        .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+                        .filter((line, index, arr) => Boolean(line) || (arr[index - 1] && arr[index + 1]))
+                        .join('\n')
+                        .replace(/\n{3,}/g, '\n\n')
+                        .trim()
+                const absolute = (value?: string | null) => {
+                    if (!value) {
+                        return null
+                    }
+                    try {
+                        return new URL(value, currentUrl).href
+                    } catch {
+                        return null
+                    }
+                }
+                const parseBackground = (value?: string | null) => {
+                    const match = value?.match(/url\((['"]?)(.*?)\1\)/)
+                    return match?.[2] || null
+                }
 
-        const thumb = absolute(document.querySelector('.radio__thumb img')?.getAttribute('src'))
-        const streamMap = new Map<string, Record<string, any>>()
-        Array.from(
-            document.querySelectorAll<HTMLElement>('#modal-radio [data-video-id], #modal-movie [data-video-id]'),
-        ).forEach((node) => {
-            const videoId = clean(node.getAttribute('data-video-id'))
-            const kind = node.closest('#modal-movie') ? 'movie' : 'radio'
-            const playerRoot = node.closest<HTMLElement>('.video-js')
-            const poster =
-                absolute(node.getAttribute('poster')) ||
-                absolute(parseBackground(playerRoot?.querySelector<HTMLElement>('.vjs-poster')?.getAttribute('style')))
-            const src = absolute(node.getAttribute('src'))
-            if (!videoId && !src && !poster) {
-                return
-            }
-            const key = `${kind}:${videoId || src || poster}`
-            if (!streamMap.has(key)) {
-                streamMap.set(key, {
-                    kind,
-                    url: src,
-                    poster,
-                    video_id: videoId || null,
+                const thumb = absolute(document.querySelector('.radio__thumb img')?.getAttribute('src'))
+                const streamMap = new Map<string, Record<string, any>>()
+                Array.from(
+                    document.querySelectorAll<HTMLElement>(
+                        '#modal-radio [data-video-id], #modal-movie [data-video-id]',
+                    ),
+                ).forEach((node) => {
+                    const videoId = clean(node.getAttribute('data-video-id'))
+                    const kind = node.closest('#modal-movie') ? 'movie' : 'radio'
+                    const playerRoot = node.closest<HTMLElement>('.video-js')
+                    const poster =
+                        absolute(node.getAttribute('poster')) ||
+                        absolute(
+                            parseBackground(
+                                playerRoot?.querySelector<HTMLElement>('.vjs-poster')?.getAttribute('style'),
+                            ),
+                        )
+                    const src = absolute(node.getAttribute('src'))
+                    if (!videoId && !src && !poster) {
+                        return
+                    }
+                    const key = `${kind}:${videoId || src || poster}`
+                    if (streamMap.has(key)) {
+                        return
+                    }
+                    const playback = videoId ? playbackByVideoId[videoId] || null : null
+                    streamMap.set(key, {
+                        kind,
+                        url: src,
+                        poster,
+                        video_id: videoId || null,
+                        account_id: playback?.account_id || null,
+                        policy_key: playback?.policy_key || null,
+                        playback_api_url: playback?.api_url || null,
+                        source_url: playback?.source_url || null,
+                        source_codecs: playback?.source_codecs || null,
+                        has_video: Boolean(playback?.has_video_codec),
+                    })
                 })
-            }
-        })
-        const streams = Array.from(streamMap.values())
-            .map((stream) => {
-                if (!stream.url && !stream.poster && !stream.video_id) {
-                    return null
-                }
-                return stream
-            })
-            .filter(Boolean)
+                const streams = Array.from(streamMap.values())
+                    .map((stream) => {
+                        if (!stream.url && !stream.poster && !stream.video_id) {
+                            return null
+                        }
+                        return stream
+                    })
+                    .filter(Boolean)
 
-        const media = [
-            ...(thumb
-                ? [
-                      {
-                          type: 'photo' as const,
-                          url: thumb,
-                      },
-                  ]
-                : []),
-            ...streams.flatMap((stream: any) => {
-                if (!stream.poster) {
-                    return []
-                }
-                return [
-                    {
-                        type: 'video_thumbnail' as const,
-                        url: stream.poster as string,
-                    },
+                const videoStreams = streams.filter(
+                    (stream: any) => stream.has_video === true && Boolean(stream.playback_api_url || stream.source_url),
+                )
+                const primaryVideo = videoStreams.find((stream: any) => stream.kind === 'movie') || videoStreams[0]
+                const media = [
+                    ...(thumb
+                        ? [
+                              {
+                                  type: 'photo' as const,
+                                  url: thumb,
+                              },
+                          ]
+                        : []),
+                    ...streams.flatMap((stream: any) => {
+                        if (!stream.poster) {
+                            return []
+                        }
+                        return [
+                            {
+                                type: 'video_thumbnail' as const,
+                                url: stream.poster as string,
+                            },
+                        ]
+                    }),
+                    ...(primaryVideo
+                        ? [
+                              {
+                                  type: 'video' as const,
+                                  url: String(primaryVideo.playback_api_url || primaryVideo.source_url),
+                              },
+                          ]
+                        : []),
                 ]
-            }),
-        ]
 
-        const notes = clean(document.querySelector('.radio__notes')?.textContent)
-        const accessNote = clean(document.querySelector('#modal-msg .msg')?.textContent)
-        const bodyText = [cleanMultiline(document.querySelector('.radio__text')?.textContent), notes]
-            .filter(Boolean)
-            .join('\n\n')
+                const notes = clean(document.querySelector('.radio__notes')?.textContent)
+                const accessNote = clean(document.querySelector('#modal-msg .msg')?.textContent)
+                const bodyText = [cleanMultiline(document.querySelector('.radio__text')?.textContent), notes]
+                    .filter(Boolean)
+                    .join('\n\n')
 
-        return {
-            title: clean(document.querySelector('.radio__title')?.textContent),
-            dateText: clean(document.querySelector('.radio__posted')?.textContent),
-            bodyText,
-            bodyHtml: document.querySelector<HTMLElement>('.section-radio-content .content')?.innerHTML || '',
-            member: null,
-            media,
-            extraData: {
-                access_note: accessNote || null,
-                notes: notes || null,
-                streams,
+                return {
+                    title: clean(document.querySelector('.radio__title')?.textContent),
+                    dateText: clean(document.querySelector('.radio__posted')?.textContent),
+                    bodyText,
+                    bodyHtml: document.querySelector<HTMLElement>('.section-radio-content .content')?.innerHTML || '',
+                    member: null,
+                    media,
+                    extraData: {
+                        access_note: accessNote || null,
+                        notes: notes || null,
+                        streams,
+                    },
+                } satisfies WebsiteDetailPayload
             },
-        }
-    }, url)
-    if (!Array.isArray(detail.extraData?.streams) || detail.extraData.streams.length === 0) {
+            url,
+            brightcove.records(),
+        )
+    } finally {
+        brightcove.stop()
+    }
+
+    const streams = Array.isArray(detail.extraData?.streams) ? detail.extraData.streams : []
+    if (streams.length === 0) {
         throw new Error(
             `Website radio detail missing video stream for ${formatSafeWebsiteUrl(url)}; format may have changed`,
+        )
+    }
+    if (!detail.media.some((media) => media.type === 'video')) {
+        throw new Error(
+            `Website radio detail missing downloadable Brightcove video for ${formatSafeWebsiteUrl(url)}; player API may have changed`,
         )
     }
     return detail
 }
 
 async function extractMovieDetail(page: Page, url: string, listItem: WebsiteListItem): Promise<WebsiteDetailPayload> {
-    await page.goto(url, { waitUntil: 'domcontentloaded' })
-    await waitForRequiredDetailSelector(page, 'movie', url, '.movie__title, .movie-player video')
-    const detail = await page.evaluate((currentUrl) => {
-        const clean = (value?: string | null) =>
-            (value || '')
-                .replace(/\u00a0/g, ' ')
-                .replace(/\s+/g, ' ')
-                .trim()
-        const cleanMultiline = (value?: string | null) =>
-            (value || '')
-                .replace(/\u00a0/g, ' ')
-                .replace(/\r/g, '')
-                .split('\n')
-                .map((line) => line.replace(/[ \t]+/g, ' ').trim())
-                .filter((line, index, arr) => Boolean(line) || (arr[index - 1] && arr[index + 1]))
-                .join('\n')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim()
-        const absolute = (value?: string | null) => {
-            if (!value) {
-                return null
-            }
-            try {
-                return new URL(value, currentUrl).href
-            } catch {
-                return null
-            }
-        }
-        const parseBackground = (value?: string | null) => {
-            const match = value?.match(/url\((['"]?)(.*?)\1\)/)
-            return match?.[2] || null
-        }
+    const brightcove = startBrightcovePlaybackCapture(page)
+    let detail: WebsiteDetailPayload
+    try {
+        await page.goto(url, { waitUntil: 'domcontentloaded' })
+        await waitForRequiredDetailSelector(page, 'movie', url, '.movie__title, .movie-player video')
+        await waitForBrightcovePlayback(page, brightcove, '.movie-player [data-video-id]')
+        detail = await page.evaluate(
+            (currentUrl, playbackByVideoId) => {
+                const clean = (value?: string | null) =>
+                    (value || '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\s+/g, ' ')
+                        .trim()
+                const cleanMultiline = (value?: string | null) =>
+                    (value || '')
+                        .replace(/\u00a0/g, ' ')
+                        .replace(/\r/g, '')
+                        .split('\n')
+                        .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+                        .filter((line, index, arr) => Boolean(line) || (arr[index - 1] && arr[index + 1]))
+                        .join('\n')
+                        .replace(/\n{3,}/g, '\n\n')
+                        .trim()
+                const absolute = (value?: string | null) => {
+                    if (!value) {
+                        return null
+                    }
+                    try {
+                        return new URL(value, currentUrl).href
+                    } catch {
+                        return null
+                    }
+                }
+                const parseBackground = (value?: string | null) => {
+                    const match = value?.match(/url\((['"]?)(.*?)\1\)/)
+                    return match?.[2] || null
+                }
 
-        const videoMap = new Map<string, Record<string, any>>()
-        Array.from(document.querySelectorAll<HTMLElement>('.movie-player [data-video-id]')).forEach((node) => {
-            const videoId = clean(node.getAttribute('data-video-id'))
-            const playerRoot = node.closest<HTMLElement>('.video-js')
-            const poster =
-                absolute(node.getAttribute('poster')) ||
-                absolute(parseBackground(playerRoot?.querySelector<HTMLElement>('.vjs-poster')?.getAttribute('style')))
-            const src = absolute(node.getAttribute('src'))
-            if (!videoId && !src && !poster) {
-                return
-            }
-            const key = videoId || src || poster || String(videoMap.size)
-            if (!videoMap.has(key)) {
-                videoMap.set(key, {
-                    url: src,
-                    poster,
-                    video_id: videoId || null,
+                const videoMap = new Map<string, Record<string, any>>()
+                Array.from(document.querySelectorAll<HTMLElement>('.movie-player [data-video-id]')).forEach((node) => {
+                    const videoId = clean(node.getAttribute('data-video-id'))
+                    const playerRoot = node.closest<HTMLElement>('.video-js')
+                    const poster =
+                        absolute(node.getAttribute('poster')) ||
+                        absolute(
+                            parseBackground(
+                                playerRoot?.querySelector<HTMLElement>('.vjs-poster')?.getAttribute('style'),
+                            ),
+                        )
+                    const src = absolute(node.getAttribute('src'))
+                    if (!videoId && !src && !poster) {
+                        return
+                    }
+                    const key = videoId || src || poster || String(videoMap.size)
+                    if (videoMap.has(key)) {
+                        return
+                    }
+                    const playback = videoId ? playbackByVideoId[videoId] || null : null
+                    videoMap.set(key, {
+                        kind: 'movie',
+                        url: src,
+                        poster,
+                        video_id: videoId || null,
+                        account_id: playback?.account_id || null,
+                        policy_key: playback?.policy_key || null,
+                        playback_api_url: playback?.api_url || null,
+                        source_url: playback?.source_url || null,
+                        source_codecs: playback?.source_codecs || null,
+                        has_video: Boolean(playback?.has_video_codec),
+                    })
                 })
-            }
-        })
-        const videos = Array.from(videoMap.values())
-            .map((video) => {
-                if (!video.url && !video.poster && !video.video_id) {
-                    return null
-                }
-                return video
-            })
-            .filter(Boolean)
+                const videos = Array.from(videoMap.values())
+                    .map((video) => {
+                        if (!video.url && !video.poster && !video.video_id) {
+                            return null
+                        }
+                        return video
+                    })
+                    .filter(Boolean)
 
-        const tags = Array.from(document.querySelectorAll('.movie-tag-list.artist .movie-tag-item'))
-            .map((node) => clean(node.textContent))
-            .filter(Boolean)
-
-        const notes = clean(document.querySelector('.movie__notes')?.textContent)
-        const bodyText = [tags.length > 0 ? tags.join(' ') : '', notes].filter(Boolean).join('\n\n')
-
-        return {
-            title: clean(document.querySelector('.movie__title')?.textContent),
-            dateText: clean(document.querySelector('.movie__posted')?.textContent),
-            bodyText: cleanMultiline(bodyText),
-            bodyHtml: document.querySelector<HTMLElement>('.section-movie-content .content')?.innerHTML || '',
-            member: null,
-            media: videos.flatMap((video: any) => {
-                if (!video.poster) {
-                    return []
-                }
-                return [
-                    {
-                        type: 'video_thumbnail' as const,
-                        url: video.poster as string,
-                    },
+                const videoStreams = videos.filter(
+                    (video: any) => video.has_video === true && Boolean(video.playback_api_url || video.source_url),
+                )
+                const primaryVideo = videoStreams[0]
+                const media = [
+                    ...videos.flatMap((video: any) => {
+                        if (!video.poster) {
+                            return []
+                        }
+                        return [
+                            {
+                                type: 'video_thumbnail' as const,
+                                url: video.poster as string,
+                            },
+                        ]
+                    }),
+                    ...(primaryVideo
+                        ? [
+                              {
+                                  type: 'video' as const,
+                                  url: String(primaryVideo.playback_api_url || primaryVideo.source_url),
+                              },
+                          ]
+                        : []),
                 ]
-            }),
-            extraData: {
-                notes: notes || null,
-                tags,
-                streams: videos,
+
+                const tags = Array.from(document.querySelectorAll('.movie-tag-list.artist .movie-tag-item'))
+                    .map((node) => clean(node.textContent))
+                    .filter(Boolean)
+
+                const notes = clean(document.querySelector('.movie__notes')?.textContent)
+                const bodyText = [tags.length > 0 ? tags.join(' ') : '', notes].filter(Boolean).join('\n\n')
+
+                return {
+                    title: clean(document.querySelector('.movie__title')?.textContent),
+                    dateText: clean(document.querySelector('.movie__posted')?.textContent),
+                    bodyText: cleanMultiline(bodyText),
+                    bodyHtml: document.querySelector<HTMLElement>('.section-movie-content .content')?.innerHTML || '',
+                    member: null,
+                    media,
+                    extraData: {
+                        notes: notes || null,
+                        tags,
+                        streams: videos,
+                    },
+                } satisfies WebsiteDetailPayload
             },
-        }
-    }, url)
-    if (!Array.isArray(detail.extraData?.streams) || detail.extraData.streams.length === 0) {
+            url,
+            brightcove.records(),
+        )
+    } finally {
+        brightcove.stop()
+    }
+
+    const streams = Array.isArray(detail.extraData?.streams) ? detail.extraData.streams : []
+    if (streams.length === 0) {
         throw new Error(
             `Website movie detail missing video stream for ${formatSafeWebsiteUrl(url)}; format may have changed`,
         )
     }
+    if (!detail.media.some((media) => media.type === 'video')) {
+        throw new Error(
+            `Website movie detail missing downloadable Brightcove video for ${formatSafeWebsiteUrl(url)}; player API may have changed`,
+        )
+    }
     return detail
 }
-
 async function extractLiveReportDetail(page: Page, url: string): Promise<WebsiteDetailPayload> {
     await page.goto(url, { waitUntil: 'domcontentloaded' })
     await waitForRequiredDetailSelector(

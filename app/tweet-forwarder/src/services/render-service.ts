@@ -9,6 +9,8 @@ import {
     ytDlpDownloadMediaFile,
     writeImgToFile,
     extToMime,
+    downloadStreamingMediaFile,
+    isDownloadableStreamingMediaUrl,
 } from '@/middleware/media'
 import { parseNetscapeCookieToPuppeteerCookie } from '@idol-bbq-utils/spider'
 import {
@@ -1425,11 +1427,14 @@ export class RenderService {
                             continue
                         }
                         try {
-                            const path = await plainDownloadMediaFile(url, taskId, {
+                            const requestHeaders = {
                                 ...(cookieHeader ? { cookie: cookieHeader } : {}),
                                 ...((currentArticle?.platform && platformPresetHeadersMap[currentArticle.platform]) ||
                                     {}),
-                            })
+                            }
+                            const path = isDownloadableStreamingMediaUrl(url)
+                                ? await downloadStreamingMediaFile(url, taskId, requestHeaders)
+                                : await plainDownloadMediaFile(url, taskId, requestHeaders)
 
                             files.push(await finalizeDownloadedFile(path, url, overrideType ? undefined : type))
                         } catch (e) {

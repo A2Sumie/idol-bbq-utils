@@ -1,5 +1,5 @@
 import { test, expect } from 'bun:test'
-import { buildYtDlpArgs, DEFAULT_YT_DLP_FORMAT } from './index'
+import { buildYtDlpArgs, DEFAULT_YT_DLP_FORMAT, isDownloadableStreamingMediaUrl } from './index'
 
 test('buildYtDlpArgs includes cookies, output path, and custom format', () => {
     const args = buildYtDlpArgs(
@@ -71,4 +71,31 @@ test('buildYtDlpArgs includes pacing and retry controls', () => {
     expect(args[args.indexOf('--concurrent-fragments') + 1]).toBe('1')
     expect(args[args.indexOf('--limit-rate') + 1]).toBe('2M')
     expect(args[args.indexOf('--retry-sleep') + 1]).toBe('exp=1:20')
+})
+
+test('isDownloadableStreamingMediaUrl accepts Brightcove playback API urls', () => {
+    expect(
+        isDownloadableStreamingMediaUrl(
+            'https://edge.api.brightcove.com/playback/v1/accounts/4504957038001/videos/6401901074112?bc_policy=BCpkADawq',
+        ),
+    ).toBeTrue()
+    expect(
+        isDownloadableStreamingMediaUrl(
+            'https://edge.api.brightcove.com/playback/v1/accounts/4504957038001/videos/6401901074112',
+        ),
+    ).toBeTrue()
+})
+
+test('isDownloadableStreamingMediaUrl accepts HLS and DASH manifest urls', () => {
+    expect(isDownloadableStreamingMediaUrl('https://example.com/master.m3u8?fastly_token=abc')).toBeTrue()
+    expect(isDownloadableStreamingMediaUrl('https://example.com/manifest.mpd')).toBeTrue()
+    expect(isDownloadableStreamingMediaUrl('http://example.com/path/rendition.m3u8')).toBeTrue()
+})
+
+test('isDownloadableStreamingMediaUrl rejects regular files and malformed urls', () => {
+    expect(isDownloadableStreamingMediaUrl('https://example.com/video.mp4')).toBeFalse()
+    expect(isDownloadableStreamingMediaUrl('https://example.com/photo.jpg')).toBeFalse()
+    expect(isDownloadableStreamingMediaUrl('https://example.com/master.m3u8.txt')).toBeFalse()
+    expect(isDownloadableStreamingMediaUrl('edge.api.brightcove.com/playback/v1/accounts/1/videos/2')).toBeFalse()
+    expect(isDownloadableStreamingMediaUrl('not a url')).toBeFalse()
 })

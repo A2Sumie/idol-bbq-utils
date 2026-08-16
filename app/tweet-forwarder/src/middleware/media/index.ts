@@ -9,6 +9,60 @@ import { UserAgent } from '@idol-bbq-utils/spider'
 const MATCH_FILE_NAME = /(?<filename>[^/]+)\.(?<ext>[^.]+)$/
 const DEFAULT_YT_DLP_FORMAT = 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b'
 const PLAIN_DOWNLOAD_TIMEOUT_MS = 30_000
+const BRIGHTCOVE_PLAYBACK_HOST = 'edge.api.brightcove.com'
+const BRIGHTCOVE_PLAYBACK_PATH_RE = /^\/playback\/v1\/accounts\/(\d+)\/videos\/(\d+)\/?$/i
+const STREAMING_MANIFEST_URL_RE = /\.(?:m3u8|mpd)(?:$|[?#])/i
+const STREAMING_VIDEO_CODEC_RE = /\b(?:avc1|hvc1|hev1|av01|vp\d{1,2}|mpeg2video|theora)\b/i
+const STREAMING_YTDLP_TIMEOUT_MS = 15 * 60_000
+const BRIGHTCOVE_PLAYBACK_FETCH_TIMEOUT_MS = 20_000
+
+interface StreamingMediaSource {
+    src: string
+    type: string
+    codecs: string | null
+}
+
+function pickStreamingMediaSource(sources: unknown) {
+    if (!Array.isArray(sources)) {
+        return null
+    }
+    const normalized = sources
+        .map((source) => {
+            if (!source || typeof source !== 'object') {
+                return null
+            }
+            const record = source as Record<string, unknown>
+            const src = typeof record.src === 'string' ? record.src : null
+            const type = typeof record.type === 'string' ? record.type : null
+            const codecs = typeof record.codecs === 'string' ? record.codecs : null
+            if (!src || !type) {
+                return null
+            }
+            return { src, type, codecs }
+        })
+        .filter((source): source is StreamingMediaSource => source !== null)
+
+    const hasVideoCodec = (source: StreamingMediaSource) => STREAMING_VIDEO_CODEC_RE.test(source.codecs || '')
+    const https = (source: StreamingMediaSource) => source.src.startsWith('https://')
+    const isHls = (source: StreamingMediaSource) => /mpegurl/i.test(source.type)
+    const isDash = (source: StreamingMediaSource) => /dash/i.test(source.type)
+    const isMp4 = (source: StreamingMediaSource) => /^video\/mp4$/i.test(source.type)
+
+    return (
+        normalized.find((source) => isHls(source) && https(source) && hasVideoCodec(source)) ||
+        normalized.find((source) => isHls(source) && hasVideoCodec(source)) ||
+        normalized.find((source) => isDash(source) && https(source) && hasVideoCodec(source)) ||
+        normalized.find((source) => isDash(source) && hasVideoCodec(source)) ||
+        normalized.find((source) => isMp4(source) && https(source)) ||
+        normalized.find((source) => isMp4(source)) ||
+        normalized.find((source) => isHls(source) && https(source)) ||
+        normalized.find((source) => isHls(source)) ||
+        normalized.find((source) => isDash(source) && https(source)) ||
+        normalized.find((source) => isDash(source)) ||
+        normalized.find((source) => https(source)) ||
+        null
+    )
+}
 
 function writeImgToFile(buffer: Buffer<ArrayBufferLike>, filename: string): string {
     const dest = `${CACHE_DIR_ROOT}/media/plain/${filename}`
@@ -79,6 +133,86 @@ async function plainDownloadMediaFile(url: string, prefix?: string, headers?: Re
     }
     fs.writeFileSync(dest, file)
     return dest
+}
+
+function isDownloadableStreamingMediaUrl(value: string) {
+    try {
+        const parsed = new URL(value)
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+            return false
+        }
+        if (parsed.hostname === BRIGHTCOVE_PLAYBACK_HOST) {
+            return BRIGHTCOVE_PLAYBACK_PATH_RE.test(parsed.pathname)
+        }
+        return STREAMING_MANIFEST_URL_RE.test(`${parsed.pathname}${parsed.search}`)
+    } catch {
+        return false
+    }
+}
+
+async function resolveBrightcovePlaybackSourceUrl(url: string, headers?: Record<string, string>): Promise<string> {
+    const parsed = new URL(url)
+    const match = BRIGHTCOVE_PLAYBACK_PATH_RE.exec(parsed.pathname)
+    const policyKey = parsed.searchParams.get('bc_policy') || parsed.searchParams.get('policy')
+    if (!match || !policyKey) {
+        throw new Error(`Invalid Brightcove playback URL: ${url}`)
+    }
+
+    const apiUrl = new URL(url)
+    apiUrl.searchParams.delete('bc_policy')
+    apiUrl.searchParams.delete('policy')
+    const res = await fetch(apiUrl, {
+        headers: {
+            'user-agent': UserAgent.LINUX_CHROME,
+            origin: 'https://nanabunnonijyuuni-mobile.com',
+            referer: 'https://nanabunnonijyuuni-mobile.com/',
+            accept: `application/json;pk=${policyKey}`,
+            ...(headers || {}),
+        },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(BRIGHTCOVE_PLAYBACK_FETCH_TIMEOUT_MS),
+    })
+    if (!res.ok) {
+        throw new Error(`Brightcove playback API failed: ${res.status} ${res.statusText} ${apiUrl}`)
+    }
+    let payload: Record<string, any> | null = null
+    try {
+        payload = (await res.json()) as Record<string, any>
+    } catch (error) {
+        throw new Error(`Brightcove playback API returned invalid JSON: ${error}`)
+    }
+    const source = pickStreamingMediaSource(payload?.sources)
+    if (!source) {
+        throw new Error(`Brightcove playback API returned no downloadable source for ${url}`)
+    }
+    return source.src
+}
+
+async function downloadStreamingMediaFile(
+    url: string,
+    prefix?: string,
+    headers?: Record<string, string>,
+): Promise<string> {
+    if (!isDownloadableStreamingMediaUrl(url)) {
+        throw new Error(`Unsupported streaming media URL: ${url}`)
+    }
+    const parsed = new URL(url)
+    const manifestUrl =
+        parsed.hostname === BRIGHTCOVE_PLAYBACK_HOST ? await resolveBrightcovePlaybackSourceUrl(url, headers) : url
+    const paths = ytDlpDownloadMediaFile(
+        manifestUrl,
+        {
+            path: process.env.YTDLP_PATH || 'yt-dlp',
+            format: DEFAULT_YT_DLP_FORMAT,
+        } as MediaToolConfigMap[MediaToolEnum.YT_DLP],
+        prefix,
+        STREAMING_YTDLP_TIMEOUT_MS,
+    )
+    const output = paths.find((path) => path.trim())
+    if (!output) {
+        throw new Error(`Streaming media download produced no files for ${url}`)
+    }
+    return output
 }
 
 async function tryGetCookie(url: string) {
@@ -194,6 +328,7 @@ function ytDlpDownloadMediaFile(
     url: string,
     yt_dlp: MediaToolConfigMap[MediaToolEnum.YT_DLP],
     prefix?: string,
+    timeoutMs = 180_000,
 ): string[] {
     if (!yt_dlp) {
         return []
@@ -210,7 +345,7 @@ function ytDlpDownloadMediaFile(
         const res = execFileSync(exec_path, args, {
             encoding: 'utf-8',
             // A hung yt-dlp process must not block the article pipeline forever.
-            timeout: 180_000,
+            timeout: timeoutMs,
             killSignal: 'SIGKILL',
         })
             .split('\n')
@@ -278,5 +413,7 @@ export {
     extToMime,
     mimeToExt,
     tryGetCookie,
+    downloadStreamingMediaFile,
+    isDownloadableStreamingMediaUrl,
 }
 export type { FileContentType }
