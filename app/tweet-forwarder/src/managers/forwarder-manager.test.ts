@@ -6762,6 +6762,111 @@ test('sendArticles suppresses stored translations for no-translation targets', a
     expect(cleanupPaths).toContain('/tmp/original-card.png')
 })
 
+test('sendArticles native_translated_card sends original text plus original and translated cards', async () => {
+    class RecordingForwarder extends Forwarder {
+        NAME = 'recording'
+        sent: Array<{ texts: string[]; props: any }> = []
+
+        protected async realSend(texts: string[], props?: any): Promise<any> {
+            this.sent.push({ texts, props })
+            return
+        }
+    }
+
+    const pools = new ForwarderPools(
+        {
+            forward_targets: [],
+            cfg_forward_target: {} as any,
+            connections: {} as any,
+            formatters: [],
+            cfg_forwarder: {
+                render_type: 'text',
+            } as any,
+            forwarders: [],
+            crawlers: [],
+        },
+        new EventEmitter(),
+    )
+
+    const target = new RecordingForwarder(
+        {
+            block_until: '32h',
+            group_id: '742435777',
+            text_original_only: true,
+            native_translated_card: {
+                enabled: true,
+                badge_label: '译文',
+                processor_id: 'test-processor',
+            },
+        } as any,
+        'target-native-translated-card',
+    )
+
+    ;(pools as any).claimArticleChain = async () => true
+    ;(pools as any).releaseArticleChain = async () => undefined
+    ;(pools as any).prepareArticleChainTranslations = async () => true
+
+    const renderCalls: Array<{ article: any; config: any }> = []
+    const cleanupPaths: string[] = []
+    ;(pools as any).renderService = {
+        process: async (article: any, config?: any) => {
+            renderCalls.push({ article, config })
+            const translated =
+                Array.isArray(config?.card_features) && config.card_features.includes('translated-corner-badge')
+            const media = {
+                media_type: 'photo',
+                path: translated ? '/tmp/translated-card.png' : '/tmp/original-card.png',
+            }
+            return {
+                text: translated ? '译:original text only' : 'original text only',
+                textCollapseMode: 'article',
+                cardMediaFiles: [media],
+                originalMediaFiles: [],
+                mediaFiles: [media],
+            }
+        },
+        renderText: (article: any) => article.content || '',
+        buildCardMediaFromRenderedFiles: () => [],
+        cleanup: (files: Array<{ path: string }>) => cleanupPaths.push(...files.map((file) => file.path)),
+    }
+
+    const article = {
+        id: 772,
+        a_id: 'native-translated-card-article',
+        platform: Platform.X,
+        username: 'member',
+        u_id: 'member',
+        content: 'original text only',
+        translation: '译:original text only',
+        translated_by: 'LLM',
+        url: 'https://x.com/member/status/772',
+        type: 'tweet',
+        created_at: Math.floor(Date.now() / 1000),
+        ref: null,
+        has_media: false,
+        media: [],
+        extra: null,
+        u_avatar: null,
+    }
+
+    await (pools as any).sendArticles(
+        undefined,
+        'native-translated-card-task',
+        [article],
+        [{ forwarder: target, runtime_config: undefined }],
+        { render_type: 'text-card' } as any,
+    )
+
+    expect(target.sent[0]?.texts[0]).toBe('original text only')
+    expect(target.sent[0]?.props?.media).toEqual([
+        { media_type: 'photo', path: '/tmp/original-card.png' },
+        { media_type: 'photo', path: '/tmp/translated-card.png' },
+    ])
+    expect(target.sent[0]?.props?.article?.translation).toBeNull()
+    expect(renderCalls.some((call) => String(call.config?.taskId).includes('translated-card'))).toBeTrue()
+    expect(cleanupPaths).toEqual(expect.arrayContaining(['/tmp/original-card.png', '/tmp/translated-card.png']))
+})
+
 test('sendArticles fills missing translations before rendering translated summary companion card', async () => {
     class RecordingForwarder extends Forwarder {
         NAME = 'recording'

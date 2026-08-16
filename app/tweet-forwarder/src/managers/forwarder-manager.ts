@@ -60,7 +60,12 @@ import {
     applyPartialSendFailure,
     markTargetHealthForSendOutcome,
 } from '@/services/target-health-service'
-import { resolveSummaryCardConfig, type ResolvedSummaryCardConfig } from '@/services/summary-card-policy'
+import {
+    resolveSummaryCardConfig,
+    resolveTranslatedCardConfig,
+    type ResolvedSummaryCardConfig,
+    type ResolvedTranslatedCardConfig,
+} from '@/services/summary-card-policy'
 import { buildShortVideoTextFingerprint } from '@/services/media-cache-service'
 import {
     isBilibiliVideoPairingHeldResult,
@@ -3484,10 +3489,26 @@ class ForwarderPools extends BaseCompatibleModel {
         return target.getEffectiveConfig(runtime_config).suppress_translations === true
     }
 
+    private resolveNativeTranslatedCardForTarget(
+        target: BaseForwarder,
+        runtime_config?: ForwardTargetPlatformCommonConfig,
+    ): ResolvedTranslatedCardConfig | null {
+        return resolveTranslatedCardConfig(
+            (
+                target.getEffectiveConfig(runtime_config) as ForwardTargetPlatformCommonConfig & {
+                    native_translated_card?: unknown
+                }
+            ).native_translated_card,
+        )
+    }
+
     private shouldStripNativeOriginalCardTranslations(
         target: BaseForwarder,
         runtime_config?: ForwardTargetPlatformCommonConfig,
     ) {
+        if (this.resolveNativeTranslatedCardForTarget(target, runtime_config)) {
+            return true
+        }
         const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
         return Boolean(summaryConfig?.sendFirstNative && summaryConfig.translatedCard)
     }
@@ -6715,9 +6736,12 @@ class ForwarderPools extends BaseCompatibleModel {
             return null
         }
 
-        const summaryConfig = resolveSummaryCardConfig(target.getEffectiveConfig(runtime_config))
-        const translatedCard = summaryConfig?.translatedCard
-        if (!summaryConfig?.sendFirstNative || !translatedCard) {
+        const effectiveConfig = target.getEffectiveConfig(runtime_config)
+        const nativeTranslatedCard = this.resolveNativeTranslatedCardForTarget(target, runtime_config)
+        const summaryConfig = resolveSummaryCardConfig(effectiveConfig)
+        const translatedCard =
+            nativeTranslatedCard || (summaryConfig?.sendFirstNative ? summaryConfig.translatedCard : null)
+        if (!translatedCard) {
             return null
         }
         if (!translatedCard.processorId) {

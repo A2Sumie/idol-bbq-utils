@@ -62,7 +62,12 @@ function normalizeTranslatedBadgeLabel(value: unknown) {
     return label.slice(0, 6) || DEFAULT_TRANSLATED_SUMMARY_CARD_BADGE_LABEL
 }
 
-function resolveTranslatedCardConfig(raw: unknown): ResolvedSummaryCardConfig['translatedCard'] {
+type ResolvedTranslatedCardConfig = {
+    badgeLabel: string
+    processorId?: string
+}
+
+function resolveTranslatedCardConfig(raw: unknown): ResolvedTranslatedCardConfig | null {
     if (raw !== true && (typeof raw !== 'object' || !raw || (raw as any).enabled === false)) {
         return null
     }
@@ -209,8 +214,10 @@ function resolveSummaryCardRoutePolicy(config: ForwardTargetPlatformCommonConfig
 export {
     resolveSummaryCardConfig,
     resolveSummaryCardRoutePolicy,
+    resolveTranslatedCardConfig,
     toSummaryCardRoutePolicy,
     type ResolvedSummaryCardConfig,
+    type ResolvedTranslatedCardConfig,
     type SummaryCardRoutePolicy,
     type SummaryCardSingleItemBehavior,
     type SummaryCardWindowAlignment,

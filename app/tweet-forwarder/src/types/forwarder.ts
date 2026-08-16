@@ -315,6 +315,18 @@ interface ForwardTargetPlatformCommonConfig {
      */
     text_original_only?: boolean
     /**
+     * Render a second translated card for the ordinary per-article send and keep the
+     * text block original-only. Unlike summary_card.translated_card, this does NOT
+     * enable summary aggregation; every article is sent natively with 原文卡 + 译文卡.
+     */
+    native_translated_card?:
+        | boolean
+        | {
+              enabled?: boolean
+              badge_label?: string
+              processor_id?: string
+          }
+    /**
      * Suppress provider sends that would have no visible media. Use for media-only
      * destinations where text-only fallback is more harmful than dropping the send.
      */
