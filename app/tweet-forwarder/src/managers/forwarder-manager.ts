@@ -5399,7 +5399,7 @@ class ForwarderPools extends BaseCompatibleModel {
         const title =
             hasStorm && groups.length === 1
                 ? `话题更新 ${groups[0]?.label || ''}`.trim()
-                : `更新合并 ${this.formatSummaryCardRangeForQueue(
+                : `22/7消息聚合 新消息${this.formatSummaryCardRangeForQueue(
                       queue,
                       allItems.map((item) => item.article),
                   )}`
@@ -6210,10 +6210,12 @@ class ForwarderPools extends BaseCompatibleModel {
         const range = this.formatSummaryCardRangeForQueue(
             queue,
             items.map((item) => item.article),
-            { spaced: true },
         )
         const itemLine = this.buildSummaryCardSendTextDigestItems(items)
-        return [`更新合并 ${range || fallbackTitle.replace(/^(?:聚合|更新合并)\s*/, '')}`.trim(), itemLine]
+        return [
+            `22/7消息聚合 新消息${range || fallbackTitle.replace(/^(?:聚合|更新合并|22\/7消息聚合)\s*/, '')}`.trim(),
+            itemLine,
+        ]
             .filter(Boolean)
             .join('\n')
     }
@@ -6301,11 +6303,10 @@ class ForwarderPools extends BaseCompatibleModel {
         )
 
         return [
-            `【更新合并】${this.formatSummaryCardRangeForQueue(
+            `【22/7消息聚合 新消息${this.formatSummaryCardRangeForQueue(
                 queue,
                 allItems.map((item) => item.article),
-                { spaced: true },
-            )}`,
+            )}】`,
             ...sections,
         ].join('\n\n')
     }
@@ -6323,7 +6324,7 @@ class ForwarderPools extends BaseCompatibleModel {
             platform: sourceArticle?.platform || Platform.X,
             a_id: `summary-card-${now}`,
             u_id: 'message_pack',
-            username: '更新合并',
+            username: '22/7消息聚合',
             created_at: now,
             content: `${title}\n\n${content}`,
             url: sourceArticle?.url || '',
@@ -6856,11 +6857,10 @@ class ForwarderPools extends BaseCompatibleModel {
             lines.push(`另有 ${omitted} 条更新已合并`)
         }
         return [
-            `【更新合并】${this.formatSummaryCardRangeForQueue(
+            `【22/7消息聚合 新消息${this.formatSummaryCardRangeForQueue(
                 queue,
                 items.map((item) => item.article),
-                { spaced: true },
-            )}`,
+            )}】`,
             rootLine,
             ...lines,
         ]
@@ -7372,7 +7372,7 @@ class ForwarderPools extends BaseCompatibleModel {
 
         const title = options?.tag
             ? `【话题更新合并】${options.tag} / ${sorted.length} 条 / ${start}-${end}`
-            : `【更新合并】${sorted.length} 条 / ${start}-${end}`
+            : `【22/7消息聚合 新消息${sorted.length}条 / ${start}-${end}`
         return [title, ...lines].join('\n\n')
     }
 

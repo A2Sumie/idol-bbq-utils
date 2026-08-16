@@ -2879,7 +2879,7 @@ test('sendArticles sends a target-level digest for lower-noise targets', async (
     }
 
     expect(target.sent).toHaveLength(1)
-    expect(target.sent[0]?.texts[0]).toContain('【更新合并】4 条')
+    expect(target.sent[0]?.texts[0]).toContain('【22/7消息聚合 新消息4条 /')
     expect(target.sent[0]?.texts[0]).toContain('↪ member-2')
     expect(target.sent[0]?.texts[0]).toContain('另有 1 条更新已合并')
     expect(claimed).toEqual([300, 301, 302, 303])
@@ -4036,11 +4036,11 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
     expect(target.sent).toHaveLength(2)
     expect(target.sent[0]?.props?.forceSend).toBeTrue()
     expect(target.sent[0]?.props?.media).toEqual([{ media_type: 'photo', path: '/tmp/summary-card.png' }])
-    expect(target.sent[0]?.texts[0]).toContain('更新合并')
+    expect(target.sent[0]?.texts[0]).toContain('22/7消息聚合 新消息')
     expect(target.sent[0]?.texts[0]).toContain('1. member1 x发推')
     expect(target.sent[0]?.texts[0]).toContain('2. member2 x发推')
     expect(target.sent[0]?.texts[0]).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
-    expect(packedArticles[0]?.content).toContain('【更新合并】2 条')
+    expect(packedArticles[0]?.content).toContain('【22/7消息聚合 新消息2条 /')
     expect(packedArticles[0]?.content).not.toMatch(/\d{2}:\d{2}-\d{2}:\d{2}/)
     expect(packedArticles[0]?.content).toContain('summary content 1')
     expect(packedArticles[0]?.content).toContain('summary content 2')
@@ -4067,7 +4067,7 @@ test('sendArticles rate-limits summary-card sends to one card per interval', asy
             alt: 'summary-2',
         },
     ])
-    expect(packedArticles[1]?.content).toContain('【更新合并】1 条')
+    expect(packedArticles[1]?.content).toContain('【22/7消息聚合 新消息1条 /')
     expect(packedArticles[1]?.content).toContain('summary content 3')
     expect(packedArticles[1]?.extra?.data?.groups?.[0]?.items?.[0]?.text).toContain('summary content 3')
     expect(packedArticles[1]?.extra?.data?.groups).toHaveLength(1)
@@ -4236,7 +4236,7 @@ test('summary-card send text keeps Bilibili card body digest', () => {
         '聚合 fallback',
     )
 
-    expect(text).toContain('更新合并')
+    expect(text).toContain('22/7消息聚合')
     expect(text).toContain('1. member1 x发推')
 })
 
@@ -5087,7 +5087,7 @@ test('single-item summary-card windows fall back to compact native when uncovere
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toContain('single uncovered text')
     expect(target.sent[0]?.texts[0]).not.toContain('聚合')
-    expect(target.sent[0]?.texts[0]).not.toContain('更新合并 1 条')
+    expect(target.sent[0]?.texts[0]).not.toContain('22/7消息聚合 新消息1条')
     expect(target.sent[0]?.props?.media).toEqual([
         {
             media_type: 'photo',
@@ -8301,7 +8301,7 @@ test('sendArticles keeps summary-card fallback compact when card rendering fails
     }
 
     expect(target.sent).toHaveLength(1)
-    expect(target.sent[0]?.texts[0]).toContain('更新合并 1 条 /')
+    expect(target.sent[0]?.texts[0]).toContain('22/7消息聚合 新消息1条 /')
     expect(target.sent[0]?.texts[0]).toContain('1. media_member x发推')
     expect(target.sent[0]?.texts[0]).not.toContain('图集: 1 张')
     expect(target.sent[0]?.texts[0]).not.toBe(packedArticles[0]?.content?.split('\n')[0])
@@ -10610,7 +10610,7 @@ test('summary-card aligned windows wait for the configured five-minute delay', a
 
     expect(target.sent).toHaveLength(1)
     expect(target.sent[0]?.texts[0]).toMatch(/\d{4}～\d{4}/)
-    expect(packedArticles[0]?.content).toMatch(/【更新合并】1 条 \/ \d{4}～\d{4}/)
+    expect(packedArticles[0]?.content).toMatch(/【22\/7消息聚合 新消息1条 \/ \d{4}～\d{4}】/)
 })
 
 test('sendArticles starts a new summary-card window instead of appending to a due queue', async () => {
