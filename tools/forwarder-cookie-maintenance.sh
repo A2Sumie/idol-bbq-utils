@@ -4,6 +4,9 @@ set -Eeuo pipefail
 CONTAINER_NAME="${CONTAINER_NAME:-forwarder-new}"
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-3000}"
+# Notification target for SESSION_BROKEN alerts (falls back to the first QQ
+# forward target's group_id from the container config when unset).
+NOTIFY_GROUP_ID="${NOTIFY_GROUP_ID:-}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 YOUTUBE_KEEPALIVE_SCRIPT="${YOUTUBE_KEEPALIVE_SCRIPT:-${SCRIPT_DIR}/youtube-cookie-keepalive.sh}"
 
@@ -18,6 +21,41 @@ auth_header="$(mktemp)"
 trap 'rm -f "$auth_header"' EXIT
 chmod 600 "$auth_header"
 printf 'Authorization: Bearer %s\n' "$api_secret" > "$auth_header"
+
+# First QQ forward target's group_id from the container config — the
+# notification channel for SESSION_BROKEN alerts.
+default_notify_group() {
+    docker exec "$CONTAINER_NAME" bun -e '
+        const fs = require("fs")
+        const YAML = require("yaml")
+        const config = YAML.parse(fs.readFileSync("/app/config.yaml", "utf8")) || {}
+        const target = (config.forward_targets || []).find((t) => t && t.platform === "qq")
+        const groupId = target?.cfg_platform?.group_id
+        process.stdout.write(groupId ? String(groupId) : "")
+    ' 2>/dev/null || true
+}
+
+notify_session_broken() {
+    local summary="$1"
+    # Always emit the loud marker line first — it lands in the maintenance log
+    # (which docker/host log greps can see) regardless of QQ availability.
+    printf 'SESSION_BROKEN %s\n' "$summary" >&2
+
+    local group_id="${NOTIFY_GROUP_ID:-$(default_notify_group)}"
+    if [ -z "$group_id" ]; then
+        printf 'SESSION_BROKEN notify skipped: no QQ group_id configured\n' >&2
+        return 0
+    fi
+    local response status
+    response="$(curl -sS --connect-timeout 5 --max-time 30 -w '\n%{http_code}' -X POST \
+        "http://${API_HOST}:${API_PORT}/api/actions/qq/send" \
+        -H @"$auth_header" -H 'Content-Type: application/json' \
+        --data-binary "$(python3 -c 'import json,sys; print(json.dumps({"group_id": sys.argv[1], "message": sys.argv[2]}))' "$group_id" "SESSION_BROKEN: $summary")" 2>/dev/null || printf '\n000')"
+    status="${response##*$'\n'}"
+    if [ "$status" != "200" ]; then
+        printf 'SESSION_BROKEN notify failed: http=%s\n' "$status" >&2
+    fi
+}
 
 discover_crawlers() {
     docker exec "$CONTAINER_NAME" bun -e '
@@ -52,7 +90,13 @@ sync() {
     status="${response##*$'\n'}"
     response="${response%$'\n'*}"
     printf '%s http=%s %s\n' "$crawler" "$status" "$response"
-    [ "$status" = 200 ]
+    # 409 "missing sessionid"-style failures used to exit quietly for days.
+    # Surface every failed sync through the notification channel + a loud
+    # SESSION_BROKEN marker line in this log.
+    if [ "$status" != "200" ] || printf '%s' "$response" | grep -qi 'missing'; then
+        notify_session_broken "cookie sync failed for ${crawler}: http=${status} ${response:0:200}"
+    fi
+    [ "$status" = "200" ]
 }
 
 crawlers=()
