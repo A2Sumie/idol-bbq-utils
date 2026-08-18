@@ -93,7 +93,25 @@ sync() {
     # 409 "missing sessionid"-style failures used to exit quietly for days.
     # Surface every failed sync through the notification channel + a loud
     # SESSION_BROKEN marker line in this log.
-    if [ "$status" != "200" ] || printf '%s' "$response" | grep -qi 'missing'; then
+    #
+    # Failure detection (17:00 false-alarm incident): a *successful* sync
+    # response also contains the key name "requiredCookieNames":{"present":
+    # [...],"missing":[...]}, so grepping the raw body for 'missing' fires on
+    # every http=200. Detect failure structurally instead:
+    #   - non-200 status, or
+    #   - liveProbe status "fail", or
+    #   - requiredCookieNames.missing non-empty array.
+    if [ "$status" != "200" ] || printf '%s' "$response" | python3 -c '
+import json, sys
+body = sys.stdin.read()
+try:
+    data = json.loads(body)
+except Exception:
+    sys.exit(0)  # unparseable 200 body = failure -> alert
+required = (data.get("requiredCookieNames") or {}).get("missing") or []
+probe = (data.get("liveProbe") or {}).get("status")
+sys.exit(0 if (required or probe == "fail") else 1)
+'; then
         notify_session_broken "cookie sync failed for ${crawler}: http=${status} ${response:0:200}"
     fi
     [ "$status" = "200" ]
