@@ -336,12 +336,16 @@ function nextCrawlerRunAt(schedule: ResolvedCrawlerSchedule, afterEpochSeconds: 
                 continue
             }
             const base = midnight + slot.minuteOfDay * 60
-            let jittered = base + stableJitterSeconds(`${crawlerName}:${base}`, schedule.jitterSeconds)
-            // Negative jitter must never pull a run below the configured min gap.
-            jittered = Math.max(jittered, afterEpochSeconds + schedule.minGapSeconds)
-            if (jittered > afterEpochSeconds) {
-                return jittered
+            const jittered = base + stableJitterSeconds(`${crawlerName}:${base}`, schedule.jitterSeconds)
+            // A slot whose jittered time already passed must not be resurrected:
+            // clamping it to after+minGap made expired slots run immediately and
+            // then re-run forever at 2×minGap (the 8-16 Live dispatch storm).
+            if (jittered <= afterEpochSeconds) {
+                continue
             }
+            // Future slots only: negative jitter must never pull a run below the
+            // configured min gap (the original d9ebd5a intent).
+            return Math.max(jittered, afterEpochSeconds + schedule.minGapSeconds)
         }
     }
     return null
