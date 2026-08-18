@@ -163,6 +163,68 @@ test('Instagram grabPosts resolves after posts query without waiting for highlig
     expect((listeners.get('response') || []).length).toBeLessThanOrEqual(1)
 })
 
+test('Instagram backfills avatar-less posts via page-context web_profile_info', async () => {
+    // XDT timeline payload whose user nodes dropped all avatar fields.
+    const posts_json = {
+        data: {
+            xdt_api__v1__feed__user_timeline_graphql_connection: {
+                edges: [
+                    {
+                        node: {
+                            code: 'NOAV1',
+                            taken_at: 1742400132,
+                            caption: { text: 'avatar-less post' },
+                            user: { username: 'noav_user', full_name: 'No Avatar' },
+                            image_versions2: { candidates: [{ width: 720, url: 'https://example.com/p.jpg' }] },
+                        },
+                    },
+                ],
+            },
+        },
+    }
+    const listeners = new Map<string, Array<(data: any) => void>>()
+    const page = {
+        on: (eventName: string, handler: (data: any) => void) => {
+            const handlers = listeners.get(eventName) || []
+            handlers.push(handler)
+            listeners.set(eventName, handlers)
+        },
+        off: (eventName: string, handler: (data: any) => void) => {
+            listeners.set(
+                (listeners.get(eventName) || []).filter((entry) => entry !== handler),
+            )
+        },
+        goto: async () => {
+            for (const handler of listeners.get('response') || []) {
+                handler({
+                    url: () => 'https://www.instagram.com/graphql/query/',
+                    status: () => 200,
+                    json: async () => posts_json,
+                    request: () => ({
+                        method: () => 'POST',
+                        postData: () =>
+                            'av=0&fb_api_req_friendly_name=PolarisProfilePostsQuery&variables=%7B%7D',
+                    }),
+                })
+            }
+        },
+        waitForSelector: async () => {
+            throw new Error('not found')
+        },
+        evaluate: async (fn: unknown, handle: string) => {
+            // Simulate the in-page fetch of web_profile_info.
+            expect(handle).toBe('noav_user')
+            expect(String(fn)).toContain('web_profile_info')
+            return 'https://example.com/hd-avatar.jpg'
+        },
+    } as any
+
+    const posts = await InsApiJsonParser.grabPosts(page, 'https://www.instagram.com/noav_user/')
+
+    expect(posts).toHaveLength(1)
+    expect(posts[0]?.u_avatar).toBe('https://example.com/hd-avatar.jpg')
+})
+
 test('Instagram grabPosts merges reloaded posts when a cache-bust reload returns newer data', async () => {
     const posts_json = JSON.parse(readFileSync(dataPath('instagram', 'instagram-posts.json'), 'utf-8'))
     const listeners = new Map<string, Array<(data: any) => void>>()

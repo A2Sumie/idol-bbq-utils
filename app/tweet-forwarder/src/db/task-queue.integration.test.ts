@@ -237,6 +237,57 @@ afterEach(async () => {
     rmSync(tempDir, { recursive: true, force: true })
 })
 
+function instagramArticleData(overrides: Record<string, unknown> = {}) {
+    return {
+        platform: Platform.Instagram,
+        a_id: 'DTESTAVATAR',
+        u_id: 'test_user',
+        username: 'Test User',
+        created_at: 1787000000,
+        content: 'hello',
+        url: 'https://www.instagram.com/p/DTESTAVATAR/',
+        type: 'post',
+        ref: null,
+        has_media: false,
+        media: null,
+        extra: null,
+        u_avatar: null,
+        ...overrides,
+    } as any
+}
+
+test('Article trySave self-heals a missing avatar on an existing article', async () => {
+    const created = await DB.Article.save(instagramArticleData({ u_avatar: null }))
+    expect(created.u_avatar).toBeNull()
+
+    // Fresh crawl of the same post now carries the backfilled avatar URL.
+    const result = await DB.Article.trySave(
+        instagramArticleData({ u_avatar: 'https://example.com/hd-avatar.jpg' }),
+    )
+    expect(result).toBeDefined()
+    expect(result?.u_avatar).toBe('https://example.com/hd-avatar.jpg')
+
+    const reread = await DB.Article.getByArticleCode('DTESTAVATAR', Platform.Instagram)
+    expect(reread?.u_avatar).toBe('https://example.com/hd-avatar.jpg')
+})
+
+test('Article trySave does not overwrite an existing avatar', async () => {
+    const created = await DB.Article.save(
+        instagramArticleData({ u_avatar: 'https://example.com/original-avatar.jpg' }),
+    )
+    expect(created.u_avatar).toBe('https://example.com/original-avatar.jpg')
+
+    // Avatar already present: no patch is applied and trySave keeps its
+    // "nothing new persisted" contract (undefined).
+    const result = await DB.Article.trySave(
+        instagramArticleData({ u_avatar: 'https://example.com/other-avatar.jpg' }),
+    )
+    expect(result).toBeUndefined()
+
+    const reread = await DB.Article.getByArticleCode('DTESTAVATAR', Platform.Instagram)
+    expect(reread?.u_avatar).toBe('https://example.com/original-avatar.jpg')
+})
+
 test('TaskQueue add revives failed idempotent tasks without duplicating pending tasks', async () => {
     const first = await DB.TaskQueue.add('aggregate_hourly', { value: 1 }, 100, {
         source_ref: 'x:member',

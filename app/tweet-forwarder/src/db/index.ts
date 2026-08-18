@@ -96,6 +96,25 @@ namespace DB {
         export async function trySave(article: Article): Promise<DBArticle | undefined> {
             const exist_one = await checkExist(article)
             if (exist_one) {
+                // Self-heal missing avatars: articles persisted while IG payloads
+                // dropped avatar fields stay avatar-less forever because this
+                // path never updates existing rows. Fill the gap when the fresh
+                // crawl carries what the stored row lacks.
+                if (
+                    article.u_avatar &&
+                    typeof (exist_one as any).u_avatar !== 'undefined' &&
+                    !(exist_one as any).u_avatar
+                ) {
+                    try {
+                        const updated = await getDelegate(article.platform).update({
+                            where: { id: exist_one.id },
+                            data: { u_avatar: article.u_avatar },
+                        })
+                        return updated ?? exist_one
+                    } catch {
+                        return exist_one
+                    }
+                }
                 return
             }
             return await save(article)
