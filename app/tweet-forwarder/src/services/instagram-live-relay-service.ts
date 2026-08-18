@@ -4,6 +4,7 @@ import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'child_
 import { createHash } from 'crypto'
 import type { Logger } from '@idol-bbq-utils/log'
 import { Instagram } from '@idol-bbq-utils/spider'
+import { isDomainBlocked, recordDomainFailure, recordDomainSuccess } from '@idol-bbq-utils/spider'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import type { Page } from 'puppeteer-core'
 import type { Article } from '@/db'
@@ -38,6 +39,8 @@ const DEFAULT_INSTAGRAM_ARCHIVE_MIN_PUBLISH_DURATION_SECONDS = 60
 const DEFAULT_INSTAGRAM_ARCHIVE_MAX_DURATION_SECONDS = 4 * 60 * 60
 const INSTAGRAM_ORIGIN = 'https://www.instagram.com'
 const LIVE_WEB_INFO_PATH = '/api/v1/live/web_info/'
+// Origin key shared with the spider package's in-page fetch circuit breaker.
+const INSTAGRAM_WEB_ORIGIN_KEY = 'www.instagram.com'
 const N2NJ_REQUEST_USER_AGENT = 'N2NJ-Stream-Bot/1.0'
 
 const ALLOWED_HEADER_KEYS = new Set([
@@ -1592,6 +1595,12 @@ class InstagramLiveRelayService {
     }
 
     private async fetchLiveWebInfo(page: Page, liveUrl: string, userId: string) {
+        // Shared per-origin circuit breaker (same one as the avatar backfill):
+        // when the IG session is dead every web_info XHR fails; trip once and
+        // skip the probes entirely until the block window elapses.
+        if (isDomainBlocked(INSTAGRAM_WEB_ORIGIN_KEY)) {
+            throw new Error('live web_info probe skipped: circuit breaker open for www.instagram.com')
+        }
         // The page is normally already on the live URL from captureEchoPackage —
         // only re-navigate when the previous goto failed (e.g. about:blank).
         const currentUrl = (() => {
@@ -1636,9 +1645,11 @@ class InstagramLiveRelayService {
         )
 
         if (!result.ok) {
+            recordDomainFailure(INSTAGRAM_WEB_ORIGIN_KEY)
             throw new Error(`HTTP ${result.status}: ${result.text}`)
         }
 
+        recordDomainSuccess(INSTAGRAM_WEB_ORIGIN_KEY)
         return JSON.parse(result.text)
     }
 
