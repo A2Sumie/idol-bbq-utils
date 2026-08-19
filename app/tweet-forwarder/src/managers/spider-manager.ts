@@ -343,6 +343,12 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
     }
 
     const message = toErrorMessage(root).toLowerCase()
+    const code = (root as any)?.code
+    if (code === 'instagram_session_dead' || /\binstagram_session_dead\b/.test(message)) {
+        // Body-predicate death (login_required / checkpoint_required /
+        // two_factor_required with HTTP 200) — auth-class, no retry.
+        return 'auth'
+    }
     const status = statusFromMessage(message)
     if (status === 401 || status === 403) {
         return 'auth'

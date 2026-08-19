@@ -1428,6 +1428,25 @@ test('classifyCrawlError still classifies genuine login/checkpoint bounces as au
     expect(classifyCrawlError(new Error('login_required'))).toBe('auth')
 })
 
+test('classifyCrawlError maps body-predicate session death (instagram_session_dead) to auth', () => {
+    // 200-status responses carrying login_required/checkpoint_required/
+    // two_factor_required surface as InstagramSessionDeadError; the code and
+    // the predicate name both classify auth, and IG never retries auth.
+    const dead = new Error(
+        'Instagram session dead (two_factor_required) detected in PolarisProfilePostsQuery response body (instagram_session_dead)',
+    )
+    ;(dead as any).code = 'instagram_session_dead'
+    expect(classifyCrawlError(dead)).toBe('auth')
+    expect(classifyCrawlError(new Error('Instagram session dead (login_required) ... (instagram_session_dead)'))).toBe(
+        'auth',
+    )
+    // environment-changed hint must not change the classification
+    expect(
+        classifyCrawlError(new Error('... (instagram_session_dead hint=environment-changed)')),
+    ).toBe('auth')
+    expect(shouldRetryCrawlErrorForPlatform(dead, Platform.Instagram)).toBe(false)
+})
+
 test('classifyCrawlError keeps explicit rate-limit and status signals', () => {
     expect(classifyCrawlError(new Error('Error: 429'))).toBe('rate_limit')
     expect(classifyCrawlError(new Error('too many requests'))).toBe('rate_limit')

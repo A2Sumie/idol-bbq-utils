@@ -2044,3 +2044,230 @@ test('RenderService builds TikTok CDN cookie headers from the configured Netscap
         rmSync(dir, { recursive: true, force: true })
     }
 })
+
+// ---------------------------------------------------------------------------
+// Instagram media URL lifecycle (intel §3): oe expiry pre-check, candidate
+// fallback chain, normalized failure-cache keys
+// ---------------------------------------------------------------------------
+
+describe('RenderService Instagram media URL handling', () => {
+    test('failure cache keys are normalized: rotated signatures share one memory', () => {
+        const service = new RenderService()
+        const error404 = new Error('Failed to download file: 404 Not Found')
+        // First signed URL fails permanently.
+        ;(service as any).cacheMediaDownloadFailure(
+            'https://scontent.cdninstagram.com/v/t51/a.jpg?oe=64F00000&oh=SIG1&_nc_ht=cdn',
+            error404,
+        )
+        // The same image behind a rotated signature must be recognized as
+        // already-failed (raw-URL keys would miss and re-burn the request).
+        expect(
+            (service as any).isMediaDownloadCachedFailed(
+                'https://scontent.cdninstagram.com/v/t51/a.jpg?oe=64F00001&oh=SIG2&_nc_ht=cdn',
+            ),
+        ).toBe(true)
+        // A different image is not poisoned.
+        expect(
+            (service as any).isMediaDownloadCachedFailed(
+                'https://scontent.cdninstagram.com/v/t51/b.jpg?oe=64F00000&oh=SIG3',
+            ),
+        ).toBe(false)
+        // 5xx never enters the failure cache.
+        ;(service as any).cacheMediaDownloadFailure(
+            'https://scontent.cdninstagram.com/v/t51/c.jpg?oe=64F00000',
+            new Error('Failed to download file: 503 Unavailable'),
+        )
+        expect((service as any).isMediaDownloadCachedFailed('https://scontent.cdninstagram.com/v/t51/c.jpg')).toBe(false)
+    })
+
+    test('oe-expired primary URL is skipped in favor of an unexpired fallback candidate', async () => {
+        const requestedPaths: Array<string> = []
+        const server = Bun.serve({
+            port: 0,
+            fetch(request) {
+                const { pathname } = new URL(request.url)
+                requestedPaths.push(pathname)
+                if (pathname.endsWith('/expired-primary.jpg')) {
+                    return new Response('should not be requested', { status: 404 })
+                }
+                if (pathname.endsWith('/fallback.jpg')) {
+                    return new Response(
+                        Buffer.from(
+                            // 1x1 PNG
+                            Buffer.from(
+                                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s1OtS8AAAAASUVORK5CYII=',
+                                'base64',
+                            ),
+                        ),
+                        { headers: { 'content-type': 'image/png' } },
+                    )
+                }
+                return new Response('not found', { status: 404 })
+            },
+        })
+        try {
+            const service = new RenderService()
+            const pastHex = Math.floor(Date.now() / 1000 - 3600).toString(16)
+            const result = await service.process(
+                {
+                    id: 1,
+                    a_id: 'OEEXPIRED1',
+                    u_id: 'ig_user',
+                    username: 'IG User',
+                    created_at: 1773845200,
+                    content: 'primary already expired',
+                    translation: undefined,
+                    translated_by: undefined,
+                    url: 'https://www.instagram.com/p/OEEXPIRED1/',
+                    type: 'post' as any,
+                    ref: null,
+                    has_media: true,
+                    media: [
+                        {
+                            type: 'photo' as const,
+                            url: `http://localhost:${server.port}/expired-primary.jpg?oe=${pastHex}`,
+                            fallback_urls: [`http://localhost:${server.port}/fallback.jpg`],
+                        },
+                    ],
+                    extra: null,
+                    u_avatar: null,
+                    platform: Platform.Instagram,
+                } as any,
+                {
+                    taskId: 'test-oe-expired',
+                    mediaConfig: { type: 'no-storage', use: { tool: MediaToolEnum.DEFAULT } },
+                },
+            )
+
+            // The dead primary was never requested (oe pre-check saved a
+            // guaranteed-failed roundtrip); the fallback served the file.
+            expect(requestedPaths.some((p) => p.endsWith('/expired-primary.jpg'))).toBe(false)
+            expect(requestedPaths.some((p) => p.endsWith('/fallback.jpg'))).toBe(true)
+            expect(result.mediaFiles.length).toBe(1)
+        } finally {
+            server.stop(true)
+        }
+    })
+
+    test('4xx on the primary URL falls through to the fallback chain in order', async () => {
+        const requestedPaths: Array<string> = []
+        const server = Bun.serve({
+            port: 0,
+            fetch(request) {
+                const { pathname } = new URL(request.url)
+                requestedPaths.push(pathname)
+                if (pathname.endsWith('/primary-403.jpg') || pathname.endsWith('/mid-403.jpg')) {
+                    return new Response('forbidden', { status: 403 })
+                }
+                if (pathname.endsWith('/ok.jpg')) {
+                    return new Response(
+                        Buffer.from(
+                            Buffer.from(
+                                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9s1OtS8AAAAASUVORK5CYII=',
+                                'base64',
+                            ),
+                        ),
+                        { headers: { 'content-type': 'image/png' } },
+                    )
+                }
+                return new Response('not found', { status: 404 })
+            },
+        })
+        try {
+            const service = new RenderService()
+            const result = await service.process(
+                {
+                    id: 2,
+                    a_id: 'FALLCHAIN1',
+                    u_id: 'ig_user',
+                    username: 'IG User',
+                    created_at: 1773845200,
+                    content: 'chain test',
+                    translation: undefined,
+                    translated_by: undefined,
+                    url: 'https://www.instagram.com/p/FALLCHAIN1/',
+                    type: 'post' as any,
+                    ref: null,
+                    has_media: true,
+                    media: [
+                        {
+                            type: 'photo' as const,
+                            url: `http://localhost:${server.port}/primary-403.jpg`,
+                            fallback_urls: [
+                                `http://localhost:${server.port}/mid-403.jpg`,
+                                `http://localhost:${server.port}/ok.jpg`,
+                            ],
+                        },
+                    ],
+                    extra: null,
+                    u_avatar: null,
+                    platform: Platform.Instagram,
+                } as any,
+                {
+                    taskId: 'test-fallback-chain',
+                    mediaConfig: { type: 'no-storage', use: { tool: MediaToolEnum.DEFAULT } },
+                },
+            )
+
+            // Tried in order: primary → first fallback (403) → second fallback (ok).
+            expect(requestedPaths.map((p) => p.split('/').pop())).toEqual([
+                'primary-403.jpg',
+                'mid-403.jpg',
+                'ok.jpg',
+            ])
+            expect(result.mediaFiles.length).toBe(1)
+        } finally {
+            server.stop(true)
+        }
+    })
+
+    test('every candidate expired → media item skipped without any request', async () => {
+        const requestedPaths: Array<string> = []
+        const server = Bun.serve({
+            port: 0,
+            fetch(request) {
+                requestedPaths.push(new URL(request.url).pathname)
+                return new Response('nope', { status: 404 })
+            },
+        })
+        try {
+            const service = new RenderService()
+            const pastHex = Math.floor(Date.now() / 1000 - 60).toString(16)
+            const result = await service.process(
+                {
+                    id: 3,
+                    a_id: 'ALLDEAD1',
+                    u_id: 'ig_user',
+                    username: 'IG User',
+                    created_at: 1773845200,
+                    content: 'all dead',
+                    translation: undefined,
+                    translated_by: undefined,
+                    url: 'https://www.instagram.com/p/ALLDEAD1/',
+                    type: 'post' as any,
+                    ref: null,
+                    has_media: true,
+                    media: [
+                        {
+                            type: 'photo' as const,
+                            url: `http://localhost:${server.port}/dead1.jpg?oe=${pastHex}`,
+                            fallback_urls: [`http://localhost:${server.port}/dead2.jpg?oe=${pastHex}`],
+                        },
+                    ],
+                    extra: null,
+                    u_avatar: null,
+                    platform: Platform.Instagram,
+                } as any,
+                {
+                    taskId: 'test-all-expired',
+                    mediaConfig: { type: 'no-storage', use: { tool: MediaToolEnum.DEFAULT } },
+                },
+            )
+
+            expect(requestedPaths).toEqual([])
+            expect(result.mediaFiles).toEqual([])
+        } finally {
+            server.stop(true)
+        }
+    })
+})

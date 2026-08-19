@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
     analyzeManifestText,
     buildPlayerUrl,
+    classifyInstagramBroadcastStatus,
     filterRelayHeaders,
     InstagramLiveRelayService,
     isPostLiveGraceActive,
@@ -64,6 +65,7 @@ test('instagram live relay parser extracts mpd urls from web_info payload', () =
             'https://example.com/live-abr.mpd?foo=1',
             'https://example.com/live-hd.mpd?foo=1',
         ],
+        expireAt: null,
     })
 })
 
@@ -93,4 +95,106 @@ test('instagram live relay target config preserves zero sync interval and falls 
     })
     expect(invalidInterval.sync_interval_seconds).toBe(300)
     expect(invalidInterval.post_live_grace_seconds).toBe(6 * 60 * 60)
+})
+
+// ---------------------------------------------------------------------------
+// P5: broadcast_status state machine (intel §4.1) + expire_at freshness
+// (intel §4.2) + held-manifest grace (intel §4.3)
+// ---------------------------------------------------------------------------
+
+test('instagram live broadcast status classifier maps the 11-value enum', () => {
+    const classify = classifyInstagramBroadcastStatus
+    // active family
+    expect(classify('active')).toBe('active')
+    expect(classify(null)).toBe('active')
+    expect(classify('')).toBe('active')
+    // terminal
+    expect(classify('stopped')).toBe('terminal')
+    expect(classify('hard_stop')).toBe('terminal')
+    expect(classify('HARD_STOP')).toBe('terminal')
+    // post_live family
+    expect(classify('post_live')).toBe('post_live')
+    expect(classify('post_live_posting')).toBe('post_live')
+    expect(classify('post_live_posting_failed')).toBe('post_live')
+    expect(classify('post_live_posting_initiated')).toBe('post_live')
+    expect(classify('post_live_post_request_failed')).toBe('post_live')
+    // non-terminal
+    expect(classify('interrupted')).toBe('non_terminal')
+    expect(classify('hidden')).toBe('non_terminal')
+    expect(classify('unknown')).toBe('non_terminal')
+    // novel values degrade non-terminal: an unrecognized status must not kill a capture
+    expect(classify('some_future_status')).toBe('non_terminal')
+})
+
+test('instagram live web_info parser carries expire_at in epoch seconds', () => {
+    expect(
+        parseInstagramLiveWebInfo({
+            broadcast_status: 'active',
+            dash_abr_playback_url: 'https://example.com/live.mpd',
+            expire_at: 1773845200,
+        }),
+    ).toMatchObject({ expireAt: 1773845200 })
+    // absent / nonsense → null
+    expect(parseInstagramLiveWebInfo({ broadcast_status: 'active' }).expireAt).toBeNull()
+    expect(parseInstagramLiveWebInfo({ expire_at: 'nope' }).expireAt).toBeNull()
+    expect(parseInstagramLiveWebInfo({ expire_at: 0 }).expireAt).toBeNull()
+})
+
+test('instagram live post-live package is held within the 300s manifest grace window', async () => {
+    const service = new InstagramLiveRelayService('/tmp/instagram-live-relay-held-test') as any
+    const now = Date.now()
+    const previousCache = {
+        handle: 'held_handle',
+        profileUrl: 'https://www.instagram.com/held_handle/',
+        checkedAt: new Date(now - 60_000).toISOString(),
+        isLive: false,
+        liveBroadcastId: '42',
+        liveBroadcastVisibility: null,
+        liveUrl: null,
+        displayName: 'Held',
+        avatarUrl: null,
+        lastLiveAt: new Date(now - 60_000).toISOString(),
+        package: {
+            mode: 'echo',
+            page_url: 'https://www.instagram.com/held_handle/live/',
+            timestamp: now - 60_000,
+            lastRefreshedAt: now - 60_000,
+            broadcast_status: 'post_live',
+            cookies_b64: '',
+            streams_detected: 1,
+            streams: [
+                {
+                    source: 'https://example.invalid/live.mpd',
+                    type: 'DASH',
+                    headers: {},
+                    mediaInfo: { size: 1, variants_count: 1, variants: [], encrypted: false, pssh: null },
+                },
+            ],
+            licenses: [],
+            keys: [],
+        },
+        archive: null,
+        syncedAt: new Date(now - 60_000).toISOString(),
+        relay: { baseUrl: 'https://player', playerId: 'relay', active: true },
+    }
+    const relayConfig = {
+        post_live_grace_seconds: 6 * 60 * 60,
+        sync_interval_seconds: 300,
+    }
+
+    // Manifest fetch fails (example.invalid is unreachable / 4xx): within the
+    // 300s held window the previous package must be kept, not dropped.
+    const held = await service.refreshPostLivePackage(previousCache, relayConfig)
+    expect(held).not.toBeNull()
+    expect(held.streams_detected).toBe(1)
+    expect(held.lastRefreshedAt).toBe(now - 60_000)
+
+    // Outside the window (package last refreshed 400s ago): refresh failure now
+    // legitimately ends the replay (returns null → caller stops the relay).
+    const staleCache = {
+        ...previousCache,
+        package: { ...previousCache.package, lastRefreshedAt: now - 400_000, timestamp: now - 400_000 },
+    }
+    const dropped = await service.refreshPostLivePackage(staleCache, relayConfig)
+    expect(dropped).toBeNull()
 })

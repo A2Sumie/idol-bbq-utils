@@ -33,6 +33,10 @@ const DEFAULT_SYNC_INTERVAL_SECONDS = 300
 const DEFAULT_POST_LIVE_GRACE_SECONDS = 6 * 60 * 60
 const STREAM_CAPTURE_TIMEOUT_MS = 15000
 const MANIFEST_FETCH_TIMEOUT_MS = 15000
+// Intel §4.3: after a manifest refresh failure the app keeps serving the last
+// held manifest for 300 seconds — refresh failure ≠ stream death. The relay
+// mirrors that window before declaring a post-live package dead.
+const MANIFEST_HELD_GRACE_MS = 300 * 1000
 const LIVE_PLAYER_API_TIMEOUT_MS = 15000
 const DEFAULT_INSTAGRAM_ARCHIVE_EXTENSION = 'mkv'
 const DEFAULT_INSTAGRAM_ARCHIVE_MIN_PUBLISH_DURATION_SECONDS = 60
@@ -98,6 +102,23 @@ interface EchoPackage {
         key: string
         session?: string
     }>
+    /**
+     * Epoch ms of the last successful manifest refresh (intel §4.3: the app
+     * keeps serving a held manifest for 300s after refresh failures — a fetch
+     * failure within the window must not be treated as stream death).
+     */
+    lastRefreshedAt?: number
+    /**
+     * broadcast_status observed at capture time (intel §4.1, 11-value enum).
+     * Categorized by classifyInstagramBroadcastStatus during sync.
+     */
+    broadcast_status?: string | null
+    /**
+     * Live media model expiry, epoch SECONDS (`expire_at`). Drives freshness
+     * re-capture: once every stream URL in the package is past expire_at, the
+     * package cannot serve the relay and a new media model must be fetched.
+     */
+    expireAt?: number | null
 }
 
 interface ResolvedInstagramLiveArchiveConfig {
@@ -370,12 +391,48 @@ function parseInstagramLiveWebInfo(json: any) {
                 .filter((value): value is string => Boolean(value)),
         ),
     )
+    const expireAtRaw = Number(payload?.expire_at)
+    const expireAt = Number.isFinite(expireAtRaw) && expireAtRaw > 0 ? expireAtRaw : null
 
     return {
         broadcastStatus: payload?.broadcast_status ? String(payload.broadcast_status) : null,
         coverUrl: normalizeUrlValue(payload?.cover_frame_url),
         streamUrls,
+        expireAt,
     }
+}
+
+/**
+ * broadcast_status state machine (intel §4.1, 11-value enum verified in the
+ * Android client): the enum decides whether "not active" means the stream is
+ * really over, in its archive posting phase, or merely in a recoverable hiccup.
+ * Unknown strings degrade to the non-terminal branch — a novel status must not
+ * kill a live capture.
+ */
+type InstagramBroadcastStatusCategory =
+    | 'active'
+    /** stopped / hard_stop — the broadcast is definitively over. */
+    | 'terminal'
+    /** post_live* family — over, but the archive/replay is still being produced. */
+    | 'post_live'
+    /** interrupted / hidden / unknown (and unrecognized values) — keep watching. */
+    | 'non_terminal'
+
+const INSTAGRAM_TERMINAL_BROADCAST_STATUSES = new Set(['stopped', 'hard_stop'])
+
+function classifyInstagramBroadcastStatus(status: string | null | undefined): InstagramBroadcastStatusCategory {
+    const normalized = String(status || '').trim().toLowerCase()
+    if (!normalized || normalized === 'active') {
+        return 'active'
+    }
+    if (INSTAGRAM_TERMINAL_BROADCAST_STATUSES.has(normalized)) {
+        return 'terminal'
+    }
+    if (normalized.startsWith('post_live')) {
+        return 'post_live'
+    }
+    // interrupted / hidden / unknown / novel values
+    return 'non_terminal'
 }
 
 function createEmptyMediaInfo(): StreamMediaInfo {
@@ -690,17 +747,28 @@ class InstagramLiveRelayService {
                     nextCache.archive = finishedArchive
                 }
 
+                // broadcast_status refinement (intel §4.1): a terminal status
+                // (stopped/hard_stop) means the broadcast is definitively over —
+                // no post-live replay keeps running. The post_live* family keeps
+                // the current grace-window replay behavior.
+                const offlineBroadcastCategory = classifyInstagramBroadcastStatus(previousCache?.package?.broadcast_status)
+                const postLiveReplayAllowed = offlineBroadcastCategory !== 'terminal'
+
                 // Only pay the manifest re-fetches when a post-live relay sync is
                 // actually due; otherwise the package is unchanged and re-analyzing
                 // manifests every round (up to 24 rounds in the grace window) is
                 // pure upstream traffic.
                 const shouldSyncPostLive =
-                    !previousCache?.relay?.active ||
-                    !previousCache?.syncedAt ||
-                    Date.now() - new Date(previousCache.syncedAt).getTime() >= relayConfig.sync_interval_seconds * 1000
+                    postLiveReplayAllowed &&
+                    (!previousCache?.relay?.active ||
+                        !previousCache?.syncedAt ||
+                        Date.now() - new Date(previousCache.syncedAt).getTime() >=
+                            relayConfig.sync_interval_seconds * 1000)
                 const postLivePackage = shouldSyncPostLive
                     ? await this.refreshPostLivePackage(previousCache, relayConfig, scopedLog)
-                    : previousCache?.package || null
+                    : postLiveReplayAllowed
+                      ? previousCache?.package || null
+                      : null
                 if (postLivePackage) {
                     nextCache.package = postLivePackage
 
@@ -741,10 +809,56 @@ class InstagramLiveRelayService {
                 return nextCache
             }
 
+            // broadcast_status override (intel §4.1): `stopped`/`hard_stop` are
+            // terminal even while the profile graphql still claims is_live
+            // (stale cache / subscriber lag). Finish the recording immediately
+            // instead of waiting for the profile to agree. interrupted/hidden/
+            // unknown stay non-terminal — the current watch-and-poll behavior.
+            const packageBroadcastStatus =
+                previousCache?.package?.broadcast_status || nextCache.package?.broadcast_status || null
+            const broadcastCategory = classifyInstagramBroadcastStatus(packageBroadcastStatus)
+            if (broadcastCategory === 'terminal') {
+                scopedLog?.info(
+                    `Instagram live ${options.handle} broadcast_status=${packageBroadcastStatus} is terminal; finishing recording without waiting for the profile flag`,
+                )
+                const finishedArchive = await this.finishRecordingIfNeeded(options.handle, previousCache, scopedLog)
+                if (finishedArchive) {
+                    nextCache.archive = finishedArchive
+                }
+                if (relayConfig.relay_enabled && relayConfig.stop_offline && previousCache?.relay?.active) {
+                    const relayResponse = await this.stopRelay(relayConfig)
+                    nextCache.relay = {
+                        baseUrl: relayConfig.live_player_url,
+                        playerId: relayConfig.player_id,
+                        active: false,
+                        status: relayResponse.status,
+                        body: relayResponse.body,
+                    }
+                }
+                nextCache.package = null
+                this.writeCache(options.handle, nextCache)
+                return nextCache
+            }
+
+            // expire_at freshness gate (intel §4.2): the live media model — not
+            // URL params — defines stream freshness. Once the captured package
+            // is past expire_at while the profile still says live, every URL in
+            // it is dead weight: re-capture a fresh media model.
+            const packageExpireAt = previousCache?.package?.expireAt ?? null
+            const packageExpired =
+                packageExpireAt !== null && packageExpireAt > 0 && packageExpireAt <= Math.floor(Date.now() / 1000)
+
             const shouldCapture =
                 previousCache?.liveBroadcastId !== status.live_broadcast_id ||
                 !previousCache?.package ||
-                (previousCache.package.streams_detected || 0) === 0
+                (previousCache.package.streams_detected || 0) === 0 ||
+                packageExpired
+
+            if (packageExpired && !shouldCapture) {
+                scopedLog?.warn(
+                    `Instagram live package for ${options.handle} passed expire_at (${packageExpireAt}); re-capturing media model`,
+                )
+            }
 
             if (shouldCapture) {
                 nextCache.package = await this.captureEchoPackage({
@@ -1424,6 +1538,10 @@ class InstagramLiveRelayService {
         const analysisTasks: Array<Promise<void>> = []
         const baseHeaders = filterRelayHeaders(requestHeaders)
         const cookieEntries = await this.collectCookies(page, cookieString)
+        // web_info also reports the broadcast lifecycle (intel §4.1) and the
+        // media-model expiry (intel §4.2): both ride along with the streams.
+        let observedBroadcastStatus: string | null = null
+        let observedExpireAt: number | null = null
 
         const responseListener = (response: any) => {
             const source = response.url()
@@ -1441,6 +1559,13 @@ class InstagramLiveRelayService {
                         try {
                             const text = await response.text()
                             const liveWebInfo = JSON.parse(text)
+                            const parsed = parseInstagramLiveWebInfo(liveWebInfo)
+                            if (parsed.broadcastStatus) {
+                                observedBroadcastStatus = parsed.broadcastStatus
+                            }
+                            if (parsed.expireAt !== null) {
+                                observedExpireAt = parsed.expireAt
+                            }
                             await this.captureStreamsFromLiveWebInfo(capturedStreams, liveWebInfo, headers, log)
                         } catch (error) {
                             log?.warn(`Failed to parse Instagram live web_info ${source}: ${error}`)
@@ -1470,6 +1595,13 @@ class InstagramLiveRelayService {
                         },
                         liveUrl,
                     )
+                    const parsedWebInfo = parseInstagramLiveWebInfo(liveWebInfo)
+                    if (parsedWebInfo.broadcastStatus) {
+                        observedBroadcastStatus = parsedWebInfo.broadcastStatus
+                    }
+                    if (parsedWebInfo.expireAt !== null) {
+                        observedExpireAt = parsedWebInfo.expireAt
+                    }
                     await this.captureStreamsFromLiveWebInfo(capturedStreams, liveWebInfo, directHeaders, log)
                     xhrFoundStreams = capturedStreams.size > 0
                     if (xhrFoundStreams) {
@@ -1516,6 +1648,9 @@ class InstagramLiveRelayService {
             mode: 'echo',
             page_url: liveUrl,
             timestamp: Date.now(),
+            lastRefreshedAt: Date.now(),
+            expireAt: observedExpireAt,
+            broadcast_status: observedBroadcastStatus,
             cookies_b64: Buffer.from(JSON.stringify(cookieEntries), 'utf8').toString('base64'),
             streams_detected: streams.length,
             streams,
@@ -1699,12 +1834,28 @@ class InstagramLiveRelayService {
         ).filter((stream): stream is EchoStreamRecord => Boolean(stream))
 
         if (refreshedStreams.length === 0) {
+            // Held-manifest grace (intel §4.3): the app keeps playing the last
+            // good manifest for 300s after refresh failures — a failed fetch is
+            // not proof the stream died. Within the window, keep serving the
+            // previous package instead of dropping it (which would stopRelay).
+            const heldAt = previousPackage.lastRefreshedAt || previousPackage.timestamp
+            const heldForMs = Date.now() - heldAt
+            if (heldForMs < MANIFEST_HELD_GRACE_MS) {
+                log?.warn(
+                    `Post-live manifest refresh failed but within ${MANIFEST_HELD_GRACE_MS / 1000}s held-manifest grace (held ${Math.round(heldForMs / 1000)}s); keeping the previous package`,
+                )
+                return {
+                    ...previousPackage,
+                    lastRefreshedAt: heldAt,
+                }
+            }
             return null
         }
 
         return {
             ...previousPackage,
             timestamp: Date.now(),
+            lastRefreshedAt: Date.now(),
             streams_detected: refreshedStreams.length,
             streams: refreshedStreams.sort((a, b) => {
                 return (b.mediaInfo?.variants_count || 0) - (a.mediaInfo?.variants_count || 0)
@@ -1894,9 +2045,10 @@ export {
     InstagramLiveRelayService,
     analyzeManifestText,
     buildPlayerUrl,
+    classifyInstagramBroadcastStatus,
     filterRelayHeaders,
     isPostLiveGraceActive,
     parseInstagramLiveWebInfo,
     parseCookieString,
 }
-export type { EchoPackage, InstagramLiveCacheEntry }
+export type { EchoPackage, InstagramLiveCacheEntry, InstagramBroadcastStatusCategory }

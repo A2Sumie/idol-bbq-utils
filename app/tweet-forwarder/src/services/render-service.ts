@@ -13,6 +13,7 @@ import {
     isDownloadableStreamingMediaUrl,
 } from '@/middleware/media'
 import { parseNetscapeCookieToPuppeteerCookie } from '@idol-bbq-utils/spider'
+import { isInstagramMediaUrlExpired, normalizeInstagramMediaUrlForCache } from '@idol-bbq-utils/spider'
 import {
     articleToText,
     compactArticleToText,
@@ -160,12 +161,13 @@ export class RenderService {
     private static readonly CARD_RENDER_CACHE_LIMIT = 16
 
     private isMediaDownloadCachedFailed(url: string): boolean {
-        const until = this.mediaDownloadFailureCache.get(url)
+        const key = normalizeInstagramMediaUrlForCache(url)
+        const until = this.mediaDownloadFailureCache.get(key)
         if (!until) {
             return false
         }
         if (until <= Date.now()) {
-            this.mediaDownloadFailureCache.delete(url)
+            this.mediaDownloadFailureCache.delete(key)
             return false
         }
         return true
@@ -178,7 +180,12 @@ export class RenderService {
         if (status < 400 || status >= 500) {
             return
         }
-        this.mediaDownloadFailureCache.set(url, Date.now() + RenderService.MEDIA_FAILURE_CACHE_MS)
+        // Key on the normalized URL: Instagram rotates CDN signature params
+        // (`oe`/`oh`/`__gda__`/`_nc_*`...) per media model, so raw-URL keys let
+        // the same dead image re-burn requests (and bloat this cache) each time
+        // the spider re-captures the post. Normalized, one image = one memory.
+        const key = normalizeInstagramMediaUrlForCache(url)
+        this.mediaDownloadFailureCache.set(key, Date.now() + RenderService.MEDIA_FAILURE_CACHE_MS)
         if (this.mediaDownloadFailureCache.size > RenderService.MEDIA_FAILURE_CACHE_LIMIT) {
             const oldest = Array.from(this.mediaDownloadFailureCache.entries()).sort((a, b) => a[1] - b[1])[0]
             if (oldest) {
@@ -1414,33 +1421,67 @@ export class RenderService {
 
                 // Helper to download a list of media items
                 const _handleMedia = async (
-                    mediaList: Array<{ url: string; type: MediaType }>,
+                    mediaList: Array<{ url: string; type: MediaType; fallback_urls?: Array<string> }>,
                     overrideType?: boolean,
                     cookieHeader?: string | null,
                 ) => {
                     const files = [] as Array<RenderedMediaFile | undefined>
-                    for (const [index, { url, type }] of mediaList.entries()) {
-                        if (this.isMediaDownloadCachedFailed(url)) {
-                            this.log?.debug(`Skipping cached-failed media download for ${url}`)
-                            failedUrls.add(url)
+                    for (const [index, mediaItem] of mediaList.entries()) {
+                        const { type } = mediaItem
+                        // Instagram CDN URLs self-describe their death via the
+                        // `oe` hex-epoch param: a URL past its `oe` can never
+                        // succeed, so skip straight to the candidate fallbacks
+                        // instead of paying a guaranteed-failed request.
+                        // (There is no re-sign path in the client; only a fresh
+                        // media model or a fallback candidate revives an asset.)
+                        const fullChain = [mediaItem.url, ...(mediaItem.fallback_urls || [])]
+                        const effectiveChain = fullChain.filter((candidate) => !isInstagramMediaUrlExpired(candidate))
+                        if (effectiveChain.length === 0) {
+                            this.log?.debug(`All candidates expired for media item of ${mediaItem.url}; skipping`)
+                            failedUrls.add(mediaItem.url)
                             files.push(undefined)
                             continue
                         }
-                        try {
-                            const requestHeaders = {
-                                ...(cookieHeader ? { cookie: cookieHeader } : {}),
-                                ...((currentArticle?.platform && platformPresetHeadersMap[currentArticle.platform]) ||
-                                    {}),
-                            }
-                            const path = isDownloadableStreamingMediaUrl(url)
-                                ? await downloadStreamingMediaFile(url, taskId, requestHeaders)
-                                : await plainDownloadMediaFile(url, taskId, requestHeaders)
 
-                            files.push(await finalizeDownloadedFile(path, url, overrideType ? undefined : type))
-                        } catch (e) {
-                            this.log?.error(`Error while downloading media file: ${e}, skipping ${url}`)
-                            failedUrls.add(url)
-                            this.cacheMediaDownloadFailure(url, e)
+                        let downloaded = false
+                        for (const candidateUrl of effectiveChain) {
+                            if (this.isMediaDownloadCachedFailed(candidateUrl)) {
+                                this.log?.debug(`Skipping cached-failed media download for ${candidateUrl}`)
+                                continue
+                            }
+                            try {
+                                const requestHeaders = {
+                                    ...(cookieHeader ? { cookie: cookieHeader } : {}),
+                                    ...((currentArticle?.platform && platformPresetHeadersMap[currentArticle.platform]) ||
+                                        {}),
+                                }
+                                const path = isDownloadableStreamingMediaUrl(candidateUrl)
+                                    ? await downloadStreamingMediaFile(candidateUrl, taskId, requestHeaders)
+                                    : await plainDownloadMediaFile(candidateUrl, taskId, requestHeaders)
+
+                                files.push(await finalizeDownloadedFile(path, candidateUrl, overrideType ? undefined : type))
+                                downloaded = true
+                                break
+                            } catch (e) {
+                                this.log?.error(
+                                    `Error while downloading media file: ${e}, skipping ${candidateUrl}${
+                                        candidateUrl !== mediaItem.url ? ' (candidate fallback)' : ''
+                                    }`,
+                                )
+                                this.cacheMediaDownloadFailure(candidateUrl, e)
+                                // Only 4xx (permanent) failures justify switching
+                                // candidates; 5xx/network blips are transient and
+                                // the next candidate is likely on the same sick CDN.
+                                const message = e instanceof Error ? e.message : String(e)
+                                const statusMatch = message.match(/(\d{3})/)
+                                const status = statusMatch ? Number(statusMatch[1]) : 0
+                                if (status < 400 || status >= 500) {
+                                    break
+                                }
+                            }
+                        }
+                        if (!downloaded) {
+                            failedUrls.add(mediaItem.url)
                             files.push(undefined)
                         }
 
