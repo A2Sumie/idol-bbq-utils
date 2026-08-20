@@ -2072,11 +2072,15 @@ class SpiderPools extends BaseCompatibleModel {
     }
 
     private crawlCooldownKey(context: CrawlTargetContext) {
-        // Instagram cooldowns include the profile path so one failing handle does
-        // not cool the whole shared session (11 handles used to back off together
-        // after a single 45s timeout).
+        // Instagram and TikTok cooldowns include the profile path so one failing
+        // handle does not cool the whole shared session (11 IG handles used to
+        // back off together after a single 45s timeout; on 2026-08-20 a stray
+        // TikTok invalid_handle misclassification on @sally_amaki froze all 8
+        // TikTok handles for ~6h per episode).
         const targetScope =
-            context.platform === Platform.Instagram ? context.url.pathname.split('/').filter(Boolean)[0] || 'root' : ''
+            context.platform === Platform.Instagram || context.platform === Platform.TikTok
+                ? context.url.pathname.split('/').filter(Boolean)[0] || 'root'
+                : ''
         return [
             context.platform,
             context.url.hostname,

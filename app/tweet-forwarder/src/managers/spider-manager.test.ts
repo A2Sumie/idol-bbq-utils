@@ -1534,6 +1534,26 @@ test('SpiderPools escalates repeat cooldowns for the same target', async () => {
     expect(third.expiresAt - Date.now()).toBeLessThanOrEqual(6 * 60 * 60 * 1000)
 })
 
+test('SpiderPools scopes TikTok cooldowns per handle so one bad handle does not freeze the session', async () => {
+    const emitter = new EventEmitter()
+    const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools-tiktok-scope', emitter)
+    const makeContext = (handle: string) => ({
+        url: new URL(`https://www.tiktok.com/@${handle}`),
+        platform: Platform.TikTok,
+        sessionProfile: 'tiktok-mobile-main',
+        deviceProfile: 'mobile_chrome',
+    })
+    const badHandle = makeContext('sally_amaki')
+    const goodHandle = makeContext('227official')
+
+    ;(pools as any).setCooldownForError(badHandle, 'invalid_handle', 'TikTok handle @sally_amaki appears to not exist (tiktok_invalid_handle)')
+
+    expect((pools as any).getActiveCooldown(badHandle)).toBeTruthy()
+    expect((pools as any).getActiveCooldown(goodHandle)).toBeNull()
+    // Same-handle keys remain stable across sessions for the escalation map.
+    expect((pools as any).crawlCooldownKey(badHandle)).toBe('3:www.tiktok.com:tiktok-mobile-main:@sally_amaki')
+})
+
 test('SpiderPools respects X Retry-After hints embedded in 429 errors', async () => {
     const emitter = new EventEmitter()
     const pools = new SpiderPools('/tmp/idol-bbq-utils-test-spider-pools-retry-after', emitter)
