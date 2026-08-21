@@ -1428,6 +1428,34 @@ test('classifyCrawlError still classifies genuine login/checkpoint bounces as au
     expect(classifyCrawlError(new Error('login_required'))).toBe('auth')
 })
 
+test('classifyCrawlError separates X environment-drift challenges from credential death', () => {
+    // account/access and /i/bouncer/ redirects carry the x_environment_challenge
+    // marker (core/spider x.ts 3xx split): the cookie is usually alive, so the
+    // class must stay distinct from auth's credential-death semantics.
+    const challenge = new Error(
+        'Error: x_environment_challenge redirect (302) to https://x.com/account/access - restore original environment (IP/UA/profile) before rotating cookies',
+    )
+    expect(classifyCrawlError(challenge)).toBe('challenge')
+    expect(classifyCrawlError(new Error('x_environment_challenge redirect (302) to https://x.com/i/bouncer/123'))).toBe(
+        'challenge',
+    )
+    expect(classifyCrawlError(new Error('Error: login redirect (302): session expired or checkpoint'))).toBe('auth')
+})
+
+test('classifyCrawlError consumes structured X error-envelope codes', () => {
+    const withXCode = (code: number) => {
+        const error = new Error(`Failed to fetch tweets: envelope (code ${code})`)
+        ;(error as any).xErrorCode = code
+        return error
+    }
+    expect(classifyCrawlError(withXCode(88))).toBe('rate_limit')
+    expect(classifyCrawlError(withXCode(32))).toBe('auth')
+    expect(classifyCrawlError(withXCode(99))).toBe('auth')
+    expect(classifyCrawlError(withXCode(326))).toBe('challenge')
+    // Codes outside the known families must not hijack classification.
+    expect(classifyCrawlError(withXCode(50))).not.toBe('rate_limit')
+})
+
 test('classifyCrawlError maps body-predicate session death (instagram_session_dead) to auth', () => {
     // 200-status responses carrying login_required/checkpoint_required/
     // two_factor_required surface as InstagramSessionDeadError; the code and

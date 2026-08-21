@@ -77,6 +77,11 @@ const MOBILE_DEVICE_PROFILES: ReadonlySet<DeviceProfile> = new Set<DeviceProfile
 ])
 const RISK_COOLDOWN_MS: Record<CrawlErrorClass, number> = {
     auth: 30 * 60 * 1000,
+    // Environment-drift challenge (X account/access, /i/bouncer/): the cookie is
+    // usually still valid from the original IP/UA/device profile, so this cools
+    // the target without the auth path's credential-death semantics. Recovery
+    // should restore the original environment rather than rotate cookies.
+    challenge: 30 * 60 * 1000,
     rate_limit: 20 * 60 * 1000,
     timeout: 0,
     transient: 0,
@@ -91,6 +96,7 @@ const INSTAGRAM_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000
 
 type CrawlErrorClass =
     | 'auth'
+    | 'challenge'
     | 'rate_limit'
     | 'timeout'
     | 'transient'
@@ -349,6 +355,27 @@ function classifyCrawlError(error: unknown): CrawlErrorClass {
         // two_factor_required with HTTP 200) — auth-class, no retry.
         return 'auth'
     }
+    // X GraphQL error-envelope code, stamped on the Error by core/spider x.ts
+    // (throwForXGraphQLErrors). Code-first classification beats message regexes:
+    // 88 = rate limit, 326 = account locked (challenge), 32/89/99/135/215 = auth.
+    const xErrorCode = Number((root as any)?.xErrorCode)
+    if (Number.isFinite(xErrorCode)) {
+        if (xErrorCode === 88) {
+            return 'rate_limit'
+        }
+        if (xErrorCode === 326) {
+            return 'challenge'
+        }
+        if ([32, 89, 99, 135, 215].includes(xErrorCode)) {
+            return 'auth'
+        }
+    }
+    if (/\bx_environment_challenge\b/.test(message)) {
+        // X environment-drift challenge (account/access, /i/bouncer/ redirects):
+        // credential is usually alive; restoring the original IP/UA/profile
+        // beats rotating cookies, so keep it distinct from 'auth'.
+        return 'challenge'
+    }
     const status = statusFromMessage(message)
     if (status === 401 || status === 403) {
         return 'auth'
@@ -403,6 +430,7 @@ function shouldRetryCrawlError(error: unknown) {
     const classification = classifyCrawlError(error)
     return (
         classification !== 'auth' &&
+        classification !== 'challenge' &&
         classification !== 'rate_limit' &&
         classification !== 'parser' &&
         classification !== 'private_unfollowed' &&
