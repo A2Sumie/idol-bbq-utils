@@ -10,15 +10,23 @@
 //     X570 — one cheap request), capture = yt-dlp showroomlive extractor.
 //   - twitch:   probe = yt-dlp --dump-single-json (is_live), capture = yt-dlp
 //     --live-from-start (full VOD from the start of the stream).
+//   - tiktok:   probe = chain-B live-page hydration (GET @handle/live ->
+//     SIGI_STATE LiveRoom, 2026-08-21 sa7 e2e probe), capture = the page's
+//     embedded h264/aac HLS pull url via ffmpeg -c copy (the flv variants are
+//     enhanced-FLV HEVC, which ffmpeg < 7.2 cannot demux).
 //
 // Request budget mirrors the reference projects (yt-dlp / DouyinLiveRecorder /
 // TikTok-Live-Connector / instagrapi): one probe request per poll interval while a
 // window is open, capture only while actually live, no redundant fallback chains.
+// TikTok additionally enforces a process-wide per-host floor of 8s between
+// live-page hydration requests (measured SlardarWAF threshold, sa7 §4) via
+// tiktokLivePagePacer — independent of the plan's poll_seconds.
 import { spawn, type ChildProcess } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import DB from '@/db'
 import type { Logger } from '@idol-bbq-utils/log'
+import { TiktokLive, tiktokLivePagePacer, type HostPacer } from '@idol-bbq-utils/spider'
 import type { LiveCapturePlanPayload } from './live-capture-plan-service'
 
 export interface LiveCaptureConfig {
@@ -167,6 +175,19 @@ export function buildShowroomCaptureCommand(
     }
 }
 
+const TIKTOK_LIVE_PAGE_HOST = 'www.tiktok.com'
+
+/**
+ * Credential hygiene (sa7 §6.4): a stream url's query carries the only
+ * credential (`sign`; `expire`/`lsb_session_id` ride along). The full url is
+ * required in the ffmpeg argv, but anything written to logs or persisted state
+ * must use this stripped form.
+ */
+export function stripStreamUrlQuery(url: string): string {
+    const q = url.indexOf('?')
+    return q === -1 ? url : url.slice(0, q)
+}
+
 /** Parse a yt-dlp --dump-single-json payload for a live status. */
 export function parseTwitchLiveDump(json: any): boolean {
     if (!json || typeof json !== 'object') {
@@ -176,6 +197,50 @@ export function parseTwitchLiveDump(json: any): boolean {
         return true
     }
     return json.live_status === 'is_live'
+}
+
+/**
+ * Probe a TikTok handle's live status via chain B (sa7): the live-page
+ * hydration JSON embeds the HLS pull urls directly, so one GET answers both
+ * "is live" and "what to record". The per-host 8s pacer is held here (not in
+ * the spider probe) because the WAF threshold is per host, not per plan.
+ *
+ * Status mapping: only a confirmed not-live / invalid handle is 'offline';
+ * WAF challenge pages, parse failures and fetch errors are 'unknown' so a
+ * transient blip never advances the offline streak and stops an ongoing
+ * capture mid-broadcast.
+ */
+export async function probeTikTokLive(
+    handle: string,
+    options: {
+        fetchPage?: (url: string, headers: Record<string, string>) => Promise<string>
+        pacer?: HostPacer
+    } = {},
+): Promise<{ status: ProbeStatus; m3u8: string | null; title?: string; reason?: string }> {
+    await (options.pacer || tiktokLivePagePacer).waitTurn(TIKTOK_LIVE_PAGE_HOST)
+    const result = await TiktokLive.probeTikTokLiveStatus(handle, { fetchPage: options.fetchPage })
+    if (result.live && result.m3u8) {
+        return { status: 'live', m3u8: result.m3u8, title: result.title }
+    }
+    const offline = Boolean(result.reason && (/not live/.test(result.reason) || /invalid handle/.test(result.reason)))
+    return { status: offline ? 'offline' : 'unknown', m3u8: null, reason: result.reason }
+}
+
+/**
+ * Build the ffmpeg HLS-copy capture command for a TikTok live room. The
+ * chain-B pull url is h264/aac (sa7 §2), so a plain copy works on the stock
+ * ffmpeg; the signed url is only used inside argv, never logged.
+ */
+export function buildTikTokCaptureCommand(
+    archiveDir: string,
+    m3u8Url: string,
+    stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19),
+): { bin: string; args: Array<string> } {
+    const output = path.join(archiveDir, `${stamp}.mkv`)
+    return {
+        bin: 'ffmpeg',
+        args: ['-y', '-i', m3u8Url, '-c', 'copy', output],
+    }
 }
 
 export function targetUrl(plan: LiveCapturePlanPayload): string {
@@ -227,6 +292,7 @@ function stopChildGracefully(child: ChildProcess, timeoutMs = 10_000) {
 interface CaptureSessionDeps {
     fetchImpl?: typeof fetch
     probeShowroom?: typeof probeShowroomDetail
+    probeTikTok?: typeof probeTikTokLive
 }
 
 class CaptureSession {
@@ -244,6 +310,7 @@ class CaptureSession {
     private stopping = false
     private shuttingDown = false
     private lastRoomId: number | null = null
+    private lastTikTokM3u8: string | null = null
     private result: { captured: boolean; files: Array<string>; duration_seconds: number; last_error?: string } = {
         captured: false,
         files: [],
@@ -383,6 +450,16 @@ class CaptureSession {
                 return { status: 'unknown' }
             }
         }
+        if (this.plan.target.platform === 'tiktok') {
+            const probe = this.deps.probeTikTok || probeTikTokLive
+            const result = await probe(this.plan.target.handle)
+            if (result.status === 'live' && result.m3u8) {
+                this.lastTikTokM3u8 = result.m3u8
+            } else if (result.status === 'unknown' && result.reason) {
+                this.log?.warn(`[live-capture ${this.id}] tiktok probe degraded: ${result.reason}`)
+            }
+            return { status: result.status }
+        }
         this.log?.warn(`[live-capture ${this.id}] unsupported platform ${this.plan.target.platform}`)
         return { status: 'unknown' }
     }
@@ -408,6 +485,24 @@ class CaptureSession {
                 }
                 const { bin, args } = buildShowroomCaptureCommand(this.archiveDir, m3u8)
                 this.log?.info(`[live-capture ${this.id}] capturing showroom room=${this.lastRoomId} ${bin} -> mkv`)
+                const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+                this.attachCaptureProcess(child)
+                return
+            }
+            if (this.plan.target.platform === 'tiktok') {
+                // Native path (chain B, sa7 §6.1): the hydration probe already
+                // delivered the h264/aac HLS pull url; record it with ffmpeg
+                // -c copy. Stream urls die with the broadcast session (offline
+                // room = 404), so when ffmpeg exits the poll loop simply
+                // re-probes for a fresh url — no long-lived url caching.
+                if (!this.lastTikTokM3u8) {
+                    this.log?.warn(`[live-capture ${this.id}] tiktok live without a pull url; skip capture`)
+                    return
+                }
+                const { bin, args } = buildTikTokCaptureCommand(this.archiveDir, this.lastTikTokM3u8)
+                this.log?.info(
+                    `[live-capture ${this.id}] capturing tiktok @${this.plan.target.handle} ${bin} -> mkv url=${stripStreamUrlQuery(this.lastTikTokM3u8)}`,
+                )
                 const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
                 this.attachCaptureProcess(child)
                 return

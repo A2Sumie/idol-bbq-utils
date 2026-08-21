@@ -71,6 +71,27 @@ test('persistMediaFile moves downloaded media into a stable hash store with side
     expect(stored.hash).toHaveLength(64)
 })
 
+test('persistMediaFile strips the credential query from persisted source urls', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'media-cache-test-'))
+    createdPaths.add(tmpDir)
+    const sourcePath = path.join(tmpDir, 'clip.mp4')
+    fs.writeFileSync(sourcePath, Buffer.from('fake-video-bytes'))
+
+    const stored = persistMediaFile(sourcePath, {
+        media_type: 'video',
+        source_url:
+            'https://pull-hls-example.invalid/game/stream-1000000000000000001_or4/index.m3u8?expire=1000000000&sign=0123456789abcdef0123456789abcdef',
+    })
+    createdPaths.add(stored.path)
+    createdPaths.add(`${stored.path}.json`)
+
+    expect(stored.source_urls).toEqual([
+        'https://pull-hls-example.invalid/game/stream-1000000000000000001_or4/index.m3u8',
+    ])
+    const sidecar = JSON.parse(fs.readFileSync(`${stored.path}.json`, 'utf8'))
+    expect(JSON.stringify(sidecar.source_urls)).not.toContain('sign=')
+})
+
 test('cleanupMediaCache removes expired stored media and transient downloads', () => {
     const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'media-cache-cleanup-test-'))
     createdPaths.add(cacheRoot)

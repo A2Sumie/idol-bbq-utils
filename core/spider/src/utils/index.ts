@@ -223,5 +223,6 @@ export { parseNetscapeCookieToPuppeteerCookie, auditNetscapeCookieFile, getCooki
 export type { NetscapeCookieFileAudit }
 export * from './http'
 export * from './browser'
+export * from './host-pacer'
 export * from './domain-breaker'
 export * from './instagram-media-url'

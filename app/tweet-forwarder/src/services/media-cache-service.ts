@@ -1042,6 +1042,20 @@ function ensureSatoriCompatibleImage(filePath: string, log?: { warn?: (...args: 
     }
 }
 
+/**
+ * Credential hygiene: TikTok media urls (playAddr / live pull urls) carry
+ * their credential in the query (`sign` / `token_auth`). Sidecar metadata is
+ * persisted at rest, and the signed query is expired junk on any re-read —
+ * store the query-stripped form.
+ */
+function stripMediaSourceUrlQuery(url?: string) {
+    if (!url) {
+        return url
+    }
+    const queryIndex = url.indexOf('?')
+    return queryIndex === -1 ? url : url.slice(0, queryIndex)
+}
+
 function persistMediaFile(sourcePath: string, options: PersistMediaFileOptions): StoredMediaMetadata {
     ensureDirectory(MEDIA_STORE_ROOT)
     ensureDirectory(MEDIA_STORE_VIDEO_ROOT)
@@ -1071,7 +1085,11 @@ function persistMediaFile(sourcePath: string, options: PersistMediaFileOptions):
         size_bytes: stats.size,
         duration_seconds:
             options.media_type === 'video' ? probeDurationSeconds(storedPath) || existing?.duration_seconds : undefined,
-        source_urls: dedupeStrings([...(existing?.source_urls || []), options.source_url, options.article?.url]),
+        source_urls: dedupeStrings([
+            ...(existing?.source_urls || []),
+            stripMediaSourceUrlQuery(options.source_url),
+            options.article?.url,
+        ]),
         article_markers: dedupeStrings([...(existing?.article_markers || []), articleMarker]),
         article_urls: dedupeStrings([...(existing?.article_urls || []), options.article?.url]),
         platforms: dedupeStrings([
