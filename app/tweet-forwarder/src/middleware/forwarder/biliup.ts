@@ -2051,6 +2051,7 @@ async function runBiliupUpload(
 export {
     DEFAULT_BILIUP_EXCLUDED_UIDS,
     buildBiliupUploadCandidate,
+    isSallyMemberOnlyBiliupHandle,
     buildCookieDocument,
     completeBiliupUploadCandidateTags,
     normalizeBiliupCookieDocument,

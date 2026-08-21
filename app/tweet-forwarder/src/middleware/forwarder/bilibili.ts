@@ -4,7 +4,12 @@ import { delay } from '@/utils/time'
 import { stripUrlsFromText } from '@/utils/base'
 import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
-import { buildBiliupUploadCandidate, completeBiliupUploadCandidateTags, runBiliupUpload } from './biliup'
+import {
+    buildBiliupUploadCandidate,
+    completeBiliupUploadCandidateTags,
+    isSallyMemberOnlyBiliupHandle,
+    runBiliupUpload,
+} from './biliup'
 import { Platform } from '@idol-bbq-utils/spider/types'
 import {
     normalizeForwarderImageAttachments,
@@ -315,6 +320,15 @@ class BiliForwarder extends Forwarder {
             return `会员限定内容${this.countSuppressibleMedia(props)}`
         }
         if (article.platform === Platform.Website) {
+            return null
+        }
+        // The text heuristic is only a fallback for sources without an explicit
+        // flag — in practice Sally's subscriber-only X posts — so scope it to the
+        // known member-posting handles (same set as the biliup member filter).
+        // Public posts that merely *mention* 会員限定 (show promos like
+        // "※会員限定パートあり", quoted announcements) must not suppress the
+        // unrelated media of a whole message pack.
+        if (!isSallyMemberOnlyBiliupHandle(article)) {
             return null
         }
         const haystack = [article.content || '', article.translation || '', ...texts].join('\n')

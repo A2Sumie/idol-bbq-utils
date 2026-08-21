@@ -2412,3 +2412,79 @@ test('resolveVideoUploadConfig reuses tag_generation creds for title_generation 
     const noCreds = resolveVideoUploadConfig({ enabled: true })
     expect(noCreds?.title_generation).toBeUndefined()
 })
+
+test('BiliForwarder keeps message-pack media when a quoted promo merely mentions members-only parts', async () => {
+    // Regression (2026-08-21 prod): a summary pack containing a public tweet that
+    // quoted ONETOONE's "※会員限定パートあり" promo had all of its media suppressed
+    // as "members-only". Text mentions from non member-posting handles must not
+    // trigger suppression.
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            suppress_members_only_media: true,
+            video_upload: { enabled: false },
+        } as any,
+        'bili-pack-members-mention-test',
+    )
+
+    let dynamicCall: any = null
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async (texts: string[], props: any) => {
+        dynamicCall = { texts, props }
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const media = [{ media_type: 'photo', path: '/tmp/card.png' }]
+    const result = await (forwarder as any).realSend(
+        ['【22/7消息聚合】\n22時から！\n※会員限定パートあり\nhttps://live.nicovideo.jp/watch/lv350997498'],
+        {
+            article: {
+                a_id: 'summary-card-1787315710',
+                u_id: 'message_pack',
+                platform: Platform.X,
+                content: '【22/7消息聚合】\n今夜22時～「千春の次元をこえたる！」\n※会員限定パートあり',
+            },
+            media,
+        },
+    )
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(dynamicCall.texts[0]).not.toContain('媒体未转载')
+    expect(dynamicCall.props.media).toEqual(media)
+})
+
+test('BiliForwarder still suppresses Sally member-only X posts detected by text', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+            suppress_members_only_media: true,
+            video_upload: { enabled: false },
+        } as any,
+        'bili-sally-text-heuristic-test',
+    )
+
+    let dynamicCall: any = null
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async (texts: string[], props: any) => {
+        dynamicCall = { texts, props }
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const result = await (forwarder as any).realSend(['subscribers-only post from Sally'], {
+        article: {
+            a_id: 'sally-mo-1',
+            u_id: 'sally_amaki',
+            platform: Platform.X,
+            content: 'subscribers-only post from Sally',
+        },
+        media: [{ media_type: 'photo', path: '/tmp/sally.jpg' }],
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    // Text still goes out; only media are filtered, with the filtered count noted.
+    expect(dynamicCall.texts[0]).toBe('【媒体未转载：会员限定内容，已过滤 1 张图片】')
+    expect(dynamicCall.texts[1]).toBe('subscribers-only post from Sally')
+    expect(dynamicCall.props.media).toEqual([])
+})

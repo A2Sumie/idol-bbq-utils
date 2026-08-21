@@ -297,6 +297,11 @@ test('enqueueMissingYouTubeLinksFromXArticle queues missing YouTube crawler run 
         // falls back to its default channel list and never touches the target.
         expect(adds[0].payload.websites).toEqual(['https://www.youtube.com/watch?v=PWUNnCNTOLk'])
         expect(adds[0].meta.idempotency_key).toBeTruthy()
+        // Regression (2026-08-21 prod): the scheduled run died with
+        // "Spider not found" because the YouTube spider only matched channel URLs.
+        // Every enqueued watch URL must resolve to a registered spider.
+        const { spiderRegistry } = await import('@idol-bbq-utils/spider')
+        expect(spiderRegistry.findByUrl(adds[0].payload.websites[0])?.platform).toBe(Platform.YouTube)
     } finally {
         ;(DB.Article as any).getByArticleCode = originalGetByArticleCode
         ;(DB.TaskQueue as any).add = originalTaskAdd
