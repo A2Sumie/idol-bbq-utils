@@ -2488,3 +2488,60 @@ test('BiliForwarder still suppresses Sally member-only X posts detected by text'
     expect(dynamicCall.texts[1]).toBe('subscribers-only post from Sally')
     expect(dynamicCall.props.media).toEqual([])
 })
+
+test('BiliForwarder rewrites X hashtags to the paired Bilibili form in dynamic texts', async () => {
+    const forwarder = new BiliForwarder(
+        {
+            bili_jct: 'csrf-token',
+            sessdata: 'sess-token',
+        } as any,
+        'bili-hashtag-test',
+    )
+
+    let dynamicCall: any = null
+    ;(forwarder as any).tryVideoUpload = async () => false
+    ;(forwarder as any).sendDynamicContent = async (texts: string[], props: any) => {
+        dynamicCall = { texts, props }
+        return [{ ok: true, mode: 'dynamic' }]
+    }
+
+    const result = await (forwarder as any).realSend(['推文正文 #ナナニジ #COVID-19 以及 #1234 不动'], {
+        article: {
+            a_id: 'x-hashtag-1',
+            u_id: 'member',
+            platform: Platform.X,
+            content: '推文正文 #ナナニジ #COVID-19 以及 #1234 不动',
+        },
+    })
+
+    expect(result).toEqual([{ ok: true, mode: 'dynamic' }])
+    expect(dynamicCall.texts[0]).toBe('推文正文 #ナナニジ# #COVID#-19 以及 #1234 不动')
+})
+
+test('buildBiliupUploadCandidate rewrites X hashtags in biliup title and description', () => {
+    const candidate = buildBiliupUploadCandidate(
+        {
+            platform: Platform.X,
+            u_id: 'kawase_uta',
+            username: '河瀬詩',
+            a_id: 'x-hashtag-video',
+            content: 'ライブ映像です #ナナニジ #COVID-19',
+            created_at: 1710900000,
+            url: 'https://x.com/kawase_uta/status/x-hashtag-video',
+        } as any,
+        ['ライブ映像です #ナナニジ #COVID-19'],
+        [
+            { media_type: 'video_thumbnail', path: '/tmp/cover.jpg' },
+            { media_type: 'video', path: '/tmp/video.mp4' },
+        ],
+        { enabled: true },
+    )
+
+    expect(candidate).toBeTruthy()
+    expect(candidate?.title).toContain('#ナナニジ#')
+    expect(candidate?.title).toContain('#COVID#-19')
+    expect(candidate?.description).toContain('#ナナニジ#')
+    expect(candidate?.description).toContain('#COVID#-19')
+    // Idempotent: conversion inside realSend plus this boundary must not double-wrap.
+    expect(candidate?.description).not.toContain('#ナナニジ##')
+})

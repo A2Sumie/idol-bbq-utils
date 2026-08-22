@@ -2,6 +2,7 @@ import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, t
 import { pRetry } from '@idol-bbq-utils/utils'
 import { delay } from '@/utils/time'
 import { stripUrlsFromText } from '@/utils/base'
+import { convertXHashtagsToBiliFormat } from '@/utils/bili-hashtag'
 import { chunk } from 'lodash'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 import {
@@ -224,7 +225,11 @@ class BiliForwarder extends Forwarder {
         // Bilibili posts must never carry source links (blog/official requests): strip URLs from
         // every text path (article sends, summary cards, digests, passthroughs) at the sender gate,
         // not only in the forwarder-manager article path.
-        const urlStrippedTexts = normalizedTexts.map((text) => stripUrlsFromText(text))
+        // X hashtags are then rewritten to the Bilibili paired `#tag#` form. Doing it after URL
+        // stripping keeps URL fragments (`https://x.com/a#frag`) out of the conversion; doing it at
+        // the sender gate covers dynamic texts and biliup metadata alike without touching the
+        // stored article text or other targets (QQ etc.).
+        const urlStrippedTexts = normalizedTexts.map((text) => convertXHashtagsToBiliFormat(stripUrlsFromText(text)))
         if (mediaSuppressionNotice) {
             const noticeTexts = [`【媒体未转载：${mediaSuppressionNotice}】`, ...urlStrippedTexts]
             const textOnlyProps = {

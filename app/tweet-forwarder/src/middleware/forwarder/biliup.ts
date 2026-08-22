@@ -2,6 +2,7 @@ import { CACHE_DIR_ROOT } from '@/config'
 import type { Article } from '@/db'
 import { processorRegistry } from '@/middleware/processor'
 import { formatPlatformTag } from '@/services/render-service'
+import { convertXHashtagsToBiliFormat } from '@/utils/bili-hashtag'
 import type { BiliupVideoUploadConfig } from '@/types/forwarder'
 import type { ProcessorConfig, ProcessorProvider } from '@/types/processor'
 import type { Logger } from '@idol-bbq-utils/log'
@@ -1765,13 +1766,20 @@ function buildBiliupUploadCandidate(
     const coverPath =
         media.find((item) => item.media_type === 'video_thumbnail')?.path ||
         media.find((item) => item.media_type === 'photo')?.path
+    // X hashtags inside the source caption must reach Bilibili in the paired `#tag#`
+    // form. Title/description are derived from article.content/translation as well as
+    // the outbound texts, so convert at this output boundary instead of per-input.
     return {
-        title: deriveTitle(article, texts, resolvedConfig.metadata_timezone, resolvedConfig.metadata_templates?.title),
-        description: deriveDescription(
-            article,
-            texts,
-            resolvedConfig.metadata_timezone,
-            resolvedConfig.metadata_templates?.description,
+        title: convertXHashtagsToBiliFormat(
+            deriveTitle(article, texts, resolvedConfig.metadata_timezone, resolvedConfig.metadata_templates?.title),
+        ),
+        description: convertXHashtagsToBiliFormat(
+            deriveDescription(
+                article,
+                texts,
+                resolvedConfig.metadata_timezone,
+                resolvedConfig.metadata_templates?.description,
+            ),
         ),
         sourceUrl: article.url,
         coverPath,
