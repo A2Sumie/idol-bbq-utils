@@ -111,6 +111,11 @@ fi
 
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   sleep "$CHECK_EVERY"
+  # Guard against the end-of-window race: the watcher can exit at its own
+  # deadline between our sleep and this check — never relaunch past DEADLINE
+  # (2026-09-28: monitor spawned a watcher at 22:00:34 whose --until rolled
+  # over to the next day, polling until 06:00).
+  [ "$(date +%s)" -ge "$DEADLINE" ] && break
   if ! watcher_alive; then
     echo "[monitor $(date '+%F %T %Z')] watcher dead; relaunching"
     relaunch || echo "[monitor] relaunch failed" >&2
