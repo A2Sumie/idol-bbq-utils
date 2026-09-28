@@ -564,13 +564,15 @@ function extractRoomIdFromHtml(html: string): string | null {
     } else if (session && probe.status === 4) {
       endedStreak += 1
       if (!firstEndedAt) firstEndedAt = Date.now()
-      log(`ended confirmation ${endedStreak}/3; elapsed=${Math.floor((Date.now() - firstEndedAt) / 1000)}s/300s`)
+      log(`ended confirmation ${endedStreak}/3; elapsed=${Math.floor((Date.now() - firstEndedAt) / 1000)}s/60s`)
     } else {
       endedStreak = 0
       firstEndedAt = 0
     }
     const activeSession = session as SessionState | null
-    if (activeSession && endedStreak >= 3 && Date.now() - firstEndedAt >= 300_000) {
+    // Confirm window: 3 consecutive status=4 probes spanning >=60s (user ruling
+    // 2026-09-28: was 300s). A same-room restart within the window still resumes.
+    if (activeSession && endedStreak >= 3 && Date.now() - firstEndedAt >= 60_000) {
       writeManifest(activeSession)
       log(`session finalized room=${activeSession.roomId} parts=${activeSession.manifest.parts.length}`)
       session = null
