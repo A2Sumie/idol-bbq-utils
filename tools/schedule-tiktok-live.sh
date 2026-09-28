@@ -141,7 +141,7 @@ docker exec "$CONTAINER_NAME" sh -c '
   set -- "$handle"
   [ "$once" = "1" ] && set -- "$@" --once
   [ -n "$until_time" ] && set -- "$@" --until "$until_time"
-  set -- "$@" --poll "$poll" --max-minutes "$max_minutes" --cookie /app/assets/cookies/tiktok_cookies.txt
+  set -- "$@" --poll "$poll" --max-minutes "$max_minutes" --cookie /app/assets/cookies/tcookies.txt
   mkdir -p /app/archive/tiktok-live
   nohup bun /app/tiktok-live-watch.ts "$@" >> "/app/archive/tiktok-live/watch-$handle.log" 2>&1 & echo "started-pid=$!"
 ' _ "$HANDLE" "$ONCE" "$UNTIL" "$POLL" "$MAX_MINUTES"

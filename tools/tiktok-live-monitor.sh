@@ -81,15 +81,19 @@ relaunch() {
   docker exec "$CONTAINER_NAME" sh -c '
     mkdir -p /app/archive/tiktok-live
     nohup bun /app/tiktok-live-watch.ts "$1" --until "$2" --poll "$3" --max-minutes "$4" \
-      --cookie /app/assets/cookies/tiktok_cookies.txt \
+      --cookie /app/assets/cookies/tcookies.txt \
       >> "/app/archive/tiktok-live/watch-$1.log" 2>&1 & echo "started=$!"
   ' _ "$HANDLE" "$UNTIL" "$POLL" "$MAX_MINUTES"
 }
 
 watcher_alive() {
+  # Match only real bun processes: the probing sh's own argv contains the
+  # needle string, so a bare cmdline grep always self-matches (2026-09-28 bug).
   docker exec "$CONTAINER_NAME" sh -c '
     needle="$1"
     for d in /proc/[0-9]*; do
+      exe=$(readlink "$d/exe" 2>/dev/null) || continue
+      case "$exe" in *bun*) : ;; *) continue ;; esac
       if tr "\0" " " < "$d/cmdline" 2>/dev/null | grep -qF "$needle"; then
         exit 0
       fi
