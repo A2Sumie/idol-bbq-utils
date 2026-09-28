@@ -397,16 +397,34 @@ async function captureSegment(probe: Extract<Probe, { candidates: Candidate[] }>
     const capSeconds = Math.max(1, Math.floor((deadlineMs - Date.now()) / 1000))
     log(`capturing ${partName} attempt=${attempt + 1} quality=${cand.quality} kind=${cand.kind} -> ${mediaPath}`)
     const startedAt = new Date().toISOString()
+    // While stuck on an audio-only ('ao') candidate, keep probing for the video
+    // track: as soon as hd/origin appears, finalize the ao part and let the main
+    // loop pick up video (user mandate 2026-09-28: ao 别漏 + 一直尝试切 hd).
+    let upgradeTimer: ReturnType<typeof setInterval> | null = null
+    if (cand.quality.toLowerCase() === 'ao') {
+      upgradeTimer = setInterval(async () => {
+        try {
+          let fresh = await probeLiveHttp()
+          if (!fresh) fresh = await persistentBrowserProbe()
+          if (fresh && fresh.status === 2 && fresh.roomId === session?.roomId && fresh.candidates.some((c) => c.quality.toLowerCase() !== 'ao')) {
+            log('video track appeared during ao capture; finalizing ao part and upgrading to video')
+            if (activeChild && !activeChild.killed) { try { activeChild.kill('SIGINT') } catch {} }
+          }
+        } catch {}
+      }, 10_000)
+    }
     const { ok, bytes } = await captureCandidate(cand, mediaPath, ffLog, capSeconds)
+    if (upgradeTimer) { clearInterval(upgradeTimer); upgradeTimer = null }
     const media = ok ? probeMedia(mediaPath) : {}
     const v = (media.streams || []).find((s: any) => s.codec_type === 'video')
     const a = (media.streams || []).find((s: any) => s.codec_type === 'audio')
     const duration = Number(media?.format?.duration || 0)
-    if (ok && v && duration >= minValidDuration) {
+    // Keep audio-only parts too (ao 别漏): a part is valid with audio OR video.
+    if (ok && (v || a) && duration >= minValidDuration) {
       session.manifest.parts.push({
         part: partName, file: `${partName}.mkv`, quality: cand.quality, kind: cand.kind,
         bytes, duration: media?.format?.duration ?? null,
-        video: { codec: v.codec_name, width: v.width, height: v.height, fps: v.avg_frame_rate },
+        video: v ? { codec: v.codec_name, width: v.width, height: v.height, fps: v.avg_frame_rate } : null,
         audio: a ? { codec: a.codec_name, sampleRate: a.sample_rate, channels: a.channels } : null,
         startedAt, endedAt: new Date().toISOString(),
       })
