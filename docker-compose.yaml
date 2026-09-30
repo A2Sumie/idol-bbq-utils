@@ -78,6 +78,12 @@ services:
       - './assets/config.yaml:/app/config.yaml'
       # 2. 挂载数据库文件
       - './assets/refactor.db:/app/data.db'
+      # WAL/SHM sidecar files must be host-visible too: single-file .db mount alone
+      # leaves the live WAL inside the container (host backups/audits miss data).
+      # NOTE: if the app ever unlinks+recreates data.db-wal, this bind re-breaks;
+      # durable fix is a directory/volume mount at a maintenance restart.
+      - './assets/refactor.db-wal:/app/data.db-wal'
+      - './assets/refactor.db-shm:/app/data.db-shm'
       # 3. 挂载 cookies 文件夹 (注意：只挂载子目录以保留容器内的字体文件)
       - './assets/cookies:/app/assets/cookies'
       # 4. 挂载日志目录
