@@ -325,7 +325,7 @@ describe('RenderService text-compact', () => {
             },
         )
 
-        expect(expectedTime).toContain('ᴶˢᵀ(')
+        expect(expectedTime).toContain('ʲᵖ(')
         expect(formatTime(1710000000).startsWith('240310 ')).toBeTrue()
         const expectedClock = expectedTime.split('(')[0]
         const expectedAttributionTime = formatArticleAttributionTimeToken(1710000000)
