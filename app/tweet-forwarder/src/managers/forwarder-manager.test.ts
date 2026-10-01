@@ -6381,7 +6381,7 @@ test('sendArticles keeps forwarded reference text after retired idle-first summa
                 return '@reply_member 2325⁹ X回复\n\nreply body\n------------\n@first_member 2320⁹（略）'
             }
             if (article.ref) {
-                return `@reply_member 2325⁹ X回复\n\nreply body\n------------\n@first_member 2320⁹ X发推\n\n${article.ref.content}`
+                return `@reply_member 2325⁹ X回复\n\nreply body\n------------\n@first_member 2320⁹ 推特发帖\n\n${article.ref.content}`
             }
             return article.content || ''
         },

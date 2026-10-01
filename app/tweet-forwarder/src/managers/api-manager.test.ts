@@ -2028,7 +2028,7 @@ test('APIManager rejects website override when URL platform does not match crawl
     )
 
     expect(response.status).toBe(400)
-    expect(await response.text()).toBe('website override platform mismatch: expected X, got Website')
+    expect(await response.text()).toBe('website override platform mismatch: expected 推特, got Website')
 })
 
 test('APIManager records failed processor runs when processor execution fails', async () => {

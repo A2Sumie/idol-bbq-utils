@@ -530,7 +530,9 @@ export class RenderService {
 
     private formatPlatformFrom(article: Article): string {
         if (article.platform === Platform.X) {
-            return [article.username?.trim(), formatArticleTimeToken(article.created_at), 'X'].filter(Boolean).join(' ')
+            return [article.username?.trim(), formatArticleTimeToken(article.created_at), platformNameMap[article.platform]]
+                .filter(Boolean)
+                .join(' ')
         }
         if (article.platform === Platform.Website) {
             return formatWebsiteCardText(article)

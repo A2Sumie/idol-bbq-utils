@@ -106,14 +106,14 @@ function readPngSize(buffer: Buffer) {
 }
 
 describe('formatPlatformTag', () => {
-    test('keeps the generic platform-name label for non-card consumers', () => {
+    test('uses the platform display label for non-card consumers', () => {
         expect(
             formatPlatformTag({
                 a_id: '1',
                 platform: Platform.X,
                 username: '22/7(ナナブンノニジュウニ)',
             }),
-        ).toBe('X 22/7(ナナブンノニジュウニ)')
+        ).toBe('推特 22/7(ナナブンノニジュウニ)')
     })
 
     test('renders X card headers as name, compact time, then platform', () => {
@@ -125,7 +125,7 @@ describe('formatPlatformTag', () => {
                 username: '22/7(ナナブンノニジュウニ)',
                 created_at: 1710000000,
             }),
-        ).toBe(`22/7(ナナブンノニジュウニ) ${formatArticleTimeToken(1710000000)} X`)
+        ).toBe(`22/7(ナナブンノニジュウニ) ${formatArticleTimeToken(1710000000)} 推特`)
     })
 
     test('keeps the platform prefix for non-X platforms', () => {
@@ -289,10 +289,10 @@ describe('RenderService text-compact', () => {
         const expectedClock = expectedTime.split('(')[0]
         const expectedAttributionTime = formatArticleAttributionTimeToken(1710000000)
         const lines = result.text.split('\n')
-        expect(lines[0]).toBe(`@mao_asaoka227 ${expectedClock} X引用`)
+        expect(lines[0]).toBe(`@mao_asaoka227 ${expectedClock} 推特引用`)
         expect(lines[1]).toBe('')
         expect(lines.at(-2)).toBe('')
-        expect(lines.at(-1)).toBe(`麻丘真央 ${expectedAttributionTime} X 引用`)
+        expect(lines.at(-1)).toBe(`麻丘真央 ${expectedAttributionTime} 推特 引用`)
         expect(result.text).not.toContain('发布推文')
         expect(result.text).not.toContain('引用推文')
     })
@@ -325,7 +325,7 @@ describe('RenderService text-compact', () => {
             },
         )
 
-        expect(expectedTime).toContain('⁹(')
+        expect(expectedTime).toContain('ᴶˢᵀ(')
         expect(formatTime(1710000000).startsWith('240310 ')).toBeTrue()
         const expectedClock = expectedTime.split('(')[0]
         const expectedAttributionTime = formatArticleAttributionTimeToken(1710000000)
@@ -391,7 +391,7 @@ describe('RenderService text-compact', () => {
                     type: 'tweet',
                     platform: Platform.X,
                 },
-                expectedText: `麻丘真央 @mao_asaoka227 ${expectedClock} X发推`,
+                expectedText: `麻丘真央 @mao_asaoka227 ${expectedClock} 推特发帖`,
             },
             {
                 name: 'website-empty-article',
@@ -480,8 +480,8 @@ describe('RenderService text-compact', () => {
             },
         )
 
-        expect(result.text).toContain(`@satsuki_shiina ${quoteClock} X引用\n\n引用コメント\n\n椎名桜月`)
-        expect(result.text).toContain(`X 引用\n------------\n@needygirl_anime ${refClock} X发推`)
+        expect(result.text).toContain(`@satsuki_shiina ${quoteClock} 推特引用\n\n引用コメント\n\n椎名桜月`)
+        expect(result.text).toContain(`推特 引用\n------------\n@needygirl_anime ${refClock} 推特发帖`)
         expect(result.text).not.toContain('\n\n------------')
         expect(result.text).not.toContain('------------\n\n')
     })
@@ -975,7 +975,7 @@ describe('RenderService text-card', () => {
                                 items: [
                                     {
                                         index: 1,
-                                        text: '@media_member 2320⁹ X发推',
+                                        text: '@media_member 2320⁹ 推特发帖',
                                         mediaLabel: '#1 图集',
                                         media: [{ type: 'photo', url: 'https://example.com/item-photo.jpg' }],
                                     },
@@ -1204,7 +1204,7 @@ describe('RenderService text-card', () => {
                                 items: [
                                     {
                                         index: 1,
-                                        text: '@media_member 2320⁹ X发推',
+                                        text: '@media_member 2320⁹ 推特发帖',
                                         mediaLabel: '#1 图集',
                                         media: [{ type: 'photo', url: SAMPLE_PROGRESSIVE_JPEG_DATA_URL }],
                                     },

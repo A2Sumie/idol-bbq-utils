@@ -643,14 +643,14 @@ test('BiliForwarder strips source URLs from all dynamic text before posting', as
     })
 
     await (forwarder as any).realSend(
-        [`【22/7 博客｜南伊織】南風はどこから。\n\n22/7官网 博客 抓取于 2211⁺⁹（260806）\n${url}`],
+        [`【22/7 博客｜南伊織】南風はどこから。\n\n22/7官网 博客 抓取于 2211ᴶˢᵀ（260806）\n${url}`],
         { media: [{ media_type: 'photo', path: '/tmp/source.jpg' }] },
     )
 
     expect(sentText).not.toContain(url)
     expect(sentText).not.toContain('nanabunnonijyuuni-mobile.com')
     expect(sentText).toContain('【22/7 博客｜南伊織】南風はどこから。')
-    expect(sentText).toContain('抓取于 2211⁺⁹（260806）')
+    expect(sentText).toContain('抓取于 2211ᴶˢᵀ（260806）')
 })
 
 test('BiliForwarder verifies Bilibili photo dynamic detail after posting', async () => {
