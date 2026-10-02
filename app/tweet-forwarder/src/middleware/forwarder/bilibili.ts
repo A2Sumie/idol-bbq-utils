@@ -97,6 +97,8 @@ type BiliCreateDynamicResponse = {
         data?: {
             dyn_id?: string | number
             dyn_id_str?: string | number
+            dynamic_id?: string | number
+            dynamic_id_str?: string | number
         }
     }
 }
@@ -167,6 +169,7 @@ class BiliForwarder extends Forwarder {
             cookie_file,
             cookies,
             media_check_level = 'none',
+            dynamic_api = 'web',
             video_upload,
         } = config as ForwardTargetPlatformConfig<ForwardTargetPlatformEnum.Bilibili>
         if (!bili_jct || !sessdata) {
@@ -177,16 +180,22 @@ class BiliForwarder extends Forwarder {
         this.media_check_level = media_check_level
         this.video_upload = video_upload
         const cookieFile = cookie_file || video_upload?.cookie_file
-        this.api = new BilibiliApiClient({
-            bili_jct,
-            sessdata,
-            buvid3,
-            buvid4,
-            cookies: {
-                ...BilibiliApiClient.readCookieDocument(cookieFile),
-                ...(cookies || {}),
+        this.api = new BilibiliApiClient(
+            {
+                bili_jct,
+                sessdata,
+                buvid3,
+                buvid4,
+                // App OAuth token when the biliup cookie export carries one (empty in browser
+                // exports); the app route then sends it like the client's common interceptor.
+                access_key: BilibiliApiClient.readAccessToken(cookieFile),
+                cookies: {
+                    ...BilibiliApiClient.readCookieDocument(cookieFile),
+                    ...(cookies || {}),
+                },
             },
-        })
+            { dynamicApi: dynamic_api },
+        )
     }
 
     private buvidFetchPromise: Promise<void> | null = null
@@ -748,7 +757,8 @@ class BiliForwarder extends Forwarder {
 
     private extractDynamicId(res: BiliCreateDynamicResponse) {
         const data = res.data?.data
-        const dynId = data?.dyn_id_str ?? data?.dyn_id
+        // Web face answers dyn_id_str; the app face (dynamic_svr/create*) answers dynamic_id_str.
+        const dynId = data?.dyn_id_str ?? data?.dyn_id ?? data?.dynamic_id_str ?? data?.dynamic_id
         return dynId === undefined || dynId === null ? '' : String(dynId).trim()
     }
 

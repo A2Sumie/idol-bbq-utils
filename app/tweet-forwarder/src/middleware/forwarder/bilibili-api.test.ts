@@ -152,3 +152,94 @@ test('BilibiliApiClient bounds every dynamic call with a request timeout', async
         expect(Number(timeout)).toBeGreaterThan(0)
     }
 })
+
+type CapturedPost = { url: string; body: any; options: any }
+
+async function capturePosts(run: (client: BilibiliApiClient) => Promise<unknown>): Promise<CapturedPost[]> {
+    const captured: CapturedPost[] = []
+    const originalPost = axios.post
+    try {
+        ;(axios as any).post = async (url: string, body: any, options: any) => {
+            captured.push({ url, body, options })
+            return { data: { code: 0, data: { dynamic_id_str: '777' } } }
+        }
+        await run(new BilibiliApiClient({ bili_jct: 'jct-value', sessdata: 'sess-value' }, { dynamicApi: 'app' }))
+    } finally {
+        ;(axios as any).post = originalPost
+    }
+    return captured
+}
+
+test('dynamic_api defaults to the web face: create/dyn JSON body, unchanged behavior', async () => {
+    const captured: CapturedPost[] = []
+    const originalPost = axios.post
+    try {
+        ;(axios as any).post = async (url: string, body: any, options: any) => {
+            captured.push({ url, body, options })
+            return { data: { code: 0, data: { dyn_id_str: '1' } } }
+        }
+        const client = new BilibiliApiClient({ bili_jct: 'jct-value', sessdata: 'sess-value' })
+        expect(client.postingRoute).toBe('web')
+        await client.createTextDynamic('hello')
+    } finally {
+        ;(axios as any).post = originalPost
+    }
+    expect(captured.length).toBe(1)
+    expect(captured[0]!.url).toBe('https://api.bilibili.com/x/dynamic/feed/create/dyn')
+    expect(JSON.stringify(captured[0]!.body)).toContain('"dyn_req"')
+    expect(captured[0]!.options.params.csrf).toBe('jct-value')
+})
+
+test('app route posts text through the signed vc create endpoint (发表文字动态)', async () => {
+    const captured = await capturePosts((client) => client.createTextDynamic('测试正文 [RT-B]'))
+    expect(captured.length).toBe(1)
+    const { url, body, options } = captured[0]!
+    expect(url.startsWith('https://api.vc.bilibili.com/dynamic_svr/v1/dynamic_svr/create?')).toBe(true)
+    expect(url).toContain('appkey=1d8b6e7d45233436')
+    expect(url).toContain('mobi_app=android')
+    expect(url).toMatch(/&sign=[0-9a-f]{32}$/)
+    const form = String(body)
+    expect(form).toContain('type=4')
+    expect(form).toContain('rid=0')
+    expect(decodeURIComponent(form.replace(/\+/g, ' '))).toContain('content=测试正文 [RT-B]')
+    expect(form).toContain('ctrl=%5B%5D')
+    expect(form).toContain('csrf_token=jct-value')
+    expect(String(options.headers['User-Agent'])).toContain('BiliDroid')
+    expect(String(options.headers.Cookie)).toContain('SESSDATA=sess-value')
+})
+
+test('app route posts draw dynamics through create_draw (发表相簿动态) with pictures JSON', async () => {
+    const captured = await capturePosts((client) =>
+        client.createPhotoDynamic('图文正文', [{ img_src: 'https://i0.hdslb.com/x.png', img_width: 240, img_height: 240, img_size: 8.2 }]),
+    )
+    expect(captured.length).toBe(1)
+    const { url, body } = captured[0]!
+    expect(url.startsWith('https://api.vc.bilibili.com/dynamic_svr/v1/dynamic_svr/create_draw?')).toBe(true)
+    const form = String(body)
+    expect(form).toContain('biz=3')
+    expect(form).toContain('category=3')
+    expect(form).toContain('type=0')
+    expect(form).toContain('from=create.dynamic.android')
+    expect(form).toContain('setting=')
+    expect(decodeURIComponent(form)).toContain('"img_src":"https://i0.hdslb.com/x.png"')
+})
+
+test('access_key from the cookie export joins both the signed query and the form', async () => {
+    const captured: CapturedPost[] = []
+    const originalPost = axios.post
+    try {
+        ;(axios as any).post = async (url: string, body: any, options: any) => {
+            captured.push({ url, body, options })
+            return { data: { code: 0, data: { dynamic_id_str: '1' } } }
+        }
+        const client = new BilibiliApiClient(
+            { bili_jct: 'jct-value', sessdata: 'sess-value', access_key: 'ak-token' },
+            { dynamicApi: 'app' },
+        )
+        await client.createTextDynamic('x')
+    } finally {
+        ;(axios as any).post = originalPost
+    }
+    expect(captured[0]!.url).toContain('access_key=ak-token')
+    expect(String(captured[0]!.body)).toContain('access_key=ak-token')
+})

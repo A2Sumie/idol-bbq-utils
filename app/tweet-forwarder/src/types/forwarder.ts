@@ -101,6 +101,14 @@ type PlatformConfigMap = {
         image_max_pixels?: number
         suppress_media_uids?: Array<string>
         suppress_members_only_media?: boolean
+        /**
+         * Dynamic posting route. 'web' (default) = x/dynamic/feed/create/dyn, unchanged
+         * behavior. 'app' = app-protocol face on api.vc.bilibili.com (signed appkey/appsec
+         * requests; see bilibili-app-sign.ts for the recorded pairing). Enable with an explicit
+         * `dynamic_api: app` entry in the target's cfg_platform (assets/config.yaml is
+         * machine-local and stays untouched by code changes).
+         */
+        dynamic_api?: 'web' | 'app'
         video_upload?: BiliupVideoUploadConfig
     }
     /**
