@@ -18,6 +18,7 @@ import {
     articleToText,
     compactArticleToText,
     extractArticleHeadline,
+    formatArticleSourceActionLabel,
     formatArticleTimeToken,
     formatMetaline,
     formatWebsiteCardText,
@@ -530,7 +531,11 @@ export class RenderService {
 
     private formatPlatformFrom(article: Article): string {
         if (article.platform === Platform.X) {
-            return [article.username?.trim(), formatArticleTimeToken(article.created_at), platformNameMap[article.platform]]
+            return [
+                article.username?.trim(),
+                formatArticleTimeToken(article.created_at),
+                formatArticleSourceActionLabel(article as any),
+            ]
                 .filter(Boolean)
                 .join(' ')
         }
