@@ -432,10 +432,7 @@ export class RenderService {
                 // Standard Card Logic. Website already renders its full text into
                 // the card; sending formatWebsiteCardText as the text block as well
                 // duplicates the title/link/attribution in the same message.
-                text =
-                    article.platform === Platform.Website
-                        ? formatPlatformTag(article, this.log)
-                        : this.formatPlatformFrom(article)
+                text = this.resolveImgTagText(article, config)
                 textCollapseMode = 'none'
                 await appendRenderedCardToMedia('start')
             }
@@ -527,6 +524,32 @@ export class RenderService {
                     this.log?.error(`Error while unlinking file ${path}: ${e}`)
                 }
             })
+    }
+
+    /**
+     * img-tag 文本行。官推(227_staff)的正文必须留在消息文本里（卡片照发，但不能只把正文锁进卡片）；
+     * 其余来源保持既有形态：Website 用平台标签行，其他用身份行。
+     */
+    private resolveImgTagText(
+        article: Article,
+        config: {
+            render_type?: string
+            collapsedArticleIds?: Set<string | number>
+            textOriginalOnly?: boolean
+        },
+    ) {
+        const isOfficialX =
+            article.platform === Platform.X &&
+            String(article.u_id || '')
+                .trim()
+                .replace(/^@+/, '')
+                .toLowerCase() === '227_staff'
+        if (isOfficialX) {
+            return this.renderText(article, config)
+        }
+        return article.platform === Platform.Website
+            ? formatPlatformTag(article, this.log)
+            : this.formatPlatformFrom(article)
     }
 
     private formatPlatformFrom(article: Article): string {

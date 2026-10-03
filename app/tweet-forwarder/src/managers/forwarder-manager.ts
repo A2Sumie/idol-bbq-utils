@@ -4,7 +4,7 @@ import { CronJob } from 'cron'
 import EventEmitter from 'events'
 import { BaseCompatibleModel, sanitizeWebsites, stripUrlsFromText, TaskScheduler, toErrorMessage } from '@/utils/base'
 import type { AppConfig, Processor } from '@/types'
-import { Platform, type MediaType, type TaskType } from '@idol-bbq-utils/spider/types'
+import { Platform, type TaskType } from '@idol-bbq-utils/spider/types'
 import DB from '@/db'
 import type { Article, ArticleWithId, DBFollows } from '@/db'
 import {
@@ -16,7 +16,7 @@ import {
     NonRetryableForwarderSendError,
     PartialForwarderSendError,
 } from '@/middleware/forwarder/base'
-import { type Media, type MediaTool, MediaToolEnum } from '@/types/media'
+import { MediaToolEnum } from '@/types/media'
 import type { ForwardTargetPlatformCommonConfig, Forwarder as RealForwarder } from '@/types/forwarder'
 import { getForwarder } from '@/middleware/forwarder'
 import crypto from 'crypto'
@@ -1023,7 +1023,7 @@ class ForwarderPools extends BaseCompatibleModel {
                     ...cfg_forward_target,
                     ...t.cfg_platform,
                 }
-                const { block_until, replace_regex, ...restToBeHashed } = t.cfg_platform
+                const { block_until: _block_until, replace_regex: _replace_regex, ...restToBeHashed } = t.cfg_platform
                 const forwarderToBeHashed = {
                     ...t,
                     cfg_platform: {
@@ -1518,10 +1518,6 @@ class ForwarderPools extends BaseCompatibleModel {
             connections?: AppConfig['connections']
             article_ids_by_url?: ArticleIdsByUrl
         }
-        const batchId = crypto
-            .createHash('md5')
-            .update(`article:${websites.join(',')}`)
-            .digest('hex')
         let attemptedPaths = 0
         let failedPaths = 0
 
@@ -2472,10 +2468,10 @@ class ForwarderPools extends BaseCompatibleModel {
                         }
 
                         const suppressTranslations = this.shouldSuppressTargetTranslations(target, runtime_config)
-                        const stripNativeOriginalTranslations = this.shouldStripNativeOriginalCardTranslations(
-                            target,
-                            runtime_config,
-                        )
+                        // 官推(227_staff): 译文并进正文，不拆成单独的 companion 卡
+                        const stripNativeOriginalTranslations =
+                            !this.isOfficialAccountArticle(article) &&
+                            this.shouldStripNativeOriginalCardTranslations(target, runtime_config)
                         const targetArticle =
                             suppressTranslations || stripNativeOriginalTranslations
                                 ? stripArticleTranslations(article)
@@ -2682,7 +2678,8 @@ class ForwarderPools extends BaseCompatibleModel {
                             )
                         }
 
-                        const translatedCompanionCard = suppressTranslations
+                        const translatedCompanionCard =
+                            suppressTranslations || this.isOfficialAccountArticle(article)
                             ? null
                             : await this.buildTranslatedNativeCompanionCard(
                                   article,
@@ -4123,6 +4120,17 @@ class ForwarderPools extends BaseCompatibleModel {
             return userId === '227smej' && !isShorts
         }
         return false
+    }
+
+    /** 官推 = 227_staff 的 X 动作；它的正文/译文要留在消息文本里，不能只塞进卡片。 */
+    private isOfficialAccountArticle(article: ArticleWithId | Article) {
+        return (
+            article.platform === Platform.X &&
+            String(article.u_id || '')
+                .trim()
+                .replace(/^@+/, '')
+                .toLowerCase() === '227_staff'
+        )
     }
 
     private shouldUseSummaryCardForArticle(article: ArticleWithId) {

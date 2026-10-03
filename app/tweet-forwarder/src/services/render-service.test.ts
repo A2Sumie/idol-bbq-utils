@@ -2271,3 +2271,32 @@ describe('RenderService Instagram media URL handling', () => {
         }
     })
 })
+
+test('img-tag text keeps the official account body in the message, not only in the card', () => {
+    const service = new RenderService()
+    const base = {
+        a_id: '2106301993421787396',
+        platform: Platform.X,
+        username: '22/7(ナナブンノニジュウニ)',
+        created_at: 1790824065,
+        type: 'tweet',
+        content: '正文在这里',
+        translation: '',
+        ref: null,
+        media: [],
+    } as unknown as Article
+
+    // 官推(227_staff): 正文必须在文本里
+    const official = (service as any).resolveImgTagText({ ...base, u_id: '227_staff' }, {})
+    expect(official).toContain('正文在这里')
+    expect(official).toContain('推特发帖')
+
+    // 成员: 保持身份行（卡片承载正文）
+    const member = (service as any).resolveImgTagText({ ...base, u_id: 'minami__iori', username: '南伊織【22/7】' }, {})
+    expect(member).not.toContain('正文在这里')
+    expect(member).toBe('南伊織【22/7】 1207ʲᵖ(10.01) 推特发帖')
+
+    // Website: 保持平台标签行
+    const site = (service as any).resolveImgTagText({ ...base, platform: Platform.Website, u_id: '22/7:official-news', username: '22/7 Official News' }, {})
+    expect(site).toBe('Website 22/7 Official News')
+})
