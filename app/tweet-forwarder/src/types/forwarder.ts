@@ -418,6 +418,14 @@ interface ForwardTargetPlatformCommonConfig {
          */
         block_until?: string
     }>
+    /**
+     * Whether `forceSend` dispatches (manual resend API, x-link immediate forward, system
+     * companion sends) skip the `block_rules` above. Default `false` (strict): a target
+     * blocked by `block_rules` stays blocked for forced sends too, so freezing a target is
+     * final. Set it to `true` only when a target must keep the legacy operator escape
+     * hatch that lets a forced send bypass the rules.
+     */
+    block_rules_apply_to_force_send?: boolean
 }
 
 type ForwardTargetPlatformConfig<T extends ForwardTargetPlatformEnum = ForwardTargetPlatformEnum> = PlatformConfigMap[T]

@@ -855,6 +855,15 @@ export class TaskManager extends BaseCompatibleModel {
             const sendResult = await forwarder.send(text, {
                 timestamp: Math.floor(Date.now() / 1000),
                 media: mediaFiles.length > 0 ? mediaFiles : undefined,
+                // Synthetic article anchor so `block_rules` still apply at flush time:
+                // strict freeze means no force path (including this aggregate flush) can
+                // escape the target's block rules.
+                article: {
+                    platform: payload.platform,
+                    type: 'article',
+                    a_id: syntheticKey,
+                    created_at: payload.end,
+                } as any,
                 forceSend: true,
             })
             if (sendResult.status === 'queued') {

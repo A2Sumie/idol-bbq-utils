@@ -194,10 +194,23 @@ abstract class BaseForwarder extends BaseCompatibleModel {
             .use(new TextChunkMiddleware(this.getTextLimit()))
     }
 
+    /**
+     * Strict freeze semantics (default): force sends (manual resend, x-link immediate
+     * forward, system companion sends) still run the block rules, so a frozen target
+     * (`block_type: always`) is really frozen and cannot be re-opened by a forced send.
+     * Only when the target opts out with `block_rules_apply_to_force_send: false` does a
+     * force send keep its legacy operator-escape-hatch meaning of skipping block rules.
+     */
+    protected forceSendBypassesBlockRules(): boolean {
+        return this.config?.block_rules_apply_to_force_send === false
+    }
+
     protected createForceSendPipeline(): MiddlewarePipeline {
-        return new MiddlewarePipeline()
-            .use(new TextReplaceMiddleware())
-            .use(new TextChunkMiddleware(this.getTextLimit()))
+        const pipeline = new MiddlewarePipeline()
+        if (!this.forceSendBypassesBlockRules()) {
+            pipeline.use(this.blockRuleMiddleware)
+        }
+        return pipeline.use(new TextReplaceMiddleware()).use(new TextChunkMiddleware(this.getTextLimit()))
     }
 
     protected getTextLimit(): number {
@@ -212,9 +225,6 @@ abstract class BaseForwarder extends BaseCompatibleModel {
     }
 
     public async check_blocked(text: string, props: SendProps): Promise<boolean> {
-        if (props?.forceSend) {
-            return false
-        }
         const { timestamp, runtime_config, article } = props || {}
         const mergedConfig = this.getEffectiveConfig(runtime_config)
 
@@ -229,9 +239,19 @@ abstract class BaseForwarder extends BaseCompatibleModel {
         }
 
         const blockCheckPipeline = new MiddlewarePipeline()
-            .use(this.timeFilterMiddleware)
-            .use(this.keywordFilterMiddleware)
-            .use(this.blockRuleMiddleware)
+        if (props?.forceSend) {
+            // A force send is only ever blocked by the block rules (mirrors
+            // createForceSendPipeline); time/keyword filters stay out of its way.
+            if (this.forceSendBypassesBlockRules()) {
+                return false
+            }
+            blockCheckPipeline.use(this.blockRuleMiddleware)
+        } else {
+            blockCheckPipeline
+                .use(this.timeFilterMiddleware)
+                .use(this.keywordFilterMiddleware)
+                .use(this.blockRuleMiddleware)
+        }
 
         try {
             const result = await blockCheckPipeline.execute(context)
