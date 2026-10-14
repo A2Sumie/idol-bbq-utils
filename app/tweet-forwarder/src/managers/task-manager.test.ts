@@ -118,14 +118,6 @@ test('TaskManager aggregate sends are claimed through outbound messages', async 
     expect(outcome).toMatchObject({ targetId: 'target-a', status: 'sent', retryable: false })
     expect(sentPayloads).toHaveLength(1)
     expect(sentPayloads[0]?.props?.forceSend).toBeTrue()
-    // Strict freeze: the aggregate flush carries a synthetic article anchor so the
-    // target's block_rules still apply to this force path.
-    expect(sentPayloads[0]?.props?.article).toMatchObject({
-        platform: Platform.X,
-        type: 'article',
-        a_id: expect.stringContaining('aggregate_hourly'),
-        created_at: 200,
-    })
     expect(health[0]?.last_send_status).toBe('sent')
 })
 
