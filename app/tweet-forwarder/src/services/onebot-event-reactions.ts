@@ -352,38 +352,35 @@ async function runCommand(
 
     const endpoint = resolveHandlerEndpoint(handler, ctx)
 
-    const replyTo = (text: string): ReactionActionResult => ({
-        handlerId,
-        type: 'command',
-        status: 'ok',
-        detail: `command ${name}`,
-        calls: [{ action: 'send_msg', ok: true, detail: text }],
-    })
-
-    if (name === 'ping') {
-        await callOneBotAction(
+    // The command's reply goes back through the normal outbound path, so its
+    // send result is reported honestly (a dead bridge must not read as 'ok').
+    const sendText = async (text: string) => {
+        const { verdict } = await callOneBotAction(
             endpoint,
             event.groupId ? 'send_group_msg' : 'send_private_msg',
             event.groupId
-                ? { group_id: event.groupId, message: [{ type: 'text', data: { text: 'pong' } }] }
-                : { user_id: event.userId, message: [{ type: 'text', data: { text: 'pong' } }] },
+                ? { group_id: event.groupId, message: [{ type: 'text', data: { text } }] }
+                : { user_id: event.userId, message: [{ type: 'text', data: { text } }] },
             ctx.post,
         )
-        return replyTo('pong')
+        return { ok: verdict.ok, detail: verdict.ok ? 'ok' : verdict.detail }
+    }
+    const replyTo = (text: string, sent: { ok: boolean; detail: string }): ReactionActionResult => ({
+        handlerId,
+        type: 'command',
+        status: sent.ok ? 'ok' : 'failed',
+        detail: `command ${name}: ${text} (reply ${sent.detail})`,
+        calls: [{ action: 'send_msg', ok: sent.ok, detail: sent.detail }],
+    })
+
+    if (name === 'ping') {
+        return replyTo('pong', await sendText('pong'))
     }
 
     if (name === 'status') {
         const health = await probeQqBridgeHealth(endpoint, ctx.post)
         const line = `桥状态: online=${health.online} good=${health.good} flavor=${health.flavor} uptime=${health.uptimeSeconds ?? '?'}s`
-        await callOneBotAction(
-            endpoint,
-            event.groupId ? 'send_group_msg' : 'send_private_msg',
-            event.groupId
-                ? { group_id: event.groupId, message: [{ type: 'text', data: { text: line } }] }
-                : { user_id: event.userId, message: [{ type: 'text', data: { text: line } }] },
-            ctx.post,
-        )
-        return replyTo(line)
+        return replyTo(line, await sendText(line))
     }
 
     // recall <message_id>  (or the replied message id)
@@ -393,20 +390,16 @@ async function runCommand(
     }
     const result = await recallOneBotMessage(endpoint, targetMessageId, ctx.post)
     const line = result.success ? `已撤回 ${targetMessageId}` : `撤回失败 ${targetMessageId}: ${result.detail}`
-    await callOneBotAction(
-        endpoint,
-        event.groupId ? 'send_group_msg' : 'send_private_msg',
-        event.groupId
-            ? { group_id: event.groupId, message: [{ type: 'text', data: { text: line } }] }
-            : { user_id: event.userId, message: [{ type: 'text', data: { text: line } }] },
-        ctx.post,
-    )
+    const sent = await sendText(line)
     return {
         handlerId,
         type: 'command',
-        status: result.success ? 'ok' : 'failed',
+        status: result.success && sent.ok ? 'ok' : 'failed',
         detail: line,
-        calls: [{ action: 'delete_msg', ok: result.success, detail: result.detail }],
+        calls: [
+            { action: 'delete_msg', ok: result.success, detail: result.detail },
+            { action: 'send_msg', ok: sent.ok, detail: sent.detail },
+        ],
     }
 }
 

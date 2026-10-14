@@ -162,7 +162,8 @@ test('command handler: #status works for admins only', async () => {
         },
         { ...baseCtx(), post: adminRun.post },
     )
-    expect(adminResult.actions[0]).toMatchObject({ type: 'command', status: 'ok', detail: 'command status' })
+    expect(adminResult.actions[0]).toMatchObject({ type: 'command', status: 'ok' })
+    expect(adminResult.actions[0]!.detail).toContain('command status')
     expect(adminRun.calls.map((call) => call.path.split('/').pop())).toEqual([
         'get_status',
         'get_version_info',
@@ -372,6 +373,25 @@ test('per-handler cooldown + quota limit reaction storms', async () => {
     const third = await runReactionChain(groupMessage(), config, { ...baseCtx(), post, limiter })
     expect(third.actions[0]!.status).toBe('limited')
     expect(calls).toHaveLength(2)
+})
+
+test('command replies report a dead bridge as failed instead of ok', async () => {
+    const { post, calls } = makePost(() => new Error('ECONNREFUSED'))
+    const result = await runReactionChain(
+        groupMessage({
+            message: [{ type: 'text', data: { text: '#ibping' } }],
+            raw_message: '#ibping',
+            user_id: 10001,
+        }),
+        {
+            enabled: true,
+            handlers: [{ id: 'cmd', type: 'command', command: { commands: ['ping'], prefix: '#ib', admin_only: true } }],
+        },
+        { ...baseCtx(), post },
+    )
+    expect(result.actions[0]).toMatchObject({ type: 'command', status: 'failed' })
+    expect(result.actions[0]!.calls![0]).toMatchObject({ action: 'send_msg', ok: false })
+    expect(calls).toHaveLength(1)
 })
 
 test('disabled handlers and unknown command prefixes are inert', async () => {
