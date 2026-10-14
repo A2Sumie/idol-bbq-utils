@@ -273,12 +273,16 @@ export async function uploadFileViaOneBotStream(options: UploadStreamOptions): P
     }
 
     const hash = createHash('sha256')
+    let expectedSha256: string | undefined
     for (let index = 0; index < totalChunks; index++) {
         const start = index * chunkBytes
         const end = Math.min(fileSize, start + chunkBytes)
         const buf = await readSlice(filePath, start, end - start)
         hash.update(buf)
         const isLast = index === totalChunks - 1
+        if (isLast) {
+            expectedSha256 = hash.digest('hex')
+        }
         const res = await callUpload({
             stream_id: streamId,
             chunk_data: buf.toString('base64'),
@@ -286,21 +290,42 @@ export async function uploadFileViaOneBotStream(options: UploadStreamOptions): P
             total_chunks: totalChunks,
             file_size: fileSize,
             filename: fileName,
-            ...(isLast ? { is_complete: true, expected_sha256: hash.digest('hex') } : {}),
+            ...(isLast ? { is_complete: true, expected_sha256: expectedSha256 } : {}),
             file_retention: config.uploadRetentionMs,
         })
-        if (isLast) {
-            const filePathOnBot = extractUploadedFilePath(res)
-            if (!filePathOnBot) {
-                throw new Error(`QQ upload_file_stream completed without file_path for ${fileName}`)
-            }
+        // Bridges that merge inline (NapCat-style: the `is_complete` data call
+        // returns the completion) already carry file_path here.
+        const inlinePath = extractUploadedFilePath(res)
+        if (inlinePath) {
             options.log?.debug(
-                `QQ media uploaded via upload_file_stream: ${fileName} -> ${filePathOnBot} (${totalChunks} chunk(s))`,
+                `QQ media uploaded via upload_file_stream: ${fileName} -> ${inlinePath} (${totalChunks} chunk(s), inline completion)`,
             )
-            return filePathOnBot
+            return inlinePath
         }
     }
-    throw new Error(`QQ upload_file_stream produced no completion for ${fileName}`)
+
+    // SnowLuma semantics (packages/onebot/src/actions/stream-file.ts): a call
+    // carrying chunk_data always acks `chunk_received`; the merge + completion
+    // frame (`file_path/file_name/file_size/sha256`) only arrive from a
+    // data-less `is_complete` call. Send it explicitly when the chunk frames
+    // did not complete inline.
+    const res = await callUpload({
+        stream_id: streamId,
+        is_complete: true,
+        total_chunks: totalChunks,
+        file_size: fileSize,
+        filename: fileName,
+        expected_sha256: expectedSha256,
+        file_retention: config.uploadRetentionMs,
+    })
+    const filePathOnBot = extractUploadedFilePath(res)
+    if (!filePathOnBot) {
+        throw new Error(`QQ upload_file_stream completed without file_path for ${fileName}`)
+    }
+    options.log?.debug(
+        `QQ media uploaded via upload_file_stream: ${fileName} -> ${filePathOnBot} (${totalChunks} chunk(s))`,
+    )
+    return filePathOnBot
 }
 
 function extractUploadedFilePath(res: any): string | null {

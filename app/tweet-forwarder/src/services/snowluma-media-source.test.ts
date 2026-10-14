@@ -162,6 +162,62 @@ test('uploadFileViaOneBotStream chunks the file and returns the bot path', async
     }
 })
 
+test('uploadFileViaOneBotStream finishes with a data-less is_complete call (SnowLuma chunk frames never complete)', async () => {
+    // SnowLuma semantics (packages/onebot/src/actions/stream-file.ts): every
+    // data-bearing call acks `chunk_received` regardless of `is_complete`; the
+    // completion frame with `file_path` only comes from a separate data-less
+    // `is_complete` call. Regression: the old sequence sent `is_complete` on the
+    // last data chunk and read `file_path` from its `chunk_received` frame.
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-media-upload-finish-'))
+    const filePath = path.join(tempRoot, 'clip.bin')
+    const payload = Buffer.alloc(300_000, 7)
+    await writeFile(filePath, payload)
+    const calls: Array<{ path: string; body: any; options: any }> = []
+    try {
+        const botPath = await uploadFileViaOneBotStream({
+            endpoint: 'http://127.0.0.1:3000',
+            token: 'tok',
+            filePath,
+            fileName: 'clip.bin',
+            fileSize: payload.length,
+            config: config({ mode: 'upload', uploadChunkBytes: 128 * 1024 }),
+            post: async (requestPath, body, options) => {
+                calls.push({ path: requestPath, body, options })
+                // SnowLuma framing: chunk calls always ack, only the data-less
+                // is_complete call completes with file_path.
+                const data =
+                    (body as any).chunk_data !== undefined
+                        ? { type: 'stream', status: 'chunk_received' }
+                        : (body as any).is_complete === true
+                          ? {
+                                type: 'response',
+                                status: 'file_complete',
+                                file_path: '/app/data/stream/upload/clip.bin',
+                                file_name: 'clip.bin',
+                                file_size: payload.length,
+                                sha256: 'x',
+                            }
+                          : { type: 'stream', status: 'file_created' }
+                return { data: { status: 'ok', retcode: 0, data } }
+            },
+        })
+        expect(botPath).toBe('/app/data/stream/upload/clip.bin')
+        // 3 chunk calls + 1 data-less completion call
+        expect(calls).toHaveLength(4)
+        const finish = calls[3].body
+        expect(calls[3].path).toBe('http://127.0.0.1:3000/upload_file_stream')
+        expect(finish.is_complete).toBe(true)
+        expect(finish.chunk_data).toBeUndefined()
+        expect(finish.chunk_index).toBeUndefined()
+        expect(finish.stream_id).toBe(calls[0].body.stream_id)
+        expect(finish.total_chunks).toBe(3)
+        expect(finish.expected_sha256).toMatch(/^[0-9a-f]{64}$/)
+        expect(finish.expected_sha256).toBe(calls[2].body.expected_sha256)
+    } finally {
+        await rm(tempRoot, { recursive: true, force: true })
+    }
+})
+
 test('uploadFileViaOneBotStream surfaces business failures with the shared wording shape', async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-media-upload-fail-'))
     const filePath = path.join(tempRoot, 'clip.bin')
