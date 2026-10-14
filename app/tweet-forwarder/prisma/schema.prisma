@@ -238,6 +238,7 @@ model outbound_messages {
   payload_hash         String
   status               String  @default("planned")
   provider_message_ids Json?
+  message_ids          Json?
   segment_results      Json?
   attempt_count        Int     @default(0)
   last_error           String?

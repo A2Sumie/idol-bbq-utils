@@ -140,6 +140,29 @@ type PlatformConfigMap = {
                   node_uin?: string | number
                   max_segments_per_node?: number
               }
+        /**
+         * How image/video segments reference their bytes. 'file' (default) keeps
+         * the legacy `file://<local path>` shape and the shared-filesystem
+         * deployment assumption. 'auto' prefers a bridge-pullable URL, then
+         * base64 inline, then SnowLuma `upload_file_stream` chunked upload, and
+         * falls back to `file://`. Forced 'inline' / 'upload' / 'url' degrade to
+         * `file://` when a cap is exceeded. See docs/snowluma.md.
+         */
+        media_delivery?: 'file' | 'auto' | 'inline' | 'upload' | 'url'
+        /** Public base URL serving the media cache dir (url / auto delivery). */
+        media_url_base?: string
+        /** Raw byte cap for base64 inline embedding (default 2 MiB). */
+        media_inline_max_bytes?: number
+        /** Raw byte cap for chunked upload_file_stream delivery (default 512 MiB). */
+        media_upload_max_bytes?: number
+        /** Decoded bytes per upload_file_stream chunk (default 1 MiB). */
+        media_upload_chunk_bytes?: number
+        /** Per-chunk request timeout in ms (default 60000). */
+        media_upload_timeout_ms?: number
+        /** Overall chunked upload deadline in ms (default 600000). */
+        media_upload_deadline_ms?: number
+        /** Bot-side retention of uploaded files in ms (default 3600000, 0 = keep). */
+        media_upload_retention_ms?: number
     }
 }
 

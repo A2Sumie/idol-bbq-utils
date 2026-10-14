@@ -36,6 +36,11 @@ import {
 import { getCookiesRoot } from '@/utils/directories'
 import { pRetry } from '@idol-bbq-utils/utils'
 import { buildConfigAudit } from '@/services/config-audit-service'
+import {
+    fetchOneBotReceipt,
+    probeQqBridgeHealth,
+    recallOneBotMessage,
+} from '@/services/onebot-receipt-service'
 import { buildRouteGraph } from '@/services/route-graph-service'
 import { buildRuntimeManifest } from '@/services/runtime-manifest-service'
 import { redactSecrets } from '@/services/redaction-service'
@@ -755,6 +760,10 @@ export class APIManager extends BaseCompatibleModel {
             return this.handleArticleResend(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/qq/x-link') return this.handleQqXLink(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/qq/send') return this.handleQqSend(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/qq/recall') return this.handleQqRecall(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/qq/receipt-check')
+            return this.handleQqReceiptCheck(req)
+        if (req.method === 'GET' && url.pathname === '/api/actions/qq/health') return this.handleQqHealth(url)
         if (req.method === 'POST' && url.pathname === '/api/actions/processors/run') return this.handleProcessorRun(req)
 
         return new Response(`Not Found: ${req.method} ${url.pathname}`, { status: 404 })
@@ -2642,6 +2651,137 @@ export class APIManager extends BaseCompatibleModel {
             this.log?.error(`QQ send failed: ${detail}`)
             return jsonResponse({ success: false, error: 'qq_send_failed', detail }, 502)
         }
+    }
+
+    private resolveQqOneBotEndpoint(override?: { url?: string; token?: string }): { endpoint: string; token: string } | null {
+        const qqTarget = (this.config.forward_targets || []).find(
+            (target) => target.platform === ForwardTargetPlatformEnum.QQ,
+        )
+        const targetPlatform = (qqTarget?.cfg_platform || {}) as { url?: string; token?: string }
+        const endpoint = String(override?.url?.trim() || targetPlatform.url || '').replace(/\/+$/, '')
+        const token = String(override?.token?.trim() || targetPlatform.token || '').trim()
+        return endpoint ? { endpoint, token } : null
+    }
+
+    private async resolveQqMessageIds(body: {
+        message_id?: unknown
+        message_ids?: unknown
+        idempotency_key?: unknown
+    }): Promise<string[]> {
+        const explicit: string[] = []
+        if (Array.isArray(body.message_ids)) {
+            explicit.push(...body.message_ids.map((id) => String(id || '').trim()).filter(Boolean))
+        }
+        const single = String(body.message_id || '').trim()
+        if (single) {
+            explicit.push(single)
+        }
+        if (explicit.length > 0) {
+            return Array.from(new Set(explicit))
+        }
+        const idempotencyKey = String(body.idempotency_key || '').trim()
+        if (!idempotencyKey) {
+            return []
+        }
+        const record = await DB.OutboundMessage.getByIdempotencyKey(idempotencyKey).catch(() => null)
+        const stored = record?.message_ids
+        const ids = Array.isArray(stored) ? stored : []
+        return Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)))
+    }
+
+    /**
+     * Explicit recall of previously sent QQ messages (OneBot `delete_msg`,
+     * SnowLuma message-store backed). Deliberately manual — the send pipeline
+     * never recalls automatically. Body: { message_id | message_ids |
+     * idempotency_key, url?, token? } where the idempotency_key route uses the
+     * message ids persisted at send time in outbound_messages.message_ids.
+     */
+    private async handleQqRecall(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('QQ recall')
+        if (disabled) return disabled
+        const body = (await req.json()) as {
+            message_id?: unknown
+            message_ids?: unknown
+            idempotency_key?: unknown
+            url?: string
+            token?: string
+        }
+        const messageIds = await this.resolveQqMessageIds(body)
+        if (messageIds.length === 0) {
+            return jsonResponse({ success: false, error: 'message_id_required' }, 400)
+        }
+        const target = this.resolveQqOneBotEndpoint(body)
+        if (!target) {
+            return jsonResponse({ success: false, error: 'qq_endpoint_required' }, 400)
+        }
+        const results = []
+        for (const messageId of messageIds) {
+            results.push(await recallOneBotMessage(target, messageId))
+        }
+        return jsonResponse({ success: results.every((result) => result.success), results })
+    }
+
+    /**
+     * Receipt check against the bridge's message-store (SnowLuma `get_msg`):
+     * confirms that ids recorded at send time really exist as visible messages.
+     * Body mirrors handleQqRecall.
+     */
+    private async handleQqReceiptCheck(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('QQ receipt check')
+        if (disabled) return disabled
+        const body = (await req.json()) as {
+            message_id?: unknown
+            message_ids?: unknown
+            idempotency_key?: unknown
+            url?: string
+            token?: string
+        }
+        const messageIds = await this.resolveQqMessageIds(body)
+        if (messageIds.length === 0) {
+            return jsonResponse({ success: false, error: 'message_id_required' }, 400)
+        }
+        const target = this.resolveQqOneBotEndpoint(body)
+        if (!target) {
+            return jsonResponse({ success: false, error: 'qq_endpoint_required' }, 400)
+        }
+        const results = []
+        for (const messageId of messageIds) {
+            results.push(await fetchOneBotReceipt(target, messageId))
+        }
+        return jsonResponse({ success: results.every((result) => result.ok), results })
+    }
+
+    /**
+     * Bridge health probe (`get_status` + `get_version_info`): login state,
+     * link health and SnowLuma-vs-NapCat flavor. With `?target_id=` the probe is
+     * recorded into the existing target-health table so a dead bridge shows up
+     * on /api/target-health without waiting for a failed send.
+     */
+    private async handleQqHealth(url: URL): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('QQ bridge health probe')
+        if (disabled) return disabled
+        const target = this.resolveQqOneBotEndpoint({
+            url: url.searchParams.get('url') || undefined,
+            token: url.searchParams.get('token') || undefined,
+        })
+        if (!target) {
+            return jsonResponse({ success: false, error: 'qq_endpoint_required' }, 400)
+        }
+        const health = await probeQqBridgeHealth(target)
+        const targetId = (url.searchParams.get('target_id') || '').trim()
+        if (targetId) {
+            await DB.TargetHealth.mark({
+                target_id: targetId,
+                provider: 'qq',
+                status: health.online && health.good ? 'ok' : 'error',
+                last_send_status: 'probe',
+                ...(health.online && health.good ? {} : { disabled_reason: health.detail }),
+                details: { probe: 'get_status', ...health.raw },
+            }).catch((error) => {
+                this.log?.warn(`Failed to record QQ bridge health for ${targetId}: ${error}`)
+            })
+        }
+        return jsonResponse({ success: true, health: { ...health, raw: undefined }, target_id: targetId || null })
     }
 
     private async handleQqXLink(req: Request): Promise<Response> {

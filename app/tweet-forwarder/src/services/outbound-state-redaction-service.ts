@@ -9,6 +9,7 @@ type OutboundMessageEntryLike = Record<string, unknown> & {
     synthetic_key?: string | null
     payload_hash?: string | null
     provider_message_ids?: unknown
+    message_ids?: unknown
     segment_results?: unknown
     last_error?: string | null
 }
@@ -89,6 +90,18 @@ function compactHash(value: unknown) {
 
 function redactIdentifier(value: unknown) {
     return hasValue(value) ? '[redacted]' : value
+}
+
+/** Provider message ids are delivery identifiers — never expose the raw ids. */
+function publicMessageIds(value: unknown) {
+    if (!hasValue(value)) {
+        return value ?? null
+    }
+    const ids = Array.isArray(value) ? value : [value]
+    return {
+        redacted_value: true,
+        id_count: ids.length,
+    }
 }
 
 function publicTextSummary(value: unknown) {
@@ -258,6 +271,7 @@ function redactOutboundMessageForApi<T extends OutboundMessageEntryLike>(message
         payload_hash: redactIdentifier(message.payload_hash),
         payload_hash_present: hasValue(message.payload_hash),
         provider_message_ids: publicOperationalJson(message.provider_message_ids),
+        message_ids: publicMessageIds(message.message_ids),
         segment_results: publicOperationalJson(message.segment_results),
         last_error: publicTextSummary(message.last_error),
     }

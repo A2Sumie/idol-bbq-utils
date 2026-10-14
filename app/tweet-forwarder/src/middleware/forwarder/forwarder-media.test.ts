@@ -120,6 +120,41 @@ test('QQForwarder does not send video thumbnails as standalone images', async ()
     ])
 })
 
+test('QQForwarder media_delivery=inline emits base64:// segments (SnowLuma media decoupling)', async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'qq-inline-segment-'))
+    const photoPath = path.join(tempRoot, 'cover.png')
+    await writeFile(photoPath, Buffer.from('tiny-image-bytes'))
+    try {
+        const forwarder = new QQForwarder(
+            {
+                group_id: '123',
+                url: 'http://127.0.0.1:3001',
+                token: '',
+                media_delivery: 'inline',
+            } as any,
+            'qq-inline-test',
+        )
+        ;(forwarder as any).minInterval = 0
+        const payloads: any[] = []
+        ;(forwarder as any).sendWithPayload = async (segments: any) => {
+            payloads.push(segments)
+            return { data: { status: 'ok', retcode: 0, data: { message_id: 42 } } }
+        }
+        await (forwarder as any).realSend(['hello'], {
+            media: [{ media_type: 'photo', path: photoPath }],
+        })
+        expect(payloads[0]).toEqual([
+            { type: 'text', data: { text: 'hello' } },
+            {
+                type: 'image',
+                data: { file: `base64://${Buffer.from('tiny-image-bytes').toString('base64')}` },
+            },
+        ])
+    } finally {
+        await rm(tempRoot, { recursive: true, force: true })
+    }
+})
+
 test('QQForwarder rejects OneBot failed JSON responses even when HTTP succeeds', () => {
     const forwarder = new QQForwarder(
         {
@@ -155,6 +190,39 @@ test('QQForwarder rejects OneBot failed JSON responses even when HTTP succeeds',
             'send_group_msg',
         ),
     ).toThrow(/status=failed retcode=200 message=EventChecker Failed/)
+})
+
+test('QQForwarder maps non-retryable verdicts to NonRetryableForwarderSendError (SnowLuma + NapCat)', () => {
+    const forwarder = new QQForwarder(
+        {
+            group_id: '123',
+            url: 'http://127.0.0.1:3001',
+            token: '',
+        } as any,
+        'qq-verdict-test',
+    )
+    const assert = (forwarder as any).assertOneBotResponseOk.bind(forwarder)
+
+    // NapCat EventChecker rejection (retcode=200): must never be retried.
+    expect(() =>
+        assert({ data: { status: 'failed', retcode: 200, data: { result: 120 } } }, 'send_group_msg'),
+    ).toThrow(NonRetryableForwarderSendError)
+    // SnowLuma parameter error (1400) and risk-control wording on 100: same.
+    expect(() =>
+        assert({ data: { status: 'failed', retcode: 1400, wording: 'bad segment' } }, 'send_group_msg'),
+    ).toThrow(NonRetryableForwarderSendError)
+    expect(() =>
+        assert({ data: { status: 'failed', retcode: 100, wording: 'send failed: 触发风控' } }, 'send_group_msg'),
+    ).toThrow(NonRetryableForwarderSendError)
+    // Transient business failure wording stays retryable (plain Error).
+    let thrown: unknown
+    try {
+        assert({ data: { status: 'failed', retcode: 100, wording: 'send failed: upstream timeout' } }, 'send_group_msg')
+    } catch (error) {
+        thrown = error
+    }
+    expect(thrown).toBeInstanceOf(Error)
+    expect(thrown).not.toBeInstanceOf(NonRetryableForwarderSendError)
 })
 
 test('QQForwarder can package text and media as OneBot merged-forward nodes', async () => {

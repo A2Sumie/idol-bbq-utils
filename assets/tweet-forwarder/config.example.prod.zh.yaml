@@ -44,6 +44,15 @@ bots:
         #   enabled: true
         #   node_name: 'idol-bbq'
         #   node_uin: '10000'
+        # --- SnowLuma 媒体投递（详见 docs/snowluma.md；默认 'file' = 传统 file:// 共享文件系统）---
+        # media_delivery: 'auto'                # file | auto | inline | upload | url
+        # media_url_base: 'http://127.0.0.1:8080/tweet-forwarder-media'   # url/auto: 桥可拉取的媒体基址
+        # media_inline_max_bytes: 2097152       # base64 内联上限（2 MiB）
+        # media_upload_max_bytes: 536870912     # upload_file_stream 上限（512 MiB）
+        # media_upload_chunk_bytes: 1048576     # 分块解码后大小
+        # media_upload_timeout_ms: 60000        # 单块请求超时
+        # media_upload_deadline_ms: 600000      # 整体上传截止
+        # media_upload_retention_ms: 3600000    # 上传后 bot 侧保留时长
     config:                                   # (可选) 任务配置，可覆盖全局配置
       # 设置user-agent
       user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0'                 # (可选) puppeteer supported user agent

@@ -50,6 +50,7 @@ async function createOutboundMessageSchema(prisma: PrismaClientInstance) {
             "payload_hash" TEXT NOT NULL,
             "status" TEXT NOT NULL DEFAULT 'planned',
             "provider_message_ids" JSONB,
+            "message_ids" JSONB,
             "segment_results" JSONB,
             "attempt_count" INTEGER NOT NULL DEFAULT 0,
             "last_error" TEXT,
@@ -726,6 +727,7 @@ test('OutboundMessage terminal states clear unrelated stale fields on SQLite', a
         provider_message_ids: {
             message_id: 'msg-1',
         },
+        message_ids: ['msg-1'],
         segment_results: null,
         last_error: null,
     })
@@ -748,6 +750,7 @@ test('OutboundMessage terminal states clear unrelated stale fields on SQLite', a
     expect(partial).toMatchObject({
         status: 'partial',
         provider_message_ids: null,
+        message_ids: ['visible-1'],
         segment_results: [{ message_id: 'visible-1' }],
         last_error: 'tail failed',
     })
@@ -769,6 +772,7 @@ test('OutboundMessage terminal states clear unrelated stale fields on SQLite', a
     expect(failed).toMatchObject({
         status: 'failed',
         provider_message_ids: null,
+        message_ids: null,
         segment_results: null,
         last_error: 'network failed',
     })

@@ -262,10 +262,44 @@ function providerCode(value: unknown): string | null {
     return code === undefined || code === null ? null : String(code)
 }
 
+/**
+ * Pull every provider-side message id out of a send result (OneBot
+ * `data.message_id`, flattened `message_id` fields, arrays of per-segment
+ * responses, partial results...). These are persisted to the
+ * `outbound_messages.message_ids` column so a send can be receipt-checked
+ * (`get_msg`) or recalled (`delete_msg`) after the fact — SnowLuma's
+ * message-store keeps a durable copy keyed by exactly these ids.
+ */
+function extractProviderMessageIds(value: unknown, depth = 0): string[] {
+    if (depth > 6 || value === null || value === undefined) {
+        return []
+    }
+    if (Array.isArray(value)) {
+        return Array.from(new Set(value.flatMap((item) => extractProviderMessageIds(item, depth + 1))))
+    }
+    if (typeof value !== 'object') {
+        return []
+    }
+    const record = value as Record<string, unknown>
+    const ids: string[] = []
+    const direct = record.message_id
+    if (direct !== undefined && direct !== null && String(direct).length > 0) {
+        ids.push(String(direct))
+    }
+    for (const [key, nested] of Object.entries(record)) {
+        if (key === 'message_id') {
+            continue
+        }
+        ids.push(...extractProviderMessageIds(nested, depth + 1))
+    }
+    return Array.from(new Set(ids))
+}
+
 export {
     articleKey,
     articleOutboundKey,
     articleRowKey,
+    extractProviderMessageIds,
     hashValue,
     isOutboundFailedStatus,
     isOutboundDryRunStatus,

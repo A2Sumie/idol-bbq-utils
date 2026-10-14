@@ -1,11 +1,17 @@
 import axios from 'axios'
 import { chunk } from 'lodash'
-import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, type SendProps } from './base'
+import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, type MediaFile, type SendProps } from './base'
+import { classifyOneBotResponse, classifyOneBotTransportError } from './onebot-semantics'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 import {
     normalizeForwarderImageAttachments,
     resolveForwarderImageMaxBytes,
 } from '@/services/forwarder-image-attachment-service'
+import {
+    buildQQMediaFileValue,
+    resolveQQMediaDeliveryConfig,
+    type QQMediaDeliveryConfigLike,
+} from '@/services/snowluma-media-source'
 
 type OneBotTextSegment = {
     type: 'text'
@@ -32,6 +38,13 @@ type OneBotMessageSegment = OneBotTextSegment | OneBotImageSegment | OneBotVideo
 
 const QQ_REQUEST_TIMEOUT_MS = 15_000
 
+/**
+ * In `url` media delivery the bridge downloads the media after the send is
+ * accepted, so compressed attachment copies must outlive the send call for a
+ * bit before `normalizedAttachments.cleanup()` frees them.
+ */
+const QQ_MEDIA_URL_CLEANUP_GRACE_MS = 5 * 60 * 1000
+
 type MergedForwardRuntimeConfig = {
     enabled: boolean
     nodeName: string
@@ -45,6 +58,7 @@ class QQForwarder extends Forwarder {
     private user_id?: string
     private url: string
     private token: string
+    private mediaDelivery: ReturnType<typeof resolveQQMediaDeliveryConfig>
     NAME = 'qq'
     protected override BASIC_TEXT_LIMIT = 4000
 
@@ -62,6 +76,7 @@ class QQForwarder extends Forwarder {
         this.user_id = user_id ? String(user_id) : undefined
         this.url = url
         this.token = token
+        this.mediaDelivery = resolveQQMediaDeliveryConfig(config as QQMediaDeliveryConfigLike)
     }
 
     private isPrivateChat() {
@@ -101,76 +116,104 @@ class QQForwarder extends Forwarder {
         }
     }
 
+    /**
+     * Unified OneBot response judgment (NapCat + SnowLuma): see
+     * onebot-semantics.ts for the full retcode/wording table. Success is
+     * `status=="ok" && retcode==0`; NapCat EventChecker rejections
+     * (`retcode:200`) and SnowLuma `1400/1401/1404/1413` + risk-control wording
+     * become NonRetryableForwarderSendError so pRetry never re-spams them.
+     */
     private assertOneBotResponseOk(res: { data?: any; statusText?: string }, context: string) {
-        const data = res?.data
-        const status = String(data?.status || '')
-            .trim()
-            .toLowerCase()
-        const retcodeRaw = data?.retcode
-        const retcodeText = retcodeRaw === undefined || retcodeRaw === null ? '' : String(retcodeRaw).trim()
-        const hasRetcode = retcodeText.length > 0
-        const retcode = Number(retcodeRaw)
-        const retcodeFailed = hasRetcode && (!Number.isFinite(retcode) || retcode !== 0)
-        if ((status && status !== 'ok') || retcodeFailed) {
-            const message = String(
-                data?.message || data?.wording || data?.msg || data?.error || res?.statusText || 'unknown',
-            )
-            const detail = `QQ OneBot send failed (${context}): status=${status || 'unknown'} retcode=${hasRetcode ? retcodeRaw : 'unknown'} message=${message}`
-            // NapCat retcode 200 EventChecker rejections happen before the message is accepted; retrying the
-            // identical payload just spams the API during an outage.
-            if (hasRetcode && Number(retcodeRaw) === 200) {
-                throw new NonRetryableForwarderSendError(detail)
-            }
-            throw new Error(detail)
+        const verdict = classifyOneBotResponse(res, context)
+        if (verdict.ok) {
+            return verdict
         }
+        if (!verdict.retryable) {
+            throw new NonRetryableForwarderSendError(verdict.detail)
+        }
+        throw new Error(verdict.detail)
     }
 
-    private buildImageSegments(media: NonNullable<SendProps['media']>): OneBotImageSegment[] {
-        return media
-            .filter((i) => i.media_type === 'photo')
-            .map((i) => ({
-                type: 'image',
-                data: {
-                    file: `file://${i.path}`,
-                },
-            }))
+    /**
+     * Transport-layer failures (timeout / reset / 5xx) stay retryable; 4xx
+     * (bad endpoint, bad token, oversized body) are promoted to
+     * NonRetryableForwarderSendError so they cannot start a retry storm.
+     */
+    private rethrowClassifiedTransportError(error: unknown): never {
+        const transport = classifyOneBotTransportError(error)
+        if (!transport.retryable) {
+            throw new NonRetryableForwarderSendError(transport.detail)
+        }
+        throw error
     }
 
-    private buildVideoSegments(media: NonNullable<SendProps['media']>): OneBotVideoSegment[] {
-        return media
-            .filter((i) => i.media_type === 'video')
-            .map((i) => ({
-                type: 'video',
-                data: {
-                    file: `file://${i.path}`,
-                },
-            }))
+    private async resolveMediaFileValue(
+        item: MediaFile,
+        cache: Map<string, string>,
+    ): Promise<{ value: string; usedUrl: boolean }> {
+        const cached = cache.get(item.path)
+        if (cached !== undefined) {
+            return { value: cached, usedUrl: cached.startsWith('http://') || cached.startsWith('https://') }
+        }
+        const built = await buildQQMediaFileValue(
+            {
+                path: item.path,
+                url: (item as MediaFile & { url?: string }).url,
+            },
+            {
+                config: this.mediaDelivery,
+                endpoint: this.url,
+                token: this.token,
+                log: this.log,
+            },
+        )
+        cache.set(item.path, built.value)
+        if (built.method !== 'file' && built.method !== 'url') {
+            this.log?.debug(`QQ media source for ${item.path}: ${built.method} (${built.reason})`)
+        }
+        return { value: built.value, usedUrl: built.method === 'url' }
     }
 
-    private buildMediaSegmentsInOrder(media: NonNullable<SendProps['media']>): OneBotMessageSegment[] {
-        return media.flatMap<OneBotMessageSegment>((item): Array<OneBotMessageSegment> => {
-            if (item.media_type === 'photo') {
-                return [
-                    {
-                        type: 'image' as const,
-                        data: {
-                            file: `file://${item.path}`,
-                        },
-                    },
-                ]
+    private async buildImageSegments(
+        media: NonNullable<SendProps['media']>,
+        cache: Map<string, string>,
+    ): Promise<OneBotImageSegment[]> {
+        const segments: OneBotImageSegment[] = []
+        for (const item of media.filter((i) => i.media_type === 'photo')) {
+            const { value } = await this.resolveMediaFileValue(item, cache)
+            segments.push({ type: 'image', data: { file: value } })
+        }
+        return segments
+    }
+
+    private async buildVideoSegments(
+        media: NonNullable<SendProps['media']>,
+        cache: Map<string, string>,
+    ): Promise<OneBotVideoSegment[]> {
+        const segments: OneBotVideoSegment[] = []
+        for (const item of media.filter((i) => i.media_type === 'video')) {
+            const { value } = await this.resolveMediaFileValue(item, cache)
+            segments.push({ type: 'video', data: { file: value } })
+        }
+        return segments
+    }
+
+    private async buildMediaSegmentsInOrder(
+        media: NonNullable<SendProps['media']>,
+        cache: Map<string, string>,
+    ): Promise<OneBotMessageSegment[]> {
+        const segments: OneBotMessageSegment[] = []
+        for (const item of media) {
+            if (item.media_type !== 'photo' && item.media_type !== 'video') {
+                continue
             }
-            if (item.media_type === 'video') {
-                return [
-                    {
-                        type: 'video' as const,
-                        data: {
-                            file: `file://${item.path}`,
-                        },
-                    },
-                ]
-            }
-            return []
-        })
+            const { value } = await this.resolveMediaFileValue(item, cache)
+            segments.push({
+                type: item.media_type === 'photo' ? ('image' as const) : ('video' as const),
+                data: { file: value },
+            })
+        }
+        return segments
     }
 
     private buildTextSegments(texts: string[]): OneBotTextSegment[] {
@@ -191,8 +234,9 @@ class QQForwarder extends Forwarder {
             log: _log,
         })
         media = normalizedAttachments.media
-        let pics = this.buildImageSegments(media)
-        let videos = this.buildVideoSegments(media)
+        const mediaFileCache = new Map<string, string>()
+        const pics = await this.buildImageSegments(media, mediaFileCache)
+        const videos = await this.buildVideoSegments(media, mediaFileCache)
         if (media.length > 0) {
             _log?.debug(`Send text with photos..., media: ${media}`)
             _log?.debug(`pics: ${pics}`)
@@ -232,7 +276,10 @@ class QQForwarder extends Forwarder {
         try {
             const mergedForwardConfig = this.normalizeMergedForwardConfig(props)
             if (mergedForwardConfig.enabled) {
-                const segments = [...this.buildTextSegments(texts), ...this.buildMediaSegmentsInOrder(media)]
+                const segments = [
+                    ...this.buildTextSegments(texts),
+                    ...(await this.buildMediaSegmentsInOrder(media, mediaFileCache)),
+                ]
                 if (segments.length > 0) {
                     const res = await this.sendMergedForwardPayload(segments, mergedForwardConfig)
                     _res.push(res)
@@ -266,7 +313,17 @@ class QQForwarder extends Forwarder {
 
             return _res
         } finally {
-            normalizedAttachments.cleanup()
+            // In url delivery mode the bridge may fetch the media slightly after
+            // the send response, so give compressed copies a grace period.
+            const usedUrlDelivery = [...mediaFileCache.values()].some(
+                (value) => value.startsWith('http://') || value.startsWith('https://'),
+            )
+            if (usedUrlDelivery) {
+                const timer = setTimeout(() => normalizedAttachments.cleanup(), QQ_MEDIA_URL_CLEANUP_GRACE_MS)
+                ;(timer as unknown as { unref?: () => void }).unref?.()
+            } else {
+                normalizedAttachments.cleanup()
+            }
         }
     }
 
@@ -294,25 +351,35 @@ class QQForwarder extends Forwarder {
 
     async sendWithPayload(arr_of_segments: OneBotMessageSegment[]) {
         if (this.isPrivateChat()) {
-            const res = await axios.post(
-                `${this.url}/send_private_msg`,
+            let res
+            try {
+                res = await axios.post(
+                    `${this.url}/send_private_msg`,
+                    {
+                        user_id: this.user_id,
+                        message: arr_of_segments,
+                    },
+                    this.buildRequestOptions(),
+                )
+            } catch (error) {
+                this.rethrowClassifiedTransportError(error)
+            }
+            this.assertOneBotResponseOk(res, 'send_private_msg')
+            return res
+        }
+        let res
+        try {
+            res = await axios.post(
+                `${this.url}/send_group_msg`,
                 {
-                    user_id: this.user_id,
+                    group_id: this.group_id,
                     message: arr_of_segments,
                 },
                 this.buildRequestOptions(),
             )
-            this.assertOneBotResponseOk(res, 'send_private_msg')
-            return res
+        } catch (error) {
+            this.rethrowClassifiedTransportError(error)
         }
-        const res = await axios.post(
-            `${this.url}/send_group_msg`,
-            {
-                group_id: this.group_id,
-                message: arr_of_segments,
-            },
-            this.buildRequestOptions(),
-        )
         this.assertOneBotResponseOk(res, 'send_group_msg')
         return res
     }
@@ -327,25 +394,35 @@ class QQForwarder extends Forwarder {
             },
         }))
         if (this.isPrivateChat()) {
-            const res = await axios.post(
-                `${this.url}/send_private_forward_msg`,
+            let res
+            try {
+                res = await axios.post(
+                    `${this.url}/send_private_forward_msg`,
+                    {
+                        user_id: this.user_id,
+                        messages: nodes,
+                    },
+                    this.buildRequestOptions(),
+                )
+            } catch (error) {
+                this.rethrowClassifiedTransportError(error)
+            }
+            this.assertOneBotResponseOk(res, 'send_private_forward_msg')
+            return res
+        }
+        let res
+        try {
+            res = await axios.post(
+                `${this.url}/send_group_forward_msg`,
                 {
-                    user_id: this.user_id,
+                    group_id: this.group_id,
                     messages: nodes,
                 },
                 this.buildRequestOptions(),
             )
-            this.assertOneBotResponseOk(res, 'send_private_forward_msg')
-            return res
+        } catch (error) {
+            this.rethrowClassifiedTransportError(error)
         }
-        const res = await axios.post(
-            `${this.url}/send_group_forward_msg`,
-            {
-                group_id: this.group_id,
-                messages: nodes,
-            },
-            this.buildRequestOptions(),
-        )
         this.assertOneBotResponseOk(res, 'send_group_forward_msg')
         return res
     }

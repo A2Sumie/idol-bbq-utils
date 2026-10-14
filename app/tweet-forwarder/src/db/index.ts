@@ -10,6 +10,7 @@ import {
     isOutboundStaleRetryableStatus,
     OUTBOUND_FAILED_RETRY_LIMIT,
     OUTBOUND_STATUS,
+    extractProviderMessageIds,
     hashValue,
 } from '@/services/outbound-message-service'
 
@@ -1429,6 +1430,17 @@ namespace DB {
         const FAILED_RETRY_BASE_SECONDS = 60
         const FAILED_RETRY_MAX_SECONDS = 3600
 
+        /**
+         * Normalized provider message ids for the `outbound_messages.message_ids`
+         * column (SnowLuma/NapCat `data.message_id` per visible segment). Empty
+         * results are stored as JSON null so the column is never a stale mix of
+         * two attempts.
+         */
+        function messageIdsJson(providerResult: unknown) {
+            const ids = extractProviderMessageIds(providerResult)
+            return ids.length > 0 ? (ids as Prisma.InputJsonValue) : Prisma.JsonNull
+        }
+
         function failedBackoffSeconds(attemptCount: number) {
             const exponent = Math.max(0, Math.min(attemptCount, 6))
             return Math.min(FAILED_RETRY_MAX_SECONDS, FAILED_RETRY_BASE_SECONDS * 2 ** exponent)
@@ -1577,6 +1589,7 @@ namespace DB {
                         payload_hash: data.payload_hash,
                         status: OUTBOUND_STATUS.Planned,
                         provider_message_ids: Prisma.JsonNull,
+                        message_ids: Prisma.JsonNull,
                         segment_results: Prisma.JsonNull,
                         last_error: null,
                         updated_at: now,
@@ -1628,6 +1641,7 @@ namespace DB {
                     status: OUTBOUND_STATUS.Sending,
                     attempt_count: { increment: 1 },
                     provider_message_ids: Prisma.JsonNull,
+                    message_ids: Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     updated_at: now,
                     finished_at: null,
@@ -1643,6 +1657,7 @@ namespace DB {
                 data: {
                     status: OUTBOUND_STATUS.Queued,
                     provider_message_ids: (details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    message_ids: Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     updated_at: now,
                     finished_at: null,
@@ -1658,6 +1673,7 @@ namespace DB {
                 data: {
                     status: OUTBOUND_STATUS.DryRun,
                     provider_message_ids: (details as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    message_ids: Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     updated_at: now,
                     finished_at: null,
@@ -1680,6 +1696,7 @@ namespace DB {
                 data: {
                     status: OUTBOUND_STATUS.Skipped,
                     provider_message_ids: payload as Prisma.InputJsonValue,
+                    message_ids: Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     updated_at: now,
                     finished_at: now,
@@ -1695,6 +1712,7 @@ namespace DB {
                 data: {
                     status: OUTBOUND_STATUS.Sent,
                     provider_message_ids: (providerResult as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
+                    message_ids: messageIdsJson(providerResult),
                     segment_results: Prisma.JsonNull,
                     updated_at: now,
                     finished_at: now,
@@ -1710,6 +1728,7 @@ namespace DB {
                 data: {
                     status: OUTBOUND_STATUS.Partial,
                     provider_message_ids: Prisma.JsonNull,
+                    message_ids: messageIdsJson(providerResult),
                     segment_results: (providerResult as Prisma.InputJsonValue | undefined) ?? Prisma.JsonNull,
                     last_error: error instanceof Error ? error.message : String(error),
                     updated_at: now,
@@ -1725,6 +1744,7 @@ namespace DB {
                 data: {
                     status: OUTBOUND_STATUS.Failed,
                     provider_message_ids: Prisma.JsonNull,
+                    message_ids: Prisma.JsonNull,
                     segment_results: Prisma.JsonNull,
                     last_error: error instanceof Error ? error.message : String(error),
                     updated_at: now,

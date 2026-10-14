@@ -51,6 +51,15 @@ bots:
         #   enabled: true
         #   node_name: 'idol-bbq'
         #   node_uin: '10000'
+        # --- SnowLuma media delivery (see docs/snowluma.md; default 'file' = legacy file:// shared-fs) ---
+        # media_delivery: 'auto'                # file | auto | inline | upload | url
+        # media_url_base: 'http://127.0.0.1:8080/tweet-forwarder-media'   # url/auto: bridge-pullable base
+        # media_inline_max_bytes: 2097152       # base64 inline cap (2 MiB)
+        # media_upload_max_bytes: 536870912     # upload_file_stream cap (512 MiB)
+        # media_upload_chunk_bytes: 1048576     # decoded chunk size
+        # media_upload_timeout_ms: 60000        # per-chunk request timeout
+        # media_upload_deadline_ms: 600000      # whole upload deadline
+        # media_upload_retention_ms: 3600000    # bot-side file retention after upload
     config:                                   # (optional) forwarder configurations
       user_agent:  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36'                             # (optional) puppeteer supported user agent
       cron: "*/5 4-23 * * *"                  

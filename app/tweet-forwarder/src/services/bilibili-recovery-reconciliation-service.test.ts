@@ -89,6 +89,7 @@ async function createOutboundMessageSchema(prisma: PrismaClientInstance) {
             "payload_hash" TEXT NOT NULL,
             "status" TEXT NOT NULL DEFAULT 'planned',
             "provider_message_ids" JSONB,
+            "message_ids" JSONB,
             "segment_results" JSONB,
             "attempt_count" INTEGER NOT NULL DEFAULT 0,
             "last_error" TEXT,
