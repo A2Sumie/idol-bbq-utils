@@ -3263,3 +3263,292 @@ test('APIManager returns no-secret config audit for route policy checks', async 
     expect(serialized).not.toContain('test-secret')
     expect(serialized).not.toContain('bot-token')
 })
+
+// ---------------------------------------------------------------------------
+// POST /api/actions/qq/events — generic OneBot v11 inbound event channel
+// ---------------------------------------------------------------------------
+
+function makeMockOneBotBridge(response: any = { status: 'ok', retcode: 0, data: { message_id: 4242 } }) {
+    const calls: Array<{ path: string; body: any }> = []
+    const server = Bun.serve({
+        port: 0,
+        fetch: async (req) => {
+            calls.push({ path: new URL(req.url).pathname, body: await req.json().catch(() => null) })
+            return new Response(JSON.stringify(response), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json' },
+            })
+        },
+    })
+    return { server, calls, url: `http://127.0.0.1:${server.port}` }
+}
+
+function makeInboundManager(overrides: Record<string, any> = {}) {
+    return new APIManager({
+        getConfig: () =>
+            ({
+                api: { secret: 'test-secret' },
+                forward_targets: [
+                    {
+                        id: 'qq-1',
+                        platform: 'qq',
+                        cfg_platform: {
+                            url: overrides.bridgeUrl || 'http://127.0.0.1:3001',
+                            token: 'bot-token',
+                            group_id: '999',
+                        },
+                    },
+                ],
+                ...overrides.config,
+            }) as any,
+        getDeps: () => ({ ...(overrides.deps || {}) }) as any,
+    })
+}
+
+function signedEventsRequest(path: string, body: string, secret = 'test-secret') {
+    const signature = crypto.createHmac('sha1', secret).update(body).digest('hex')
+    return new Request(`http://localhost${path}`, {
+        method: 'POST',
+        headers: { 'x-signature': `sha1=${signature}` },
+        body,
+    })
+}
+
+const inboundGroupEvent = JSON.stringify({
+    time: 1_777_777_777,
+    self_id: 30200001,
+    post_type: 'message',
+    message_type: 'group',
+    message_id: 99887766,
+    group_id: 999,
+    user_id: 12345,
+    message: [{ type: 'text', data: { text: 'ping inbound' } }],
+    raw_message: 'ping inbound',
+    sender: { user_id: 12345, nickname: 'tester', role: 'member' },
+})
+
+test('APIManager QQ events endpoint accepts both HMAC signature and Bearer auth', async () => {
+    const manager = makeInboundManager()
+    const dispatch = (req: Request) => (manager as any).dispatchApiRequest(req, { timeout: () => undefined }, 'test-secret')
+
+    const viaHmac = await dispatch(signedEventsRequest('/api/actions/qq/events', inboundGroupEvent))
+    expect(viaHmac.status).toBe(200)
+
+    const viaBearer = await dispatch(
+        new Request('http://localhost/api/actions/qq/events', {
+            method: 'POST',
+            headers: { Authorization: 'Bearer test-secret' },
+            body: inboundGroupEvent,
+        }),
+    )
+    expect(viaBearer.status).toBe(200)
+
+    const badSignature = await dispatch(
+        new Request('http://localhost/api/actions/qq/events', {
+            method: 'POST',
+            headers: { 'x-signature': 'sha1=deadbeef' },
+            body: inboundGroupEvent,
+        }),
+    )
+    expect(badSignature.status).toBe(401)
+
+    const noAuth = await dispatch(
+        new Request('http://localhost/api/actions/qq/events', { method: 'POST', body: inboundGroupEvent }),
+    )
+    expect(noAuth.status).toBe(401)
+})
+
+test('APIManager QQ events endpoint stays inert while qq_inbound is not enabled', async () => {
+    const bridge = makeMockOneBotBridge()
+    try {
+        const manager = makeInboundManager({ bridgeUrl: bridge.url })
+        const response = await (manager as any).dispatchApiRequest(
+            signedEventsRequest('/api/actions/qq/events', inboundGroupEvent),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ success: true, status: 'ignored', reason: 'inbound_disabled' })
+        expect(bridge.calls).toHaveLength(0)
+    } finally {
+        bridge.server.stop(true)
+    }
+})
+
+test('APIManager QQ events endpoint runs the reaction chain against the bridge and dedupes redeliveries', async () => {
+    const bridge = makeMockOneBotBridge()
+    try {
+        const manager = makeInboundManager({
+            bridgeUrl: bridge.url,
+            config: {
+                qq_inbound: {
+                    enabled: true,
+                    bot_user_ids: ['30200001'],
+                    handlers: [
+                        {
+                            id: 'reply-hello',
+                            type: 'reply',
+                            match: { text_regex: 'ping inbound' },
+                            reply: { template: 'pong: {text}', quote: true },
+                        },
+                    ],
+                },
+            },
+        })
+        const dispatch = (body: string) =>
+            (manager as any).dispatchApiRequest(signedEventsRequest('/api/actions/qq/events', body), {
+                timeout: () => undefined,
+            }, 'test-secret')
+
+        const first = await dispatch(inboundGroupEvent)
+        expect(first.status).toBe(200)
+        const firstBody = await first.json()
+        expect(firstBody.status).toBe('processed')
+        expect(firstBody.reactions[0]).toMatchObject({ handlerId: 'reply-hello', status: 'ok' })
+        expect(bridge.calls).toHaveLength(1)
+        expect(bridge.calls[0]!.path).toBe('/send_group_msg')
+        expect(bridge.calls[0]!.body.group_id).toBe('999')
+        expect(bridge.calls[0]!.body.message[0]).toEqual({ type: 'reply', data: { message_id: '99887766' } })
+
+        // Bridge redelivery of the SAME event must not react twice.
+        const second = await dispatch(inboundGroupEvent)
+        expect(second.status).toBe(200)
+        expect(await second.json()).toMatchObject({ success: true, status: 'duplicate' })
+        expect(bridge.calls).toHaveLength(1)
+    } finally {
+        bridge.server.stop(true)
+    }
+})
+
+test('APIManager QQ events endpoint answers SnowLuma quick operations as the response body', async () => {
+    const bridge = makeMockOneBotBridge()
+    try {
+        const manager = makeInboundManager({
+            bridgeUrl: bridge.url,
+            config: {
+                qq_inbound: {
+                    enabled: true,
+                    handlers: [
+                        {
+                            id: 'quick',
+                            type: 'quick_operation',
+                            match: { text_regex: 'ping inbound' },
+                            quick_operation: { reply: 'auto: {text}', at_sender: true },
+                        },
+                    ],
+                },
+            },
+        })
+        const response = await (manager as any).dispatchApiRequest(
+            signedEventsRequest('/api/actions/qq/events', inboundGroupEvent),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+        expect(response.status).toBe(200)
+        expect(await response.json()).toEqual({ reply: 'auto: ping inbound', at_sender: true })
+        expect(bridge.calls).toHaveLength(0)
+    } finally {
+        bridge.server.stop(true)
+    }
+})
+
+test('APIManager QQ events endpoint survives malformed and non-event payloads', async () => {
+    const manager = makeInboundManager({
+        config: { qq_inbound: { enabled: true, handlers: [{ id: 'r', type: 'reply', reply: { template: 'x' } }] } },
+    })
+    const dispatch = (req: Request) => (manager as any).dispatchApiRequest(req, { timeout: () => undefined }, 'test-secret')
+
+    const badJson = await dispatch(signedEventsRequest('/api/actions/qq/events', 'not json at all'))
+    expect(badJson.status).toBe(200)
+    expect(await badJson.json()).toMatchObject({ status: 'ignored', reason: 'invalid_json' })
+
+    const notEvent = await dispatch(signedEventsRequest('/api/actions/qq/events', JSON.stringify({ hello: 'world' })))
+    expect(notEvent.status).toBe(200)
+    expect(await notEvent.json()).toMatchObject({ status: 'ignored', reason: 'not_onebot_event' })
+
+    // Unknown future notice subtype normalizes and is ignored instead of 500.
+    const weirdNotice = await dispatch(
+        signedEventsRequest(
+            '/api/actions/qq/events',
+            JSON.stringify({ self_id: 1, post_type: 'notice', notice_type: 'brand_new', group_id: 1, user_id: 2 }),
+        ),
+    )
+    expect(weirdNotice.status).toBe(200)
+    expect((await weirdNotice.json()).status).toBe('ignored')
+})
+
+test('APIManager QQ events endpoint drops self echoes (bot uin / message_sent)', async () => {
+    const bridge = makeMockOneBotBridge()
+    try {
+        const manager = makeInboundManager({
+            bridgeUrl: bridge.url,
+            config: {
+                qq_inbound: {
+                    enabled: true,
+                    bot_user_ids: ['30200001'],
+                    handlers: [{ id: 'r', type: 'reply', reply: { template: 'x' } }],
+                },
+            },
+        })
+        const own = JSON.stringify({
+            self_id: 30200001,
+            post_type: 'message',
+            message_type: 'group',
+            message_id: 1,
+            group_id: 999,
+            user_id: 30200001,
+            message: 'loop',
+            sender: { user_id: 30200001 },
+        })
+        const response = await (manager as any).dispatchApiRequest(
+            signedEventsRequest('/api/actions/qq/events', own),
+            { timeout: () => undefined },
+            'test-secret',
+        )
+        expect(response.status).toBe(200)
+        const body = await response.json()
+        expect(body.status).toBe('ignored')
+        expect(JSON.stringify(body.reactions)).toContain('self echo')
+        expect(bridge.calls).toHaveLength(0)
+    } finally {
+        bridge.server.stop(true)
+    }
+})
+
+test('APIManager QQ events endpoint never routes X links into the legacy x-link pipeline', async () => {
+    const sendCalls: any[] = []
+    const manager = makeInboundManager({
+        config: {
+            qq_inbound: {
+                enabled: true,
+                handlers: [{ id: 'r', type: 'reply', reply: { template: 'x' } }],
+            },
+        },
+        deps: {
+            forwarderPools: {
+                sendImmediateXLinkArticle: async (...args: any[]) => {
+                    sendCalls.push(args)
+                    return { sent: true }
+                },
+            },
+        },
+    })
+    const withLink = JSON.stringify({
+        self_id: 1,
+        post_type: 'message',
+        message_type: 'group',
+        message_id: 2,
+        group_id: 999,
+        user_id: 42,
+        message: [{ type: 'text', data: { text: 'https://x.com/kyu0817a/status/2068528507651842559' } }],
+        raw_message: 'https://x.com/kyu0817a/status/2068528507651842559',
+        sender: { user_id: 42 },
+    })
+    const response = await (manager as any).dispatchApiRequest(
+        signedEventsRequest('/api/actions/qq/events', withLink),
+        { timeout: () => undefined },
+        'test-secret',
+    )
+    expect(response.status).toBe(200)
+    expect(sendCalls).toHaveLength(0)
+})

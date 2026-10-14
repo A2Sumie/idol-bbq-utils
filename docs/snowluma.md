@@ -138,5 +138,126 @@ QQ target（`cfg_platform`）：
 - **限速**：SnowLuma 发送端限流 [未证实]（能力报告 §2.6），保守维持自建节拍：
   `minInterval` 1s/目标 + pRetry 有界 + 不可重试目标冷却。如需更严可在
   `base.ts` `minInterval` 处加令牌桶（本轮不动）。
-- **事件面升级（WS 事件流 / historySync 补缺）**：属 kyestu/切换任务范围，本轮未动
-  `api-manager.ts` 的 HMAC 验签入口（NapCat HTTP 上报兼容面未变）。
+- **事件面升级（WS 事件流 / historySync 补缺）**：HTTP 入站事件通道与反应框架已落地
+  （见 §8）；WS 事件流与 `historySync` 断线补缺仍未接（能力面未证实事件补发队列，
+  历史缺口只能靠 `get_*_msg_history` 事后补），留到下一波。
+
+---
+
+## 8. 入站事件与反应（通用 OneBot v11 事件通道 + 可插拔反应框架）
+
+> 目标口径："高度支持 SnowLuma 特性" = **能反向监控 QQ 群内消息并做出反应**。
+> 能力齐备优先，具体业务规则可少。默认**整体关闭**，未配置时现网行为一字不变。
+
+### 8.1 链路图
+
+```
+SnowLuma httpClients / NapCat httpPostEndpoints
+   │  POST /api/actions/qq/events   （X-Signature: sha1=HMAC-SHA1(secret, rawBody) 或 Bearer）
+   ▼
+api-manager.handleQqEvents
+   ├─ 鉴权（与 x-link 同一 verifier，两桥逐字节同构）
+   ├─ normalizeOneBotEvent（services/onebot-event-ingest.ts）
+   │     · message: array | CQ-string 双格式（text/@/reply 段、CQ 转义）
+   │     · notice/request/meta_event 子类型宽松归一（未知子类型不抛错）
+   │     · 输出 {kind, postType, subType, messageType, groupId, userId, sender*,
+   │            messageId, text, rawText, atUserIds, atBot, dedupeKey, raw}
+   ├─ 幂等去重（EventDedupeCache：TTL + 容量上限；键=message_id/notice/request 唯一键）
+   ├─ 自回声丢弃（post_type=message_sent、user_id ∈ bot_user_ids、user_id==self_id）
+   ├─ runReactionChain（services/onebot-event-reactions.ts，配置驱动 handler 链）
+   │     reply ─────────► send_group_msg / send_private_msg（reply 段=引用回复）
+   │     forward/alert ─► 转发到指定群/管理员私聊（可带本地媒体，走 media_delivery 决策表）
+   │     command ───────► #status(健康探针) / #ping / #recall <message_id>（管理员白名单）
+   │     group_action ──► set_group_ban / set_group_kick / _send_group_notice（默认关闭）
+   │     quick_operation► 直接把 {reply, at_sender, delete, ban} 作为 HTTP 响应体交回桥
+   └─ 出站调用统一走 callOneBotAction（onebot-receipt-service）
+         └── 失败判读 = §1 判读表（onebot-semantics），单发不重试
+```
+
+**与 x-link 的关系**：`POST /api/actions/qq/x-link`（贴 X 链接→立即转帖）是**独立入口，零改动**。
+SnowLuma 侧保留原有的 `idol-bbq-x-link` httpClients 推送不变，另加一条 `idol-bbq-events`
+指向 `/api/actions/qq/events`。理由：x-link 对外行为一字不变（回归测试钉住），推送分离
+互不干扰、回滚只需摘一条 httpClients；事件通道内**不**复刻 X 链接转帖（避免双触发）。
+
+### 8.2 事件清单（两方言同一归一出口）
+
+| post_type | 覆盖 | 备注 |
+|---|---|---|
+| `message` | ✅ | `message_type: group/private`（群临时会话归 private + group_id）；`message` 为 array 或 CQ 字符串均可 |
+| `message_sent` | ✅（丢弃） | SnowLuma `reportSelfMessage` 出站回声，永远不触发反应 |
+| `notice` | ✅ | 兼容 NapCat 常用子类型 + SnowLuma 新增（`group_msg_emoji_like`、`essence`、`notify/input_status`、`bot_offline`、`group_card`…）；未知子类型归一为 `notice` + 保留 raw |
+| `request` | ✅ | `friend` / `group`（含 `flag`、`comment`），可配规则转发给管理员 |
+| `meta_event` | ✅（不触发） | heartbeat/lifecycle 归一但默认无 handler 匹配（post_types 默认 `['message']`） |
+| 未知 post_type | ✅（不触发） | 归一为 `kind: 'unknown'`，记录后跳过，**不崩** |
+
+### 8.3 规则 schema（`qq_inbound`，顶层配置键）
+
+见 `assets/tweet-forwarder/config.example.yaml` 末尾完整注释示例。要点：
+
+- `enabled`：主开关，缺省/`false` = 端点只回 `ignored`，零副作用。
+- `bot_user_ids` / `admins`：自回声白名单 / 管理员白名单（命令与 group_action 鉴权）。
+- `allow_group_actions`：群管理反应的**第二道**开关（第三道是 handler 的 group 允许列表）。
+- `dedupe_ttl_seconds`（默认 3600）/ `dedupe_max_entries`（默认 4096）：幂等窗口。
+- `default_cooldown_seconds` / `default_max_per_hour`：每 handler × 每群/私聊 的冷却与小时配额，
+  handler 可用 `cooldown_seconds` / `max_per_hour` 覆盖。
+- `handlers[]`：`id`、`type`（`reply | forward | command | group_action | quick_operation`）、
+  `enabled`、`match`（`post_types`、`message_types`、`group_ids`、`user_ids`、`text_regex`、
+  `raw_regex`、`at_bot`、`require_admin`）、各 type 的专属配置块、可选 `url`/`token` 覆盖出站端点。
+- 模板占位符：`{text}` `{raw_text}` `{user_id}` `{group_id}` `{sender_name}` `{message_id}` `{handler_id}`。
+
+### 8.4 鉴权
+
+| 方式 | 头 | 说明 |
+|---|---|---|
+| 桥签名（推荐给 webhook） | `X-Signature: sha1=<hex>` | `sha1=HMAC-SHA1(api.secret, rawBody)`，与 x-link 同一 verifier（timing-safe）；SnowLuma `httpClients.accessToken` = `api.secret` 即可 |
+| Bearer | `Authorization: Bearer <api.secret>` | 运维手工 POST / 测试用 |
+
+两桥（SnowLuma / NapCat）签名逐字节同构，无需分支。鉴权失败一律 **401**（不泄露原因）。
+
+### 8.5 幂等（webhook 重发不重复反应）
+
+- 键：`message` 事件 = `msg:<self_id>:<message_id>`；`notice`/`request` 用
+  `message_id/flag + group/user/operator/target` 组合键；无 id 时回退 raw 哈希。
+- 存储：进程内 TTL + 容量上限缓存（`onebot-event-dedupe.ts`）。
+  **有意不做 DB 表**：默认关闭的功能不值得一条迁移；代价是重启后最多重放一个 TTL 窗口
+  （按桥的重发窗口选 1h 足够）。
+- 响应语义：重复投递回 `{"status":"duplicate"}`，不进 handler 链。
+
+### 8.6 防呆
+
+| 风险 | 对策 |
+|---|---|
+| 自触发死循环（bot 回复又触发自己） | `post_type=message_sent`、`user_id ∈ bot_user_ids`、`user_id == self_id` 一律丢弃；上游 `reportSelfMessage:false` 也关掉回声 |
+| 反应刷屏 | 每 handler × 每群/私聊：`cooldown_seconds` 冷却 + `max_per_hour` 配额（超限记 `limited` 并跳过） |
+| 重试风暴 | 每个反应**单发一次**，不自动重试；失败按 §1 判读表分类记录（`failed` + wording），可重试语义留给出站侧既有预算 |
+| 坏事件崩服务 | 归一化失败 → `ignored`；handler 异常 → try/catch 隔离，链上后续 handler 照常执行 |
+| webhook 重发 | §8.5 幂等 |
+| 群管理误伤 | `group_action` 三重开关（`allow_group_actions` + handler 允许列表 + 管理员触发者），默认全关 |
+| 非管理员滥用命令 | `command` 默认 `admin_only: true`；`#recall` **永远**管理员白名单 |
+
+### 8.7 quick operation（SnowLuma 快速操作）
+
+SnowLuma 支持在 HTTP 上报的**响应体**里直接回快速操作（`network/quick-operation.ts`，
+能力报告 §3.2 [确认]；支持 `reply`（群聊自动 @发送者）、`delete`、`ban` 等）。
+`quick_operation` handler 命中后，端点把 `{reply, at_sender, delete, ban}` **作为响应体**
+原样返回（不再是 `{success,...}` 信封），桥侧直接执行，省一次显式发送调用。
+注意：真机效果以登录后验收为准（本次未登录，属"文档/源码级确认"）。
+
+### 8.8 如何加新 handler
+
+1. `src/services/onebot-event-reactions.ts`：在 `QqInboundHandlerType` 加类型名，
+   在 `runReactionChain` 的 switch 里加分支（保持单发、不抛错、返回 `ReactionActionResult`）。
+2. 配置块加到 `QqInboundHandlerConfig`（含 JSDoc）与 `config.example.yaml` 示例。
+3. 出站一律复用 `callOneBotAction` / `recallOneBotMessage` / `probeQqBridgeHealth`
+   （失败判读自动走 §1 判读表）；需要媒体时复用 `buildQQMediaFileValue`（§2 决策表）。
+4. 测试：`src/services/onebot-event-reactions.test.ts` 加命中/不命中/失败隔离/限速各一钉。
+
+### 8.9 验证与回滚
+
+- 单元/集成测试：`onebot-event-ingest.test.ts`（两方言解析）、`onebot-event-dedupe.test.ts`
+  （幂等+限速）、`onebot-event-reactions.test.ts`（规则/防呆/隔离）、
+  `api-manager.test.ts`（鉴权双兼容、幂等、quick op、坏事件、自回声、x-link 不受影响）。
+- 上机验证（3020e）：SnowLuma 容器内 `node -e "fetch('http://host.docker.internal:3000/api/actions/qq/events',{...X-Signature...})"`
+  → 200 才算通；`/home/sumie/snowluma/verify-e2e.sh` 含入站冒烟步骤。
+- 回滚三步：① `qq_inbound.enabled` 不配/置 false（立即静默）② `git revert` 该 commit
+  ③ 摘掉 SnowLuma `onebot.json` 的 `idol-bbq-events` httpClients 条目 + 回滚镜像锚点。

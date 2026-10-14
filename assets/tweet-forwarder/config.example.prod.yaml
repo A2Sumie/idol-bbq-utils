@@ -103,3 +103,60 @@ bots:
       interval_time:
         max: 0
         min: 0
+  interval_time:
+    max: 1000
+    min: 10
+
+# --- QQ/OneBot inbound events + reaction framework (POST /api/actions/qq/events) ---
+# Default OFF: without an explicit `qq_inbound.enabled: true` the endpoint only
+# answers `ignored` and nothing changes. Full reference: docs/snowluma.md
+# "入站事件与反应". The legacy x-link push keeps its own endpoint untouched.
+# qq_inbound:
+#   enabled: true                          # master switch
+#   bot_user_ids: ['10001']                # bot uins; their messages never trigger reactions
+#   admins: ['20002']                      # whitelist for commands / group_action triggers
+#   allow_group_actions: false             # group_action ALSO needs this + a group allowlist + admin
+#   dedupe_ttl_seconds: 3600               # webhook redelivery idempotency window
+#   dedupe_max_entries: 4096
+#   default_cooldown_seconds: 10           # per handler+group cooldown
+#   default_max_per_hour: 20               # per handler+group hourly quota
+#   handlers:
+#     - id: 'reply-ping'
+#       type: 'reply'                      # reply | forward | command | group_action | quick_operation
+#       enabled: true
+#       match:
+#         post_types: ['message']          # message | notice | request | meta_event
+#         message_types: ['group']         # group | private
+#         group_ids: ['qq group id']
+#         text_regex: '#ping'              # JS regex on extracted text
+#         at_bot: false                    # require @bot
+#         require_admin: false             # require sender in admins
+#       cooldown_seconds: 10
+#       max_per_hour: 20
+#       reply:
+#         template: 'pong: {text}'         # {text} {raw_text} {user_id} {group_id} {sender_name} {message_id} {handler_id}
+#         quote: true                      # reply segment -> SnowLuma quotes the original automatically
+#         at_sender: false
+#     - id: 'alert-admin'
+#       type: 'forward'                    # relay the event to groups / admin private chats
+#       match: { text_regex: 'keyword' }
+#       forward:
+#         template: '[inbound] {group_id}/{sender_name}: {text}'
+#         group_ids: ['qq group id']
+#         user_ids: ['admin uin']
+#         # target_ids: ['forward target id']   # or resolve through forward_targets
+#         # media: [{ path: '/tmp/tweet-forwarder/media/x.png', type: 'image' }]
+#     - id: 'ops-commands'
+#       type: 'command'                    # #status / #ping / #recall <message_id>
+#       command:
+#         commands: ['status', 'ping', 'recall']
+#         prefix: '#'
+#         admin_only: true                 # 'recall' is ALWAYS admin-only
+#     - id: 'mute-on-keyword'
+#       type: 'group_action'               # ban | kick | notice; needs allow_group_actions + allowlist + admin
+#       match: { group_ids: ['qq group id'] }
+#       group_action: { action: 'ban', duration_seconds: 60 }
+#     - id: 'quick-reply'
+#       type: 'quick_operation'            # answer via the webhook HTTP response (SnowLuma quick op)
+#       match: { text_regex: '^hello$' }
+#       quick_operation: { reply: 'hi!', at_sender: true }

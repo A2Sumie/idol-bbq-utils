@@ -3,6 +3,7 @@ import type { Crawler, CrawlerConfig } from './crawler'
 import type { Forwarder, ForwarderConfig, ForwardTarget, ForwardTargetPlatformCommonConfig } from './forwarder'
 import type { Formatter, ConnectionMap } from './formatter'
 import type { Processor } from './processor'
+import type { QqInboundConfig } from '@/services/onebot-event-reactions'
 
 export * from './processor'
 export * from './crawler'
@@ -56,6 +57,13 @@ interface AppConfig {
         secret?: string
         cors_origin?: string | Array<string>
     }
+    /**
+     * QQ/OneBot inbound event channel + pluggable reaction framework
+     * (POST /api/actions/qq/events). Absent / disabled = zero behavior change
+     * (the legacy x-link push keeps its own dedicated entry point). See
+     * docs/snowluma.md "入站事件与反应".
+     */
+    qq_inbound?: QqInboundConfig
     notification_signals?: {
         mode?: 'shadow' | 'disabled'
     }

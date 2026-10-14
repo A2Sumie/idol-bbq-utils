@@ -41,6 +41,9 @@ import {
     probeQqBridgeHealth,
     recallOneBotMessage,
 } from '@/services/onebot-receipt-service'
+import { normalizeOneBotEvent } from '@/services/onebot-event-ingest'
+import { EventDedupeCache } from '@/services/onebot-event-dedupe'
+import { runReactionChain, type QqInboundConfig } from '@/services/onebot-event-reactions'
 import { buildRouteGraph } from '@/services/route-graph-service'
 import { buildRuntimeManifest } from '@/services/runtime-manifest-service'
 import { redactSecrets } from '@/services/redaction-service'
@@ -170,6 +173,15 @@ function isOneBotEventBody(value: unknown) {
         value && typeof value === 'object' && typeof (value as { post_type?: unknown }).post_type === 'string',
     )
 }
+
+/**
+ * POST paths that accept the OneBot httpClients HMAC-SHA1 signature
+ * (`X-Signature: sha1=...`) as an alternative to `Authorization: Bearer`.
+ * Both bridge dialects sign the raw body the same way (byte-identical to
+ * SnowLuma's http-post-adapter), so the same verifier covers NapCat and
+ * SnowLuma pushes.
+ */
+const QQ_HMAC_SIGNED_PATHS = new Set(['/api/actions/qq/x-link', '/api/actions/qq/events'])
 
 const MAX_BUN_IDLE_TIMEOUT_SECONDS = 255
 const DEFAULT_CIC_ORIGIN = 'https://cic.n2nj.moe'
@@ -587,6 +599,10 @@ export class APIManager extends BaseCompatibleModel {
     // updates could interleave read/backup/write and a failed reload could
     // roll back a newer writer's file.
     private configSaveChain: Promise<void> = Promise.resolve()
+    // Inbound event idempotency: webhook redeliveries (bridge timeout/restart)
+    // must not trigger the same reaction twice. In-memory TTL cache by design
+    // (no schema migration for a default-off feature); see docs/snowluma.md.
+    private qqInboundDedupe?: EventDedupeCache
 
     constructor(runtime: ApiRuntimeControl, log?: Logger) {
         super()
@@ -654,7 +670,7 @@ export class APIManager extends BaseCompatibleModel {
 
         const authHeader = req.headers.get('Authorization')
         let authorized = authHeader === `Bearer ${secret}`
-        if (!authorized && req.method === 'POST' && url.pathname === '/api/actions/qq/x-link') {
+        if (!authorized && req.method === 'POST' && QQ_HMAC_SIGNED_PATHS.has(url.pathname)) {
             const rawBody = await req.clone().text()
             authorized = verifyOneBotHttpClientSignature(rawBody, req.headers.get('x-signature'), secret)
         }
@@ -759,6 +775,7 @@ export class APIManager extends BaseCompatibleModel {
         if (req.method === 'POST' && url.pathname === '/api/actions/articles/resend')
             return this.handleArticleResend(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/qq/x-link') return this.handleQqXLink(req)
+        if (req.method === 'POST' && url.pathname === '/api/actions/qq/events') return this.handleQqEvents(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/qq/send') return this.handleQqSend(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/qq/recall') return this.handleQqRecall(req)
         if (req.method === 'POST' && url.pathname === '/api/actions/qq/receipt-check')
@@ -2910,6 +2927,106 @@ export class APIManager extends BaseCompatibleModel {
             targetIds,
             hydrated,
             result: summarizeImmediateXLinkSendResult(result),
+        })
+    }
+
+    /**
+     * Generic OneBot v11 inbound event channel (POST /api/actions/qq/events).
+     *
+     * Both bridge dialects (SnowLuma `httpClients` / NapCat httpPostEndpoints)
+     * push signed event bodies here; `normalizeOneBotEvent` folds message
+     * array|CQ-string formats and notice/request subtypes into one shape, then
+     * the config-driven handler chain reacts. Auth: Bearer API secret OR the
+     * bridge's `X-Signature: sha1=HMAC-SHA1(secret, rawBody)`.
+     *
+     * Failure posture: the webhook answers 200 for anything that passes auth
+     * but is unusable (bad JSON / non-event / disabled / duplicate), so a
+     * misbehaving event can never turn into a bridge-side redelivery storm.
+     * Unexpected handler errors are contained inside runReactionChain.
+     */
+    private getQqInboundDedupe(inbound: QqInboundConfig) {
+        const ttlMs = Math.max(60, Number(inbound.dedupe_ttl_seconds) || 3600) * 1000
+        const maxEntries = Math.max(16, Number(inbound.dedupe_max_entries) || 4096)
+        if (!this.qqInboundDedupe) {
+            this.qqInboundDedupe = new EventDedupeCache({ ttlMs, maxEntries })
+        }
+        return this.qqInboundDedupe
+    }
+
+    private resolveQqTargetDestination(targetId: string): { group_id?: string; user_id?: string } | null {
+        const target = (this.config.forward_targets || []).find(
+            (candidate) => candidate.id === targetId || this.resolveForwardTargetRuntimeId(candidate) === targetId,
+        )
+        if (!target || target.platform !== ForwardTargetPlatformEnum.QQ) return null
+        const cfg = (target.cfg_platform || {}) as { group_id?: string; user_id?: string }
+        return { group_id: cfg.group_id, user_id: cfg.user_id }
+    }
+
+    private async handleQqEvents(req: Request): Promise<Response> {
+        const disabled = this.rejectUnlessOnline('QQ inbound events')
+        if (disabled) return disabled
+
+        let body: unknown
+        try {
+            body = await req.json()
+        } catch {
+            this.log?.warn('QQ inbound event body is not valid JSON; skipped')
+            return jsonResponse({ success: true, status: 'ignored', reason: 'invalid_json' })
+        }
+
+        const inbound = (this.config.qq_inbound || {}) as QqInboundConfig
+        if (inbound.enabled !== true) {
+            return jsonResponse({ success: true, status: 'ignored', reason: 'inbound_disabled' })
+        }
+
+        const event = normalizeOneBotEvent(body)
+        if (!event) {
+            return jsonResponse({ success: true, status: 'ignored', reason: 'not_onebot_event' })
+        }
+
+        const dedupe = this.getQqInboundDedupe(inbound)
+        if (!dedupe.mark(event.dedupeKey)) {
+            this.log?.info(`QQ inbound duplicate event skipped: ${event.dedupeKey}`)
+            return jsonResponse({ success: true, status: 'duplicate', dedupe_key: event.dedupeKey })
+        }
+
+        const endpoint = this.resolveQqOneBotEndpoint()
+        if (!endpoint) {
+            return jsonResponse({ success: true, status: 'ignored', reason: 'qq_endpoint_required' })
+        }
+
+        const qqTarget = (this.config.forward_targets || []).find(
+            (target) => target.platform === ForwardTargetPlatformEnum.QQ,
+        )
+        const result = await runReactionChain(event, inbound, {
+            endpoint,
+            resolveTarget: (targetId) => this.resolveQqTargetDestination(targetId),
+            mediaConfig: (qqTarget?.cfg_platform || {}) as any,
+            log: this.log as any,
+        })
+
+        if (result.quickOperation) {
+            // SnowLuma/NapCat quick operation: the HTTP response body itself is
+            // the quick-op payload ({reply, at_sender, delete, ban, ...}).
+            return new Response(JSON.stringify(result.quickOperation), {
+                status: 200,
+                headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
+            })
+        }
+
+        return jsonResponse({
+            success: true,
+            status: result.handled ? 'processed' : 'ignored',
+            event: {
+                kind: event.kind,
+                post_type: event.postType,
+                sub_type: event.subType,
+                message_type: event.messageType,
+                group_id: event.groupId,
+                user_id: event.userId,
+                message_id: event.messageId,
+            },
+            reactions: result.actions,
         })
     }
 
