@@ -32,7 +32,7 @@ bots:
             enabled: true
             session_profile: 'bilibili-uploader'
             url: 'https://www.bilibili.com'
-          metadata_templates:                 # (optional) placeholders: display_name user_id summary body_or_summary platform_type_label datetime url
+          metadata_templates:                 # (optional) placeholders: display_name user_id summary body_or_summary platform_type_label source_tag datetime url (source_tag renders '' when the title self-identifies its source)
             title: '【{{platform_type_label}}】{{display_name}} {{summary}}'
             description: |
               {{body_or_summary}}

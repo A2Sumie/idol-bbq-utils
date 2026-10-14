@@ -94,7 +94,8 @@ test('buildBiliupUploadCandidate keeps YouTube Shorts original title at descript
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7】03.20_24 短视频中文标题')
+    // Shorts keep the source tag even though the title is the original title translation.
+    expect(candidate?.title).toBe('【22/7】[YT] 03.20_24 短视频中文标题')
     expect(candidate?.description.split('\n')[0]).toBe('原标题: ショート動画の原題')
     expect(candidate?.description).toContain('短视频说明')
     expect(candidate?.description).not.toContain('\nショート動画の原題\n')
@@ -287,7 +288,8 @@ test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 椎名桜月】03.20_26')
+    // Date-shell fallback (no caption at all): Instagram keeps its source tag.
+    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 03.20_26')
     expect(candidate?.description).toContain('来源平台: Instagram投稿')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: satsuki_shiina')
@@ -317,7 +319,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7 TikTok Member】03.20_26 TT短视频正文')
+    expect(candidate?.title).toBe('【22/7 TikTok Member】[TT] 03.20_26 TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).not.toContain('TikTok')
@@ -404,7 +406,7 @@ test('completeBiliupUploadCandidateTags replaces title payload without appending
         source_tag: 'X',
         source_url: 'https://x.com/kitahara_misaki/status/1',
     })
-    expect(candidate?.title).toBe('【22/7 北原実咲】06.13_26 直播后的感谢')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 06.13_26 直播后的感谢')
     expect(candidate?.title).not.toContain('06.13_26 今日は')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
@@ -446,7 +448,8 @@ test('buildBiliupUploadCandidate falls back from empty-shell metadata titles', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7】03.20_26')
+    // Empty-shell template falls back to the same conditional source slot.
+    expect(candidate?.title).toBe('【22/7】[TT] 03.20_26')
     expect(candidate?.title).not.toContain('Unknown')
     expect(candidate?.title).not.toBe('【】[TT]')
 })
@@ -507,7 +510,7 @@ test('title generation prompt forbids name+date over-simplification', async () =
     expect(prompt).not.toContain('信息不足则返回空字符串')
     expect(prompt).toContain('禁止把成员名、日期、时间、账号名或平台名作为标题主体')
     expect(prompt).toContain('具体描述视频内容或事件本身')
-    expect(candidate?.title).toBe('【22/7 北原実咲】06.13_26 介绍自己养的兔子')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[ins] 06.13_26 介绍自己养的兔子')
 })
 
 test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', () => {
@@ -529,7 +532,7 @@ test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7】06.07_26 22/7_the 3rd')
+    expect(candidate?.title).toBe('【22/7】[X] 06.07_26 22/7_the 3rd')
 })
 
 test('buildBiliupUploadCandidate uses detected members instead of collection account names', () => {
@@ -551,7 +554,7 @@ test('buildBiliupUploadCandidate uses detected members instead of collection acc
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 北原実咲 黒崎ありす】03.20_26 北原実咲 黒崎ありす')
+    expect(candidate?.title).toBe('【22/7 北原実咲 黒崎ありす】[ins] 03.20_26 北原実咲 黒崎ありす')
     expect(candidate?.title).not.toContain('THE 3RD')
     expect(candidate?.description).toContain('来源账号: 北原実咲 黒崎ありす')
     expect(candidate?.config.tags).toContain('北原実咲')
@@ -580,7 +583,7 @@ test('buildBiliupUploadCandidate resolves staff posts to mentioned members when 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 北原実咲】03.20_26 北原実咲の紹介動画')
+    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 03.20_26 北原実咲の紹介動画')
     expect(candidate?.title).not.toContain('22/7(ナナブンノニジュウニ)')
     expect(candidate?.description).toContain('来源账号: 北原実咲')
     expect(candidate?.config.tags).toContain('北原実咲')
@@ -607,7 +610,7 @@ test('buildBiliupUploadCandidate maps decorative X nicknames to canonical member
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 望月りの】03.20_26 本日18:00〜 もぐもぐ配信します')
+    expect(candidate?.title).toBe('【22/7 望月りの】[X] 03.20_26 本日18:00〜 もぐもぐ配信します')
     expect(candidate?.description).toContain('来源账号: 望月りの')
 })
 
@@ -630,7 +633,8 @@ test('buildBiliupUploadCandidate maps configured Instagram handles to canonical 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 椎名桜月】03.20_26')
+    // Instagram story without text: date-shell keeps the source tag.
+    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 03.20_26')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: shiina_satsuki227')
 })
@@ -658,7 +662,7 @@ test('buildBiliupUploadCandidate maps TikTok 22/7-prefixed nicknames to canonica
     )
 
     // Platform names are scrubbed from title payloads by deterministic post-processing.
-    expect(candidate?.title).toBe('【22/7 月城咲舞】03.20_26 本文')
+    expect(candidate?.title).toBe('【22/7 月城咲舞】[TT] 03.20_26 本文')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
@@ -2139,12 +2143,14 @@ test('YouTube original title drives the title: the model only translates it', as
     expect(candidate?.description.split('\n')[0]).toBe(`原标题: ${originalTitle}`)
 })
 
-test('biliup title format snapshot: 【22/7 …】MM.DD_YY payload without source brackets', () => {
+test('title source tag is conditional: kept for summarized/shorts/no-original-title/date-shell, omitted for translated original titles', () => {
     const build = (article: any) =>
         buildBiliupUploadCandidate(article, [], [{ media_type: 'video', path: '/tmp/fmt.mp4' }], {
             enabled: true,
         })
 
+    // 1) YouTube long video whose title IS the original title translation: no source tag
+    //    (the title self-identifies its source).
     expect(
         build({
             platform: Platform.YouTube,
@@ -2158,6 +2164,7 @@ test('biliup title format snapshot: 【22/7 …】MM.DD_YY payload without sourc
             url: 'https://www.youtube.com/watch?v=fmt-yt',
         } as any)?.title,
     ).toBe('【22/7】06.17_26 新曲《二つの道》音乐MV')
+    // 2) YouTube Shorts keeps [YT]: short-form titles carry no source identification.
     expect(
         build({
             platform: Platform.YouTube,
@@ -2170,7 +2177,22 @@ test('biliup title format snapshot: 【22/7 …】MM.DD_YY payload without sourc
             created_at: 1781694017,
             url: 'https://www.youtube.com/shorts/fmt-short',
         } as any)?.title,
-    ).toBe('【22/7】06.17_26 短视频一')
+    ).toBe('【22/7】[YT] 06.17_26 短视频一')
+    // 3) YouTube without a creator original title (summarized caption) keeps [YT].
+    expect(
+        build({
+            platform: Platform.YouTube,
+            type: 'video',
+            u_id: '22_7_channel',
+            username: '22/7 official',
+            a_id: 'fmt-yt-no-title',
+            content: '',
+            translation: '直播后的感谢\n\n谢谢大家',
+            created_at: 1781694017,
+            url: 'https://www.youtube.com/watch?v=fmt-yt-no-title',
+        } as any)?.title,
+    ).toBe('【22/7】[YT] 06.17_26 直播后的感谢')
+    // 4) X / Instagram / TikTok summarized titles keep their source tag.
     expect(
         build({
             platform: Platform.X,
@@ -2183,7 +2205,21 @@ test('biliup title format snapshot: 【22/7 …】MM.DD_YY payload without sourc
             created_at: 1781694017,
             url: 'https://x.com/kawase_uta/status/fmt-x',
         } as any)?.title,
-    ).toBe('【22/7 河瀬詩】06.17_26 今天有演出')
+    ).toBe('【22/7 河瀬詩】[X] 06.17_26 今天有演出')
+    expect(
+        build({
+            platform: Platform.TikTok,
+            type: 'video',
+            u_id: 'emma_tsukishiro',
+            username: '22/7 月城咲舞',
+            a_id: 'fmt-tt',
+            content: '今日のライブ',
+            created_at: 1781694017,
+            url: 'https://www.tiktok.com/@emma_tsukishiro/video/fmt-tt',
+        } as any)?.title,
+    ).toBe('【22/7 月城咲舞】[TT] 06.17_26 今日のライブ')
+    // 5) Date-shell fallback (zero content signal) keeps the source tag — even for a
+    //    YouTube long video whose title payload scrubbed to nothing.
     expect(
         build({
             platform: Platform.Instagram,
@@ -2195,7 +2231,19 @@ test('biliup title format snapshot: 【22/7 …】MM.DD_YY payload without sourc
             created_at: 1781694017,
             url: 'https://www.instagram.com/p/fmt-ins/',
         } as any)?.title,
-    ).toBe('【22/7 椎名桜月】06.17_26')
+    ).toBe('【22/7 椎名桜月】[ins] 06.17_26')
+    expect(
+        build({
+            platform: Platform.YouTube,
+            type: 'video',
+            u_id: '22_7_channel',
+            username: '22/7 official',
+            a_id: 'fmt-yt-date-shell',
+            content: 'YouTube',
+            created_at: 1781694017,
+            url: 'https://www.youtube.com/watch?v=fmt-yt-date-shell',
+        } as any)?.title,
+    ).toBe('【22/7】[YT] 06.17_26')
 })
 
 test('overlong translated titles are truncated semantically inside the Bilibili limit', async () => {
@@ -2352,7 +2400,7 @@ test('sources without an original title summarize the caption and reject clickba
     expect(input.task).toBe('summarize_post_title')
     expect(input.original_title).toBeUndefined()
     // Clickbait output is rejected and the deterministic caption translation survives.
-    expect(deterministicTitle).toBe('【22/7 北原実咲】06.13_26 感谢今天来看直播')
+    expect(deterministicTitle).toBe('【22/7 北原実咲】[X] 06.13_26 感谢今天来看直播')
     expect(candidate?.title).toBe(deterministicTitle)
 })
 

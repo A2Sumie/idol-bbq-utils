@@ -903,6 +903,28 @@ function resolveBiliupSourceTag(article: Pick<Article, 'platform'>) {
     return '社媒'
 }
 
+/**
+ * Conditional title source tag: `{{source_tag}}` renders to the bare tag or to ''.
+ *
+ * The tag is kept whenever the title cannot identify its own source — X/Instagram/TikTok
+ * (summarized caption titles), YouTube Shorts, YouTube entries without a creator original
+ * title, and the date-shell fallback (`【22/7】MM.DD_YY`, zero content signal). It is
+ * dropped only for YouTube long videos whose title IS the translation of the creator's
+ * original title: that title self-identifies its source. website/blog is not in the omit
+ * list and keeps its tag.
+ */
+function resolveTitleSourceTag(
+    article: Pick<Article, 'content' | 'platform' | 'type'>,
+    hasTitlePayload: boolean,
+) {
+    const titleIsTranslatedOriginalTitle =
+        article.platform === Platform.YouTube &&
+        article.type !== 'shorts' &&
+        Boolean(extractOriginalBiliupTitleLine(article)) &&
+        hasTitlePayload
+    return titleIsTranslatedOriginalTitle ? '' : resolveBiliupSourceTag(article)
+}
+
 function formatDateTimeParts(timestampSeconds: number, timeZone: string) {
     const parts = new Intl.DateTimeFormat('en-CA', {
         timeZone,
@@ -933,16 +955,19 @@ function formatDateTimeParts(timestampSeconds: number, timeZone: string) {
     }
 }
 
-function resolveUploadSummary(
-    article: Pick<Article, 'platform'>,
-    primaryLine: string,
-    displayName: string,
-    dateTime: ReturnType<typeof formatDateTimeParts>,
-) {
+function resolveBiliupTitleHeadline(primaryLine: string) {
     // Headline is capped at 40 chars (code points, surrogate-safe) so the fixed
     // account/source prefix keeps most of the 80-char title budget. The cut is
     // semantic (word/segment boundary) and platform/repost words are scrubbed first.
-    const summary = truncateBiliupTitleText(scrubBiliupTitlePayload(primaryLine), 40)
+    return truncateBiliupTitleText(scrubBiliupTitlePayload(primaryLine), 40)
+}
+
+function resolveUploadSummary(
+    article: Pick<Article, 'platform'>,
+    summary: string,
+    displayName: string,
+    dateTime: ReturnType<typeof formatDateTimeParts>,
+) {
     if ([Platform.Instagram, Platform.TikTok, Platform.X].includes(article.platform)) {
         // upload_summary drops the display name on purpose: account_title already
         // carries it, repeating it after [TT]/[X] reads as a stutter.
@@ -993,7 +1018,8 @@ function buildTemplateContext(
     const summary = primaryLine || dateTime.datetime
     const bodyWithoutRepeatedSummary = stripDuplicateLeadingSummary(blocks[0] || '', summary)
     const body = bodyWithoutRepeatedSummary || blocks[0] || ''
-    const uploadSummary = resolveUploadSummary(article, primaryLine, displayName, dateTime)
+    const headline = resolveBiliupTitleHeadline(primaryLine)
+    const uploadSummary = resolveUploadSummary(article, headline, displayName, dateTime)
 
     return {
         account_title: resolveBiliupAccountTitle(displayName),
@@ -1007,7 +1033,7 @@ function buildTemplateContext(
         display_name: displayName,
         platform_label: resolvePlatformLabel(article),
         platform_type_label: resolvePlatformTypeLabel(article),
-        source_tag: resolveBiliupSourceTag(article),
+        source_tag: resolveTitleSourceTag(article, Boolean(headline)),
         summary,
         time: dateTime.time,
         type_label: resolveTypeLabel(article),
@@ -1030,6 +1056,10 @@ function stripEmptyRenderedBrackets(value: string) {
         .replace(/『\s*』/g, '')
         .replace(/（\s*）/g, '')
         .replace(/\(\s*\)/g, '')
+        // An empty `[...]` source slot disappears together with one trailing horizontal
+        // space, so an omitted source tag renders exactly like the tag-less template
+        // (`【acc】MM.DD_YY …`, no stray space after `】`).
+        .replace(/\[[ \t]*\][ \t]?/g, '')
         .replace(/\[\s*\]/g, '')
         .replace(/\s{2,}/g, ' ')
         .trim()
@@ -1043,14 +1073,16 @@ function cleanupTemplateOutput(value: string) {
 }
 
 /**
- * Uniform default title template for every source: `【account】MM.DD_YY <title payload>`.
- * The old `[YT]/[X]/[TT]/[ins]` source bracket is intentionally gone: it burned title budget,
- * carried no search value, read as a 搬运 marker on Bilibili, and the source is fully credited
- * in the description (`来源平台:` line). The `【22/7 …】` brand prefix stays as the search
- * anchor and the `MM.DD_YY` date code keeps chronological scan/dedupe value.
+ * Uniform default title template for every source: `【account】[source] MM.DD_YY <title payload>`.
+ * The `[{{source_tag}}]` slot is *conditional* (see `resolveTitleSourceTag`): it renders to the
+ * bare tag (`[YT]`/`[X]`/`[ins]`/`[TT]`/`[blog]`) when the title cannot identify its own source,
+ * and to nothing for YouTube long videos whose title is the original title's translation.
+ * The `【22/7 …】` brand prefix stays as the search anchor and the `MM.DD_YY` date code keeps
+ * chronological scan/dedupe value; the source is always credited in the description (`来源平台:`
+ * line) regardless of the title slot.
  */
 function resolveDefaultTitleTemplate(_article: Pick<Article, 'platform' | 'type'>) {
-    return '【{{account_title}}】{{upload_summary}}'
+    return '【{{account_title}}】[{{source_tag}}] {{upload_summary}}'
 }
 
 function buildTitleFallback(context: TemplateContext, article: Pick<Article, 'platform' | 'username' | 'a_id'>) {
@@ -1059,7 +1091,7 @@ function buildTitleFallback(context: TemplateContext, article: Pick<Article, 'pl
         context.article_id || 'Bilibili upload',
     )
     return normalizeBiliupMainTitleText(
-        stripEmptyRenderedBrackets(`【${context.account_title}】${context.upload_summary}`),
+        stripEmptyRenderedBrackets(`【${context.account_title}】[${context.source_tag}] ${context.upload_summary}`),
         hardFallback,
     )
 }
