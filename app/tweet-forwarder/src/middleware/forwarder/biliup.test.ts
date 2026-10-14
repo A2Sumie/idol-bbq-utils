@@ -94,7 +94,7 @@ test('buildBiliupUploadCandidate keeps YouTube Shorts original title at descript
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7】[YT] 03.20_24 短视频中文标题')
+    expect(candidate?.title).toBe('【22/7】03.20_24 短视频中文标题')
     expect(candidate?.description.split('\n')[0]).toBe('原标题: ショート動画の原題')
     expect(candidate?.description).toContain('短视频说明')
     expect(candidate?.description).not.toContain('\nショート動画の原題\n')
@@ -135,14 +135,14 @@ test('completeBiliupUploadCandidateTags formats official YouTube long video meta
     const originalCreate = (processorRegistry as any).create
     const originalTitle = '22/7 3期生 AUDITION DOCUMENTARY - 北原実咲 -'
     const translationTitle = '北原実咲三期生试镜纪录片'
-    const generatedTitle = '三期生试镜纪录片'
-    const calls: Array<{ provider: string; text: string }> = []
-    ;(processorRegistry as any).create = async (provider: string) => ({
+    const llmTranslation = '北原实咲三期生试镜纪录片'
+    const calls: Array<{ provider: string; text: string; prompt?: string }> = []
+    ;(processorRegistry as any).create = async (provider: string, _key: string, _log: unknown, config: any) => ({
         process: async (text: string) => {
-            calls.push({ provider, text })
+            calls.push({ provider, text, prompt: config?.prompt })
             return JSON.stringify({
                 tags: ['オーディション', '北原実咲', '三期生', 'ナナニジライブ'],
-                title_zh: translationTitle,
+                title_zh: llmTranslation,
             })
         },
         drop: async () => undefined,
@@ -194,29 +194,24 @@ test('completeBiliupUploadCandidateTags formats official YouTube long video meta
     expect(calls).toHaveLength(1)
     expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
     expect(calls[0]?.text).toContain(originalTitle)
+    expect(calls[0]?.prompt).toContain('翻译原标题')
+    expect(calls[0]?.prompt).toContain('original_title的忠实简体中文翻译')
     const officialGenerationInput = JSON.parse(calls[0]?.text || '{}')
-    expect(officialGenerationInput.title_candidates).toContainEqual(
-        expect.objectContaining({
-            source: 'translation_first_line',
-            text: translationTitle,
-            confidence: 'high',
-        }),
+    expect(officialGenerationInput.task).toBe('translate_original_title')
+    expect(officialGenerationInput.original_title).toBe(originalTitle)
+    expect(officialGenerationInput.title_candidates).toBeUndefined()
+    expect(officialGenerationInput.evidence).toBeUndefined()
+    // Glossary from assets/knowledge/22_7 ships with the input so names translate consistently.
+    expect(officialGenerationInput.glossary).toContainEqual(
+        expect.objectContaining({ source: '北原実咲', target: '北原实咲' }),
     )
-    expect(officialGenerationInput.title_candidates).toContainEqual(
-        expect.objectContaining({
-            source: 'original_first_line',
-            text: originalTitle,
-            confidence: 'high',
-        }),
-    )
-    expect(officialGenerationInput.evidence).toMatchObject({
+    expect(officialGenerationInput.source_context).toMatchObject({
         platform: 'YouTube',
         source_url: 'https://www.youtube.com/watch?v=X6J9TphDexM',
-        deterministic_title: `【22/7 北原実咲】06.17_26 ${translationTitle}`,
-        translation_first_line: translationTitle,
-        original_first_line: originalTitle,
     })
-    expect(candidate?.title).toBe(`【22/7 北原実咲】06.17_26 ${generatedTitle}`)
+    // The LLM translation replaces the payload verbatim (translation-first, no re-generation,
+    // no context stripping): only the fixed account prefix + date code stay untouched.
+    expect(candidate?.title).toBe(`【22/7 北原実咲】06.17_26 ${llmTranslation}`)
     expect(candidate?.title).not.toContain('[YT]')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
@@ -292,7 +287,7 @@ test('buildBiliupUploadCandidate prepares branded metadata for Instagram uploads
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 03.20_26')
+    expect(candidate?.title).toBe('【22/7 椎名桜月】03.20_26')
     expect(candidate?.description).toContain('来源平台: Instagram投稿')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: satsuki_shiina')
@@ -322,7 +317,7 @@ test('buildBiliupUploadCandidate prepares TikTok videos for Bilibili upload', ()
     )
 
     expect(candidate).toBeTruthy()
-    expect(candidate?.title).toBe('【22/7 TikTok Member】[TT] 03.20_26 TT短视频正文')
+    expect(candidate?.title).toBe('【22/7 TikTok Member】03.20_26 TT短视频正文')
     expect(candidate?.coverPath).toBe('/tmp/tt-cover.jpg')
     expect(candidate?.videoPaths).toEqual(['/tmp/tt-video.mp4'])
     expect(candidate?.config.tags).not.toContain('TikTok')
@@ -400,20 +395,16 @@ test('completeBiliupUploadCandidateTags replaces title payload without appending
     expect(calls).toHaveLength(1)
     expect(calls[0]?.provider).toBe('DeepSeekV4Pro')
     const generatedInput = JSON.parse(calls[0]?.text || '{}')
-    expect(generatedInput.title_candidates).toContainEqual(
-        expect.objectContaining({
-            source: 'detected_member_facts',
-            text: '北原実咲',
-            confidence: 'high',
-        }),
-    )
-    expect(generatedInput.evidence).toMatchObject({
+    // X captions carry no creator title: the summarize path condenses the post body instead.
+    expect(generatedInput.task).toBe('summarize_post_title')
+    expect(generatedInput.original_title).toBeUndefined()
+    expect(generatedInput.text).toContain('今日は配信ありがとうございました')
+    expect(generatedInput.source_context).toMatchObject({
         platform: 'Twitter',
         source_tag: 'X',
         source_url: 'https://x.com/kitahara_misaki/status/1',
-        original_first_line: '今日は配信ありがとうございました',
     })
-    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 06.13_26 直播后的感谢')
+    expect(candidate?.title).toBe('【22/7 北原実咲】06.13_26 直播后的感谢')
     expect(candidate?.title).not.toContain('06.13_26 今日は')
     expect(candidate?.config.tags).toHaveLength(10)
     expect(candidate?.config.tags).toEqual([
@@ -455,7 +446,7 @@ test('buildBiliupUploadCandidate falls back from empty-shell metadata titles', (
         },
     )
 
-    expect(candidate?.title).toBe('[TT] 03.20_26')
+    expect(candidate?.title).toBe('【22/7】03.20_26')
     expect(candidate?.title).not.toContain('Unknown')
     expect(candidate?.title).not.toBe('【】[TT]')
 })
@@ -516,7 +507,7 @@ test('title generation prompt forbids name+date over-simplification', async () =
     expect(prompt).not.toContain('信息不足则返回空字符串')
     expect(prompt).toContain('禁止把成员名、日期、时间、账号名或平台名作为标题主体')
     expect(prompt).toContain('具体描述视频内容或事件本身')
-    expect(candidate?.title).toBe('【22/7 北原実咲】[ins] 06.13_26 介绍自己养的兔子')
+    expect(candidate?.title).toBe('【22/7 北原実咲】06.13_26 介绍自己养的兔子')
 })
 
 test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', () => {
@@ -538,7 +529,7 @@ test('buildBiliupUploadCandidate uses compact 22/7 source tags for X uploads', (
         },
     )
 
-    expect(candidate?.title).toBe('【22/7】[X] 06.07_26 22/7_the 3rd')
+    expect(candidate?.title).toBe('【22/7】06.07_26 22/7_the 3rd')
 })
 
 test('buildBiliupUploadCandidate uses detected members instead of collection account names', () => {
@@ -560,7 +551,7 @@ test('buildBiliupUploadCandidate uses detected members instead of collection acc
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 北原実咲 黒崎ありす】[ins] 03.20_26 北原実咲 黒崎ありす')
+    expect(candidate?.title).toBe('【22/7 北原実咲 黒崎ありす】03.20_26 北原実咲 黒崎ありす')
     expect(candidate?.title).not.toContain('THE 3RD')
     expect(candidate?.description).toContain('来源账号: 北原実咲 黒崎ありす')
     expect(candidate?.config.tags).toContain('北原実咲')
@@ -589,7 +580,7 @@ test('buildBiliupUploadCandidate resolves staff posts to mentioned members when 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 北原実咲】[X] 03.20_26 北原実咲の紹介動画')
+    expect(candidate?.title).toBe('【22/7 北原実咲】03.20_26 北原実咲の紹介動画')
     expect(candidate?.title).not.toContain('22/7(ナナブンノニジュウニ)')
     expect(candidate?.description).toContain('来源账号: 北原実咲')
     expect(candidate?.config.tags).toContain('北原実咲')
@@ -616,7 +607,7 @@ test('buildBiliupUploadCandidate maps decorative X nicknames to canonical member
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 望月りの】[X] 03.20_26 本日18:00〜 もぐもぐ配信します')
+    expect(candidate?.title).toBe('【22/7 望月りの】03.20_26 本日18:00〜 もぐもぐ配信します')
     expect(candidate?.description).toContain('来源账号: 望月りの')
 })
 
@@ -639,7 +630,7 @@ test('buildBiliupUploadCandidate maps configured Instagram handles to canonical 
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 椎名桜月】[ins] 03.20_26')
+    expect(candidate?.title).toBe('【22/7 椎名桜月】03.20_26')
     expect(candidate?.description).toContain('来源账号: 椎名桜月')
     expect(candidate?.description).toContain('账号标识: shiina_satsuki227')
 })
@@ -666,7 +657,8 @@ test('buildBiliupUploadCandidate maps TikTok 22/7-prefixed nicknames to canonica
         },
     )
 
-    expect(candidate?.title).toBe('【22/7 月城咲舞】[TT] 03.20_26 TikTok本文')
+    // Platform names are scrubbed from title payloads by deterministic post-processing.
+    expect(candidate?.title).toBe('【22/7 月城咲舞】03.20_26 本文')
 })
 
 test('buildBiliupUploadCandidate skips excluded FC website feeds', () => {
@@ -2089,6 +2081,371 @@ test('BiliForwarder tightens X action header spacing for Bilibili posts', async 
     expect(uploadTexts[1]).toContain('@member 0204ʲᵖ 推特引用:\n引用本文')
     expect(dynamicTexts[1]).toContain('@member 0204ʲᵖ 推特引用:\n引用本文')
     expect(dynamicTexts[1]).not.toContain('X引用\n\n引用本文')
+})
+
+test('YouTube original title drives the title: the model only translates it', async () => {
+    const originalCreate = (processorRegistry as any).create
+    const originalTitle = '天城サリー『推しカメラ』#3 を公開'
+    const llmTranslation = '天城莎莉《推し相机》#3 公开'
+    const calls: Array<{ provider: string; text: string; prompt?: string }> = []
+    ;(processorRegistry as any).create = async (provider: string, _key: string, _log: unknown, config: any) => ({
+        process: async (text: string) => {
+            calls.push({ provider, text, prompt: config?.prompt })
+            return JSON.stringify({ tags: ['天城莎莉', '推しカメラ'], title_zh: llmTranslation })
+        },
+        drop: async () => undefined,
+    })
+
+    const article = {
+        platform: Platform.YouTube,
+        type: 'video',
+        u_id: '22_7_channel',
+        username: '22/7 official',
+        a_id: 'yt-oshi-camera-3',
+        content: `${originalTitle}\n\n関西メンバーの推しカメラ第3弾です`,
+        created_at: 1781694017,
+        url: 'https://www.youtube.com/watch?v=yt-oshi-camera-3',
+    } as any
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/oshi-camera-3.mp4' }],
+        {
+            enabled: true,
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+
+    try {
+        expect(candidate).toBeTruthy()
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(calls).toHaveLength(1)
+    const input = JSON.parse(calls[0]?.text || '{}')
+    // The original title is the only translation material handed to the model.
+    expect(input.task).toBe('translate_original_title')
+    expect(input.original_title).toBe(originalTitle)
+    expect(calls[0]?.prompt).toContain('original_title是唯一翻译素材')
+    // The main title is exactly the model's translation of that title.
+    expect(candidate?.title).toBe(`【22/7 天城サリー】06.17_26 ${llmTranslation}`)
+    // The verbatim original title keeps living in the description.
+    expect(candidate?.description.split('\n')[0]).toBe(`原标题: ${originalTitle}`)
+})
+
+test('biliup title format snapshot: 【22/7 …】MM.DD_YY payload without source brackets', () => {
+    const build = (article: any) =>
+        buildBiliupUploadCandidate(article, [], [{ media_type: 'video', path: '/tmp/fmt.mp4' }], {
+            enabled: true,
+        })
+
+    expect(
+        build({
+            platform: Platform.YouTube,
+            type: 'video',
+            u_id: '22_7_channel',
+            username: '22/7 official',
+            a_id: 'fmt-yt',
+            content: '新曲「二つの道」Music Video\n\n公開中',
+            translation: '新曲《二つの道》音乐MV\n\n公开中',
+            created_at: 1781694017,
+            url: 'https://www.youtube.com/watch?v=fmt-yt',
+        } as any)?.title,
+    ).toBe('【22/7】06.17_26 新曲《二つの道》音乐MV')
+    expect(
+        build({
+            platform: Platform.YouTube,
+            type: 'shorts',
+            u_id: '22_7_channel',
+            username: '22/7 official',
+            a_id: 'fmt-short',
+            content: 'ショート1\n\n説明',
+            translation: '短视频一\n\n说明',
+            created_at: 1781694017,
+            url: 'https://www.youtube.com/shorts/fmt-short',
+        } as any)?.title,
+    ).toBe('【22/7】06.17_26 短视频一')
+    expect(
+        build({
+            platform: Platform.X,
+            type: 'tweet',
+            u_id: 'kawase_uta',
+            username: '河瀬詩',
+            a_id: 'fmt-x',
+            content: '今日はライブでした',
+            translation: '今天有演出',
+            created_at: 1781694017,
+            url: 'https://x.com/kawase_uta/status/fmt-x',
+        } as any)?.title,
+    ).toBe('【22/7 河瀬詩】06.17_26 今天有演出')
+    expect(
+        build({
+            platform: Platform.Instagram,
+            type: 'post',
+            u_id: 'satsuki_shiina',
+            username: '椎名桜月',
+            a_id: 'fmt-ins',
+            content: null,
+            created_at: 1781694017,
+            url: 'https://www.instagram.com/p/fmt-ins/',
+        } as any)?.title,
+    ).toBe('【22/7 椎名桜月】06.17_26')
+})
+
+test('overlong translated titles are truncated semantically inside the Bilibili limit', async () => {
+    const originalCreate = (processorRegistry as any).create
+    const segments = [
+        '北原实咲三期生试镜纪录片',
+        '公演全程完整记录',
+        '纪念特别映像合集',
+        '幕后花絮采访全集',
+        '番外篇特别访谈内容',
+        '未公开舞台排练花絮',
+        '成员感想全记录',
+        '最终回完全版视频',
+    ]
+    const longTranslation = segments.join(' ')
+    ;(processorRegistry as any).create = async () => ({
+        process: async () => JSON.stringify({ tags: [], title_zh: longTranslation }),
+        drop: async () => undefined,
+    })
+
+    const article = {
+        platform: Platform.YouTube,
+        type: 'video',
+        u_id: '227SMEJ',
+        username: '22/7 OFFICIAL YouTube CHANNEL',
+        a_id: 'yt-long-translation',
+        content: '22/7 3期生 AUDITION DOCUMENTARY - 北原実咲 -\n\n本文',
+        created_at: 1781694017,
+        url: 'https://www.youtube.com/watch?v=yt-long-translation',
+    } as any
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/yt-long-translation.mp4' }],
+        {
+            enabled: true,
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+
+    try {
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    const title = candidate!.title
+    // Hard Bilibili cap (80 chars, code points) is never exceeded.
+    expect(Array.from(title).length).toBeLessThanOrEqual(80)
+    expect(title.startsWith('【22/7 北原実咲】06.17_26 ')).toBe(true)
+    // The cut lands on a semantic boundary: the kept payload is a whole run of segments
+    // (no word/name split in half) and the dropped tail is marked with one ellipsis.
+    expect(title.endsWith('…')).toBe(true)
+    const keptSegments = title.replace(/^【22\/7 北原実咲】06\.17_26 /, '').replace(/…$/, '').split(' ')
+    expect(keptSegments).toEqual(segments.slice(0, keptSegments.length))
+    expect(keptSegments.length).toBeLessThan(segments.length)
+    expect(title).not.toContain('最终回完全版视频')
+})
+
+test('falls back to the stored translation when the title model fails', async () => {
+    const originalCreate = (processorRegistry as any).create
+    ;(processorRegistry as any).create = async () => ({
+        process: async () => {
+            throw new Error('provider down')
+        },
+        drop: async () => undefined,
+    })
+
+    const article = {
+        platform: Platform.YouTube,
+        type: 'video',
+        u_id: '227SMEJ',
+        username: '22/7 OFFICIAL YouTube CHANNEL',
+        a_id: 'yt-translate-fallback',
+        content: '新番組のお知らせ\n\n22/7の新しい企画が始まります',
+        translation: '新节目的通知\n\n22/7的新企划即将开始',
+        created_at: 1781694017,
+        url: 'https://www.youtube.com/watch?v=yt-translate-fallback',
+    } as any
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/yt-translate-fallback.mp4' }],
+        {
+            enabled: true,
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+    const deterministicTitle = candidate?.title
+
+    try {
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    // Fallback chain: stored content translation (first line = translated title).
+    expect(deterministicTitle).toBe('【22/7】06.17_26 新节目的通知')
+    expect(candidate?.title).toBe(deterministicTitle)
+})
+
+test('sources without an original title summarize the caption and reject clickbait output', async () => {
+    const originalCreate = (processorRegistry as any).create
+    const calls: Array<{ text: string }> = []
+    ;(processorRegistry as any).create = async () => ({
+        process: async (text: string) => {
+            calls.push({ text })
+            return JSON.stringify({ tags: [], title_zh: '必看！震惊全网的直播回放' })
+        },
+        drop: async () => undefined,
+    })
+
+    const article = {
+        platform: Platform.X,
+        type: 'tweet',
+        u_id: 'kitahara_misaki',
+        username: '北原実咲【22/7】',
+        a_id: 'x-no-original-title',
+        content: '今日は配信ありがとうございました',
+        translation: '感谢今天来看直播',
+        created_at: 1781320000,
+        url: 'https://x.com/kitahara_misaki/status/x-no-original-title',
+    } as any
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/x-no-original-title.mp4' }],
+        {
+            enabled: true,
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+    const deterministicTitle = candidate?.title
+
+    try {
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    const input = JSON.parse(calls[0]?.text || '{}')
+    expect(input.task).toBe('summarize_post_title')
+    expect(input.original_title).toBeUndefined()
+    // Clickbait output is rejected and the deterministic caption translation survives.
+    expect(deterministicTitle).toBe('【22/7 北原実咲】06.13_26 感谢今天来看直播')
+    expect(candidate?.title).toBe(deterministicTitle)
+})
+
+test('title translation follows the knowledge glossary and keeps Japanese proper nouns', async () => {
+    const originalCreate = (processorRegistry as any).create
+    const calls: Array<{ text: string }> = []
+    ;(processorRegistry as any).create = async () => ({
+        process: async (text: string) => {
+            calls.push({ text })
+            return JSON.stringify({ tags: [], title_zh: '22/7《命の続き》MV公开' })
+        },
+        drop: async () => undefined,
+    })
+
+    const article = {
+        platform: Platform.YouTube,
+        type: 'video',
+        u_id: '22_7_channel',
+        username: '22/7 official',
+        a_id: 'yt-inochi-no-tsuzuki',
+        content: '22/7『命の続き』Music Video\n\n公開中',
+        created_at: 1781694017,
+        url: 'https://www.youtube.com/watch?v=yt-inochi-no-tsuzuki',
+    } as any
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/yt-inochi.mp4' }],
+        {
+            enabled: true,
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+
+    try {
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    const input = JSON.parse(calls[0]?.text || '{}')
+    expect(input.glossary).toContainEqual(expect.objectContaining({ source: '命の続き', target: '命の続き' }))
+    expect(input.glossary).toContainEqual(expect.objectContaining({ source: '天城サリー', target: '天城莎莉' }))
+    // Glossary keeps song titles in Japanese: the kana inside a Chinese title is legitimate
+    // and must not be rejected as "untranslated".
+    expect(candidate?.title).toBe('【22/7】06.17_26 22/7《命の続き》MV公开')
+})
+
+test('untranslated Japanese echoes fail the title guard and fall back', async () => {
+    const originalCreate = (processorRegistry as any).create
+    ;(processorRegistry as any).create = async () => ({
+        process: async () => JSON.stringify({ tags: [], title_zh: '命の続きについての動画です' }),
+        drop: async () => undefined,
+    })
+
+    const article = {
+        platform: Platform.YouTube,
+        type: 'video',
+        u_id: '22_7_channel',
+        username: '22/7 official',
+        a_id: 'yt-untranslated-echo',
+        content: '22/7『命の続き』Music Video\n\n公開中',
+        translation: '22/7《命の続き》MV公开\n\n公开中',
+        created_at: 1781694017,
+        url: 'https://www.youtube.com/watch?v=yt-untranslated-echo',
+    } as any
+    const candidate = buildBiliupUploadCandidate(
+        article,
+        [],
+        [{ media_type: 'video', path: '/tmp/yt-untranslated-echo.mp4' }],
+        {
+            enabled: true,
+            title_generation: {
+                enabled: true,
+                provider: 'DeepSeekV4Pro',
+                api_key: 'title-key',
+            },
+        },
+    )
+    const deterministicTitle = candidate?.title
+
+    try {
+        await completeBiliupUploadCandidateTags(article, [], candidate!)
+    } finally {
+        ;(processorRegistry as any).create = originalCreate
+    }
+
+    expect(candidate?.title).toBe(deterministicTitle)
+    expect(candidate?.title).toBe('【22/7】06.17_26 22/7《命の続き》MV公开')
 })
 
 function buildYoutubeTitleGenArticle() {

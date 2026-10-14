@@ -51,6 +51,52 @@ const BILIUP_FORBIDDEN_TITLE_TERMS = [
     '逆天',
     '不得不看',
 ]
+// Platform/repost words that must never appear in a Bilibili upload title: they carry no
+// search value and read as 搬运 markers. Long forms are removed anywhere in the payload;
+// short abbreviations only when standalone (so fixtures like "TT短视频正文" keep their text).
+const BILIUP_TITLE_SCRUB_LONG_WORDS = [
+    'youtube',
+    'youtubeチャンネル',
+    'twitter',
+    'tiktok',
+    'instagram',
+    'ユーチューブ',
+    'ツイッター',
+    'ツイート',
+    'インスタ',
+    'ティックタック',
+    'ティックトック',
+    '推特',
+    '搬运',
+    '转载',
+    '转帖',
+    '転載',
+    'リポスト',
+    '社媒',
+    '社交媒体',
+]
+const BILIUP_TITLE_SCRUB_SHORT_TOKENS = ['yt', 'tt', 'ins', 'ig', 'x', 'rt']
+const BILIUP_TITLE_BREAK_CHARS = new Set([
+    ' ',
+    '\u3000',
+    '·',
+    '・',
+    ':',
+    '：',
+    '|',
+    '｜',
+    '、',
+    '，',
+    ',',
+    '/',
+    '／',
+    '—',
+    '–',
+    '-',
+    '~',
+    '～',
+])
+const BILIUP_TITLE_CLOSING_BRACKETS = '】」』）)]〉》'
 const BILIUP_FORBIDDEN_TAGS = new Set(
     [
         '搬运',
@@ -136,6 +182,16 @@ const SALLY_MEMBER_ONLY_POST_PATTERNS = [
     /有料会員|会員限定|メンバー限定|メン限|サブスク限定|サブスク向け|支援者限定/u,
     /subscribers?[-\s]?only|subscriber[-\s]?exclusive|members?[-\s]?only|paid\s+subscribers?|creator\s+subscriptions?|super\s+followers?/i,
 ]
+
+/**
+ * Title-generation task mode.
+ * - `translate_original_title`: the source carries a genuine creator-authored title (YouTube). The
+ *   Bilibili main title is the faithful Chinese translation of that original title; the original
+ *   title is the only translation material and the model must not invent a different title.
+ * - `summarize_post_title`: no real title exists (X/Instagram/TikTok captions); the model condenses
+ *   the post body into a Chinese title, staying faithful to the source facts.
+ */
+type BiliupTitleTask = 'translate_original_title' | 'summarize_post_title'
 
 type TemplateContext = Record<string, string>
 
@@ -361,6 +417,87 @@ function truncateText(value: string, maxChars: number) {
         return value
     }
     return `${chars.slice(0, Math.max(0, maxChars - 3)).join('')}...`
+}
+
+/**
+ * Title-safe truncation: cut at the last semantic boundary (separator or closing bracket)
+ * inside the budget so we never split a word/name mid-token, and mark the cut with a single
+ * ellipsis. Falls back to a hard cut when no boundary exists in the lower half of the window.
+ */
+function truncateBiliupTitleText(value: string, maxChars: number) {
+    const chars = Array.from(value)
+    if (chars.length <= maxChars) {
+        return value
+    }
+    const budget = Math.max(2, maxChars - 1)
+    let cut = -1
+    for (let index = budget - 1; index >= Math.floor(budget * 0.5); index -= 1) {
+        const char = chars[index]!
+        if (BILIUP_TITLE_CLOSING_BRACKETS.includes(char)) {
+            cut = index + 1
+            break
+        }
+        if (BILIUP_TITLE_BREAK_CHARS.has(char)) {
+            cut = index
+            break
+        }
+    }
+    const end = cut >= 0 ? cut : budget
+    const head = chars
+        .slice(0, end)
+        .join('')
+        .replace(/[\s·・:：|｜、，,／/—–\-~～]+$/u, '')
+        .trim()
+    return `${head || chars.slice(0, budget).join('')}…`
+}
+
+function escapeTitleScrubWord(word: string) {
+    return word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Deterministic title payload cleanup: drop platform/repost words and tame emoji floods
+ * (3+ pictographs in a row collapse to 2) while keeping reasonable symbols intact.
+ */
+function scrubBiliupTitlePayload(value: string) {
+    let payload = normalizeTextBlock(value).replace(/\s+/g, ' ').trim()
+    for (const word of BILIUP_TITLE_SCRUB_LONG_WORDS) {
+        payload = payload.replace(new RegExp(escapeTitleScrubWord(word), 'giu'), ' ')
+    }
+    for (const token of BILIUP_TITLE_SCRUB_SHORT_TOKENS) {
+        payload = payload.replace(
+            new RegExp(`(?<![A-Za-z0-9\\u3400-\\u9fff\\u3040-\\u30ff])${escapeTitleScrubWord(token)}(?![A-Za-z0-9\\u3400-\\u9fff\\u3040-\\u30ff])`, 'giu'),
+            ' ',
+        )
+    }
+    payload = payload.replace(
+        /(?:\p{Extended_Pictographic}(?:\ufe0f|[\u{1f3fb}-\u{1f3ff}]|\u200d\p{Extended_Pictographic}(?:\ufe0f|[\u{1f3fb}-\u{1f3ff}])*)+)/gu,
+        (run) => {
+            const units = run.split('\u200d')
+            return (run.match(/\p{Extended_Pictographic}/gu) || []).length <= 2 ? run : units.slice(0, 2).join('\u200d')
+        },
+    )
+    return payload.replace(/\s+/g, ' ').trim()
+}
+
+function countTitleScriptChars(value: string) {
+    return {
+        han: (value.match(/[\u3400-\u9fff]/g) || []).length,
+        kana: (value.match(/[\u3040-\u30ff]/g) || []).length,
+    }
+}
+
+/**
+ * A title is "untranslated" when it carries no Chinese at all, or is still mostly Japanese
+ * kana (the model echoed the source). Kana inside otherwise-Chinese titles is legitimate:
+ * glossary policy keeps some song/program titles in Japanese (e.g. 「命の続き」).
+ */
+function looksUntranslatedBiliupTitle(value: string) {
+    const { han, kana } = countTitleScriptChars(value)
+    if (han === 0) {
+        return true
+    }
+    return kana >= 4 && kana > han * 2
 }
 
 function normalizeTextBlock(value: string | null | undefined) {
@@ -624,6 +761,51 @@ function resolveDetectedBiliupMemberFacts(
     ])
 }
 
+type BiliupTranslationGlossaryEntry = {
+    source: string
+    target: string
+    note?: string
+}
+
+let biliupTranslationGlossaryCache: Array<BiliupTranslationGlossaryEntry> | null | undefined
+
+/**
+ * 22/7 ja→zh glossary (`assets/knowledge/22_7/translation/translation_terms_22_7_ja_zh.json`).
+ * Shipped into the title-translation prompt so member/character/work names render exactly like
+ * the rest of the pipeline's translations.
+ */
+function resolveBiliupTranslationGlossary(): Array<BiliupTranslationGlossaryEntry> {
+    if (biliupTranslationGlossaryCache !== undefined) {
+        return biliupTranslationGlossaryCache
+    }
+
+    const candidates = [
+        path.join(process.cwd(), 'assets/knowledge/22_7/translation/translation_terms_22_7_ja_zh.json'),
+        // Repo-root assets when running from app/tweet-forwarder (local tests, host tooling).
+        path.join(process.cwd(), '../../assets/knowledge/22_7/translation/translation_terms_22_7_ja_zh.json'),
+        '/app/assets/knowledge/22_7/translation/translation_terms_22_7_ja_zh.json',
+    ]
+    const sourcePath = candidates.find((candidate) => fs.existsSync(candidate))
+    if (!sourcePath) {
+        biliupTranslationGlossaryCache = []
+        return biliupTranslationGlossaryCache
+    }
+
+    try {
+        const payload = JSON.parse(fs.readFileSync(sourcePath, 'utf8')) as Array<Record<string, unknown>>
+        biliupTranslationGlossaryCache = (Array.isArray(payload) ? payload : [])
+            .map((entry) => ({
+                source: String(entry?.source || '').trim(),
+                target: String(entry?.target || '').trim(),
+                note: String(entry?.note || '').trim() || undefined,
+            }))
+            .filter((entry) => entry.source && entry.target)
+    } catch {
+        biliupTranslationGlossaryCache = []
+    }
+    return biliupTranslationGlossaryCache
+}
+
 function cleanupBiliupDisplayName(value: string | null | undefined) {
     return String(value || '')
         .replace(/【\s*22\/7\s*】/gi, '')
@@ -758,8 +940,9 @@ function resolveUploadSummary(
     dateTime: ReturnType<typeof formatDateTimeParts>,
 ) {
     // Headline is capped at 40 chars (code points, surrogate-safe) so the fixed
-    // account/source prefix keeps most of the 80-char title budget.
-    const summary = truncateText(primaryLine.trim(), 40)
+    // account/source prefix keeps most of the 80-char title budget. The cut is
+    // semantic (word/segment boundary) and platform/repost words are scrubbed first.
+    const summary = truncateBiliupTitleText(scrubBiliupTitlePayload(primaryLine), 40)
     if ([Platform.Instagram, Platform.TikTok, Platform.X].includes(article.platform)) {
         // upload_summary drops the display name on purpose: account_title already
         // carries it, repeating it after [TT]/[X] reads as a stutter.
@@ -769,8 +952,10 @@ function resolveUploadSummary(
 }
 
 function resolveBiliupAccountTitle(displayName: string) {
+    // The uploader's Bilibili channel is the 22/7 fan channel: the brand prefix is always
+    // present so titles stay searchable and consistent even for unknown accounts.
     if (!displayName) {
-        return ''
+        return '22/7'
     }
     return displayName.startsWith('22/7') ? displayName : `22/7 ${displayName}`
 }
@@ -857,25 +1042,15 @@ function cleanupTemplateOutput(value: string) {
         .trim()
 }
 
-function isYoutubeLongVideo(article: Pick<Article, 'platform' | 'type'>) {
-    return article.platform === Platform.YouTube && article.type !== 'shorts'
-}
-
 /**
- * Video sources that carry a genuine creator-authored title (YouTube videos and Shorts).
- * For these we keep the original title as a leading `原标题:` line in the description rather than
- * cramming it into the generated Chinese title. Social captions (X/Instagram/TikTok) and website
- * articles are excluded: their first line is body/caption text, not a real title.
+ * Uniform default title template for every source: `【account】MM.DD_YY <title payload>`.
+ * The old `[YT]/[X]/[TT]/[ins]` source bracket is intentionally gone: it burned title budget,
+ * carried no search value, read as a 搬运 marker on Bilibili, and the source is fully credited
+ * in the description (`来源平台:` line). The `【22/7 …】` brand prefix stays as the search
+ * anchor and the `MM.DD_YY` date code keeps chronological scan/dedupe value.
  */
-function hasOriginalVideoTitle(article: Pick<Article, 'platform'>) {
-    return article.platform === Platform.YouTube
-}
-
-function resolveDefaultTitleTemplate(article: Pick<Article, 'platform' | 'type'>) {
-    if (isYoutubeLongVideo(article)) {
-        return '【{{account_title}}】{{upload_summary}}'
-    }
-    return '【{{account_title}}】[{{source_tag}}] {{upload_summary}}'
+function resolveDefaultTitleTemplate(_article: Pick<Article, 'platform' | 'type'>) {
+    return '【{{account_title}}】{{upload_summary}}'
 }
 
 function buildTitleFallback(context: TemplateContext, article: Pick<Article, 'platform' | 'username' | 'a_id'>) {
@@ -884,11 +1059,28 @@ function buildTitleFallback(context: TemplateContext, article: Pick<Article, 'pl
         context.article_id || 'Bilibili upload',
     )
     return normalizeBiliupMainTitleText(
-        stripEmptyRenderedBrackets(
-            `【${context.account_title}】${context.source_tag ? `[${context.source_tag}]` : ''} ${context.upload_summary}`,
-        ),
+        stripEmptyRenderedBrackets(`【${context.account_title}】${context.upload_summary}`),
         hardFallback,
     )
+}
+
+/**
+ * Video sources that carry a genuine creator-authored title (YouTube videos and Shorts).
+ * For these the original title is the translation material for the Bilibili main title and
+ * stays verbatim as a leading `原标题:` line in the description. Social captions
+ * (X/Instagram/TikTok) and website articles are excluded: their first line is body/caption
+ * text, not a real title.
+ */
+function hasOriginalVideoTitle(article: Pick<Article, 'platform'>) {
+    return article.platform === Platform.YouTube
+}
+
+function resolveBiliupTitleTask(
+    article: Pick<Article, 'content' | 'platform'>,
+): BiliupTitleTask {
+    return hasOriginalVideoTitle(article) && extractOriginalBiliupTitleLine(article)
+        ? 'translate_original_title'
+        : 'summarize_post_title'
 }
 
 function deriveTitle(
@@ -903,7 +1095,7 @@ function deriveTitle(
     const rendered = cleanupTemplateOutput(renderTemplate(template || resolveDefaultTitleTemplate(article), context))
     const fallback = buildTitleFallback(context, article)
     const title = hasRenderedTitlePayload(rendered, context) ? rendered : fallback
-    return truncateText(normalizeBiliupMainTitleText(title, fallback), MAX_BILIUP_TITLE_CHARS)
+    return truncateBiliupTitleText(normalizeBiliupMainTitleText(title, fallback), MAX_BILIUP_TITLE_CHARS)
 }
 
 function extractOriginalBiliupTitleLine(article: Pick<Article, 'content'> | undefined) {
@@ -1134,102 +1326,44 @@ function completeTagsWithFallback(tags: Array<string>, targetCount = DEFAULT_BIL
     return uniqueBiliupTags([...tags, ...BILIUP_FALLBACK_TOPIC_TAGS], Math.min(MAX_BILIUP_TAG_COUNT, targetCount))
 }
 
-function buildBiliupTitleCandidates(
-    article: Pick<Article, 'content' | 'platform' | 'username' | 'u_id' | 'a_id' | 'created_at' | 'url' | 'type'> & {
-        translation?: string | null
-    },
-    texts: string[],
-    candidate: BiliupUploadCandidate,
-) {
-    const blocks = collectTextBlocks(article, texts)
-    const firstOriginalLine = firstNonEmptyLine(article.content)
-    const firstTranslationLine = firstNonEmptyLine(article.translation)
-    const memberNames = resolveDetectedBiliupMemberFacts(article, texts)
-        .map((fact) => normalizeBiliupUploadTag(fact.names?.ja || ''))
-        .filter(Boolean)
-    const fallbackDisplayName = resolveFallbackDisplayName(article)
-
-    return [
-        {
-            source: 'deterministic_title',
-            text: candidate.title,
-            confidence: 'high',
-            role: 'current_upload_title',
-        },
-        {
-            source: 'translation_first_line',
-            text: firstTranslationLine,
-            confidence: firstTranslationLine ? 'high' : 'none',
-            role: 'translated_reference',
-        },
-        {
-            source: 'original_first_line',
-            text: firstOriginalLine,
-            confidence: firstOriginalLine ? 'high' : 'none',
-            role: 'original_reference',
-        },
-        {
-            source: 'detected_member_facts',
-            text: memberNames.join(' '),
-            confidence: memberNames.length > 0 ? 'high' : 'none',
-            role: 'member_reference',
-        },
-        {
-            source: 'fallback_display_name',
-            text: fallbackDisplayName,
-            confidence: fallbackDisplayName ? 'medium' : 'none',
-            role: 'account_reference',
-        },
-        {
-            source: 'text_blocks',
-            text: blocks.join('\n\n'),
-            confidence: blocks.length > 0 ? 'medium' : 'none',
-            role: 'body_reference',
-        },
-    ].filter((item) => item.text)
-}
-
-function buildBiliupTagGenerationInput(
+function buildBiliupMetadataGenerationInput(
     article: Pick<Article, 'platform' | 'username' | 'u_id' | 'a_id' | 'content' | 'url' | 'type' | 'created_at'> & {
         translation?: string | null
     },
     texts: string[],
     candidate: BiliupUploadCandidate,
     targetCount: number,
+    task: BiliupTitleTask | null,
+    titleBounds: { minChars: number; maxChars: number },
 ) {
     const platform = Platform[article.platform] || String(article.platform)
     const dateTime = formatDateTimeParts(article.created_at, candidate.config.metadata_timezone)
     const textBlocks = collectTextBlocks(article, texts)
-    const context = {
-        title: candidate.title,
-        description: candidate.description,
-        source_url: candidate.sourceUrl,
-        platform,
-        source_tag: resolveBiliupSourceTag(article),
-        type: article.type || '',
-        user_id: article.u_id || '',
-        username: article.username || '',
-        article_id: article.a_id || '',
+    const context: Record<string, unknown> = {
+        task: task || 'generate_tags_only',
+        text: textBlocks.join('\n\n'),
+        glossary: resolveBiliupTranslationGlossary(),
         current_tags: candidate.config.tags,
         target_count: targetCount,
-        text: textBlocks.join('\n\n'),
-        title_candidates: buildBiliupTitleCandidates(article, texts, candidate),
-        evidence: {
+        source_context: {
             platform,
             source_tag: resolveBiliupSourceTag(article),
             type: article.type || '',
-            source_url: candidate.sourceUrl,
-            article_id: article.a_id || '',
             username: article.username || '',
             user_id: article.u_id || '',
-            created_at: article.created_at || 0,
+            article_id: article.a_id || '',
+            source_url: candidate.sourceUrl,
             date: dateTime.date,
             time: dateTime.time,
-            deterministic_title: candidate.title,
-            original_first_line: firstNonEmptyLine(article.content),
-            translation_first_line: firstNonEmptyLine(article.translation),
-            text_blocks: textBlocks,
         },
+    }
+    if (task) {
+        context.title_min_chars = titleBounds.minChars
+        context.title_max_chars = titleBounds.maxChars
+    }
+    if (task === 'translate_original_title') {
+        // The only translation material: the model must translate this title, nothing else.
+        context.original_title = extractOriginalBiliupTitleLine(article)
     }
     return JSON.stringify(context, null, 2)
 }
@@ -1245,7 +1379,7 @@ type BiliupMetadataProcessorConfig = {
     cfg_processor?: ProcessorConfig
 }
 
-function parseGeneratedBiliupMetadata(value: string): GeneratedBiliupMetadata {
+function parseGeneratedBiliupMetadata(value: string, allowPlainTextTitle = false): GeneratedBiliupMetadata {
     const trimmed = String(value || '')
         .trim()
         .replace(/^```(?:json)?/i, '')
@@ -1266,7 +1400,9 @@ function parseGeneratedBiliupMetadata(value: string): GeneratedBiliupMetadata {
                   ? parsed.zh_title
                   : typeof parsed?.chinese_title === 'string'
                     ? parsed.chinese_title
-                    : undefined
+                    : typeof parsed?.title === 'string' && typeof parsed?.tags !== 'object'
+                      ? parsed.title
+                      : undefined
         if (Array.isArray(parsed?.tags) || titleZh) {
             return {
                 tags: Array.isArray(parsed?.tags) ? parsed.tags.map(String) : [],
@@ -1275,6 +1411,11 @@ function parseGeneratedBiliupMetadata(value: string): GeneratedBiliupMetadata {
         }
     } catch {
         // Fall through to a lenient comma/newline split for non-JSON model output.
+    }
+    // A translation model answering with the plain translated title (no JSON) is still useful:
+    // when title output was requested and the text is a single line, treat it as the title.
+    if (allowPlainTextTitle && !/[\n,，、]/.test(trimmed) && Array.from(trimmed).length <= MAX_BILIUP_TITLE_CHARS) {
+        return { tags: [], titleZh: trimmed }
     }
     return {
         tags: trimmed
@@ -1353,67 +1494,89 @@ function stripLeadingGeneratedTitleContext(value: string, currentTitle: string) 
 function normalizeGeneratedBiliupTitle(
     value: string | null | undefined,
     currentTitle: string,
-    bounds?: { minChars?: number; maxChars?: number },
+    bounds: { minChars?: number; maxChars?: number },
+    task: BiliupTitleTask,
 ) {
-    const minChars = Math.max(1, Math.floor(bounds?.minChars ?? DEFAULT_BILIUP_TITLE_MIN_CHARS))
-    const maxChars = Math.max(minChars, Math.floor(bounds?.maxChars ?? DEFAULT_BILIUP_TITLE_MAX_CHARS))
-    const title = normalizeTextBlock(value)
-        .replace(/[|｜\r\n]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .replace(/^[「『【《\[\]()（）\s]+|[」』】》\[\]()（）\s]+$/g, '')
-        .trim()
-    const strippedTitle = stripLeadingGeneratedTitleContext(title, currentTitle)
-    if (!strippedTitle || Array.from(strippedTitle).length < minChars || Array.from(strippedTitle).length > maxChars) {
+    // Translations may legitimately be short (a faithful short title beats an invented long one),
+    // so translate mode only enforces a minimal sanity floor; summarize mode keeps the configured
+    // target minimum to push the model toward informative titles.
+    const minChars = task === 'translate_original_title' ? 2 : Math.max(1, Math.floor(bounds?.minChars ?? DEFAULT_BILIUP_TITLE_MIN_CHARS))
+    const title = scrubBiliupTitlePayload(
+        normalizeTextBlock(value)
+            .replace(/[|｜\r\n]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .replace(/^[「『【《\[\]()（）\s]+|[」』】》\[\]()（）\s]+$/g, '')
+            .trim(),
+    )
+    // Translate mode keeps the translation verbatim (faithful translation, no second editing);
+    // summarize mode may strip model-echoed context (account name + posting date).
+    const strippedTitle =
+        task === 'translate_original_title' ? title : stripLeadingGeneratedTitleContext(title, currentTitle)
+    if (!strippedTitle || Array.from(strippedTitle).length < minChars) {
         return ''
     }
-    if (!/[\u3400-\u9fff]/.test(strippedTitle) || /[\u3040-\u30ff]/.test(strippedTitle)) {
+    if (looksUntranslatedBiliupTitle(strippedTitle)) {
         return ''
     }
     const lowercaseTitle = strippedTitle.toLocaleLowerCase()
     if (BILIUP_FORBIDDEN_TITLE_TERMS.some((term) => lowercaseTitle.includes(term.toLocaleLowerCase()))) {
         return ''
     }
-    const compactTitle = compactComparableText(strippedTitle)
-    if (!compactTitle) {
+    if (!compactComparableText(strippedTitle)) {
         return ''
     }
     return strippedTitle
 }
 
-function buildGeneratedBiliupTitlePayload(generatedTitle: string, maxChars: number) {
-    return truncateText(generatedTitle, maxChars)
+function splitBiliupTitleStructure(title: string) {
+    const normalized = normalizeBiliupMainTitleText(title, title)
+    // Fixed part keeps the exact rendered spacing: `【account】` + optional `[source]` +
+    // optional `MM.DD_YY` posting-date code. Only the trailing payload is replaceable.
+    const match = normalized.match(/^(\s*【[^】]+】(?:\s*\[[^\]]+\])?\s*(?:\d{2}\.\d{2}_\d{2})?\s*)(.*)$/)
+    return {
+        head: match?.[1] || '',
+        dateCode: match?.[1]?.match(/(\d{2}\.\d{2}_\d{2})/)?.[1] || '',
+        payload: (match?.[2] || normalized).trim(),
+    }
 }
 
 function replaceBiliupTitlePayloadWithGeneratedChinese(
     candidate: BiliupUploadCandidate,
     titleZh: string | undefined,
-    _originalTitle?: string,
-    bounds?: { minChars?: number; maxChars?: number },
+    options: {
+        task: BiliupTitleTask
+        bounds?: { minChars?: number; maxChars?: number }
+    },
 ) {
     const currentTitle = normalizeBiliupMainTitleText(candidate.title, candidate.title)
-    const generatedTitle = normalizeGeneratedBiliupTitle(titleZh, currentTitle, bounds)
+    const generatedTitle = normalizeGeneratedBiliupTitle(titleZh, currentTitle, options.bounds || {}, options.task)
     if (!generatedTitle) {
         return false
     }
 
-    const structuredMatch = currentTitle.match(/^(【[^】]+】(?:\[[^\]]+\])?\s*)(.+)$/)
-    const fixedPrefix = structuredMatch?.[1] || ''
+    const { head, dateCode, payload: _oldPayload } = splitBiliupTitleStructure(currentTitle)
     let payload = generatedTitle
-    // Guarantee the MM.DD_YY posting-date code survives LLM title replacement (social platforms).
-    const dateCode = currentTitle.match(/(\d{2}\.\d{2}_\d{2})/)?.[1]
-    if (dateCode && !payload.includes(dateCode)) {
-        payload = `${dateCode} ${payload}`.trim()
+    // The fixed part already carries the MM.DD_YY posting-date code; never duplicate it
+    // when the model echoes it back inside the title payload.
+    const echoedDate = dateCode ? payload.match(/^\d{2}\.\d{2}_\d{2}[\s:：,，、\-ー－—–|｜/／・]+/)?.[0] : undefined
+    if (echoedDate && echoedDate.includes(dateCode)) {
+        payload = payload.slice(echoedDate.length).trim()
     }
-    if (!fixedPrefix) {
-        candidate.title = buildGeneratedBiliupTitlePayload(payload, MAX_BILIUP_TITLE_CHARS)
+    if (!head) {
+        // Unstructured custom template: replace the whole title, keeping the date code alive.
+        const looseDateCode = currentTitle.match(/(\d{2}\.\d{2}_\d{2})/)?.[1] || ''
+        if (looseDateCode && !payload.includes(looseDateCode)) {
+            payload = `${looseDateCode} ${payload}`.trim()
+        }
+        candidate.title = truncateBiliupTitleText(payload, MAX_BILIUP_TITLE_CHARS)
         return true
     }
 
-    const availableTitleLength = MAX_BILIUP_TITLE_CHARS - Array.from(fixedPrefix).length
-    if (availableTitleLength < 4) {
+    const availableTitleLength = MAX_BILIUP_TITLE_CHARS - Array.from(head).length
+    if (availableTitleLength < 4 || !payload) {
         return false
     }
-    candidate.title = `${fixedPrefix}${buildGeneratedBiliupTitlePayload(payload, availableTitleLength)}`
+    candidate.title = `${head}${truncateBiliupTitleText(payload, availableTitleLength)}`
     return true
 }
 
@@ -1446,22 +1609,49 @@ function isSameBiliupMetadataProcessor(left?: BiliupMetadataProcessorConfig, rig
     )
 }
 
+const BILIUP_TAG_GENERATION_RULES = [
+    '你是B站投稿元数据助手。只输出一个JSON对象：{"tags":["标签1","标签2"],"title_zh":"中文标题"}。',
+    'tags规则：保留输入current_tags里的固定标签；优先 成员名/作品名/节目名/活动主题/声优偶像/日系偶像；每个标签20字以内。',
+    '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
+]
+
+const BILIUP_TITLE_TRANSLATION_RULES = (titleMinChars: number, titleMaxChars: number) => [
+    'title_zh规则（本次任务：翻译原标题）：',
+    '- title_zh必须是输入original_title的忠实简体中文翻译：original_title是唯一翻译素材，不得改写、扩写、概括或另拟标题，不得补写原文没有的时间、地点、人物、评价。',
+    '- 保留成员名、角色名、作品名、曲名、节目名、数字、日期、期数、序号、记号与原文结构；不截断、不漏译关键名词。',
+    '- 专有名词按输入glossary的target写法翻译并保持一致（含note里的“avoid”警告）；glossary未收录的专有名词保守处理，可保留原文。',
+    '- 用自然简体中文，不逐词硬译、不带翻译腔；不使用“震惊、必看、神回”等标题党词；不加解释、译注、引号装饰或表情符号堆砌。',
+    `- 长度目标${titleMinChars}到${titleMaxChars}字：宁可完整传达原标题信息，超长时省略次要修饰语，绝不截断半个词。`,
+    '示例：',
+    'original_title: 【ナナコミ】第12回 配信開始 → title_zh: 《NANA-COMI》第12回 开始直播',
+    'original_title: 天城サリー『推しカメラ』#3 を公開 → title_zh: 天城莎莉《推し相机》#3 公开',
+    'original_title: 北原実咲のうさぎの話 → title_zh: 北原实咲的兔子话题',
+]
+
+const BILIUP_TITLE_SUMMARIZE_RULES = (titleMinChars: number, titleMaxChars: number) => [
+    'title_zh规则（本次任务：概括标题，来源没有独立标题）：',
+    '- 把输入text开头的主要信息忠实翻译并浓缩成简体中文标题：先逐句翻译正文开头的事实，只在原文过长时压缩次要修饰；不得脑补原文没有的信息。',
+    `title_zh应为${titleMinChars}到${titleMaxChars}个中文字符，具体描述视频内容或事件本身（例如“北原実咲介绍自己养的兔子”“推し相机：强肩偶像把签名球送到2层观众席”），不夸张、不偏颇、不脑补。`,
+    '禁止把成员名、日期、时间、账号名或平台名作为标题主体（例如“北原実咲 26.08.06”这类仅成员名加日期的标题）；只要输入包含可描述的事实就必须给出能反映内容的标题，不得用空字符串或缩略概括替代。',
+    '- 保留成员名、作品名、数字、日期；专有名词按输入glossary的target写法；不使用标题党词，不加解释或译注。',
+    '- title_zh会放在固定账号/日期前缀之后作为主标题；不要重复账号名、平台名、日期、原标题或搬运属性词。',
+]
+
 function buildBiliupMetadataGenerationPrompt(
     cfgProcessor: ProcessorConfig | undefined,
     titleMinChars: number,
     titleMaxChars: number,
+    task: BiliupTitleTask | null,
 ) {
     return (
         cfgProcessor?.prompt ||
         [
-            '你是B站投稿元数据助手。请为22/7相关视频生成搜索友好的中文/日文标签与中文标题。',
-            '固定已有标签必须保留；只输出JSON：{"tags":["标签1","标签2"],"title_zh":"中文标题"}。',
-            '不要输出“搬运、转载、转帖、社媒、社交媒体、X、Twitter、Instagram、TikTok、YouTube、视频、短视频、投稿”等平台或搬运属性词。',
-            '优先选择成员、22/7相关称呼、声优偶像、日系偶像、活动/内容主题。每个标签20字以内。',
-            '输入JSON中的title_candidates和evidence是标题依据；优先使用source=translation_first_line/original_first_line/detected_member_facts的高置信事实。',
-            `title_zh应为${titleMinChars}到${titleMaxChars}个中文字符，基于原文事实，具体描述视频内容或事件本身（例如“北原実咲介绍自己养的兔子”“推しカメラ：强肩偶像把签名球送到2层观众席”），不夸张、不偏颇、不脑补。`,
-            '禁止把成员名、日期、时间、账号名或平台名作为标题主体（例如“北原実咲 26.08.06”这类仅成员名加日期的标题）；只要输入包含可描述的事实就必须给出能反映内容的标题，不得用空字符串或缩略概括替代。',
-            'title_zh会放在固定账号/来源前缀之后作为主标题；原标题会单独放进简介，不要重复账号名、平台名、日期、原标题或搬运属性词。',
+            ...BILIUP_TAG_GENERATION_RULES,
+            ...(task === 'translate_original_title'
+                ? BILIUP_TITLE_TRANSLATION_RULES(titleMinChars, titleMaxChars)
+                : task === 'summarize_post_title'
+                  ? BILIUP_TITLE_SUMMARIZE_RULES(titleMinChars, titleMaxChars)
+                  : []),
         ].join('\n')
     )
 }
@@ -1473,6 +1663,7 @@ async function runBiliupMetadataGeneration(
     targetCount: number,
     processorConfig: BiliupMetadataProcessorConfig,
     titleBounds: { minChars: number; maxChars: number },
+    task: BiliupTitleTask | null,
     log: Logger | undefined,
     label: string,
 ) {
@@ -1480,6 +1671,7 @@ async function runBiliupMetadataGeneration(
         processorConfig.cfg_processor,
         titleBounds.minChars,
         titleBounds.maxChars,
+        task,
     )
     try {
         const processor = await processorRegistry.create(processorConfig.provider, processorConfig.api_key, log, {
@@ -1487,8 +1679,10 @@ async function runBiliupMetadataGeneration(
             prompt,
         })
         try {
-            const raw = await processor.process(buildBiliupTagGenerationInput(article, texts, candidate, targetCount))
-            return parseGeneratedBiliupMetadata(raw)
+            const raw = await processor.process(
+                buildBiliupMetadataGenerationInput(article, texts, candidate, targetCount, task, titleBounds),
+            )
+            return parseGeneratedBiliupMetadata(raw, Boolean(task))
         } finally {
             await processor.drop().catch(() => undefined)
         }
@@ -1520,6 +1714,7 @@ async function completeBiliupUploadCandidateTags(
     const needTitle = Boolean(
         article && article.platform !== Platform.Website && titleGeneration && hasTranslatableMetadata,
     )
+    const titleTask = article ? resolveBiliupTitleTask(article) : null
 
     if (article && (needTags || needTitle)) {
         const tagProcessor = tagGeneration
@@ -1546,15 +1741,13 @@ async function completeBiliupUploadCandidateTags(
             candidate.config.tags = uniqueBiliupTags([...candidate.config.tags, ...generated.tags], targetCount)
         }
         const applyGeneratedTitle = (generated: GeneratedBiliupMetadata | null) => {
-            if (!needTitle || !generated) {
+            if (!needTitle || !generated || !titleTask) {
                 return
             }
-            replaceBiliupTitlePayloadWithGeneratedChinese(
-                candidate,
-                generated.titleZh,
-                extractOriginalBiliupTitleLine(article),
-                titleBounds,
-            )
+            replaceBiliupTitlePayloadWithGeneratedChinese(candidate, generated.titleZh, {
+                task: titleTask,
+                bounds: titleBounds,
+            })
         }
 
         if (needTags && needTitle && isSameBiliupMetadataProcessor(tagProcessor, titleProcessor)) {
@@ -1565,6 +1758,7 @@ async function completeBiliupUploadCandidateTags(
                 targetCount,
                 tagProcessor!,
                 titleBounds,
+                titleTask,
                 log,
                 'metadata',
             )
@@ -1580,6 +1774,7 @@ async function completeBiliupUploadCandidateTags(
                         targetCount,
                         tagProcessor,
                         titleBounds,
+                        null,
                         log,
                         'tag',
                     ),
@@ -1594,6 +1789,7 @@ async function completeBiliupUploadCandidateTags(
                         targetCount,
                         titleProcessor,
                         titleBounds,
+                        titleTask,
                         log,
                         'title',
                     ),
