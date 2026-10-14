@@ -2,6 +2,7 @@ import axios from 'axios'
 import { chunk } from 'lodash'
 import { Forwarder, NonRetryableForwarderSendError, PartialForwarderSendError, type MediaFile, type SendProps } from './base'
 import { classifyOneBotResponse, classifyOneBotTransportError } from './onebot-semantics'
+import { buildSendTextSignature, findDeliveredMessageId } from './onebot-send-reconcile'
 import { type ForwardTargetPlatformConfig, ForwardTargetPlatformEnum } from '@/types/forwarder'
 import {
     normalizeForwarderImageAttachments,
@@ -36,7 +37,21 @@ type OneBotVideoSegment = {
 
 type OneBotMessageSegment = OneBotTextSegment | OneBotImageSegment | OneBotVideoSegment
 
-const QQ_REQUEST_TIMEOUT_MS = 15_000
+const QQ_REQUEST_TIMEOUT_MS = 60_000
+
+/**
+ * Ambiguous send failures (timeout / mid-flight reset) are reconciled against
+ * the bridge's message history before any re-send. SnowLuma acks a send only
+ * after delivery, so a client timeout routinely accompanies a delivered
+ * message; observed ack latency under media load reached ~30s with the message
+ * landing up to ~38s after the request started (2026-10-15 incident). The
+ * reconcile schedule below keeps looking well past that window before it
+ * concludes the message never landed and allows one bounded re-send.
+ */
+const QQ_AMBIGUOUS_RECONCILE_DELAYS_MS = [3_000, 12_000, 20_000]
+
+/** Match window for the bridge history copy: request start minus this slack. */
+const QQ_RECONCILE_MATCH_SLACK_MS = 20_000
 
 /**
  * In `url` media delivery the bridge downloads the media after the send is
@@ -59,6 +74,8 @@ class QQForwarder extends Forwarder {
     private url: string
     private token: string
     private mediaDelivery: ReturnType<typeof resolveQQMediaDeliveryConfig>
+    private cachedSelfUin?: string | null
+    private readonly reconciledMessageIds = new Set<string>()
     NAME = 'qq'
     protected override BASIC_TEXT_LIMIT = 4000
 
@@ -138,13 +155,159 @@ class QQForwarder extends Forwarder {
      * Transport-layer failures (timeout / reset / 5xx) stay retryable; 4xx
      * (bad endpoint, bad token, oversized body) are promoted to
      * NonRetryableForwarderSendError so they cannot start a retry storm.
+     *
+     * Ambiguous failures (the request may have been delivered without a
+     * response reaching us — timeout, mid-flight reset) never blindly retry:
+     * they go through {@link reconcileAmbiguousSend}, which adopts the
+     * bridge-side copy when the message turned out to be delivered and only
+     * re-sends once the bridge history proves it never landed. Failures the
+     * bridge actually answered carry an explicit verdict and keep the normal
+     * bounded retry. `reconcilable: false` payloads (merged forwards,
+     * text-less media) cannot be matched in history, so an ambiguous failure
+     * becomes terminal instead of risking a duplicate.
      */
-    private rethrowClassifiedTransportError(error: unknown): never {
+    private async resolveTransportSendFailure(
+        error: unknown,
+        options: {
+            context: string
+            segments: unknown
+            requestStartedAt: number
+            reconcilable: boolean
+        },
+    ): Promise<never | any> {
         const transport = classifyOneBotTransportError(error)
         if (!transport.retryable) {
             throw new NonRetryableForwarderSendError(transport.detail)
         }
+        if (!transport.possiblyDelivered) {
+            throw error
+        }
+        if (!options.reconcilable) {
+            this.log?.warn(
+                `ambiguous ${options.context} failure on a non-reconcilable payload; refusing blind resend: ${transport.detail}`,
+            )
+            throw new NonRetryableForwarderSendError(
+                `ambiguous ${options.context} failure; refusing blind resend of a non-reconcilable payload: ${transport.detail}`,
+            )
+        }
+        return await this.reconcileAmbiguousSend(error, {
+            context: options.context,
+            segments: options.segments,
+            requestStartedAt: options.requestStartedAt,
+            detail: transport.detail,
+        })
+    }
+
+    /**
+     * Receipt-check before any re-send of an ambiguously failed payload.
+     * Polls the bridge's own history (`get_group_msg_history` /
+     * `get_friend_msg_history`) for the text signature of the payload:
+     *
+     * - delivered  -> adopt the bridge-side message_id as a successful send
+     *   (the outbound ledger then records the real id instead of a phantom
+     *   failure that invites manual re-sends);
+     * - proven absent after the full schedule -> rethrow the original
+     *   transport error so the bounded pRetry may re-send once;
+     * - history itself unreachable -> terminal failure: never re-send on doubt.
+     */
+    private async reconcileAmbiguousSend(
+        error: unknown,
+        options: { context: string; segments: unknown; requestStartedAt: number; detail: string },
+    ): Promise<any> {
+        const signature = buildSendTextSignature(options.segments)
+        if (!signature) {
+            this.log?.warn(
+                `ambiguous ${options.context} failure without text signature; refusing blind resend: ${options.detail}`,
+            )
+            throw new NonRetryableForwarderSendError(
+                `ambiguous ${options.context} failure; refusing blind resend of a payload without text signature: ${options.detail}`,
+            )
+        }
+        const sinceEpochSec = Math.floor((options.requestStartedAt - QQ_RECONCILE_MATCH_SLACK_MS) / 1000)
+        for (let attempt = 0; attempt <= QQ_AMBIGUOUS_RECONCILE_DELAYS_MS.length; attempt++) {
+            if (attempt > 0) {
+                await this.ambiguousReconcileSleep(QQ_AMBIGUOUS_RECONCILE_DELAYS_MS[attempt - 1])
+            }
+            let history: unknown[]
+            try {
+                history = await this.fetchRecentMessages()
+            } catch (reconcileError) {
+                const message = reconcileError instanceof Error ? reconcileError.message : String(reconcileError)
+                this.log?.warn(
+                    `ambiguous ${options.context} failure; bridge history reconcile errored, refusing blind resend: ${message}`,
+                )
+                throw new NonRetryableForwarderSendError(
+                    `ambiguous ${options.context} failure; history reconcile failed (${message}); refusing blind resend: ${options.detail}`,
+                )
+            }
+            const adoptedId = findDeliveredMessageId(history, {
+                signature,
+                sinceEpochSec,
+                selfId: await this.resolveSelfUin(),
+                takenMessageIds: this.reconciledMessageIds,
+            })
+            if (adoptedId) {
+                this.reconciledMessageIds.add(adoptedId)
+                this.log?.warn(
+                    `ambiguous ${options.context} failure reconciled: message ${adoptedId} was delivered by the bridge; not resending`,
+                )
+                return {
+                    status: 200,
+                    statusText: 'OK',
+                    data: { status: 'ok', retcode: 0, wording: '', data: { message_id: adoptedId } },
+                }
+            }
+        }
+        this.log?.warn(
+            `ambiguous ${options.context} failure reconciled as NOT delivered after ${QQ_AMBIGUOUS_RECONCILE_DELAYS_MS.length} history checks: ${options.detail}; allowing one bounded resend`,
+        )
         throw error
+    }
+
+    /** Recent history of the chat behind this forwarder (bridge-side copies). */
+    private async fetchRecentMessages(): Promise<unknown[]> {
+        const action = this.isPrivateChat() ? 'get_friend_msg_history' : 'get_group_msg_history'
+        const payload = this.isPrivateChat()
+            ? { user_id: this.user_id, count: 20 }
+            : { group_id: this.group_id, count: 20 }
+        const res = await this.postOneBot(action, payload)
+        const verdict = classifyOneBotResponse(res, action)
+        if (!verdict.ok) {
+            throw new Error(verdict.detail)
+        }
+        const data = res?.data?.data
+        if (Array.isArray(data)) {
+            return data
+        }
+        if (Array.isArray(data?.messages)) {
+            return data.messages
+        }
+        return []
+    }
+
+    /** Bot uin for history matching; null when the bridge does not say. */
+    private async resolveSelfUin(): Promise<string | null> {
+        if (this.cachedSelfUin !== undefined) {
+            return this.cachedSelfUin
+        }
+        try {
+            const res = await this.postOneBot('get_login_info', {})
+            const verdict = classifyOneBotResponse(res, 'get_login_info')
+            const userId = verdict.ok ? res?.data?.data?.user_id : undefined
+            this.cachedSelfUin = userId === undefined || userId === null ? null : String(userId)
+        } catch {
+            this.cachedSelfUin = null
+        }
+        return this.cachedSelfUin
+    }
+
+    protected async ambiguousReconcileSleep(ms: number): Promise<void> {
+        await new Promise((resolve) => setTimeout(resolve, ms))
+    }
+
+    /** Single seam over the bridge HTTP call so tests can stub transports. */
+    protected async postOneBot(action: string, body: unknown): Promise<any> {
+        return await axios.post(`${this.url}/${action}`, body, this.buildRequestOptions())
     }
 
     private async resolveMediaFileValue(
@@ -350,41 +513,45 @@ class QQForwarder extends Forwarder {
     }
 
     async sendWithPayload(arr_of_segments: OneBotMessageSegment[]) {
+        const requestStartedAt = Date.now()
         if (this.isPrivateChat()) {
             let res
             try {
-                res = await axios.post(
-                    `${this.url}/send_private_msg`,
-                    {
-                        user_id: this.user_id,
-                        message: arr_of_segments,
-                    },
-                    this.buildRequestOptions(),
-                )
+                res = await this.postOneBot('send_private_msg', {
+                    user_id: this.user_id,
+                    message: arr_of_segments,
+                })
             } catch (error) {
-                this.rethrowClassifiedTransportError(error)
+                res = await this.resolveTransportSendFailure(error, {
+                    context: 'send_private_msg',
+                    segments: arr_of_segments,
+                    requestStartedAt,
+                    reconcilable: true,
+                })
             }
             this.assertOneBotResponseOk(res, 'send_private_msg')
             return res
         }
         let res
         try {
-            res = await axios.post(
-                `${this.url}/send_group_msg`,
-                {
-                    group_id: this.group_id,
-                    message: arr_of_segments,
-                },
-                this.buildRequestOptions(),
-            )
+            res = await this.postOneBot('send_group_msg', {
+                group_id: this.group_id,
+                message: arr_of_segments,
+            })
         } catch (error) {
-            this.rethrowClassifiedTransportError(error)
+            res = await this.resolveTransportSendFailure(error, {
+                context: 'send_group_msg',
+                segments: arr_of_segments,
+                requestStartedAt,
+                reconcilable: true,
+            })
         }
         this.assertOneBotResponseOk(res, 'send_group_msg')
         return res
     }
 
     async sendMergedForwardPayload(segments: OneBotMessageSegment[], config: MergedForwardRuntimeConfig) {
+        const requestStartedAt = Date.now()
         const nodes = chunk(segments, config.maxSegmentsPerNode).map((content) => ({
             type: 'node',
             data: {
@@ -393,35 +560,40 @@ class QQForwarder extends Forwarder {
                 content,
             },
         }))
+        // Merged forwards surface in history as forward nodes, not flat text
+        // segments, so they cannot be reconciled by text signature: an
+        // ambiguous failure is terminal instead of risking a duplicate.
         if (this.isPrivateChat()) {
             let res
             try {
-                res = await axios.post(
-                    `${this.url}/send_private_forward_msg`,
-                    {
-                        user_id: this.user_id,
-                        messages: nodes,
-                    },
-                    this.buildRequestOptions(),
-                )
+                res = await this.postOneBot('send_private_forward_msg', {
+                    user_id: this.user_id,
+                    messages: nodes,
+                })
             } catch (error) {
-                this.rethrowClassifiedTransportError(error)
+                res = await this.resolveTransportSendFailure(error, {
+                    context: 'send_private_forward_msg',
+                    segments,
+                    requestStartedAt,
+                    reconcilable: false,
+                })
             }
             this.assertOneBotResponseOk(res, 'send_private_forward_msg')
             return res
         }
         let res
         try {
-            res = await axios.post(
-                `${this.url}/send_group_forward_msg`,
-                {
-                    group_id: this.group_id,
-                    messages: nodes,
-                },
-                this.buildRequestOptions(),
-            )
+            res = await this.postOneBot('send_group_forward_msg', {
+                group_id: this.group_id,
+                messages: nodes,
+            })
         } catch (error) {
-            this.rethrowClassifiedTransportError(error)
+            res = await this.resolveTransportSendFailure(error, {
+                context: 'send_group_forward_msg',
+                segments,
+                requestStartedAt,
+                reconcilable: false,
+            })
         }
         this.assertOneBotResponseOk(res, 'send_group_forward_msg')
         return res

@@ -152,6 +152,62 @@ test('transport errors: timeouts and 5xx retry, 4xx does not', () => {
     expect(tooMany.retryable).toBe(true)
 })
 
+test('transport errors: only ambiguous failures are flagged possiblyDelivered (2026-10-15 dup-send pin)', () => {
+    // Client timeout: the bridge may already be delivering — never blind retry.
+    const timeout = classifyOneBotTransportError(
+        Object.assign(new Error('timeout of 60000ms exceeded'), {
+            code: 'ECONNABORTED',
+            isAxiosError: true,
+        }),
+    )
+    expect(timeout.possiblyDelivered).toBe(true)
+
+    // Mid-flight reset: request bytes may have been processed.
+    const reset = classifyOneBotTransportError(
+        Object.assign(new Error('socket hang up'), {
+            code: 'ECONNRESET',
+            isAxiosError: true,
+        }),
+    )
+    expect(reset.possiblyDelivered).toBe(true)
+
+    // 5xx: the bridge answered with an explicit "the action ran and failed"
+    // verdict (SnowLuma error seam wraps retcode 1200) — not delivered.
+    const serverError = classifyOneBotTransportError(
+        Object.assign(new Error('Request failed with status code 502'), {
+            isAxiosError: true,
+            response: { status: 502 },
+        }),
+    )
+    expect(serverError.possiblyDelivered).toBe(false)
+
+    // Connection never established: safe to retry blindly.
+    const refused = classifyOneBotTransportError(
+        Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3200'), {
+            code: 'ECONNREFUSED',
+            isAxiosError: true,
+        }),
+    )
+    expect(refused.possiblyDelivered).toBe(false)
+
+    const dns = classifyOneBotTransportError(
+        Object.assign(new Error('getaddrinfo ENOTFOUND bridge'), {
+            code: 'ENOTFOUND',
+            isAxiosError: true,
+        }),
+    )
+    expect(dns.possiblyDelivered).toBe(false)
+
+    // Explicit "retry later" answers: nothing was processed.
+    const tooMany = classifyOneBotTransportError(
+        Object.assign(new Error('Request failed with status code 429'), {
+            isAxiosError: true,
+            response: { status: 429 },
+        }),
+    )
+    expect(tooMany.possiblyDelivered).toBe(false)
+})
+
 test('bridge flavor detection reads get_version_info app_name', () => {
     expect(detectBridgeFlavor({ app_name: 'SnowLuma', app_version: '1.14.22-node' })).toBe('snowluma')
     expect(detectBridgeFlavor({ data: { app_name: 'SnowLuma' } })).toBe('snowluma')

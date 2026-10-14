@@ -221,12 +221,30 @@ type TransportErrorLike = {
 }
 
 /**
+ * Socket-level codes where the request provably never reached the bridge:
+ * name resolution / routing / connection establishment failed before any
+ * request byte could be processed. Re-sending those is safe.
+ */
+const NEVER_DELIVERED_CODE_PATTERN = /^(ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|EACCES)$/i
+
+/**
  * Classify an error thrown by the HTTP layer (axios). Timeouts, connection
  * resets and 5xx are retryable; 4xx (bad endpoint / token / payload) are not,
  * with 408/429 kept retryable because they explicitly ask for a retry.
+ *
+ * `possiblyDelivered` answers the duplicate-send question: could the bridge
+ * have received and delivered this message even though the client saw a
+ * failure? Timeouts / connection resets mid-flight are ambiguous — SnowLuma
+ * acks `send_*_msg` only after the message is actually delivered, so a client
+ * timeout routinely accompanies a delivered message (2026-10-15 duplicate-send
+ * incident: every observed timed-out send landed in the group). Callers must
+ * reconcile against the bridge before re-sending such a payload; only
+ * `possiblyDelivered: false` failures may be blindly retried.
  */
 export function classifyOneBotTransportError(error: unknown): {
     retryable: boolean
+    /** The request may have been delivered even though the client saw a failure. */
+    possiblyDelivered: boolean
     category: OneBotFailureCategory
     detail: string
 } {
@@ -240,14 +258,32 @@ export function classifyOneBotTransportError(error: unknown): {
         const retryable = httpStatus >= 500 || httpStatus === 408 || httpStatus === 429
         return {
             retryable,
+            // The bridge answered with an explicit verdict: the action ran and
+            // failed (SnowLuma "single error seam" — HTTP 500 wraps retcode
+            // 1200 internal failures), so nothing was delivered and the
+            // bounded retry is safe. Only *response-less* failures below are
+            // ambiguous.
+            possiblyDelivered: false,
             category: 'transport',
             detail: `QQ OneBot HTTP ${httpStatus}${code ? ` code=${code}` : ''}: ${message}`,
         }
     }
 
-    const transientCode = /TIMEOUT|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|EAI_AGAIN|ENOTFOUND|SOCKET|HANG/i.test(code)
+    if (NEVER_DELIVERED_CODE_PATTERN.test(code)) {
+        return {
+            retryable: true,
+            possiblyDelivered: false,
+            category: 'transport',
+            detail: `QQ OneBot transport error${code ? ` code=${code}` : ''}: ${message}`,
+        }
+    }
+
+    // Timeout (ECONNABORTED / ETIMEDOUT / axios "timeout of Xms exceeded"),
+    // mid-flight resets (ECONNRESET / EPIPE / socket hang up) and anything
+    // unrecognized: the request bytes may well have been processed.
     return {
         retryable: true,
+        possiblyDelivered: true,
         category: 'transport',
         detail: `QQ OneBot transport error${code ? ` code=${code}` : ''}: ${message}`,
     }

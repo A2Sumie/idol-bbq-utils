@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
+    articleOutboundKey,
+    classifyOutboundRecord,
     isOutboundFailedStatus,
     isOutboundDryRunStatus,
     isOutboundInProgressStatus,
@@ -9,6 +11,23 @@ import {
     isOutboundVisibleCompletionStatus,
     OUTBOUND_STATUS,
 } from './outbound-message-service'
+
+test('2026-10-15 dup-send pin: same article double dispatch maps to one outbound key and the completed record suppresses the re-dispatch', () => {
+    const article = { platform: 'twitter', a_id: '1:2110385883505725765' } as any
+    const firstDispatch = articleOutboundKey('七虹信标-群2', article)
+    const secondDispatch = articleOutboundKey('七虹信标-群2', article)
+    expect(secondDispatch).toBe(firstDispatch)
+
+    const completed = classifyOutboundRecord({
+        idempotency_key: firstDispatch,
+        status: OUTBOUND_STATUS.Sent,
+        attempt_count: 1,
+    })
+    expect(completed.suppressed).toBeTrue()
+    expect(completed.visible).toBeTrue()
+    expect(completed.retryable).toBeFalse()
+    expect(completed.aggregateStatus).toBe('already_completed')
+})
 
 test('outbound status helpers keep visible completion distinct from suppressed completion', () => {
     expect(isOutboundVisibleCompletionStatus(OUTBOUND_STATUS.Sent)).toBeTrue()
